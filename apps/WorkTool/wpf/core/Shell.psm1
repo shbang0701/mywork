@@ -1,9 +1,9 @@
 # 셸: 메인 창 틀, 왼쪽 메뉴, 제목 줄 버튼, 트레이, 단축키, 화면 전환.
 # 메뉴는 Addons.psm1에 등록된 애드온 목록으로 만든다. 탭을 더하거나 빼도 이 파일은 고치지 않는다.
 #
-# 창은 투명도를 바꿀 수 있게 WindowStyle=None + AllowsTransparency로 만들고, 제목 줄은 직접 그린다.
+# 창은 WindowStyle=None으로 만들고 제목 줄은 직접 그린다. 투명도를 100%보다 낮게 고르면 투명 창(AllowsTransparency)으로 띄운다.
 # 그래서 이 창 안에는 WindowsFormsHost · WebBrowser를 넣지 않는다 (투명 창에서는 그려지지 않는다).
-# 투명 창은 ClearType을 못 쓰고 회색조로 글자를 그린다. 이때 Display 모드는 획이 픽셀에 맞춰 꺾여 각져 보이므로 Ideal로 그린다.
+# 투명 창은 ClearType을 못 쓰고 회색조로 글자를 그려서, 100%면 보통 창으로 띄운다 (Start-WtApp). 글자는 Ideal 모드로 그린다.
 #
 # 이벤트 처리기는 나중에 디스패처가 부르므로, 만든 함수의 지역 변수를 볼 수 없다.
 # 처리기 안에서는 $script: 변수와 $s(보낸 요소)의 Tag만 쓴다.
@@ -202,7 +202,13 @@ function Switch-WtCollapsed { Set-WtSetting 'nav.collapsed' (-not [bool](Get-WtS
 
 function Set-WtOpacity([double]$Percent = -1) {
     if ($Percent -lt 0) { $Percent = [double](Get-WtSetting 'ui.opacity') }
+    if (-not $script:window.AllowsTransparency) { return }   # 보통 창으로 띄웠으면 다시 시작해야 투명도가 바뀐다 (Test-WtOpacityNeedsRestart)
     $script:window.Opacity = [Math]::Max(0.6, [Math]::Min(1.0, $Percent / 100))
+}
+
+# 투명도를 이 값으로 바꾸면 다시 시작해야 하는지. 투명 창 여부는 창을 보이기 전에만 정할 수 있다 (Start-WtApp)
+function Test-WtOpacityNeedsRestart([double]$Percent) {
+    $script:window -and $script:window.AllowsTransparency -ne ($Percent -lt 100)
 }
 
 # 창이 있는 화면의 작업 영역(또는 전체) 크기를 WPF 단위로
@@ -480,6 +486,11 @@ function Start-WtApp {
     $script:ui = Get-WtNamedElements $w $script:shellXaml
     $w.Resources.MergedDictionaries.Add($script:themeDict)
     $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    # 투명 창은 ClearType이 꺼져 글자가 흐리게(회색조로) 그려진다. 불투명도 100%로 시작하면 보통 창으로 만들어 또렷하게 그린다
+    if ([double](Get-WtSetting 'ui.opacity') -ge 100) {
+        $w.AllowsTransparency = $false
+        $w.SetResourceReference([System.Windows.Window]::BackgroundProperty, 'B.WindowBg')
+    }
 
     Update-WtAppIcon
     $w.Add_ContentRendered({ Update-WtAppIcon })
@@ -590,5 +601,5 @@ function Start-WtApp {
     }
 }
 
-Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Set-WtOpacity,
+Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp

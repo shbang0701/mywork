@@ -314,6 +314,8 @@ try {
     Assert-WtTest '업무: 저장한 업무를 다시 읽는다' ($back.title -eq 'PM 점검' -and $back.mode -eq 'console' -and $values.Target -eq 'SRV-01' -and $values.Loud -eq $true)
     Assert-WtTest '업무: 스크립트에 없는 값을 알아본다' ((@(Get-WtFlowStaleNames $info $values) -join ',') -eq 'Gone')
     Assert-WtTest '업무: 결과 표시는 글자 · 아이콘 · 색을 함께' ((Get-WtFlowStatusLook 'failed' $false).Text -eq '실패' -and (Get-WtFlowStatusLook 'failed' $false).Icon -and (Get-WtFlowStatusLook 'success' $true).Text -eq '미리보기 · 성공' -and (Format-WtFlowSpan ([timespan]::FromSeconds(65))) -eq '1분 5초')
+    $spans = & $mod { @((Get-WtFlowRunSpan @{ started = ''; ended = '2026-10-24 14:10:42' }), (Get-WtFlowRunSpan @{ started = '어제'; ended = '' }), (Get-WtFlowRunSpan @{ started = '2026-10-24 14:10:40'; ended = '2026-10-24 14:10:42' })) }
+    Assert-WtTest '업무: 기록의 시각이 비었거나 읽을 수 없으면 걸린 시간을 비워 둔다 (오류로 멈추지 않는다)' ($spans[0] -eq '' -and $spans[1] -eq '' -and $spans[2] -eq '2초') ($spans -join ' / ')
 
     # ---- 금지 동작 검사가 제대로 잡는지 (가짜 파일) ----
     $bannedDir = Join-Path $test.Root '금지 검사'
@@ -417,6 +419,47 @@ try {
     Assert-WtTest 'WPF 업무: 실행 취소로 업무를 되살린다' (@(Get-WtFlows).Count -eq 1 -and (& $mod { $script:flow.title }) -eq '가짜 업무')
     & $mod { param($p) Select-WtFlowNode @{ Kind = 'script'; Path = $p } } (Join-Path $scriptsRoot 'NoHelp-Script.ps1')
     Assert-WtTest 'WPF 업무: 다른 스크립트를 고르면 앞 실행의 출력 · 결과를 비운다' (-not (& $mod { $script:ui.Output.Text }) -and (& $mod { $script:ui.OutputHint.Visibility }) -eq 'Visible' -and (& $mod { $script:ui.Status.Visibility }) -eq 'Collapsed')
+    # 폼에 넣을 수 없는 필수 값(콘솔 창에서만 실행하는 이유)은 칸 위에, 비워 두면 기본값을 쓰는 값만 칸 아래에 알린다
+    $notes = & $mod { param($p) Select-WtFlowNode @{ Kind = 'script'; Path = $p }; @($script:ui.Form.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] } | ForEach-Object Text) } (Join-Path $scriptsRoot 'more\Secret-Param.ps1')
+    Assert-WtTest 'WPF 업무: 콘솔 창에서만 실행하는 이유는 칸 위에, 기본값을 쓰는 값만 칸 아래에 알린다' ($notes.Count -eq 2 -and $notes[0] -like '필수 값 AdminPassword*콘솔 창에서만*' -and $notes[1] -like '비밀 값 1개*: ApiToken') ($notes -join ' / ')
+    $treeLook = & $mod {
+        $folder = @($script:ui.Tree.Items[1].Items | Where-Object { $_.Tag.Kind -eq 'folder' })[0]
+        @{ Styled = $null -ne $folder.Style -and $folder.Style -eq $script:ui.Tree.ItemContainerStyle; Trim = $folder.Header.Children[1].TextTrimming; Wrap = $folder.Header.Children[1].TextWrapping }
+    }
+    Assert-WtTest 'WPF 업무: 목록의 안쪽 항목도 맨 위 항목과 같은 모양이고, 긴 이름은 …로 줄인다' ($treeLook.Styled -and "$($treeLook.Trim)" -eq 'CharacterEllipsis' -and "$($treeLook.Wrap)" -eq 'NoWrap')
+    # 칸이 많으면 폼만 스크롤하고 출력 칸에 높이를 남긴다. 칸이 적으면 폼은 칸 높이만큼만 써서 실행 명령이 폼 바로 아래에 붙는다
+    $heights = & $mod {
+        param($v, $many, $few)
+        $size = { $v.Measure([System.Windows.Size]::new(1100, 640)); $v.Arrange([System.Windows.Rect]::new(0, 0, 1100, 640)); $v.UpdateLayout() }
+        Select-WtFlowNode @{ Kind = 'script'; Path = $many }; & $size
+        $r = @{ Max = $script:ui.FormScroll.MaxHeight; Form = $script:ui.FormScroll.ActualHeight; Extent = $script:ui.FormScroll.ExtentHeight; Out = $script:ui.OutArea.ActualHeight }
+        Select-WtFlowNode @{ Kind = 'script'; Path = $few }; & $size
+        $r.FewForm = $script:ui.FormScroll.ActualHeight; $r.FewMax = $script:ui.FormScroll.MaxHeight
+        $r
+    } $view $sample (Join-Path $scriptsRoot 'NoHelp-Script.ps1')
+    Assert-WtTest 'WPF 업무: 칸이 많으면 폼만 스크롤하고 출력 칸에 높이를 남기며, 칸이 적으면 폼은 칸 높이만큼만 쓴다' ($heights.Max -lt 10000 -and $heights.Form -le $heights.Max + 1 -and $heights.Extent -gt $heights.Form -and $heights.Out -ge 120 -and $heights.FewForm -lt $heights.FewMax) ($heights | ConvertTo-Json -Compress)
+    # 손으로 고쳤거나 망가진 기록(시작 시각이 빔)이 있어도 설명 · 최근 실행을 그린다
+    Save-WtFlowRun ([ordered]@{ id = 'bad'; script = ''; name = '망가진 기록'; started = ''; ended = '2026-10-24 14:10:42'; status = 'success'; tail = @() })
+    $badHelp = & $mod { Clear-WtFlowSelection; @($script:ui.HelpPanel.Children | Where-Object { $_ -is [System.Windows.Controls.ListBox] }) }
+    Assert-WtTest 'WPF 업무: 시작 시각이 빈 기록이 있어도 최근 실행을 그린다' ($badHelp.Count -eq 1 -and @($badHelp[0].Items | Where-Object { $_.Tag.id -eq 'bad' }).Count -eq 1)
+    # 좁은 창: 설명은 접혀 있다가 [설명 펼치기]로 가운데 위에 겹쳐 뜨고, 이때 접고 펼친 것은 설정에 남기지 않는다
+    Set-WtSetting 'workflows.help' $true
+    $layout = & $mod {
+        param($v)
+        $size = { param($w) $v.Measure([System.Windows.Size]::new($w, 700)); $v.Arrange([System.Windows.Rect]::new(0, 0, $w, 700)); $v.UpdateLayout() }
+        & $size 966
+        $r = @{ Narrow = $script:helpNarrow; Closed = "$($script:ui.HelpHost.Visibility)"; Open = "$($script:ui.HelpOpen.Visibility)" }
+        Open-WtFlowHelp
+        $r.Over = "$($script:ui.HelpHost.Visibility)"; $r.OverCol = [System.Windows.Controls.Grid]::GetColumn($script:ui.HelpHost); $r.Shadow = "$($script:ui.HelpShadow.Visibility)"
+        Close-WtFlowHelp
+        $r.Again = "$($script:ui.HelpHost.Visibility)"
+        & $size 1100
+        $r.Wide = -not $script:helpNarrow; $r.WideHost = "$($script:ui.HelpHost.Visibility)"; $r.WideCol = [System.Windows.Controls.Grid]::GetColumn($script:ui.HelpHost); $r.Column = $script:ui.HelpColumn.Width.Value
+        $r
+    } $view
+    Assert-WtTest 'WPF 업무: 창이 좁으면 설명을 접고, 펼치면 가운데 위에 겹쳐 연다 (설정은 그대로)' (
+        $layout.Narrow -and $layout.Closed -eq 'Collapsed' -and $layout.Open -eq 'Visible' -and $layout.Over -eq 'Visible' -and $layout.OverCol -eq 1 -and $layout.Shadow -eq 'Visible' -and
+        $layout.Again -eq 'Collapsed' -and (Get-WtSetting 'workflows.help') -eq $true -and $layout.Wide -and $layout.WideHost -eq 'Visible' -and $layout.WideCol -eq 2 -and $layout.Column -eq 280) ($layout | ConvertTo-Json -Compress)
     $broken = New-WtFlow '망가진 업무' (Join-Path $scriptsRoot 'Bad-Syntax.ps1') @{ X = '1' } 'app'
     Save-WtFlows (@(Get-WtFlows) + [pscustomobject]$broken)
     & $mod { param($id) $script:pendingFlow = $id; Update-WtFlowsView } $broken.id

@@ -301,6 +301,25 @@ pie
         $texts = @(Get-WtTestTexts (New-WtHelpPage))
         Assert-Wt 'WPF 도움말: 탭 설명 · 단축키 · 카드를 싣는다' ($texts -contains '가짜 탭 설명' -and $texts -contains '가짜 카드' -and $texts -contains '엑스 · 와이: 새로 고침')
         Assert-Wt 'WPF 도움말: 실패한 탭 카드는 알리고 나머지는 연다' (@($texts | Where-Object { $_ -like '고장 도움말을 만들지 못했습니다*' }).Count -eq 1)
+
+        # 공통 모양: 스크롤 막대는 화살표 없이 손잡이만 두고, 가로 · 세로 막대가 만나는 모서리에 회색 칸이 없다. 막대를 누르면 한 화면씩 움직인다
+        $box = [System.Windows.Controls.Border]::new()
+        $box.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $box.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+        $sv = [System.Windows.Controls.ScrollViewer]::new(); $sv.HorizontalScrollBarVisibility = 'Auto'
+        $lines = New-WtStack Vertical; $lines.Width = 400
+        foreach ($i in 1..30) { [void](Add-WtChild $lines (New-WtText "줄 $i")) }
+        $sv.Content = $lines; $box.Child = $sv
+        $box.Measure([System.Windows.Size]::new(200, 100)); $box.Arrange([System.Windows.Rect]::new(0, 0, 200, 100)); $box.UpdateLayout()
+        $parts = [System.Collections.Generic.List[object]]::new()
+        $walk = { param($n) $parts.Add($n); for ($i = 0; $i -lt [System.Windows.Media.VisualTreeHelper]::GetChildrenCount($n); $i++) { & $walk ([System.Windows.Media.VisualTreeHelper]::GetChild($n, $i)) } }
+        & $walk $box
+        $bars = @($parts | Where-Object { $_ -is [System.Windows.Controls.Primitives.ScrollBar] })
+        $pages = @($parts | Where-Object { $_ -is [System.Windows.Controls.Primitives.RepeatButton] } | ForEach-Object { $_.Command.Name })
+        $pageDown = @($parts | Where-Object { $_ -is [System.Windows.Controls.Primitives.RepeatButton] -and $_.Command.Name -eq 'PageDown' })[0]
+        $pageDown.Command.Execute($null, $pageDown); $box.UpdateLayout()
+        Assert-Wt 'WPF 공통 모양: 스크롤 막대는 화살표 · 모서리 칸 없이 그리고, 막대를 누르면 한 화면씩 움직인다' (
+            $bars.Count -eq 2 -and $bars[0].ActualWidth -eq 12 -and $bars[1].ActualHeight -eq 12 -and ($pages -join ',') -eq 'PageUp,PageDown,PageLeft,PageRight' -and
+            -not @($parts | Where-Object { $_ -is [System.Windows.Shapes.Rectangle] }).Count -and $sv.VerticalOffset -gt 0) "(막대 $($bars.Count) · 버튼 $($pages -join ',') · 위치 $($sv.VerticalOffset))"
     } else {
         Write-Host 'SKIP WPF로 그리기 (Windows STA에서만)'
     }

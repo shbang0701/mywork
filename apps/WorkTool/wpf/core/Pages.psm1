@@ -7,8 +7,16 @@ $script:addonChecks = @()
 $script:opacityLabel = $null
 $script:opacityTimer = $null
 $script:pendingOpacity = 100
+$script:opacityNote = $null
 
 # ---- 설정 -------------------------------------------------------------------------------------
+
+# 100%는 글자를 또렷하게 그리는 보통 창, 그 아래는 투명 창이다. 둘 사이를 오가면 다시 시작해야 적용된다
+function Update-WtOpacityNote([double]$Percent) {
+    $note = if (-not (Test-WtOpacityNeedsRestart $Percent)) { '' } elseif ($Percent -lt 100) { 'WorkTool을 다시 시작하면 적용됩니다.' } else { '다시 시작하면 글자가 더 또렷해집니다.' }
+    $script:opacityNote.Text = $note
+    $script:opacityNote.Visibility = if ($note) { 'Visible' } else { 'Collapsed' }
+}
 
 function New-WtSettingRow([string]$Label, $Control, [string]$Note) {
     $row = [System.Windows.Controls.DockPanel]::new()
@@ -54,6 +62,8 @@ function New-WtThemeCard {
     # 창 투명도: 끌면 바로 보이고, 손을 떼고 잠시 뒤 저장한다
     $op = New-WtStack Horizontal 12
     $slider = [System.Windows.Controls.Slider]::new()
+    Set-WtStyle $slider 'Range'
+    [System.Windows.Automation.AutomationProperties]::SetName($slider, '창 투명도')
     $slider.Minimum = 60
     $slider.Maximum = 100
     $slider.TickFrequency = 5
@@ -77,12 +87,18 @@ function New-WtThemeCard {
             $script:pendingOpacity = [int]$e.NewValue
             $script:opacityLabel.Text = '{0}%' -f $script:pendingOpacity
             Set-WtOpacity $script:pendingOpacity
+            Update-WtOpacityNote $script:pendingOpacity
             $script:opacityTimer.Stop()
             $script:opacityTimer.Start()
         })
     [void](Add-WtChild $op $slider)
     [void](Add-WtChild $op $script:opacityLabel)
-    [void](Add-WtChild $col (New-WtSettingRow '창 투명도' $op '60% ~ 100%'))
+    $opCol = New-WtStack Vertical 4
+    [void](Add-WtChild $opCol $op)
+    $script:opacityNote = New-WtText '' 'T.Sub'
+    [void](Add-WtChild $opCol $script:opacityNote)
+    Update-WtOpacityNote $slider.Value
+    [void](Add-WtChild $col (New-WtSettingRow '창 투명도' $opCol '60% ~ 100%'))
 
     # 글자 크기
     $seg = New-WtSegmented @(@('s', '작게'), @('m', '보통'), @('l', '크게')) ([string](Get-WtSetting 'ui.fontScale')) 'WtFont' {

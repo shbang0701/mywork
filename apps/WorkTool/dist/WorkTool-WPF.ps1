@@ -344,8 +344,9 @@ $script:fontScales = @{ s = 0.93; m = 1.0; l = 1.12 }
 # MdH1~3 · Code · BodyLine(본문 줄 높이 1.5배)은 마크다운 보기용
 $script:fontSizes = @{ Title = 26; Number = 22; H2 = 16; Dialog = 20; Body = 14; Small = 12.5; Icon = 16; MdH1 = 24; MdH2 = 20; MdH3 = 17; Code = 13; BodyLine = 21 }
 $script:fonts = @{
-    # 설치된 글꼴 중 앞에서부터 쓴다. 맑은 고딕은 Windows 기본이라 항상 있다.
-    UI   = 'Pretendard, Noto Sans KR, Malgun Gothic'
+    # 앞 글꼴에 없는 글자는 다음 글꼴로 그린다. UI는 Windows 기본 글꼴만 쓴다: 영문 · 숫자는 Segoe UI Variable(Windows 11)
+    # → Segoe UI(Windows 10), 한글은 맑은 고딕. 따로 설치하는 글꼴(Noto Sans KR 등)은 PC마다 있고 없고가 달라 쓰지 않는다
+    UI   = 'Segoe UI Variable Text, Segoe UI, Malgun Gothic'
     Icon = 'Segoe Fluent Icons, Segoe MDL2 Assets'
     Mono = 'Consolas, D2Coding, Malgun Gothic'
 }
@@ -985,6 +986,7 @@ $script:stylesXaml = @'
     <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
   </Style>
 
+  <!-- 체크 상자: 표의 선택 상자(Task.Check)와 같은 16 상자 + 오른쪽 글자. 글자를 눌러도 바뀐다 -->
   <Style x:Key="Check" TargetType="CheckBox">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
@@ -992,6 +994,182 @@ $script:stylesXaml = @'
     <Setter Property="VerticalContentAlignment" Value="Center"/>
     <Setter Property="Margin" Value="0,4"/>
     <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="CheckBox">
+      <DockPanel Background="Transparent">
+        <Border x:Name="Box" DockPanel.Dock="Left" Width="16" Height="16" VerticalAlignment="Center"
+          CornerRadius="4" Background="{DynamicResource B.Card}" BorderBrush="{DynamicResource B.InputBorder}" BorderThickness="1">
+          <Grid>
+            <Path x:Name="Mark" Data="M 2,7 L 6,11 L 12,3" Stroke="{DynamicResource B.OnAccent}" StrokeThickness="2" Visibility="Collapsed"/>
+            <Border x:Name="Dash" Width="8" Height="2" Background="{DynamicResource B.OnAccent}" Visibility="Collapsed"/>
+          </Grid>
+        </Border>
+        <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="False"/>
+      </DockPanel>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.SubText}"/></Trigger>
+        <Trigger Property="IsChecked" Value="True"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Accent}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter TargetName="Mark" Property="Visibility" Value="Visible"/></Trigger>
+        <Trigger Property="IsChecked" Value="{x:Null}"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Accent}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter TargetName="Dash" Property="Visibility" Value="Visible"/></Trigger>
+        <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Text}"/><Setter TargetName="Box" Property="BorderThickness" Value="2"/></Trigger>
+        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+
+  <!-- 스크롤 막대: 화살표 없이 둥근 손잡이만 (막대 폭 12 · 손잡이 8). 키 없는 스타일이라 창 안의 모든 스크롤에 쓰인다 -->
+  <Style x:Key="Scroll.Thumb" TargetType="Thumb">
+    <Setter Property="Focusable" Value="False"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Thumb">
+          <Border x:Name="Bd" Background="{DynamicResource B.InputBorder}" CornerRadius="4"/>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.SubText}"/>
+            </Trigger>
+            <Trigger Property="IsDragging" Value="True">
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.Text}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="Scroll.Page" TargetType="RepeatButton">
+    <Setter Property="Focusable" Value="False"/>
+    <Setter Property="IsTabStop" Value="False"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style TargetType="ScrollBar">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Width" Value="12"/>
+    <Setter Property="MinWidth" Value="12"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ScrollBar">
+          <Border Background="{TemplateBinding Background}">
+            <Track x:Name="PART_Track" IsDirectionReversed="True" Margin="2">
+              <Track.DecreaseRepeatButton><RepeatButton Style="{StaticResource Scroll.Page}" Command="ScrollBar.PageUpCommand"/></Track.DecreaseRepeatButton>
+              <Track.IncreaseRepeatButton><RepeatButton Style="{StaticResource Scroll.Page}" Command="ScrollBar.PageDownCommand"/></Track.IncreaseRepeatButton>
+              <Track.Thumb><Thumb Style="{StaticResource Scroll.Thumb}"/></Track.Thumb>
+            </Track>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+    <Style.Triggers>
+      <Trigger Property="Orientation" Value="Horizontal">
+        <Setter Property="Width" Value="Auto"/>
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="Height" Value="12"/>
+        <Setter Property="MinHeight" Value="12"/>
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="ScrollBar">
+              <Border Background="{TemplateBinding Background}">
+                <Track x:Name="PART_Track" Margin="2">
+                  <Track.DecreaseRepeatButton><RepeatButton Style="{StaticResource Scroll.Page}" Command="ScrollBar.PageLeftCommand"/></Track.DecreaseRepeatButton>
+                  <Track.IncreaseRepeatButton><RepeatButton Style="{StaticResource Scroll.Page}" Command="ScrollBar.PageRightCommand"/></Track.IncreaseRepeatButton>
+                  <Track.Thumb><Thumb Style="{StaticResource Scroll.Thumb}"/></Track.Thumb>
+                </Track>
+              </Border>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+  <!-- 기본 모양과 같고, 가로 · 세로 막대가 만나는 모서리만 회색 칸 대신 비워 둔다 -->
+  <Style TargetType="ScrollViewer">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ScrollViewer">
+          <Grid Background="{TemplateBinding Background}">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" Margin="{TemplateBinding Padding}"
+                                    CanContentScroll="{TemplateBinding CanContentScroll}" CanHorizontallyScroll="False" CanVerticallyScroll="False"
+                                    Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"/>
+            <ScrollBar x:Name="PART_VerticalScrollBar" Grid.Column="1" AutomationProperties.AutomationId="VerticalScrollBar" Cursor="Arrow"
+                       Minimum="0" Maximum="{TemplateBinding ScrollableHeight}" ViewportSize="{TemplateBinding ViewportHeight}"
+                       Value="{Binding VerticalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"
+                       Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
+            <ScrollBar x:Name="PART_HorizontalScrollBar" Grid.Row="1" Orientation="Horizontal" AutomationProperties.AutomationId="HorizontalScrollBar" Cursor="Arrow"
+                       Minimum="0" Maximum="{TemplateBinding ScrollableWidth}" ViewportSize="{TemplateBinding ViewportWidth}"
+                       Value="{Binding HorizontalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"
+                       Visibility="{TemplateBinding ComputedHorizontalScrollBarVisibility}"/>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- 값 고르기 막대(Slider, 가로): 높이 4 막대 + 지름 20 손잡이. 고른 쪽은 강조색 -->
+  <Style x:Key="Range.Fill" TargetType="RepeatButton">
+    <Setter Property="Focusable" Value="False"/>
+    <Setter Property="IsTabStop" Value="False"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="RepeatButton">
+          <Grid Background="Transparent"><Border Height="4" CornerRadius="2" Background="{TemplateBinding Background}" VerticalAlignment="Center"/></Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="Range.Thumb" TargetType="Thumb">
+    <Setter Property="Focusable" Value="False"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.InputBorder}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Thumb">
+          <Grid Width="20" Height="20">
+            <Ellipse x:Name="Ring" Fill="{DynamicResource B.Card}" Stroke="{TemplateBinding BorderBrush}" StrokeThickness="1"/>
+            <Ellipse x:Name="Dot" Width="12" Height="12" Fill="{DynamicResource B.Accent}"/>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Dot" Property="Width" Value="14"/><Setter TargetName="Dot" Property="Height" Value="14"/></Trigger>
+            <Trigger Property="IsDragging" Value="True"><Setter TargetName="Dot" Property="Width" Value="10"/><Setter TargetName="Dot" Property="Height" Value="10"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <Style x:Key="Range" TargetType="Slider">
+    <Setter Property="MinHeight" Value="32"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Slider">
+          <Grid Background="Transparent">
+            <Track x:Name="PART_Track">
+              <Track.DecreaseRepeatButton><RepeatButton Style="{StaticResource Range.Fill}" Background="{DynamicResource B.Accent}" Command="Slider.DecreaseLarge"/></Track.DecreaseRepeatButton>
+              <Track.IncreaseRepeatButton><RepeatButton Style="{StaticResource Range.Fill}" Background="{DynamicResource B.InputBorder}" Command="Slider.IncreaseLarge"/></Track.IncreaseRepeatButton>
+              <Track.Thumb><Thumb x:Name="Thumb" Style="{StaticResource Range.Thumb}"/></Track.Thumb>
+            </Track>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Thumb" Property="BorderBrush" Value="{DynamicResource B.Text}"/></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!-- 겹쳐 뜨는 패널(좁은 창에서 내용 위에 여는 설명 패널 등)의 그림자. 패널에 바로 걸면 패널 글자까지 그림 한 장으로 다시 그려져서, 패널 뒤에 따로 깐다 -->
+  <Style x:Key="Overlay.Shadow" TargetType="Border">
+    <Setter Property="Background" Value="{DynamicResource B.Card}"/>
+    <Setter Property="CornerRadius" Value="12"/>
+    <Setter Property="Effect">
+      <Setter.Value>
+        <DropShadowEffect BlurRadius="16" ShadowDepth="8" Direction="270" Opacity="0.14" Color="#000000"/>
+      </Setter.Value>
+    </Setter>
   </Style>
 
   <!-- 마크다운 보기 (Markdown.psm1). 문서 요소(Paragraph · Section · Run …)의 모양 -->
@@ -4371,8 +4549,16 @@ $script:addonChecks = @()
 $script:opacityLabel = $null
 $script:opacityTimer = $null
 $script:pendingOpacity = 100
+$script:opacityNote = $null
 
 # ---- 설정 -------------------------------------------------------------------------------------
+
+# 100%는 글자를 또렷하게 그리는 보통 창, 그 아래는 투명 창이다. 둘 사이를 오가면 다시 시작해야 적용된다
+function Update-WtOpacityNote([double]$Percent) {
+    $note = if (-not (Test-WtOpacityNeedsRestart $Percent)) { '' } elseif ($Percent -lt 100) { 'WorkTool을 다시 시작하면 적용됩니다.' } else { '다시 시작하면 글자가 더 또렷해집니다.' }
+    $script:opacityNote.Text = $note
+    $script:opacityNote.Visibility = if ($note) { 'Visible' } else { 'Collapsed' }
+}
 
 function New-WtSettingRow([string]$Label, $Control, [string]$Note) {
     $row = [System.Windows.Controls.DockPanel]::new()
@@ -4418,6 +4604,8 @@ function New-WtThemeCard {
     # 창 투명도: 끌면 바로 보이고, 손을 떼고 잠시 뒤 저장한다
     $op = New-WtStack Horizontal 12
     $slider = [System.Windows.Controls.Slider]::new()
+    Set-WtStyle $slider 'Range'
+    [System.Windows.Automation.AutomationProperties]::SetName($slider, '창 투명도')
     $slider.Minimum = 60
     $slider.Maximum = 100
     $slider.TickFrequency = 5
@@ -4441,12 +4629,18 @@ function New-WtThemeCard {
             $script:pendingOpacity = [int]$e.NewValue
             $script:opacityLabel.Text = '{0}%' -f $script:pendingOpacity
             Set-WtOpacity $script:pendingOpacity
+            Update-WtOpacityNote $script:pendingOpacity
             $script:opacityTimer.Stop()
             $script:opacityTimer.Start()
         })
     [void](Add-WtChild $op $slider)
     [void](Add-WtChild $op $script:opacityLabel)
-    [void](Add-WtChild $col (New-WtSettingRow '창 투명도' $op '60% ~ 100%'))
+    $opCol = New-WtStack Vertical 4
+    [void](Add-WtChild $opCol $op)
+    $script:opacityNote = New-WtText '' 'T.Sub'
+    [void](Add-WtChild $opCol $script:opacityNote)
+    Update-WtOpacityNote $slider.Value
+    [void](Add-WtChild $col (New-WtSettingRow '창 투명도' $opCol '60% ~ 100%'))
 
     # 글자 크기
     $seg = New-WtSegmented @(@('s', '작게'), @('m', '보통'), @('l', '크게')) ([string](Get-WtSetting 'ui.fontScale')) 'WtFont' {
@@ -4636,9 +4830,9 @@ New-Module -Name 'WorkTool.Shell' -ScriptBlock {
 # 셸: 메인 창 틀, 왼쪽 메뉴, 제목 줄 버튼, 트레이, 단축키, 화면 전환.
 # 메뉴는 Addons.psm1에 등록된 애드온 목록으로 만든다. 탭을 더하거나 빼도 이 파일은 고치지 않는다.
 #
-# 창은 투명도를 바꿀 수 있게 WindowStyle=None + AllowsTransparency로 만들고, 제목 줄은 직접 그린다.
+# 창은 WindowStyle=None으로 만들고 제목 줄은 직접 그린다. 투명도를 100%보다 낮게 고르면 투명 창(AllowsTransparency)으로 띄운다.
 # 그래서 이 창 안에는 WindowsFormsHost · WebBrowser를 넣지 않는다 (투명 창에서는 그려지지 않는다).
-# 투명 창은 ClearType을 못 쓰고 회색조로 글자를 그린다. 이때 Display 모드는 획이 픽셀에 맞춰 꺾여 각져 보이므로 Ideal로 그린다.
+# 투명 창은 ClearType을 못 쓰고 회색조로 글자를 그려서, 100%면 보통 창으로 띄운다 (Start-WtApp). 글자는 Ideal 모드로 그린다.
 #
 # 이벤트 처리기는 나중에 디스패처가 부르므로, 만든 함수의 지역 변수를 볼 수 없다.
 # 처리기 안에서는 $script: 변수와 $s(보낸 요소)의 Tag만 쓴다.
@@ -4837,7 +5031,13 @@ function Switch-WtCollapsed { Set-WtSetting 'nav.collapsed' (-not [bool](Get-WtS
 
 function Set-WtOpacity([double]$Percent = -1) {
     if ($Percent -lt 0) { $Percent = [double](Get-WtSetting 'ui.opacity') }
+    if (-not $script:window.AllowsTransparency) { return }   # 보통 창으로 띄웠으면 다시 시작해야 투명도가 바뀐다 (Test-WtOpacityNeedsRestart)
     $script:window.Opacity = [Math]::Max(0.6, [Math]::Min(1.0, $Percent / 100))
+}
+
+# 투명도를 이 값으로 바꾸면 다시 시작해야 하는지. 투명 창 여부는 창을 보이기 전에만 정할 수 있다 (Start-WtApp)
+function Test-WtOpacityNeedsRestart([double]$Percent) {
+    $script:window -and $script:window.AllowsTransparency -ne ($Percent -lt 100)
 }
 
 # 창이 있는 화면의 작업 영역(또는 전체) 크기를 WPF 단위로
@@ -5115,6 +5315,11 @@ function Start-WtApp {
     $script:ui = Get-WtNamedElements $w $script:shellXaml
     $w.Resources.MergedDictionaries.Add($script:themeDict)
     $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    # 투명 창은 ClearType이 꺼져 글자가 흐리게(회색조로) 그려진다. 불투명도 100%로 시작하면 보통 창으로 만들어 또렷하게 그린다
+    if ([double](Get-WtSetting 'ui.opacity') -ge 100) {
+        $w.AllowsTransparency = $false
+        $w.SetResourceReference([System.Windows.Window]::BackgroundProperty, 'B.WindowBg')
+    }
 
     Update-WtAppIcon
     $w.Add_ContentRendered({ Update-WtAppIcon })
@@ -5225,7 +5430,7 @@ function Start-WtApp {
     }
 }
 
-Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Set-WtOpacity,
+Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Shell.psm1 끝 ----
@@ -7662,6 +7867,9 @@ $script:filling = $false     # 코드로 트리를 고르는 중
 $script:outputKey = $null    # 출력 칸에 보이는 것이 어느 스크립트 · 업무의 것인지 ('script:경로' | 'flow:id')
 $script:shown = 0            # 출력 칸에 붙인 줄 수 (화면에 안 보여도 직접 센다)
 $script:encoding = $null     # 출력 문자 코드 (Get-WtFlowEncoding)
+$script:threeColumns = 912   # 세 칸이 다 들어가는 폭: 목록 240 + 가운데 최소 360 + 설명 280 + 사이 16 × 2
+$script:helpNarrow = $false  # 창이 좁아 설명을 가운데 위에 겹쳐 여는 중인지 (Update-WtFlowHelp)
+$script:helpOverlay = $false # 좁을 때 겹쳐 연 설명이 열려 있는지
 
 Register-WtSettingDefault 'workflows.roots' @()   # 스크립트 폴더 목록
 Register-WtSettingDefault 'workflows.help' $true  # 오른쪽 설명 패널을 펼침
@@ -8089,9 +8297,19 @@ function Format-WtFlowSpan([timespan]$Span) {
     '{0}초' -f [int][Math]::Floor($Span.TotalSeconds)
 }
 
+# 기록의 시각 → [datetime]. 비었거나 읽을 수 없으면 $null (손으로 고친 기록이 있어도 화면을 막지 않게)
+function ConvertTo-WtFlowTime($Value) {
+    if ($Value -is [datetime]) { return $Value }
+    $t = [datetime]::MinValue
+    if ([datetime]::TryParse([string]$Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$t)) { return $t }
+    $null
+}
+
 function Get-WtFlowRunSpan($Record) {
-    if (-not $Record.ended -or -not $Record.started) { return '' }
-    Format-WtFlowSpan ([datetime]$Record.ended - [datetime]$Record.started)
+    $started = ConvertTo-WtFlowTime $Record.started
+    $ended = ConvertTo-WtFlowTime $Record.ended
+    if (-not $started -or -not $ended) { return '' }
+    Format-WtFlowSpan ($ended - $started)
 }
 
 # ---- 화면: 목록 ---------------------------------------------------------------------------------
@@ -8100,15 +8318,20 @@ function Get-WtFlowRoots { @(Get-WtSetting 'workflows.roots' | Where-Object { $_
 
 function New-WtFlowTreeItem([string]$Label, [int]$Icon, $Tag, [string]$ToolTip, [switch]$Muted) {
     $item = [System.Windows.Controls.TreeViewItem]::new()
-    $row = New-WtStack Horizontal 8
+    Set-WtStyle $item 'TreeItem'   # 트리의 항목 스타일은 맨 위 항목에만 붙어서, 안쪽 항목에도 직접 붙인다
+    # 이름이 길면 칸 끝에서 …로 줄인다 (전체 경로는 마우스를 올리면 보인다)
+    $row = [System.Windows.Controls.DockPanel]::new()
     $i = New-WtIcon $Icon
     Set-WtResource $i 'Foreground' 'B.SubText'
     $i.VerticalAlignment = 'Center'
-    [void](Add-WtChild $row $i)
+    $i.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
+    [System.Windows.Controls.DockPanel]::SetDock($i, 'Left')
+    [void]$row.Children.Add($i)
     $t = New-WtText $Label $(if ($Muted) { 'T.Sub' } else { 'T.Body' })
+    $t.TextWrapping = 'NoWrap'
     $t.TextTrimming = 'CharacterEllipsis'
     $t.VerticalAlignment = 'Center'
-    [void](Add-WtChild $row $t)
+    [void]$row.Children.Add($t)
     $item.Header = $row
     $item.Tag = $Tag
     $item.IsExpanded = $true
@@ -8138,7 +8361,7 @@ function Update-WtFlowTree {
             if ($keep -eq "flow:$($f.id)") { $found = $node }
         }
         if (-not $flows.Count) {
-            $hint = New-WtFlowTreeItem '저장한 업무가 없습니다' 0xE946 @{ Kind = 'hint' } '스크립트를 고르고 [업무로 저장]하면 여기에 생깁니다' -Muted
+            $hint = New-WtFlowTreeItem '아직 없습니다' 0xE946 @{ Kind = 'hint' } '스크립트를 고르고 [업무로 저장]하면 여기에 생깁니다' -Muted
             $hint.Focusable = $false
             [void]$saved.Items.Add($hint)
         }
@@ -8171,7 +8394,7 @@ function Update-WtFlowTree {
                 if ($keep -eq "script:$($s.Path)") { $found = $node }
             }
             if (-not $group.Missing -and -not $group.Scripts.Count) {
-                $hint = New-WtFlowTreeItem '.ps1 파일이 없습니다' 0xE946 @{ Kind = 'hint' } -Muted
+                $hint = New-WtFlowTreeItem '.ps1 파일 없음' 0xE946 @{ Kind = 'hint' } -Muted
                 $hint.Focusable = $false
                 [void]$rootNode.Items.Add($hint)
             }
@@ -8293,10 +8516,18 @@ function Update-WtFlowCenter {
             [void](Add-WtChild $u.Form $note)
         }
     }
+    # 폼에 넣을 수 없는 필수 값은 [앱 안에서]를 막는 이유라서 칸보다 먼저 보인다
+    if ($info.NeedsConsole.Count) {
+        $need = New-WtText "필수 값 $($info.NeedsConsole -join ', ')은(는) 폼에 넣을 수 없어서 콘솔 창에서만 실행합니다. 창에서 PowerShell이 직접 묻습니다." 'T.Sub'
+        Set-WtResource $need 'Foreground' 'B.Warn'
+        $need.TextWrapping = 'Wrap'
+        [void](Add-WtChild $u.Form $need)
+    }
     foreach ($f in $info.Fields) { New-WtFlowField $f $values }
     if (-not $info.Fields.Count -and -not $info.Error) { [void](Add-WtChild $u.Form (New-WtText '넣을 값이 없는 스크립트입니다. [실행]을 누르면 바로 실행합니다.' 'T.Sub')) }
-    $plain = @($info.Skipped | Where-Object { -not $_.Secret })
-    $secret = @($info.Skipped | Where-Object Secret)
+    # 여기서는 비워 두면 스크립트 기본값을 쓰는 값만 알린다 (필수 값은 위에서 알렸다)
+    $plain = @($info.Skipped | Where-Object { -not $_.Secret -and -not $_.Mandatory })
+    $secret = @($info.Skipped | Where-Object { $_.Secret -and -not $_.Mandatory })
     if ($plain.Count) {
         $names = ($plain | ForEach-Object { "$($_.Name)($($_.TypeName))" }) -join ', '
         $skip = New-WtText "폼에서 넣을 수 없는 값 $($plain.Count)개는 스크립트 기본값을 씁니다: $names" 'T.Sub'
@@ -8304,15 +8535,9 @@ function Update-WtFlowCenter {
         [void](Add-WtChild $u.Form $skip)
     }
     if ($secret.Count) {
-        $skip = New-WtText "비밀 값은 폼에 넣지 않습니다(저장한 업무 · 기록에 남지 않게): $(($secret | ForEach-Object Name) -join ', ')" 'T.Sub'
+        $skip = New-WtText "비밀 값 $($secret.Count)개는 폼에 넣지 않고(저장한 업무 · 기록에 남지 않게) 스크립트 기본값을 씁니다: $(($secret | ForEach-Object Name) -join ', ')" 'T.Sub'
         $skip.TextWrapping = 'Wrap'
         [void](Add-WtChild $u.Form $skip)
-    }
-    if ($info.NeedsConsole.Count) {
-        $need = New-WtText "필수 값 $($info.NeedsConsole -join ', ')은(는) 폼에 넣을 수 없어서 콘솔 창에서만 실행합니다. 창에서 PowerShell이 직접 묻습니다." 'T.Sub'
-        Set-WtResource $need 'Foreground' 'B.Warn'
-        $need.TextWrapping = 'Wrap'
-        [void](Add-WtChild $u.Form $need)
     }
     # 실행 방식: 업무에 저장한 것 → 스크립트가 정한 것(.NOTES의 WorkTool: 콘솔, 폼에 못 넣는 필수 값) → 앱 안
     $mode = if ($script:flow -and $script:flow.mode) { [string]$script:flow.mode } elseif ($info.Console -or $info.NeedsConsole.Count) { 'console' } else { 'app' }
@@ -8718,9 +8943,28 @@ function Select-WtFlowScriptAgain {
 function Update-WtFlowHelp {
     $u = $script:ui
     if (-not $u.Count) { return }
-    $show = [bool](Get-WtSetting 'workflows.help')
-    $u.HelpColumn.Width = if ($show) { [System.Windows.GridLength]::new(280) } else { [System.Windows.GridLength]::new(0) }
-    $u.HelpCard.Visibility = if ($show) { 'Visible' } else { 'Collapsed' }
+    # 세 칸이 다 안 들어가면 설명은 접어 두고, 펼치면 가운데 위에 겹쳐 연다.
+    # 이때 펼치고 접는 것은 설정에 남기지 않는다 (창을 넓히면 설정대로 돌아간다)
+    $script:helpNarrow = Test-WtFlowNarrow $u.PageGrid.ActualWidth
+    if (-not $script:helpNarrow) { $script:helpOverlay = $false }
+    $show = if ($script:helpNarrow) { $script:helpOverlay } else { [bool](Get-WtSetting 'workflows.help') }
+    $u.HelpColumn.Width = [System.Windows.GridLength]::new($(if ($show -and -not $script:helpNarrow) { 280 } else { 0 }))
+    $box = $u.HelpHost
+    if ($script:helpNarrow) {
+        [System.Windows.Controls.Grid]::SetColumn($box, 1)
+        $box.HorizontalAlignment = 'Right'
+        $box.Width = 280
+        $box.Margin = [System.Windows.Thickness]::new(0)
+        [System.Windows.Controls.Panel]::SetZIndex($box, 1)
+    } else {
+        [System.Windows.Controls.Grid]::SetColumn($box, 2)
+        $box.HorizontalAlignment = 'Stretch'
+        $box.Width = [double]::NaN
+        $box.Margin = [System.Windows.Thickness]::new(16, 0, 0, 0)
+        [System.Windows.Controls.Panel]::SetZIndex($box, 0)
+    }
+    $u.HelpShadow.Visibility = if ($script:helpNarrow) { 'Visible' } else { 'Collapsed' }
+    $box.Visibility = if ($show) { 'Visible' } else { 'Collapsed' }
     $u.HelpOpen.Visibility = if ($show) { 'Collapsed' } else { 'Visible' }
     $panel = $u.HelpPanel
     $panel.Children.Clear()
@@ -8751,8 +8995,10 @@ function Update-WtFlowHelp {
             $b.Child = $t
             [void](Add-WtChild $panel $b)
         }
-        if ($info.Notes) { $n = New-WtText $info.Notes 'T.Sub'; $n.TextWrapping = 'Wrap'; [void](Add-WtChild $panel $n) }
-        if (-not $info.Description -and -not $info.Examples.Count -and -not $info.Notes) { [void](Add-WtChild $panel (New-WtText '이 스크립트에는 설명(.DESCRIPTION · .EXAMPLE)이 없습니다.' 'T.Sub')) }
+        # .NOTES의 「WorkTool: 콘솔」 줄은 앱이 읽는 표시라서 설명에서는 뺀다
+        $notes = (@($info.Notes -split "`r?`n" | Where-Object { $_ -notmatch '^\s*WorkTool:\s*콘솔\s*$' }) -join "`n").Trim()
+        if ($notes) { $n = New-WtText $notes 'T.Sub'; $n.TextWrapping = 'Wrap'; [void](Add-WtChild $panel $n) }
+        if (-not $info.Description -and -not $info.Examples.Count -and -not $notes) { [void](Add-WtChild $panel (New-WtText '이 스크립트에는 설명(.DESCRIPTION · .EXAMPLE)이 없습니다.' 'T.Sub')) }
     }
     $head = New-WtText '최근 실행' 'T.H2'
     $head.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)
@@ -8766,7 +9012,8 @@ function Update-WtFlowHelp {
         $look = Get-WtFlowStatusLook ([string]$r.status) ([bool]$r.whatIf)
         $row = New-WtStack Vertical 4
         [void](Add-WtChild $row (New-WtTag $look.Text $look.Bg $look.Fg $look.Icon))
-        $when = ([datetime]$r.started).ToString('M/d HH:mm')
+        $at = ConvertTo-WtFlowTime $r.started
+        $when = if ($at) { $at.ToString('M/d HH:mm') } else { '' }
         $span = Get-WtFlowRunSpan $r
         $line = (@($when, $(if (-not $info) { [string]$r.name }), $span, $(if ($r.flow) { [string]$r.flow })) | Where-Object { $_ }) -join ' · '
         [void](Add-WtChild $row (New-WtText $line 'T.Sub'))
@@ -8778,6 +9025,33 @@ function Update-WtFlowHelp {
     }
     $list.Add_SelectionChanged({ param($s, $e) if ($s.SelectedItem) { Show-WtFlowRecordTail $s.SelectedItem.Tag } })
     [void](Add-WtChild $panel $list)
+}
+
+# 가운데 · 양옆 패널이 놓일 폭이 세 칸에 모자라는지 (아직 배치 전이라 폭이 0이면 모자라지 않은 것으로 본다)
+function Test-WtFlowNarrow([double]$Width) { $Width -gt 0 -and $Width -lt $script:threeColumns }
+
+# [설명 펼치기] · [접기]. 넓으면 설정을 바꾸고, 좁으면 겹쳐 연 것만 열고 닫는다
+function Open-WtFlowHelp {
+    if ($script:helpNarrow) { $script:helpOverlay = $true } else { Set-WtSetting 'workflows.help' $true }
+    Update-WtFlowHelp
+}
+
+function Close-WtFlowHelp {
+    if ($script:helpNarrow) { $script:helpOverlay = $false } else { Set-WtSetting 'workflows.help' $false }
+    Update-WtFlowHelp
+}
+
+# 폼 높이: 남는 높이(제목 · 명령 · 결과 · 알림을 뺀 것)의 60%나 출력 칸에 240을 남긴 높이 중 큰 쪽까지 쓰고,
+# 출력 칸에는 적어도 120을 남긴다. 넘으면 폼만 스크롤한다. 칸이 적으면 폼은 칸 높이만큼만 쓰고, 실행 명령은 폼 바로 아래에 붙는다
+function Update-WtFlowFormHeight {
+    $u = $script:ui
+    if (-not $u.Count) { return }
+    $g = $u.CenterGrid
+    if ($g.ActualHeight -le 0) { return }
+    $fixed = 0
+    foreach ($i in 0, 2, 3, 4) { $fixed += $g.RowDefinitions[$i].ActualHeight }
+    $avail = $g.ActualHeight - $fixed
+    $u.FormScroll.MaxHeight = [Math]::Max(80, [Math]::Floor([Math]::Min([Math]::Max($avail * 0.6, $avail - 240), $avail - 120)))
 }
 
 # 기록을 고르면 그때의 출력 마지막 줄을 출력 칸에 보여 준다 (실행 중이면 바꾸지 않는다)
@@ -8843,11 +9117,11 @@ function New-WtFlowsView {
     $center = New-WtCard
     $center.Padding = [System.Windows.Thickness]::new(16, 12, 16, 16)
     $cgrid = [System.Windows.Controls.Grid]::new()
-    # 폼과 출력이 남는 높이를 3:2로 나눈다. 칸이 많으면 폼만 스크롤하고, 명령은 늘 보인다
-    foreach ($h in @(@('Auto', 0, 0), @('Star', 80, 3), @('Auto', 0, 0), @('Auto', 0, 0), @('Auto', 0, 0), @('Star', 100, 2))) {
+    # 폼은 칸 높이만큼(최대 높이는 Update-WtFlowFormHeight), 실행 명령은 폼 바로 아래, 출력은 남는 높이를 다 쓴다.
+    # 칸이 많으면 폼만 스크롤하고, 명령은 늘 보인다
+    foreach ($h in @('Auto', 'Auto', 'Auto', 'Auto', 'Auto', 'Star')) {
         $rd = [System.Windows.Controls.RowDefinition]::new()
-        $rd.Height = if ($h[0] -eq 'Auto') { [System.Windows.GridLength]::Auto } else { [System.Windows.GridLength]::new($h[2], 'Star') }
-        if ($h[1]) { $rd.MinHeight = $h[1] }
+        $rd.Height = if ($h -eq 'Auto') { [System.Windows.GridLength]::Auto } else { [System.Windows.GridLength]::new(1, 'Star') }
         $cgrid.RowDefinitions.Add($rd)
     }
     $head = [System.Windows.Controls.DockPanel]::new()
@@ -8862,13 +9136,14 @@ function New-WtFlowsView {
     $deleteFlow.Add_Click({ Remove-WtFlowCurrent })
     $helpOpen = New-WtButton '설명 펼치기' -Kind Link -Icon 0xE946
     $helpOpen.ToolTip = '오른쪽에 스크립트 도움말과 최근 실행을 보여 줍니다'
-    $helpOpen.Add_Click({ Set-WtSetting 'workflows.help' $true; Update-WtFlowHelp })
+    $helpOpen.Add_Click({ Open-WtFlowHelp })
     foreach ($b in @($deleteFlow, $saveFlow, $helpOpen)) { [void](Add-WtChild $headActions $b) }
     [System.Windows.Controls.DockPanel]::SetDock($headActions, 'Right')
     [void]$head.Children.Add($headActions)
     $titleStack = New-WtStack Vertical 4
     $titleStack.Margin = [System.Windows.Thickness]::new(0, 0, 12, 0)
     $title = New-WtText '업무' 'T.H2'
+    $title.TextWrapping = 'NoWrap'   # 길면 줄을 바꾸지 않고 …로 줄인다 (전체 경로는 마우스를 올리면 보인다)
     $title.TextTrimming = 'CharacterEllipsis'
     $sub = New-WtText '' 'T.Sub'
     $sub.TextWrapping = 'Wrap'
@@ -8888,8 +9163,9 @@ function New-WtFlowsView {
     $form = New-WtStack Vertical 16
     $form.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
     $formScroll.Content = $form
-    $formArea = [System.Windows.Controls.Grid]::new()
-    [void]$formArea.Children.Add($formScroll)
+    [System.Windows.Controls.Grid]::SetRow($formScroll, 1)
+    [void]$cgrid.Children.Add($formScroll)
+    # 스크립트 폴더가 없을 때: 폼부터 출력까지의 자리 한가운데에 한 줄 + [폴더 추가]
     $empty = New-WtStack Vertical 12
     $empty.HorizontalAlignment = 'Center'
     $empty.VerticalAlignment = 'Center'
@@ -8900,9 +9176,9 @@ function New-WtFlowsView {
     $emptyAdd.Add_Click({ Add-WtFlowRoot })
     [void](Add-WtChild $empty $emptyText)
     [void](Add-WtChild $empty $emptyAdd)
-    [void]$formArea.Children.Add($empty)
-    [System.Windows.Controls.Grid]::SetRow($formArea, 1)
-    [void]$cgrid.Children.Add($formArea)
+    [System.Windows.Controls.Grid]::SetRow($empty, 1)
+    [System.Windows.Controls.Grid]::SetRowSpan($empty, 5)
+    [void]$cgrid.Children.Add($empty)
 
     # 실행 명령: [실행] [미리보기] [취소] 실행 방식. 좁으면 실행 방식이 다음 줄로 내려간다
     $commands = [System.Windows.Controls.WrapPanel]::new()
@@ -8973,20 +9249,22 @@ function New-WtFlowsView {
     [void]$outArea.Children.Add($outHint)
     [System.Windows.Controls.Grid]::SetRow($outArea, 5)
     [void]$cgrid.Children.Add($outArea)
+    # 폼 최대 높이는 가운데 높이나 다른 줄(제목 · 명령 · 결과 · 알림)의 높이가 바뀔 때마다 다시 잰다
+    foreach ($x in @($cgrid, $head, $commands, $statusStack, $noteRow)) { $x.Add_SizeChanged({ Update-WtFlowFormHeight }) }
     $center.Child = $cgrid
     [System.Windows.Controls.Grid]::SetColumn($center, 1)
     [void]$grid.Children.Add($center)
 
-    # 오른쪽: 설명 · 최근 실행. 머리글의 [접기]는 늘 같은 자리에 둔다
+    # 오른쪽: 설명 · 최근 실행. 머리글의 [접기]는 늘 같은 자리에 둔다.
+    # 창이 좁으면 가운데 위에 겹쳐 연다 (Update-WtFlowHelp). 그때만 뒤에 그림자를 깐다
     $right = New-WtCard
     $right.Padding = [System.Windows.Thickness]::new(16, 12, 16, 12)
-    $right.Margin = [System.Windows.Thickness]::new(16, 0, 0, 0)
     $rdock = [System.Windows.Controls.DockPanel]::new()
     $rhead = [System.Windows.Controls.DockPanel]::new()
     $rhead.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
     $helpClose = New-WtButton '접기' -Kind Link -Icon 0xE76C
     $helpClose.ToolTip = '설명을 접어 폼을 넓게 씁니다'
-    $helpClose.Add_Click({ Set-WtSetting 'workflows.help' $false; Update-WtFlowHelp })
+    $helpClose.Add_Click({ Close-WtFlowHelp })
     [System.Windows.Controls.DockPanel]::SetDock($helpClose, 'Right')
     [void]$rhead.Children.Add($helpClose)
     $rtitle = New-WtText '설명' 'T.H2'
@@ -9002,24 +9280,36 @@ function New-WtFlowsView {
     $helpScroll.Content = $helpPanel
     [void]$rdock.Children.Add($helpScroll)
     $right.Child = $rdock
-    [System.Windows.Controls.Grid]::SetColumn($right, 2)
-    [void]$grid.Children.Add($right)
+    $helpShadow = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $helpShadow 'Overlay.Shadow'
+    $helpShadow.Visibility = 'Collapsed'
+    $helpHost = [System.Windows.Controls.Grid]::new()
+    $helpHost.Margin = [System.Windows.Thickness]::new(16, 0, 0, 0)
+    [void]$helpHost.Children.Add($helpShadow)
+    [void]$helpHost.Children.Add($right)
+    [System.Windows.Controls.Grid]::SetColumn($helpHost, 2)
+    [void]$grid.Children.Add($helpHost)
+    # 좁고 넓음이 바뀔 때만 설명 자리를 다시 정한다
+    $grid.Add_SizeChanged({ param($s, $e) if ((Test-WtFlowNarrow $s.ActualWidth) -ne $script:helpNarrow) { Update-WtFlowHelp } })
     [void]$page.Panel.Children.Add($grid)
 
     # 업무 화면 안 단축키
     $page.Root.Add_PreviewKeyDown({
             param($s, $e)
             if ($e.Key -eq 'F5') { Update-WtFlowTree; Set-WtFlowNote '스크립트 목록을 새로 읽었습니다.'; $e.Handled = $true }
+            elseif ($e.Key -eq 'Escape' -and $script:helpOverlay) { Close-WtFlowHelp; $e.Handled = $true }
         })
 
     $script:ui = @{
         Tree = $tree; RemoveRoot = $remove; Title = $title; Sub = $sub; Repick = $repick
-        Form = $form; Empty = $empty; Commands = $commands; ModeButtons = @($mode.Child.Children)
+        Form = $form; FormScroll = $formScroll; CenterGrid = $cgrid; Empty = $empty; Commands = $commands; ModeButtons = @($mode.Child.Children)
         SaveFlow = $saveFlow; DeleteFlow = $deleteFlow; RunButton = $runButton; Preview = $preview; Cancel = $cancel
         Status = $statusStack; RunStatus = $runStatus; Elapsed = $elapsed; Busy = $busy; NoteRow = $noteRow; Note = $note; Undo = $undo
         Output = $output; OutputHint = $outHint; OutArea = $outArea
-        HelpColumn = $c3; HelpCard = $right; HelpPanel = $helpPanel; HelpOpen = $helpOpen
+        PageGrid = $grid; HelpColumn = $c3; HelpHost = $helpHost; HelpShadow = $helpShadow; HelpPanel = $helpPanel; HelpOpen = $helpOpen
     }
+    $script:helpNarrow = $false
+    $script:helpOverlay = $false
     $page.Root
 }
 
