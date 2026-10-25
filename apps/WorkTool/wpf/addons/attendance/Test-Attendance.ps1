@@ -204,6 +204,18 @@ try {
     } finally { $thread.CurrentCulture = $oldCulture }
     Assert-WtTest '근태: 문화권(en-US · ko-KR · th-TH · ar-SA · de-DE 소수점 쉼표)이 달라도 가져오기 · 합계가 같다' (@($results.Values | Sort-Object -Unique).Count -eq 1)
 
+    # 같은 캐시 핸들을 받은 두 곳 중 먼저 저장한 내용은 뒤의 옛 목록으로 덮지 않는다
+    $test = New-WtTestData 'attendance-shared'; $tests.Add($test)
+    Copy-WtTestFixture 'v2.json'
+    $data = Get-WtAttendanceData; $other = Get-WtAttendanceData
+    $a = @(Copy-WtItem @($data.Items)); $a[0].note = 'A가 고침'
+    $b = @(Copy-WtItem @($other.Items)); $b[0].place = 'B의 옛 목록'
+    Save-WtAttendanceItems $data.Store $a
+    $lateError = $null; try { Save-WtAttendanceItems $other.Store $b } catch { $lateError = $_.Exception.Message }
+    Assert-WtTest '근태 저장 거부: 공유 캐시의 옛 핸들은 먼저 저장한 내용을 덮지 않는다 (낙관적 잠금)' (
+        [object]::ReferenceEquals($data.Store, $other.Store) -and $lateError -like '*바뀌었습니다*' -and
+        (Read-WtTestDoc).items[0].note -eq 'A가 고침' -and (Read-WtTestDoc).items[0].place -eq '') $lateError
+
     # ---- 읽을 수 없는 파일 ----
     $test = New-WtTestData 'attendance-bad'; $tests.Add($test)
     [System.IO.File]::WriteAllText((Get-WtStorePath 'attendance'), '{ "schema": 3, "items": [] }', [System.Text.UTF8Encoding]::new($false))

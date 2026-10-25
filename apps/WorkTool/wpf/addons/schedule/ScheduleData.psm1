@@ -13,7 +13,7 @@
 #              until 그날 포함 · count 회차 수. 둘 다 null이면 끝없음
 #              skip [원래 날짜] 빠지는 회차 / changes { "원래 날짜": { start · end · title · note · alarms 중 바뀐 칸 } } 그 회차만 바뀜
 #              주는 월요일에 시작한다(격주를 셀 때). 회차 하나는 "<id>@<원래 날짜>"로 가리킨다
-#   alarms   [ { before: 분 } ]. 시작 몇 분 전(하루 종일은 그날 0시 기준). before가 없는 알람(더 새 앱의 모양)은 울리지 않는다
+#   alarms   [ { before: 분 } ]. 시작 몇 분 전(하루 종일은 그날 0시 기준). before가 null이면 꺼진 알람, before가 없는 알람(더 새 앱의 모양)은 울리지 않는다
 #   tags     [ 글 ]
 #   rev      사람이 고친 횟수(0부터, 고칠 때마다 +1, core\Records.psm1 Set-WtItemEdited). 다시 가져오기가 「이 앱에서 고쳤는지」를 이것으로 본다
 #   created · updated · deleted   앱이 찍는 시각. deleted가 있으면 지운 항목(목록에서 숨김, 90일 뒤 { id, deleted }만 남김)
@@ -38,11 +38,14 @@ $script:lastImport = $null
 $script:limits = @{ before = @(0, 527040); interval = @(1, 999); count = @(1, 9999) }   # before: 366일(분)까지
 <#
 예전 schedule.csv의 칸 하나가 정하는 항목 칸 (다시 가져올 때 이 경로만 기존 항목에 옮긴다. 나머지 칸은 건드리지 않는다).
-Date는 매주 반복의 요일도 정한다. LastAlarm · Updated는 데이터로 옮기지 않으므로 경로가 없다(origin.row에만 남는다)
+Date는 매주 반복의 요일도 정한다. LastAlarm · Updated는 데이터로 옮기지 않으므로 경로가 없다(origin.row에만 남는다).
+목록 칸의 소유: alarms는 첫 원소의 before만(예전 앱은 알람이 하나뿐이다. 다른 원소 · 첫 원소의 다른 칸은 이 앱 · 더 새 앱의 것),
+  예전 앱에서 알람을 끄면 첫 원소의 before가 null(꺼진 알람)이 된다. repeat.days는 요일 글 목록이라 통째로 소유한다.
+  tags · repeat.skip은 CSV가 소유하지 않는다
 #>
 $script:csvOwned = @{
     Date = @('start.date', 'repeat.days'); Time = @('start.time'); Title = @('title'); Note = @('note')
-    Alarm = @('alarms'); Repeat = @('repeat.freq', 'repeat.interval', 'repeat.days')
+    Alarm = @('alarms[0].before'); Repeat = @('repeat.freq', 'repeat.interval', 'repeat.days')
 }
 
 # ---- 읽기 · 쓰기 ------------------------------------------------------------------------------
@@ -54,11 +57,12 @@ function Open-WtScheduleStore {
 
 <#
 항목을 저장한다. 읽은 핸들(Get-WtScheduleData의 Store)과, 그 핸들의 Items를 고친 목록을 넘긴다(모르는 칸 · null · 깨진 항목이 그대로 남게).
-읽지 못한 파일 · 읽은 뒤 바뀐 파일에는 쓰지 않고 예외를 올린다(Save-WtStore). 지운 지 오래된 항목은 { id, deleted }만 남긴다.
-저장한 뒤에는 Get-WtScheduleData로 다시 받는다
+읽지 못한 파일 · 그 핸들로 읽은 뒤 바뀐 파일(같은 핸들로 누가 먼저 저장한 경우 포함)에는 쓰지 않고 예외를 올린다(Save-WtStore, 낙관적 잠금).
+캐시의 항목 객체는 화면 · 홈 카드가 같이 보므로 고칠 항목은 Copy-WtItem으로 복사해서 고친다. 지운 지 오래된 항목은 { id, deleted }만 남긴다.
+저장한 뒤에는 Get-WtScheduleData로 다시 받는다(이 핸들은 더 쓸 수 없다)
 #>
 function Save-WtScheduleItems($Store, [object[]]$Items) {
-    Save-WtStore -Store $Store -Items @(Compress-WtDeletedItems @($Items))
+    [void](Save-WtStore -Store $Store -Items @(Compress-WtDeletedItems @($Items)))
     $script:cache = $null
 }
 
@@ -128,14 +132,14 @@ function Get-WtSchTiming($StartPoint, $EndPoint) {
     @{ Start = $start; End = $end; AllDay = $allDay; LastDay = $last.Date; Problem = '' }
 }
 
-# alarms 목록 → @{ List(int[] 분 전); Problem }. before가 없는 알람은 이 앱이 모르는 모양이라 건너뛴다
+# alarms 목록 → @{ List(int[] 분 전); Problem }. before가 없는 알람은 이 앱이 모르는 모양이라 건너뛰고, before가 null이면 꺼진 알람이라 건너뛴다
 function Read-WtSchAlarms($Alarms) {
     $list = [System.Collections.Generic.List[int]]::new()
     foreach ($a in @($Alarms)) {
         if ($null -eq $a) { continue }
         if (-not (Test-WtSchObject $a)) { return @{ List = @(); Problem = "알람 모양이 틀렸습니다: '$a'" } }
         $b = $a.PSObject.Properties['before']
-        if (-not $b) { continue }
+        if (-not $b -or $null -eq $b.Value) { continue }
         $m = ConvertFrom-WtWhole $b.Value $script:limits.before[0] $script:limits.before[1]
         if ($null -eq $m) { return @{ List = @(); Problem = "알람을 읽지 못했습니다(0~$($script:limits.before[1])분 정수): '$($b.Value)'" } }
         $list.Add([int]$m)
@@ -577,7 +581,7 @@ function Import-WtScheduleLegacy([string]$Folder) {
     $incoming = @(Copy-WtItem @(foreach ($r in $csv.Rows) { ConvertFrom-WtScheduleRow $r $at }))
     $m = Merge-WtLegacyItems -Items $store.Items -Incoming $incoming -Owned $script:csvOwned
     $legacy = [ordered]@{ file = $csv.File; sha256 = $csv.Sha256; encoding = $csv.Encoding; rows = $csv.Rows.Count; at = $at }
-    Save-WtStore -Store $store -Items @(Compress-WtDeletedItems @($m.Items)) -Extra @{ importedFrom = $Folder; legacy = $legacy }
+    [void](Save-WtStore -Store $store -Items @(Compress-WtDeletedItems @($m.Items)) -Extra @{ importedFrom = $Folder; legacy = $legacy })
     $script:cache = $null
     $script:lastImport = $m
     $m.Added + $m.Updated

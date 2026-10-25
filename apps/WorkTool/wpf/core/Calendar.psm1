@@ -67,7 +67,7 @@ function Get-WtHolidayDates([Nullable[datetime]]$From, [Nullable[datetime]]$To) 
 # 휴무일 항목을 저장한다 (2단계 화면이 쓴다). 읽은 핸들(Get-WtHolidayData의 Store)과 그 Items를 고친 목록을 넘긴다.
 # 읽지 못한 파일 · 읽은 뒤 바뀐 파일에는 쓰지 않는다(Save-WtStore). 지운 지 오래된 항목은 { id, deleted }만 남긴다
 function Save-WtHolidayItems($Store, [object[]]$Items) {
-    Save-WtStore -Store $Store -Items @(Compress-WtDeletedItems @($Items))
+    [void](Save-WtStore -Store $Store -Items @(Compress-WtDeletedItems @($Items)))
     $script:holidayCache = $null
 }
 

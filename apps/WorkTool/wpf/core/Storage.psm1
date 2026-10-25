@@ -449,11 +449,15 @@ function Get-WtStoreTops($Doc) {
           · unread(디스크 · 네트워크 때문에 못 읽음)
   Schema  파일의 schema (ok · missing이면 이 앱이 쓸 schema)
   Reason  refused · unread일 때 이유
-  Generation  읽거나 쓸 때마다 오르는 번호. 핸들(Open-WtStore)이 읽은 뒤에 다른 읽기 · 쓰기가 있었는지 본다
+  Generation  그 파일의 버전 번호. 읽거나 쓸 때마다 오른다. 핸들(Open-WtStore)은 열 때의 번호를 자기 것으로 들고, 저장할 때 지금 번호와 같아야 쓴다
+  거부(refused) 뒤 못 읽거나 파일이 없어져도 거부로 남는다. 다시 읽어 정상 schema(ok)를 확인해야만 풀린다
 #>
 function Set-WtStoreRead([string]$Path, [string]$State, [int]$Schema = 0, [string]$Reason = '') {
+    $key = $Path.ToLowerInvariant()
     $script:storeGeneration++
-    $script:storeRead[$Path.ToLowerInvariant()] = @{ State = $State; Schema = $Schema; Reason = $Reason; Generation = $script:storeGeneration }
+    $old = $script:storeRead[$key]
+    if ($State -in 'unread', 'missing' -and $old -and $old.State -eq 'refused') { $State = 'refused'; $Schema = $old.Schema; $Reason = $old.Reason }
+    $script:storeRead[$key] = @{ State = $State; Schema = $Schema; Reason = $Reason; Generation = $script:storeGeneration }
 }
 
 # 읽기를 거부한다: 거부했다고 적고 예외를 올린다. 파일은 바꾸지 않는다
@@ -481,15 +485,21 @@ function Read-WtStore {
     $key = $path.ToLowerInvariant()
     try { $text = Read-WtJsonText $path }
     catch { Set-WtStoreRead $path 'unread' -Reason $_.Exception.Message; throw }
-    if ($null -eq $text) { [void]$script:storeTops.Remove($key); Set-WtStoreRead $path 'missing' $Schema; return $null }
+    if ($null -eq $text) {
+        Set-WtStoreRead $path 'missing' $Schema
+        if ($script:storeRead[$key].State -eq 'refused') { throw "$Name.json은 전에 읽기를 거부한 파일입니다. 정상 schema를 다시 읽기 전에는 새로 만들지 않습니다. ($($script:storeRead[$key].Reason))" }
+        [void]$script:storeTops.Remove($key)
+        return $null
+    }
     if (-not $text.Trim()) { Stop-WtStoreRead $path "$Name.json이 비어 있습니다. 파일은 바꾸지 않았습니다." }
     try { $doc = $text | ConvertFrom-Json -Depth 20 -DateKind String }
     catch { Stop-WtStoreRead $path "$Name.json을 JSON으로 읽지 못했습니다. 파일은 바꾸지 않았습니다. ($($_.Exception.Message))" }
     if ($doc -isnot [System.Management.Automation.PSCustomObject]) { Stop-WtStoreRead $path "$Name.json의 맨 위가 객체가 아닙니다. 파일은 바꾸지 않았습니다." }
     $num = ConvertFrom-WtWhole (Get-WtField $doc 'schema') 1 999
     if ($null -eq $num) { Stop-WtStoreRead $path "$Name.json에 형식 번호(schema)가 없거나 잘못됐습니다. 파일은 바꾸지 않았습니다." }
+    # items는 꼭 목록이다. 없거나 null이면 빈 목록이 아니라 깨진 파일로 본다(빈 목록으로 저장하면 원래 내용을 모른 채 덮게 된다)
     $list = Get-WtField $doc 'items'
-    if ($null -ne $list -and $list -isnot [array]) { Stop-WtStoreRead $path "$Name.json의 items가 목록이 아닙니다. 파일은 바꾸지 않았습니다." }
+    if ($null -eq $list -or $list -isnot [array]) { Stop-WtStoreRead $path "$Name.json의 items가 없거나 목록이 아닙니다. 파일은 바꾸지 않았습니다." }
     $from = [int]$num
     if ($from -gt $Schema) {
         Stop-WtStoreRead $path "$Name.json은 더 새 버전(schema $from)에서 저장됐습니다. WorkTool을 최신으로 바꿔 주세요. 파일은 바꾸지 않았습니다."
@@ -567,36 +577,41 @@ function Write-WtStore {
 읽기 문제로 예외를 올리지 않고 State에 담는다(화면이 오류를 보여 주게).
   Name · Path · Schema(쓸 schema) · State(ok · missing · error) · Error(이유) · Doc(읽은 문서 | $null)
   Items: 저장된 항목 그대로 (null · 깨진 항목 포함, 같은 순서). 저장할 때 이것을 고쳐서 넘긴다
-  Generation: 읽은 때의 번호
+  Version: 열 때 그 파일의 버전 번호. 핸들 자기 것이고 바뀌지 않는다 (같은 핸들을 여러 곳이 나눠 가져도 저장 판정이 같이 바뀌지 않게)
+핸들의 Items 객체는 여럿이 같이 볼 수 있으므로, 고칠 때는 Copy-WtItem으로 복사해서 고친 목록을 넘긴다
 #>
 function Open-WtStore {
     param([Parameter(Mandatory)][string]$Name, [int]$Schema = 1, [scriptblock]$Migrate)
     $path = Get-WtStorePath $Name
-    $h = [ordered]@{ Name = $Name; Path = $path; Schema = $Schema; State = 'ok'; Error = $null; Doc = $null; Items = @(); Generation = 0 }
+    $state = 'ok'; $err = $null; $doc = $null; $list = @()
     try {
         $doc = Read-WtStore -Name $Name -Schema $Schema -Migrate $Migrate
-        if ($null -eq $doc) { $h.State = 'missing' } else { $h.Doc = $doc; $h.Items = @($doc.items) }
-        if ($null -eq (Get-WtField $doc 'items')) { $h.Items = @() }
-    } catch { $h.State = 'error'; $h.Error = $_.Exception.Message }
+        if ($null -eq $doc) { $state = 'missing' } else { $list = @($doc.items) }
+    } catch { $state = 'error'; $err = $_.Exception.Message }
     $read = $script:storeRead[$path.ToLowerInvariant()]
-    $h.Generation = if ($read) { $read.Generation } else { 0 }
-    [pscustomobject]$h
+    New-WtStoreHandle $Name $path $Schema $state $err $doc $list $(if ($read) { $read.Generation } else { 0 })
+}
+
+# 핸들 하나. 저장 모듈은 만든 핸들을 다시 고치지 않는다(저장하면 새 핸들을 만든다). 부르는 쪽도 고치지 않는다
+function New-WtStoreHandle([string]$Name, [string]$Path, [int]$Schema, [string]$State, $ErrorText, $Doc, [AllowNull()][object[]]$List, [long]$Version) {
+    [pscustomobject][ordered]@{ Name = $Name; Path = $Path; Schema = $Schema; State = $State; Error = $ErrorText; Doc = $Doc; Items = $List; Version = $Version }
 }
 
 <#
-핸들로 저장한다. 다음 경우에는 쓰지 않고 예외를 올린다(쓰기 실패와 다르다. 쓰기 실패는 저장 통로가 보유한다):
+핸들로 저장한다(낙관적 잠금). 다음 경우에는 쓰지 않고 예외를 올린다(쓰기 실패와 다르다. 쓰기 실패는 저장 통로가 보유한다):
   - 핸들이 읽기에 실패했다(error): 더 새 버전 · 깨진 파일 · 응답 없는 폴더
-  - 핸들로 읽은 뒤 그 파일을 다시 읽었거나 다른 길로 썼다(Generation이 다르다): 다시 Open-WtStore로 읽은 뒤 저장한다
-$Items의 null · 깨진 항목은 그대로 쓴다. 저장한 뒤에는 이 핸들로 이어서 저장할 수 있다
+  - 핸들의 Version이 그 파일의 지금 버전과 다르다: 핸들로 읽은 뒤 다시 읽었거나, 누가(같은 핸들을 가진 다른 곳 포함) 저장했다.
+    다시 Open-WtStore로 읽고 바꾼 내용을 그 위에 다시 맞춘 뒤 저장한다
+$Items의 null · 깨진 항목은 그대로 쓴다. 저장하면 새 버전의 핸들을 돌려준다(이어서 저장하려면 그것을 쓴다). 넘긴 핸들은 더 쓸 수 없다
 #>
 function Save-WtStore {
     param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()][object[]]$Items, [hashtable]$Extra)
     if ($Store.State -notin 'ok', 'missing') { throw "$($Store.Name).json은 읽지 못해서 저장하지 않습니다. ($($Store.Error))" }
-    $read = $script:storeRead[([string]$Store.Path).ToLowerInvariant()]
-    if (-not $read -or $read.Generation -ne $Store.Generation) { throw "$($Store.Name).json을 읽은 뒤에 다시 읽거나 저장한 일이 있어 저장하지 않습니다. 다시 읽은 뒤 저장하세요." }
+    $key = ([string]$Store.Path).ToLowerInvariant()
+    $read = $script:storeRead[$key]
+    if (-not $read -or $read.Generation -ne $Store.Version) { throw "$($Store.Name).json이 이 핸들로 읽은 뒤에 바뀌었습니다(다시 읽음 · 다른 저장). 다시 읽은 뒤 저장하세요." }
     Write-WtStore -Name $Store.Name -Schema $Store.Schema -Items @($Items) -Extra $Extra -KeepNull
-    $Store.Generation = $script:storeRead[([string]$Store.Path).ToLowerInvariant()].Generation
-    $Store.State = 'ok'
+    New-WtStoreHandle $Store.Name $Store.Path $Store.Schema 'ok' $null $Store.Doc @($Items) $script:storeRead[$key].Generation
 }
 # 새 항목 ID
 function New-WtId { [guid]::NewGuid().ToString('N').Substring(0, 12) }

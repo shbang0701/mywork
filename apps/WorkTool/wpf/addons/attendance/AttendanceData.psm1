@@ -38,7 +38,8 @@ $script:maxSpanDays = 31            # 출근 · 업무외 기록 하나의 길�
 $script:maxLeaveDays = 366          # 사람이 정한 휴가 일수
 <#
 예전 attendance.csv의 칸 하나가 정하는 항목 칸 (다시 가져올 때 이 경로만 기존 항목에 옮긴다. 나머지 칸은 건드리지 않는다).
-업무외 끝 날짜는 시작 날짜 · 시각에 따라 정해지므로 StartDate · StartTime도 end.date를 정한다. 종류(Type)가 바뀌면 종류별 칸을 통째로 다시 맞춘다
+업무외 끝 날짜는 시작 날짜 · 시각에 따라 정해지므로 StartDate · StartTime도 end.date를 정한다. 종류(Type)가 바뀌면 종류별 칸을 통째로 다시 맞춘다.
+목록 칸 tags는 CSV가 소유하지 않는다
 #>
 $script:csvOwned = @{
     Type = @('kind', 'start.time', 'end', 'overtime', 'leave', 'note', 'place')
@@ -58,7 +59,7 @@ function Open-WtAttendanceStore {
 
 # 항목을 저장한다. 읽은 핸들(Get-WtAttendanceData의 Store)과 그 핸들의 Items를 고친 목록을 넘긴다 (Save-WtScheduleItems와 같은 약속)
 function Save-WtAttendanceItems($Store, [object[]]$Items) {
-    Save-WtStore -Store $Store -Items @(Compress-WtDeletedItems @($Items))
+    [void](Save-WtStore -Store $Store -Items @(Compress-WtDeletedItems @($Items)))
     $script:cache = $null
 }
 
@@ -335,7 +336,7 @@ function Import-WtAttendanceLegacy([string]$Folder) {
     $incoming = @(Copy-WtItem @(foreach ($r in $csv.Rows) { ConvertFrom-WtAttendanceRow $r $at }))
     $m = Merge-WtLegacyItems -Items $store.Items -Incoming $incoming -Owned $script:csvOwned
     $legacy = [ordered]@{ file = $csv.File; sha256 = $csv.Sha256; encoding = $csv.Encoding; rows = $csv.Rows.Count; at = $at }
-    Save-WtStore -Store $store -Items @(Compress-WtDeletedItems @($m.Items)) -Extra @{ importedFrom = $Folder; legacy = $legacy }
+    [void](Save-WtStore -Store $store -Items @(Compress-WtDeletedItems @($m.Items)) -Extra @{ importedFrom = $Folder; legacy = $legacy })
     $script:cache = $null
     $script:lastImport = $m
     $m.Added + $m.Updated

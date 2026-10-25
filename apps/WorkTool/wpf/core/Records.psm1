@@ -55,12 +55,26 @@ JSON 숫자는 크기에 따라 Int64 · Double · BigInteger로 들어오므로
 #>
 function ConvertFrom-WtWhole($Value, [long]$Min, [long]$Max) {
     if ($null -eq $Value -or $Value -is [bool] -or $Value -is [string] -or $Value -is [char]) { return $null }
-    $d = $null
-    if ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal]) { $d = [decimal]$Value }
-    elseif ($Value -is [double]) { if ([double]::IsFinite($Value) -and [Math]::Abs($Value) -lt 1e15) { $d = [decimal]$Value } }
-    elseif ($Value -is [System.Numerics.BigInteger]) { if ($Value -ge [long]::MinValue -and $Value -le [long]::MaxValue) { $d = [decimal][long]$Value } }
-    if ($null -eq $d -or $d -ne [Math]::Floor($d) -or $d -lt $Min -or $d -gt $Max) { return $null }
-    [long]$d
+    # 정수인지는 받은 형식 그대로 본다. Decimal로 먼저 바꾸면 1e-30이 0, 1.0000000000000002가 1이 되어 정수로 잘못 통과한다
+    if ($Value -is [int] -or $Value -is [long]) { $w = [long]$Value }
+    elseif ($Value -is [double]) {
+        if (-not [double]::IsFinite($Value) -or [Math]::Truncate($Value) -ne $Value) { return $null }
+        # 큰 Double도 반올림 없이 옮기고, Int64 밖이면 변환 전에 거부한다
+        $whole = [System.Numerics.BigInteger]$Value
+        if ($whole -lt [long]::MinValue -or $whole -gt [long]::MaxValue) { return $null }
+        $w = [long]$whole
+    }
+    elseif ($Value -is [decimal]) {
+        if ([Math]::Truncate($Value) -ne $Value -or $Value -lt [long]::MinValue -or $Value -gt [long]::MaxValue) { return $null }
+        $w = [long]$Value
+    }
+    elseif ($Value -is [System.Numerics.BigInteger]) {
+        if ($Value -lt [long]::MinValue -or $Value -gt [long]::MaxValue) { return $null }
+        $w = [long]$Value
+    }
+    else { return $null }
+    if ($w -lt $Min -or $w -gt $Max) { return $null }
+    $w
 }
 
 # 숫자 칸 하나를 수로 읽는다(소수 됨). $Min ~ $Max 안의 유한한 수면 [double], 아니면 $null
@@ -155,8 +169,9 @@ function Test-WtDeleted($Item) {
 # 사람이 고친 횟수 rev. 없으면 0, 0 이상의 정수가 아니면 -1(알 수 없음: 합칠 때 「고쳤음」으로 본다)
 function Get-WtItemRevision($Item) {
     if (-not (Test-WtRecordObject $Item)) { return 0 }
+    $hasRev = if ($Item -is [System.Collections.IDictionary]) { $Item.Contains('rev') } else { $null -ne $Item.PSObject.Properties['rev'] }
+    if (-not $hasRev) { return 0 }
     $v = Get-WtField $Item 'rev'
-    if ($null -eq $v) { return 0 }
     $w = ConvertFrom-WtWhole $v 0 2147483647
     if ($null -eq $w) { -1 } else { [int]$w }
 }
@@ -186,7 +201,7 @@ function Compress-WtDeletedItems([object[]]$Items, [int]$Days = 90, $Now) {
             $at = ConvertFrom-WtStamp ([string](Get-WtField $i 'deleted'))
             if ($at -and $at -lt $limit) { [pscustomobject][ordered]@{ id = $i.id; deleted = $i.deleted }; continue }
         }
-        $i
+        , $i   # 깨진 항목이 목록(배열)이어도 펴지 않고 한 항목으로 내보낸다 (빈 배열 · null도 그 자리에)
     }
 }
 
@@ -216,12 +231,32 @@ function Get-WtChangedColumns($Old, $New) {
 <#
 칸 경로 하나("start.date" 처럼 점으로 잇는다)의 값을 $Source에서 $Target으로 옮긴다. 그 경로 밖의 칸은 건드리지 않는다.
 가는 길의 앞부분이 한쪽에서 null(없음)이면 그 앞부분을 통째로 맞춘다 (예: 예전 데이터에서 반복이 없어지면 repeat = null).
+목록 칸은 원소 번호로 적는다("alarms[0].before" = 첫 원소의 before만). 그 원소의 다른 칸과 다른 원소는 건드리지 않는다.
+  $Source에 그 원소가 있고 $Target에 없으면 그 원소를 목록 그 자리에 끼워 넣는다(뒤 원소는 그대로 뒤로).
+  $Source에 그 원소가 없으면 $Target 원소의 그 칸만 null로 둔다(원소와 그 확장 칸은 남는다).
 $Source에 그 칸이 없고 $Target에도 없으면 아무것도 하지 않는다
 #>
 function Copy-WtPathValue($Target, $Source, [string]$Path) {
     $parts = $Path.Split('.')
     $t = $Target; $s = $Source
     for ($i = 0; $i -lt $parts.Count - 1; $i++) {
+        $m = [regex]::Match($parts[$i], '^([^\[\]]+)\[(\d+)\]$')
+        if ($m.Success) {
+            $name = $m.Groups[1].Value; $at = [int]$m.Groups[2].Value
+            # Get-WtField는 목록을 한 덩어리로 돌려주므로 변수에 받은 뒤 @()로 본다 (@(Get-WtField …)는 목록을 한 겹 더 싼다)
+            $sRaw = Get-WtField $s $name; $tRaw = Get-WtField $t $name
+            $sl = @($sRaw); $tl = @($tRaw)
+            $se = $null; $te = $null
+            if ($null -ne $sRaw -and $at -lt $sl.Count) { $se = $sl[$at] }
+            if ($null -ne $tRaw -and $at -lt $tl.Count) { $te = $tl[$at] }
+            if ((Test-WtRecordObject $te)) { $t = $te; $s = $se; continue }
+            if ($null -eq $se) { return }
+            $list = [System.Collections.Generic.List[object]]::new()
+            if ($null -ne $tRaw) { foreach ($x in $tl) { $list.Add($x) } }
+            $list.Insert([Math]::Min($at, $list.Count), $se)
+            Set-WtField $t $name $list.ToArray()
+            return
+        }
         $sv = Get-WtField $s $parts[$i]
         $tv = Get-WtField $t $parts[$i]
         if ($null -eq $sv -or -not (Test-WtRecordObject $tv)) {
@@ -249,8 +284,10 @@ id는 글 그대로(대소문자를 가려서) 짝짓는다. 규칙
     그 밖의 칸(이 앱 · 더 새 앱이 더한 칸, 중첩 칸 포함)은 그대로다. origin.row · origin.at · updated를 새 값으로
   - 예전 줄이 바뀌었고 지금 쪽에서도 고쳤다(rev ≠ origin.rev) → 지금 값을 두고 Conflicts에 적는다
   - 지금 쪽에서 만든 항목(origin.from이 다름)과 id가 겹침 → 지금 값을 두고 Conflicts에 적는다
-  - 예전 데이터 안에서 id가 겹친 뒤 줄 → 버리지 않는다. id를 'dup-' + 줄 내용 해시로 바꾸고 origin.dupOf에 원래 id를 적어
-    따로 남긴다(탭이 「고칠 항목」으로 보여 준다, Get-WtRecordProblem). 내용까지 같은 줄은 하나만 남는다
+  - 예전 데이터 안에서 id가 겹친 뒤 줄 → 처음 줄과 내용까지 같으면 하나로 친다(dup을 만들지 않는다). 내용이 다르면 버리지 않는다:
+    id를 'dup-' + 줄 내용 해시로 바꾸고 origin.dupOf에 원래 id를 적어 따로 남긴다(탭이 「고칠 항목」으로 보여 준다, Get-WtRecordProblem).
+    그런 줄끼리 내용까지 같으면 하나만 남는다
+  - rev · origin.rev 중 하나라도 0 이상 정수가 아니면 「고쳤음」으로 본다
   - 예전 데이터에서 없어진 항목 → 지우지 않고 Missing에 적기만 한다
 #>
 function Merge-WtLegacyItems([object[]]$Items, [object[]]$Incoming, [hashtable]$Owned, [string]$From = 'winforms-csv') {
@@ -266,17 +303,20 @@ function Merge-WtLegacyItems([object[]]$Items, [object[]]$Incoming, [hashtable]$
     $r = [ordered]@{ Added = 0; Updated = 0; Unchanged = 0; KeptDeleted = 0
         Conflicts = [System.Collections.Generic.List[string]]::new(); Missing = [System.Collections.Generic.List[string]]::new(); Duplicates = [System.Collections.Generic.List[string]]::new() }
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $firstRow = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)   # id마다 처음 나온 줄의 내용
     foreach ($n in @($Incoming)) {
         $id = [string]$n.id
+        $rowKey = Get-WtRowKey $n.origin.row
         if (-not $seen.Add($id)) {
-            $hash = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes((Get-WtRowKey $n.origin.row)))
+            if ($firstRow.ContainsKey($id) -and $firstRow[$id] -ceq $rowKey) { continue }   # id와 내용까지 같은 줄은 하나로 (잃는 것이 없다)
+            $hash = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($rowKey))
             $dup = 'dup-' + [Convert]::ToHexString($hash).Substring(0, 12).ToLowerInvariant()
             Set-WtField $n 'id' $dup
             Set-WtField $n.origin 'dupOf' $id
             $id = $dup
             if (-not $seen.Add($id)) { continue }
             $r.Duplicates.Add($id)
-        }
+        } else { $firstRow[$id] = $rowKey }
         if (-not $index.ContainsKey($id)) { $merged.Add($n); $index[$id] = $merged.Count - 1; $r.Added++; continue }
         $old = $merged[$index[$id]]
         if (Test-WtDeleted $old) { $r.KeptDeleted++; continue }
@@ -284,7 +324,9 @@ function Merge-WtLegacyItems([object[]]$Items, [object[]]$Incoming, [hashtable]$
         if (-not (Test-WtRecordObject $o) -or [string](Get-WtField $o 'from') -ne $From) { $r.Conflicts.Add($id); continue }
         $changed = @(Get-WtChangedColumns (Get-WtField $o 'row') $n.origin.row)
         if (-not $changed.Count) { $r.Unchanged++; continue }
-        if ((Get-WtItemRevision $old) -ne (Get-WtItemRevision $o)) { $r.Conflicts.Add($id); continue }
+        # rev · origin.rev 중 하나라도 잘못된 값(-1)이면 고쳤음으로 본다 (둘 다 잘못돼 같은 -1이어도)
+        $revNow = Get-WtItemRevision $old; $revThen = Get-WtItemRevision $o
+        if ($revNow -lt 0 -or $revThen -lt 0 -or $revNow -ne $revThen) { $r.Conflicts.Add($id); continue }
         $paths = [System.Collections.Generic.List[string]]::new()
         foreach ($c in $changed) { foreach ($p in @($Owned[$c])) { if ($p -and -not $paths.Contains($p)) { $paths.Add($p) } } }
         foreach ($p in $paths) { Copy-WtPathValue $old $n $p }

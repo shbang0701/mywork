@@ -240,7 +240,7 @@ wpf/
   - 예외 2: 예전 WorkTool(WinForms) 데이터 폴더를 알아보는 CSV 이름(`memo.csv` 등)입니다. 이미 정해진 예전 형식이라서입니다.
 - 화면은 `core/Ui.psm1`의 `New-Wt*` 함수와 스타일 이름만 써서 만듭니다. 색 값이나 글꼴 이름을 직접 쓰지 않습니다.
 - 저장은 `Get-WtStoreItems` · `Write-WtStore`만 씁니다. 형식을 바꿀 때는 `-Schema`를 올리고 `-Migrate`로 변환을 줍니다.
-  - 항목을 고쳐 저장하는 새 코드(일정 · 근태 · 휴무일)는 저장소 핸들 `Open-WtStore` · `Save-WtStore`만 씁니다. 읽지 못한 파일(빈 파일 · 깨진 JSON · 더 새 `schema` 등) · 읽은 뒤 다시 읽은 파일에는 쓰지 않고 예외를 올리며, `null` · 깨진 항목도 같은 자리에 그대로 씁니다. `Write-WtStore`도 읽기를 거부한 파일과 더 높은 `schema` 파일에는 쓰지 않습니다. 계약은 [일정 · 근태 데이터 설계](../../../docs/plans/schedule-attendance-design.md) 1.9.
+  - 항목을 고쳐 저장하는 새 코드(일정 · 근태 · 휴무일)는 저장소 핸들 `Open-WtStore` · `Save-WtStore`만 씁니다. 읽지 못한 파일(빈 파일 · 깨진 JSON · `items` 없음 · 더 새 `schema` 등)과, 핸들을 연 뒤 버전이 바뀐 파일(다시 읽음 · 같은 핸들로 누가 먼저 저장함)에는 쓰지 않고 예외를 올립니다(낙관적 잠금). 저장하면 새 핸들을 돌려줍니다. `null` · 깨진 항목도 같은 자리에 그대로 씁니다. 고칠 항목은 `Copy-WtItem`으로 복사해서 고칩니다. `Write-WtStore`도 읽기를 거부한 파일과 더 높은 `schema` 파일에는 쓰지 않습니다. 계약은 [일정 · 근태 데이터 설계](../../../docs/plans/schedule-attendance-design.md) 1.9.
   - `-Schema`는 옛 버전이 잘못 읽게 되는 변경에만 올립니다. 칸을 더하는 것은 올리지 않습니다. 읽은 항목 객체를 그대로 두고 아는 칸만 고쳐서 저장하면 모르는 칸이 남습니다(아는 칸만으로 새 객체를 만들지 않습니다). 규칙 전체는 [일정 · 근태 데이터 설계](../../../docs/plans/schedule-attendance-design.md) 1장.
   - 날짜 · 시각 모양, 지운 표시, 예전 데이터 합치기 같은 형식 도우미는 `core/Records.psm1`에 있습니다(`Get-WtStamp` · `ConvertFrom-WtDateText` · `Test-WtDeleted` · `Merge-WtLegacyItems` 등). 칸이 없을 수 있는 `count`는 `$obj.count` 대신 `Get-WtField $obj 'count'`로 읽습니다(PowerShell이 붙인 Count가 나옴).
   - 형식이 있는 탭은 데이터 모듈(화면 없음)과 화면 모듈을 나누고, 고정 시험 자료를 탭 폴더 `fixtures/`에 둡니다(일정 · 근태 참고).

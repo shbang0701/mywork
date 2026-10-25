@@ -1,7 +1,7 @@
 # 일정 · 근태 데이터 설계 — 형식 · 이전 · 공통 규칙
 
 - 작성: 2026-10-26
-- 상태: **1단계(데이터 형식 · 이전) 구현됨, 2단계(기능 · 화면) 전 검토용.** 화면은 지금도 보기 전용입니다. 2026-10-26 형식 검토(막음 7 · 권고 3)를 반영했습니다: 1.9 저장 계약, 1.5 `rev` · id 비교, 7.4 합치기, 1.4 숫자 범위, 1.3 · 1.6 · 2.3의 계약.
+- 상태: **1단계(데이터 형식 · 이전) 구현됨, 2단계(기능 · 화면) 전 검토용.** 화면은 지금도 보기 전용입니다. 2026-10-26 형식 검토(막음 7 · 권고 3)와 재확인(덜 닫힘 5 · 새 권고 1)을 반영했습니다: 1.9 저장 계약(낙관적 잠금 · 끈질긴 거부), 1.5 `rev` · id 비교, 7.4 합치기(목록 원소 소유 · 같은 줄), 1.4 숫자 범위, 1.3 · 1.6 · 2.3의 계약.
 - 범위: WorkTool WPF 일정 · 근태 탭이 저장하는 파일의 형식, 버전을 올리고 옛 파일을 읽는 규칙, 예전 WinForms 데이터 가져오기, 휴무일 · 달력 표시 자리.
 - 경로: `core/` · `addons/` · `tests/`로 시작하는 경로는 `apps/WorkTool/wpf/` 안입니다. 그 밖의 경로는 저장소 루트 기준입니다. 근거가 된 제안서는 로컬 `.work/plans/schedule-attendance-proposal.md`(저장소에 없음)입니다.
 - 용어
@@ -61,7 +61,8 @@
 - 값이 없음은 `null` 하나로 씁니다. 구조 칸(`time` · `end` · `repeat` · `deleted` · `days` · `origin` 등)에 씁니다.
 - 글 칸(`title` · `note` · `place` · `ref` · `name`)은 늘 문자열이고, 비면 `""`입니다. 읽을 때는 `null`도 `""`로 봅니다.
 - 숫자 칸의 범위(형식 계약). 해석은 `core/Records.psm1`의 `ConvertFrom-WtWhole` · `ConvertFrom-WtNumber` 한 곳에서 하고, 범위 밖 · 소수 · 글 · 아주 큰 수(Int64 · BigInteger)는 예외 없이 그 항목만 「고칠 항목」입니다.
-  - 일정 `alarms[].before`: 0 ~ 527040 정수(366일, 분)
+  - 정수인지는 받은 수 그대로(바꾸기 전에) 봅니다. `1e-30` · `1.0000000000000002` · `0.9999999999999999`는 정수가 아니고, `10.0`은 정수 10입니다.
+  - 일정 `alarms[].before`: 0 ~ 527040 정수(366일, 분). `null`이면 꺼진 알람(울리지 않음, 고칠 항목 아님)
   - 일정 `repeat.interval`: 1 ~ 999 정수 · `repeat.count`: 1 ~ 9999 정수 · `monthDay`: 1 ~ 31 또는 -1 · `nth`: 1 ~ 5 또는 -1
   - 근태 `leave.days`: 0 ~ 366 수(소수 됨) · 출근 · 업무외 기록 하나의 길이: 31일까지
   - `rev`: 0 이상 정수(1.5) · 파일의 `schema`: 1 ~ 999 정수
@@ -75,7 +76,7 @@
 - 지운 지 90일이 지나면 저장할 때 내용을 비우고 `{ "id": "…", "deleted": "…" }`만 남깁니다. id를 남겨야 다시 가져오기 · 합치기에서 되살아나지 않습니다.
 - 같은 id가 두 번 나오면 뒤의 것을 「고칠 항목」으로 둡니다.
 - id는 **글 그대로 비교합니다(대소문자를 가림, ordinal).** `s1`과 `S1`은 다른 항목입니다. 예전 CSV의 id는 앞뒤 공백만 뗍니다.
-- `rev`: 사람이 고친 횟수입니다. 0부터 시작하고, 사람이 고치거나 지우거나 되살릴 때마다 1 오릅니다(`Set-WtItemEdited`가 `rev`와 `updated`를 같이 바꿉니다). 「이 앱에서 고쳤는지」는 시각이 아니라 `rev`로 정합니다. 같은 초에 고쳐도 `rev`는 달라집니다. 칸이 없으면 0, 0 이상 정수가 아니면 「고쳤음」으로 봅니다. `updated`는 보여 주는 사실일 뿐 판정에 쓰지 않습니다.
+- `rev`: 사람이 고친 횟수입니다. 0부터 시작하고, 사람이 고치거나 지우거나 되살릴 때마다 1 오릅니다(`Set-WtItemEdited`가 `rev`와 `updated`를 같이 바꿉니다). 「이 앱에서 고쳤는지」는 시각이 아니라 `rev`로 정합니다. 같은 초에 고쳐도 `rev`는 달라집니다. 칸이 없으면 0입니다. `rev` · `origin.rev` 중 하나라도 0 이상 정수가 아니면(`null` 포함, 둘 다 잘못돼 값이 같아도) 「고쳤음」으로 봅니다. `updated`는 보여 주는 사실일 뿐 판정에 쓰지 않습니다.
 
 ### 1.6 계산 값은 저장하지 않는다
 
@@ -115,14 +116,16 @@
 
 - 읽은 결과는 넷입니다.
   - 없음(missing): 파일이 없습니다. 빈 목록으로 보고, 새로 만들 수 있습니다.
-  - 거부(refused): 내용 때문에 읽지 않았습니다. 빈 파일(공백만 있는 파일 포함) · JSON이 아님 · 맨 위가 객체가 아님 · `schema`가 1~999 정수가 아님 · `items`가 목록이 아님 · 앱보다 높은 `schema` · 변환 실패. 「없음」과 다릅니다.
+  - 거부(refused): 내용 때문에 읽지 않았습니다. 빈 파일(공백만 있는 파일 포함) · JSON이 아님 · 맨 위가 객체가 아님 · `schema`가 1~999 정수가 아님 · `items`가 없거나 `null`이거나 목록이 아님 · 앱보다 높은 `schema` · 변환 실패. 「없음」과 다릅니다.
+  - 거부한 뒤 디스크 · 네트워크 때문에 못 읽거나 파일이 잠시 없어져도 거부로 남습니다. 다시 읽어 정상 `schema`를 확인해야만 풀립니다.
   - 못 읽음(unread): 디스크 · 네트워크 때문에 못 읽었습니다.
   - 정상(ok).
 - 항목을 고쳐 저장하는 코드는 **저장소 핸들만** 씁니다(일정 · 근태 · 휴무일. 2단계 편집도 이 길만).
-  - `Open-WtStore`가 핸들(읽은 결과 · 항목 · schema · 읽은 번호)을 돌려줍니다. 읽기 문제로 예외를 올리지 않고 `State = error`와 이유를 담습니다.
-  - `Save-WtStore $핸들 $항목`은 핸들이 정상 · 없음이고, 그 핸들로 읽은 뒤 그 파일을 다시 읽거나 다른 길로 쓴 일이 없을 때만 씁니다. 아니면 쓰지 않고 예외를 올립니다(「다시 읽은 뒤 저장하세요」). 디스크 쓰기 실패는 예전처럼 저장 통로가 보유합니다(`apps/WorkTool/wpf/README.md` 「데이터」).
-  - 저장한 뒤에는 같은 핸들로 이어서 저장할 수 있습니다.
-  - 핸들의 항목 목록은 `null` · 깨진 항목까지 같은 순서로 담고, 저장할 때 그대로 씁니다.
+  - `Open-WtStore`가 핸들(읽은 결과 · 항목 · schema · 열 때의 버전 `Version`)을 돌려줍니다. 읽기 문제로 예외를 올리지 않고 `State = error`와 이유를 담습니다.
+  - 저장은 낙관적 잠금입니다. `Save-WtStore $핸들 $항목`은 핸들이 정상 · 없음이고, 핸들의 `Version`이 그 파일의 지금 버전과 같을 때만 씁니다. 파일의 버전은 읽거나 쓸 때마다 오릅니다. 다르면(그 핸들로 읽은 뒤 다시 읽었거나 누가 저장함) 쓰지 않고 예외를 올립니다(「다시 읽은 뒤 저장하세요」). 디스크 쓰기 실패는 예전처럼 저장 통로가 보유합니다(`apps/WorkTool/wpf/README.md` 「데이터」).
+  - 핸들은 저장해도 바뀌지 않습니다. 저장하면 새 버전의 핸들을 돌려주고, 쓴 핸들은 다시 쓰지 못합니다. 그래서 같은 핸들을 여러 곳(화면 · 홈 카드가 같이 보는 캐시)이 나눠 가져도, 먼저 저장한 곳만 쓰이고 뒤의 옛 목록은 거부됩니다.
+  - 핸들의 항목 객체는 여러 곳이 같이 볼 수 있으므로, 고칠 때는 `Copy-WtItem`으로 복사한 목록을 고쳐서 넘깁니다.
+  - 핸들의 항목 목록은 `null` · 깨진 항목(목록 · 빈 목록 · 글 항목 포함)까지 같은 순서로 담고, 저장할 때 그대로 씁니다. 지운 항목 정리(`Compress-WtDeletedItems`)도 목록 항목을 펴지 않습니다.
 - 낮은 단계 `Write-WtStore`도 거부한 파일과, 파일의 `schema`가 쓰려는 `schema`보다 높은 파일에는 쓰지 않습니다. 다시 읽어 정상이 되면 풀립니다.
 - 예전부터 쓰던 `Get-WtStoreItems`(메모 · 업무 탭)는 그대로 `null` 항목을 빼고 돌려줍니다. 고쳐 저장하는 새 코드는 쓰지 않습니다.
 
@@ -410,16 +413,17 @@ RFC 5545(iCalendar) 반복 규칙의 일부를 JSON 칸으로 씁니다. `FREQ=.
 - 예전 줄이 그대로 → 그대로 둡니다.
 - 예전 줄이 바뀌었고 이 앱에서 안 고침(`rev` = `origin.rev`) → **바뀐 예전 칸이 정하는 항목 칸만** 기존 항목에 옮깁니다(아래 지도). 그 밖의 칸은 건드리지 않습니다. 이 앱 · 더 새 앱이 더한 칸, 중첩 칸(`start.zone` 같은 것), `origin`의 다른 칸이 모두 남습니다. `origin.row` · `origin.at` · `updated`만 새 값이 됩니다.
   - 가는 길의 앞부분이 한쪽에서 `null`이면 그 앞부분을 통째로 맞춥니다(예: 예전 앱에서 반복을 없애면 `repeat = null`).
-- 예전 줄이 바뀌었고 이 앱에서도 고침(`rev` ≠ `origin.rev`) → 이 앱 값을 두고 "충돌"로 적습니다. 같은 초에 고쳐도 `rev`로 알아봅니다.
+- 예전 줄이 바뀌었고 이 앱에서도 고침(`rev` ≠ `origin.rev`, 또는 둘 중 하나라도 잘못된 값) → 이 앱 값을 두고 "충돌"로 적습니다. 같은 초에 고쳐도 `rev`로 알아봅니다.
 - 이 앱에서 만든 항목(`origin.from`이 다름)과 id가 겹침 → 이 앱 값을 두고 "충돌"로 적습니다.
-- 예전 데이터 안에서 id가 겹친 뒤 줄 → 버리지 않습니다. id를 `dup-` + 줄 내용 해시 12자리로 바꾸고 `origin.dupOf`에 원래 id를 적어 따로 남깁니다. 「고칠 항목」으로 보입니다. 내용까지 같은 줄은 하나만 남습니다(잃는 것이 없음). 다시 가져와도 같은 id라 또 생기지 않습니다.
+- 예전 데이터 안에서 id가 겹친 뒤 줄 → 그 id의 처음 줄과 내용까지 같으면 하나로 칩니다(dup을 만들지 않음, 잃는 것이 없음). 내용이 다르면 버리지 않습니다. id를 `dup-` + 줄 내용 해시 12자리로 바꾸고 `origin.dupOf`에 원래 id를 적어 따로 남깁니다. 「고칠 항목」으로 보입니다. 그런 줄끼리 내용까지 같으면 하나만 남고, 다시 가져와도 같은 id라 또 생기지 않습니다.
 - 예전 CSV에서 없어진 항목 → 지우지 않고 적기만 합니다.
 
 예전 칸 → 항목 칸 지도(각 데이터 모듈의 `$script:csvOwned`)
 
-- 일정: `Date` → `start.date` · `repeat.days`(매주 반복의 요일) / `Time` → `start.time` / `Title` → `title` / `Note` → `note` / `Alarm` → `alarms` / `Repeat` → `repeat.freq` · `repeat.interval` · `repeat.days` / `LastAlarm` · `Updated` → 없음(`origin.row`에만)
+- 일정: `Date` → `start.date` · `repeat.days`(매주 반복의 요일) / `Time` → `start.time` / `Title` → `title` / `Note` → `note` / `Alarm` → `alarms[0].before` / `Repeat` → `repeat.freq` · `repeat.interval` · `repeat.days` / `LastAlarm` · `Updated` → 없음(`origin.row`에만)
 - 근태: `Type` → `kind` · `start.time` · `end` · `overtime` · `leave` · `note` · `place`(종류가 바뀌면 종류별 칸을 다시 맞춤) / `StartDate` → `start.date` · `end.date` / `StartTime` → `start.time` · `end.date`(자정 넘김) / `EndDate` → `end.date` / `EndTime` → `end.time` · `end.date` / `Place` → `place` / `Detail` → `note` · `leave.type` / `Updated` → 없음
 - 지도에 없는 예전 칸이 바뀌면 `origin.row`만 새 값이 되고 항목은 그대로입니다.
+- 목록 칸의 소유는 원소 번호로 적습니다(`alarms[0].before` = 첫 알람의 `before`만). 예전 앱은 알람이 하나뿐이라 첫 알람의 `before`만 예전 앱 것이고, 다른 알람과 첫 알람의 다른 칸(소리 등)은 이 앱 · 더 새 앱 것이라 남습니다. 이 앱에 알람이 없으면 첫 자리에 끼워 넣고, 예전 앱에서 알람을 끄면 `before`만 `null`(꺼진 알람)이 됩니다. `repeat.days`는 요일 글 목록이라 통째로 예전 앱 것입니다. 일정의 `repeat.skip`과 두 탭의 `tags`는 CSV 소유가 아니라 그대로 남습니다.
 - "적는다"는 가져오기 결과(앱 안, `Get-WtScheduleLastImport` · `Get-WtAttendanceLastImport`의 `Conflicts` · `Missing`)에 남긴다는 뜻입니다. 파일에는 적지 않고, 2단계에서 가져오기 뒤 화면에 보여 줍니다.
 - "이 앱에서 고쳤는지"는 `rev`가 `origin.rev`(가져올 때의 `rev`, 0)와 다른지로 봅니다. 시각으로 판단하지 않습니다(1.5).
 - 지금 파일을 읽을 수 없으면(더 새 버전 · 깨짐) 가져오지 않고 오류를 올립니다. 못 읽은 파일을 덮어쓰지 않습니다.
@@ -436,8 +440,8 @@ RFC 5545(iCalendar) 반복 규칙의 일부를 JSON 칸으로 씁니다. `FREQ=.
     - `v2.json`: schema 2 대표 예.
     - `v2-future.json`: 더 새 앱이 쓴 schema 2 흉내. 모르는 맨 위 키 · 칸 · 값.
     - `v2-edge.json`(두 탭): `null` 항목, 범위를 넘는 정수(Int32 · Int64 · BigInteger) · 소수, 범위 밖 날짜, 31일 넘는 기록, `rev`.
-    - 일정만: `legacy-dup.csv`(대소문자만 다른 id · 같은 id 둘째 줄 · 완전히 같은 줄), `v1-bad-end.json`(못 읽는 끝 값 · `null` 항목 · 1단계에만 있던 칸).
-  - `tests/fixtures/holidays.json` · `holidays-future.json`: 휴무일. `store-empty.json`: 빈 파일(0바이트).
+    - 일정만: `legacy-dup.csv`(대소문자만 다른 id · 같은 id 둘째 줄 · 완전히 같은 줄), `v1-bad-end.json`(못 읽는 끝 값 · `null` 항목 · 1단계에만 있던 칸), `legacy-same.csv`(id와 내용까지 같은 두 줄), `v1-raw-items.json`(목록 · 빈 목록 · `null` · 글 항목), `v2-edge-float.json`(`1e-30` · `1.0000000000000002` · `10.0` · 꺼진 알람).
+  - `tests/fixtures/holidays.json` · `holidays-future.json`: 휴무일. `store-empty.json`: 빈 파일(0바이트). `store-items-null.json` · `store-no-items.json`: `items`가 `null` · 없음.
 - 검사(`tests/Test-Core.ps1`이 모두 돌림)
   - 모든 자료가 읽힌다. 깨진 줄은 「고칠 항목」 하나로 남는다.
   - `legacy.csv` · `v1.json` → 최신 형식 결과가 기대 값과 같다. 이전 전 백업이 원본과 같은 바이트로 남고, 한 번만 생긴다. 이전 실패 때 원본 · 백업이 그대로다.
@@ -448,6 +452,7 @@ RFC 5545(iCalendar) 반복 규칙의 일부를 JSON 칸으로 씁니다. `FREQ=.
   - 문화권을 en-US · ko-KR · th-TH(불기) · ar-SA(회교력) · de-DE(소수점 쉼표)로 바꿔도 결과가 같다.
   - 다시 가져오기 합치기의 모든 경우, CSV 인코딩 세 가지, 읽을 수 없는 파일(더 새 schema · 깨진 JSON · schema 없음)에서 화면이 열리고 파일이 그대로다.
   - 2026-10-26 검토 반례: 중첩 · 앱 고유 칸이 합치기 뒤에도 남음, 같은 초 편집을 `rev`로 알아봄, 대소문자 id · 겹친 id 줄 보존, 1단계 파일의 못 읽는 끝 값 보존, 거부한 파일 · 읽은 뒤 바뀐 파일에 저장 안 함, 빈 파일 · 목록 아닌 `items` 거부, `null` 항목 보존, 큰 정수는 그 항목만 고칠 항목. 모두 고치기 전 코드에서 틀리는 것을 확인한 뒤 고쳤다.
+  - 재확인 반례: 같은 핸들을 나눠 가진 두 곳의 뒤 저장 거부, 거부 뒤 잠긴 파일에서도 거부 유지, `items: null` · 없음 거부, 목록 · 빈 목록 항목 보존, 첫 알람의 `before`만 합치기, 둘 다 잘못된 `rev`, 변환 전 정수 판정, id와 내용까지 같은 줄은 하나. 역시 고치기 전 코드에서 틀리는 것을 확인했다.
 
 ## 9. 2단계에서 할 일 · 정할 것
 
@@ -478,7 +483,7 @@ RFC 5545(iCalendar) 반복 규칙의 일부를 JSON 칸으로 씁니다. `FREQ=.
 ## 10. 1단계에서 바꾼 파일
 
 - 코어(7): `core/Records.psm1`(새) · `core/Calendar.psm1`(새) · `core/Storage.psm1` · `apps/WorkTool/wpf/Start-WorkTool.ps1`(코어 목록) · `tests/Test-Core.ps1` · `tests/Measure-WtPerformance.ps1`(측정용 가짜 데이터를 schema 2로) · `apps/WorkTool/wpf/README.md`(데이터 · 구조 절)
-- 코어 시험 자료(3): `tests/fixtures/holidays.json` · `holidays-future.json` · `store-empty.json`
-- 일정(3 + 자료 7): `addons/schedule/ScheduleData.psm1`(새) · `Schedule.psm1` · `Test-Schedule.ps1` · `fixtures/` 7개
+- 코어 시험 자료(5): `tests/fixtures/holidays.json` · `holidays-future.json` · `store-empty.json` · `store-items-null.json` · `store-no-items.json`
+- 일정(3 + 자료 10): `addons/schedule/ScheduleData.psm1`(새) · `Schedule.psm1` · `Test-Schedule.ps1` · `fixtures/` 10개
 - 근태(3 + 자료 5): `addons/attendance/AttendanceData.psm1`(새) · `Attendance.psm1` · `Test-Attendance.ps1` · `fixtures/` 5개
 - 문서(2): 이 문서 · 저장소 루트 `README.md`

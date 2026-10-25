@@ -13,6 +13,9 @@
       legacy-dup.csv  대소문자만 다른 id · 같은 id 둘째 줄 · 완전히 같은 줄 (2026-10-26 검토 반례)
       v1-bad-end.json schema 1의 읽지 못하는 끝 값 · null 항목 · 1단계에만 있던 칸 · Int32보다 큰 알람
       v2-edge.json    null 항목 · 범위를 넘는 정수(Int32 · Int64 · BigInteger) · 범위 밖 날짜 · 소수 알람 · rev
+      legacy-same.csv id와 내용까지 같은 두 줄 (재확인 반례)
+      v1-raw-items.json  items 안의 목록 · 빈 목록 · null · 글 항목
+      v2-edge-float.json 1e-30 · 1.0000000000000002 · 10.0 · 꺼진 알람(before null)
     기대 값(회차 목록 등)은 여기에 못 박아 둔다. 규칙을 바꿔 값이 바뀌면 이 파일을 일부러 고쳐야 한다.
 
 .EXAMPLE
@@ -303,7 +306,72 @@ try {
     $data = Get-WtScheduleData
     $wasMissing = $data.Store.State -eq 'missing'
     Save-WtScheduleItems $data.Store @()
-    Assert-WtTest '일정 저장: 파일이 없으면(없음) 핸들로 새로 만든다' ($wasMissing -and (Read-WtTestDoc).schema -eq 2 -and $data.Store.State -eq 'ok')
+    $againError = $null; try { Save-WtScheduleItems $data.Store @() } catch { $againError = $_.Exception.Message }
+    Assert-WtTest '일정 저장: 파일이 없으면(없음) 핸들로 새로 만들고, 저장에 쓴 핸들은 다시 쓰지 못한다(다시 읽어야 함)' ($wasMissing -and (Read-WtTestDoc).schema -eq 2 -and
+        $data.Store.State -eq 'missing' -and $againError -like '*바뀌었습니다*')
+
+    # ---- 2026-10-26 재확인 반례 (고치기 전에는 모두 틀렸다) ----
+    # 1: 알람 목록은 첫 알람의 before만 예전 앱 소유. 다른 원소 · 첫 알람의 다른 칸은 그대로, 예전 앱에서 끄면 before = null(꺼진 알람)
+    $test = New-WtTestData 'schedule-alarm'; $tests.Add($test)
+    [void][System.IO.Directory]::CreateDirectory($test.Legacy)
+    [System.IO.File]::Copy((Join-Path $fixtures 'legacy.csv'), (Join-Path $test.Legacy 'schedule.csv'))
+    [void](Import-WtLegacyData)
+    $doc = Read-WtTestDoc
+    foreach ($i in $doc.items) { if ($i.id -eq 's1') { $i.alarms = @([pscustomobject]@{ before = 10; sound = 'keep' }, [pscustomobject]@{ channel = 'future' }) } }
+    [System.IO.File]::WriteAllText((Get-WtStorePath 'schedule'), (ConvertTo-Json $doc -Depth 20), [System.Text.UTF8Encoding]::new($false))
+    $csv = [System.IO.File]::ReadAllText((Join-Path $fixtures 'legacy.csv'))
+    Write-WtTestLegacyCsv $test 'schedule' $csv.Replace('"주간 회의","","10"', '"주간 회의","","20"')
+    [void](Import-WtLegacyData -Force)
+    $al = @(@((Read-WtTestDoc).items | Where-Object { (Test-WtRecordObject $_) -and $_.id -ceq 's1' })[0].alarms)
+    Write-WtTestLegacyCsv $test 'schedule' $csv.Replace('"주간 회의","","10"', '"주간 회의","",""')
+    [void](Import-WtLegacyData -Force)
+    $off = @(@((Read-WtTestDoc).items | Where-Object { (Test-WtRecordObject $_) -and $_.id -ceq 's1' })[0].alarms)
+    $s1 = @((Get-WtScheduleData).Entries | Where-Object Id -ceq 's1')[0]
+    Assert-WtTest '일정 합치기: 알람은 첫 알람의 before만 바꾸고 다른 원소 · 확장 칸은 그대로, 예전 앱에서 끄면 before = null(꺼진 알람)' (
+        $al.Count -eq 2 -and $al[0].before -eq 20 -and $al[0].sound -eq 'keep' -and $al[1].channel -eq 'future' -and
+        $off.Count -eq 2 -and $null -eq $off[0].before -and $off[0].sound -eq 'keep' -and $s1.State -eq 'ok' -and $s1.Alarms.Count -eq 0) "$(ConvertTo-Json $al -Compress) / $(ConvertTo-Json $off -Compress)"
+    # 2: rev · origin.rev 중 하나라도 잘못된 값이면(둘 다 잘못돼도) 고쳤음으로 보고 덮지 않는다
+    $doc = Read-WtTestDoc
+    foreach ($i in $doc.items) { if ($i.id -eq 's2') { $i.title = '이 앱 값'; $i.rev = -1; $i.origin.rev = -2 } }
+    [System.IO.File]::WriteAllText((Get-WtStorePath 'schedule'), (ConvertTo-Json $doc -Depth 20), [System.Text.UTF8Encoding]::new($false))
+    Write-WtTestLegacyCsv $test 'schedule' $csv.Replace('"백업 확인"', '"예전 앱 값"')
+    [void](Import-WtLegacyData -Force)
+    Assert-WtTest '일정 합치기: rev · origin.rev가 둘 다 잘못된 값이어도 고쳤음으로 보고 덮지 않는다' (
+        @((Read-WtTestDoc).items | Where-Object { (Test-WtRecordObject $_) -and $_.id -ceq 's2' })[0].title -eq '이 앱 값' -and @((Get-WtScheduleLastImport).Conflicts) -contains 's2')
+    # 12: id와 내용까지 같은 줄은 하나 (legacy-same.csv)
+    $test = New-WtTestData 'schedule-same'; $tests.Add($test)
+    [void][System.IO.Directory]::CreateDirectory($test.Legacy)
+    [System.IO.File]::Copy((Join-Path $fixtures 'legacy-same.csv'), (Join-Path $test.Legacy 'schedule.csv'))
+    $r = Import-WtLegacyData
+    $data = Get-WtScheduleData
+    Assert-WtTest '일정 id: id와 내용까지 같은 두 줄은 하나로 (겹친 줄 · 고칠 항목을 만들지 않는다)' ($r.Count -eq 2 -and @($data.Entries).Count -eq 2 -and
+        -not @($data.Entries | Where-Object { $_.State -ne 'ok' }).Count -and -not @((Get-WtScheduleLastImport).Duplicates).Count)
+    # 6: 목록 · 빈 목록 · null · 글 항목은 이전하고 저장해도 같은 자리에 그대로 (v1-raw-items.json)
+    $test = New-WtTestData 'schedule-raw-items'; $tests.Add($test)
+    Copy-WtTestFixture 'v1-raw-items.json'
+    $data = Get-WtScheduleData
+    $items = @(Copy-WtItem @($data.Items))
+    $items[0].title = '고친 제목'; Set-WtItemEdited $items[0]
+    Save-WtScheduleItems $data.Store $items
+    $saved = (Read-WtTestDoc).items
+    Assert-WtTest '일정: 목록 · 빈 목록 · null · 글 항목은 이전 · 저장 뒤에도 같은 자리에 그대로 (펴지거나 빠지지 않음)' (@($saved).Count -eq 5 -and $saved[0].title -eq '고친 제목' -and
+        ($saved[1] -join ',') -eq 'raw1,raw2' -and $saved[2] -is [array] -and @($saved[2]).Count -eq 0 -and $null -eq $saved[3] -and $saved[4] -ceq '글 하나' -and
+        ((@($data.Entries) | ForEach-Object State) -join ',') -eq 'ok,broken,broken,broken,broken') "$(@($saved).Count) · $((@($data.Entries) | ForEach-Object State) -join ',')"
+    # 7: 정수 판정은 변환 전에 (v2-edge-float.json)
+    $test = New-WtTestData 'schedule-float'; $tests.Add($test)
+    Copy-WtTestFixture 'v2-edge-float.json'
+    $data = Get-WtScheduleData
+    Assert-WtTest '일정 경계 값: 1e-30 · 1.0000000000000002는 정수가 아니라 고칠 항목, 10.0은 정수, before null은 꺼진 알람' (
+        ((@($data.Entries) | ForEach-Object State) -join ',') -eq 'broken,broken,broken,ok,ok' -and ($data.Entries[3].Alarms -join ',') -eq '10' -and $data.Entries[4].Alarms.Count -eq 0) ((@($data.Entries) | ForEach-Object State) -join ',')
+    # 5: 같은 핸들을 여러 곳이 나눠 가져도, 한 곳이 저장하면 다른 곳의 옛 목록 저장은 거부한다(낙관적 잠금)
+    $data = Get-WtScheduleData
+    $other = Get-WtScheduleData
+    $a = @(Copy-WtItem @($data.Items)); $a[3].title = 'A가 고침'
+    $b = @(Copy-WtItem @($data.Items)); $b[3].note = 'B가 고친 옛 목록'
+    Save-WtScheduleItems $data.Store $a
+    $bError = $null; try { Save-WtScheduleItems $other.Store $b } catch { $bError = $_.Exception.Message }
+    Assert-WtTest '일정 저장 거부: 같은 핸들로 먼저 저장한 곳이 있으면 뒤의 옛 목록은 저장하지 않는다 (앞 저장이 남음)' ([object]::ReferenceEquals($data.Store, $other.Store) -and $bError -like '*바뀌었습니다*' -and
+        (Read-WtTestDoc).items[3].title -eq 'A가 고침' -and (Read-WtTestDoc).items[3].note -eq '') $bError
 
     # ---- 읽을 수 없는 파일: 화면은 열리고 파일은 그대로 ----
     $test = New-WtTestData 'schedule-bad'; $tests.Add($test)
