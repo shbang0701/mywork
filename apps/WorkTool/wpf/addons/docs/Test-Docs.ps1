@@ -134,7 +134,9 @@ try {
         Show-WtDocFolder 'stuck-1'; Show-WtDocFolder 'stuck-2'; Cancel-WtDocFolder
         Show-WtDocFolder 'fresh'
     }
-    Assert-WtTest '문서 안정성: 응답 없는 조회 두 개를 취소해도 새 폴더 조회가 바로 시작한다' (& $docsModule { @($script:jobs | Where-Object { $_.Key -eq 'folder' -and $_.Request.Path -eq 'fresh' }).Count -eq 1 })
+    # 바로 끝나는 조회는 폴더를 여는 짧은 기다림 안에 결과까지 들어온다
+    Assert-WtTest '문서 안정성: 응답 없는 조회 두 개를 취소해도 새 폴더 조회가 바로 시작한다' (& $docsModule {
+            @($script:jobs | Where-Object { $_.Key -eq 'folder' -and $_.Request.Path -eq 'fresh' }).Count -eq 1 -or ($script:entries.Count -and $script:entries[0].Name -eq 'fresh') })
     Wait-WtDocJobs
     Assert-WtTest '문서 안정성: 늦게 끝난 취소 조회는 새 폴더 목록을 덮지 않는다' ((& $docsModule { $script:entries[0].Name }) -eq 'fresh')
     # 다른 폴더를 펼쳐도 지금 폴더 쪽으로 펼침 · 스크롤을 되돌리지 않는다
@@ -175,9 +177,22 @@ try {
     & $docsModule { Update-WtDocsView }
     Wait-WtDocJobs
     Assert-WtTest '문서 안정성: 마지막 폴더를 못 열면 오류 대신 첫 폴더를 연다' ((& $docsModule { $script:current }) -eq 'X:\fb' -and -not (& $docsModule { $script:ui.Error }) -and (& $docsModule { $script:entries.Count }) -eq 1)
+    # 응답 없는 공유 폴더: 조회가 OS 요청에서 돌아오지 않아도 폴더 열기는 짧게만 기다리고, 끝낼 때는 기다리지 않고 버린다
+    $gate = New-WtTestGate
+    try {
+        & $docsModule { param($hang) $script:worker = $hang } $wtTestHang
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        & $docsModule { Show-WtDocFolder '\\srv\hang\폴더' }
+        $openMs = $watch.ElapsedMilliseconds
+        $entered = $gate.Entered.WaitOne(5000)
+        $loading = & $docsModule { $script:ui.Loading }
+        $watch.Restart(); & $docsModule { Stop-WtDocs }; $stopMs = $watch.ElapsedMilliseconds
+        Assert-WtTest '문서 안정성: 응답 없는 폴더도 화면은 잠깐만 기다리고(불러오는 중), 끝낼 때는 바로 버린다' (
+            $entered -and $loading -and $openMs -lt 1000 -and $stopMs -lt 200 -and (Get-WtWorkInfo).Running -eq 0 -and (Get-WtWorkInfo).Abandoned -ge 1) "(열기 ${openMs}ms · 끝내기 ${stopMs}ms)"
+    } finally { Remove-WtTestGate $gate }
     Set-WtSetting 'docs.roots' @(); Set-WtSetting 'docs.last' ''
     & $docsModule { param($worker) $script:worker = $worker; Stop-WtDocs } $originalWorker
-    Assert-WtTest '문서 안정성: 완료된 조회의 실행 자원과 타이머를 정리한다' ((& $docsModule { $script:jobs.Count }) -eq 0 -and -not (& $docsModule { $script:pollTimer.IsEnabled }))
+    Assert-WtTest '문서 안정성: 끝낸 뒤 남은 조회 · 화면 밖 작업이 없다' ((& $docsModule { $script:jobs.Count }) -eq 0 -and (Get-WtWorkInfo).Running -eq 0 -and (Get-WtWorkInfo).Abandoned -eq 0)
 } finally {
     & $docsModule { Stop-WtDocs }
     Remove-WtTestData $test

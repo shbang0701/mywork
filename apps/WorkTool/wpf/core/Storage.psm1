@@ -3,12 +3,74 @@
 # - 저장소(store) 하나 = JSON 파일 하나. 파일마다 schema 번호를 붙여, 형식이 바뀌면 읽을 때 한 단계씩 변환한다.
 # - 쓸 때는 임시 파일에 먼저 쓰고 바꿔치기한다. 직전 파일은 .bak으로 하나 남긴다.
 # - 읽기 실패는 항상 예외로 올린다. 빈 결과로 넘기면 다음 저장에서 기존 데이터를 덮어쓰기 때문이다.
+# - 읽기는 화면 밖(core\Work.psm1)에서 하고 $script:ioTimeoutMs까지만 기다린다. 데이터 폴더가 응답 없는 공유 폴더여도 화면이 멈추지 않고
+#   읽기 실패(IOException)로 올라간다. 그 폴더에 답 없는 읽기가 남아 있으면 기다리지 않고 바로 실패한다.
+# - 쓰기는 저장 통로(Submit-WtDataWrite)가 한 번에 하나씩 들어온 차례대로 한다. 읽기 작업과 따로라 읽기가 많이 남아도 막히지 않는다.
+#   화면은 $script:writeWaitMs까지만 기다린다. 넣은 쓰기는 넣는 순간 받아들인 것이다: 통로가 파일에 쓰였다고 확인될 때까지 가지고 있고,
+#   실패하면(바로 · 시작에서 · 늦게, 모두 같은 길) 다시 시도하거나 사용자가 버리기를 고를 때까지 둔다. 그동안 그 파일을 읽으면 그 내용을 돌려준다.
+#   저장 상태는 시간이 아니라 파일마다의 버전으로 정한다(받아들인 버전 = 확인된 버전이면 저장됨, Get-WtDataWriteStatus).
+#   셸은 끝내기 전에 쓰는 중이면 끝날 때까지 기다리고(창이 멈추지 않게), 쓰지 못한 내용이 있으면 사용자에게 묻는다.
 
 $ErrorActionPreference = 'Stop'
 
 $script:appRoot = $null
 $script:dataRoot = $null
-$script:utf8 = [System.Text.UTF8Encoding]::new($false)
+$script:ioTimeoutMs = 5000       # 데이터 폴더가 이 시간 안에 답하지 않으면 기다리지 않고 오류로 올린다
+$script:legacyTimeoutMs = 3000   # 예전 데이터 위치 찾기
+$script:writeWaitMs = 400        # 저장할 때 화면이 기다리는 시간. 로컬 저장은 이 안에 끝난다. 넘으면 저장 통로가 끝까지 맡는다
+$script:writeSlowMs = 5000       # 이보다 오래 걸리는 저장은 「응답 없음」으로 보인다 (실패로 정하지는 않는다)
+$script:writeQueue = [System.Collections.Generic.List[object]]::new()   # 차례를 기다리는 쓰기 (파일마다 마지막 내용 하나)
+$script:writeCurrent = $null     # 지금 쓰는 것
+$script:writeHandlers = [System.Collections.Generic.List[scriptblock]]::new()
+
+# 여러 단계인 디스크 작업 (화면 밖 실행 공간에서 돈다. 명령 없이 .NET만 쓴다. 예전 CSV만 Import-Csv). 검사가 응답 없는 폴더를 흉내 내려고 바꿔 끼운다.
+# 메서드 하나로 끝나는 읽기 · 있는지 보기 · 폴더 만들기는 Invoke-WtDataCall로 스레드 풀에서 바로 부른다 (가장 빠르다)
+$script:io = @{
+    Lock = { param($p) [System.IO.File]::Open($p, 'OpenOrCreate', 'ReadWrite', 'None') }
+    Unlock = { param($l) $l.Dispose() }
+    Copy = { param($a, $b) [System.IO.File]::Copy($a, $b, $true) }
+    FindLegacy = {
+        param($folders)
+        foreach ($c in $folders) {
+            foreach ($f in 'memo.csv', 'schedule.csv', 'attendance.csv') {
+                if ([System.IO.Path]::Exists([System.IO.Path]::Combine($c, $f))) { return $c }
+            }
+        }
+        $null
+    }
+    ReadCsv = {
+        param($p)
+        if (-not [System.IO.Path]::Exists($p)) { return $null }
+        , @(Import-Csv -LiteralPath $p -Encoding utf8)
+    }
+}
+
+# 디스크 작업 하나($script:io의 이름)를 화면 밖에서 하고 정한 시간까지만 기다린다. 응답이 없으면 IOException.
+# $Key: 같은 곳(데이터 폴더 · 예전 데이터 위치 · 앱 폴더)끼리 묶는다. 답 없는 작업이 남은 곳은 바로 실패한다
+function Invoke-WtDataIo {
+    param(
+        [Parameter(Mandatory, Position = 0)][string]$Op,
+        [object[]]$Arguments = @(),
+        [string]$Key = 'data',
+        [int]$TimeoutMs = $script:ioTimeoutMs,
+        [ValidateSet('Empty', 'Default')][string]$Session = 'Empty',
+        [string]$Where = '데이터 폴더',
+        [switch]$Reserved
+    )
+    try { Invoke-WtWork -Script $script:io[$Op] -ArgumentList $Arguments -Key $Key -TimeoutMs $TimeoutMs -Session $Session -Reserved:$Reserved }
+    catch [System.TimeoutException] {
+        throw [System.IO.IOException]::new("${Where}가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인하세요.", $_.Exception)
+    }
+}
+
+# .NET 메서드 하나를 화면 밖(스레드 풀)에서 부르고 정한 시간까지만 기다린다. 응답이 없으면 IOException. 예: (New-WtCall ([System.IO.File]) ReadAllText $p)
+function Invoke-WtDataCall {
+    param([Parameter(Mandatory, Position = 0)][Delegate]$Call, [string]$Key = 'data', [int]$TimeoutMs = $script:ioTimeoutMs, [string]$Where = '데이터 폴더')
+    try { Invoke-WtWork -Call $Call -Key $Key -TimeoutMs $TimeoutMs }
+    catch [System.TimeoutException] {
+        throw [System.IO.IOException]::new("${Where}가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인하세요.", $_.Exception)
+    }
+}
 
 # 진입 스크립트가 자기 위치를 알려 준다. 묶음 파일이든 원본 폴더든 같은 방식으로 쓴다.
 function Set-WtAppRoot([string]$Path) {
@@ -18,83 +80,317 @@ function Set-WtAppRoot([string]$Path) {
 
 function Get-WtAppRoot { $script:appRoot }
 
-# 데이터 폴더마다 하나의 앱만 쓴다. 빈 잠금 파일은 남겨 두고 핸들만 해제한다.
+# 데이터 폴더마다 하나의 앱만 쓴다. 빈 잠금 파일은 남겨 두고 핸들만 해제한다 (Close-WtDataLock).
 function Open-WtDataLock {
-    try {
-        [System.IO.File]::Open((Join-Path (Get-WtDataRoot) '.worktool.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
-    } catch {
+    $path = Join-Path (Get-WtDataRoot) '.worktool.lock'
+    try { Invoke-WtDataIo Lock -Arguments $path -Reserved }
+    catch {
+        if ($_.Exception.InnerException -is [System.TimeoutException]) { throw }
         throw '같은 데이터 폴더를 사용하는 WorkTool이 실행 중이거나 폴더를 잠글 수 없습니다. 기존 창·트레이를 확인하세요.'
     }
+}
+
+# 잠금을 푼다. 응답 없는 공유 폴더여도 오래 기다리지 않는다 (못 풀면 앱 프로세스가 끝날 때 풀린다)
+function Close-WtDataLock($Lock) {
+    if (-not $Lock) { return }
+    try { [void](Invoke-WtDataIo Unlock -Arguments (, $Lock) -TimeoutMs 2000 -Reserved) } catch { }
 }
 
 # 데이터 폴더. 앱 폴더에 datapath.txt가 있으면 그 첫 줄의 경로, 없으면 문서\WorkTool
 function Get-WtDataRoot {
     if ($script:dataRoot) { return $script:dataRoot }
-    $path = $null
+    $line = $null
     if ($script:appRoot) {
         $override = Join-Path $script:appRoot 'datapath.txt'
-        if (Test-Path -LiteralPath $override) {
-            $line = Get-Content -LiteralPath $override -TotalCount 1 -Encoding utf8
-            if ($line -and $line.Trim()) { $path = [Environment]::ExpandEnvironmentVariables($line.Trim()) }
-        }
+        try { $line = @((Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllText $override) -Key (Get-WtPathKey $override) -Where '앱 폴더') -split "\r?\n", 2)[0] }
+        catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { $line = $null }
     }
+    $path = if ($line -and $line.Trim()) { [Environment]::ExpandEnvironmentVariables($line.Trim()) } else { $null }
     if (-not $path) {
-        $docs = [Environment]::GetFolderPath('MyDocuments')
+        # 문서 폴더가 서버로 옮겨져 있어도 여기서 확인하러 가지 않는다 (확인 · 만들기는 아래 화면 밖 작업에서)
+        $docs = [Environment]::GetFolderPath('MyDocuments', 'DoNotVerify')
         if (-not $docs) { $docs = $HOME }
         $path = Join-Path $docs 'WorkTool'
     }
-    if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
-    $script:dataRoot = (Resolve-Path -LiteralPath $path).ProviderPath
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($path)
+    [void](Invoke-WtDataCall (New-WtCall ([System.IO.Directory]) CreateDirectory $full))
+    $script:dataRoot = $full
     $script:dataRoot
 }
 
-# JSON 파일 하나를 읽는다. 없으면 $null
+# JSON 파일 하나를 읽는다. 없으면 $null. 아직 파일에 쓰이지 않은 내용(쓰는 중 · 늦게 실패해 앱이 가진 것)이 있으면
+# 디스크 대신 그것을 돌려준다. 앱이 가진 내용과 화면이 늘 같게
 function Read-WtJsonFile([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    [System.IO.File]::ReadAllText($Path, $script:utf8) | ConvertFrom-Json -Depth 20
+    $pending = Get-WtDataWritePending $Path
+    if ($pending) { return $pending.Json | ConvertFrom-Json -Depth 20 }
+    try { $text = Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllText $Path) }
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return $null }
+    $text | ConvertFrom-Json -Depth 20
 }
 
-# JSON 파일 하나를 바꿔치기로 쓴다. 직전 파일은 <파일>.bak
+<#
+JSON 파일 하나를 바꿔치기로 쓴다. 직전 파일은 <파일>.bak. 저장 통로에 넣고 $script:writeWaitMs까지만 기다린다.
+들어온 순간 받아들인 내용이다(버전을 받는다). 그 버전은 파일에 쓰였다고 확인되거나(저장됨), 실패하면 앱이 가지고 있다가
+다시 시도하거나 사용자가 버리기를 고를 때까지 둔다 — 둘 중 하나로만 끝난다. 그래서 쓰기 실패로는 예외를 올리지 않는다.
+  바로 실패 · 쓰기 시작 실패 · 늦은 실패 모두 같은 길(Set-WtDataWriteFailed)로 남는다. 실패는 한 번 알리고, 셸이 끝내기 전에 묻는다.
+  기다리는 시간은 화면이 얼마나 기다릴지만 정한다. 저장 상태(저장됨 · 쓰는 중 · 실패)는 Get-WtDataWriteStatus가 버전으로 정한다
+#>
 function Write-WtJsonFile([string]$Path, $Data) {
     $json = ConvertTo-Json -InputObject $Data -Depth 20
+    $entry = Submit-WtDataWrite $Path $json
+    Wait-WtDataWrite $entry $script:writeWaitMs
+}
+
+# ---- 저장 통로 --------------------------------------------------------------------------------
+# 파일마다 버전을 센다: 넣은 쓰기마다 버전이 하나씩 오르고, 넣은 순간 받아들인 버전(Accepted)이 된다.
+#   확인된 버전(Confirmed): 파일에 쓰였다고 확인된 가장 새 버전
+# 받아들인 버전 > 확인된 버전인데 쓰는 중인 것이 없으면, 그 내용을 실패로 남겨 둔다(Failed). 버전이 같아져야 「저장됨」이다
+
+# 실제로 쓰기 (화면 밖에서 돈다): 임시 파일에 쓰고 바꿔치기
+function Write-WtDataFile([string]$Path, [string]$Json) {
     $tmp = "$Path.tmp"
-    [System.IO.File]::WriteAllText($tmp, $json, $script:utf8)
-    if (Test-Path -LiteralPath $Path) {
-        [System.IO.File]::Replace($tmp, $Path, "$Path.bak")
-    } else {
-        Move-Item -LiteralPath $tmp -Destination $Path
+    [System.IO.File]::WriteAllText($tmp, $Json, [System.Text.UTF8Encoding]::new($false))
+    if ([System.IO.Path]::Exists($Path)) { [System.IO.File]::Replace($tmp, $Path, "$Path.bak") }
+    else { [System.IO.File]::Move($tmp, $Path) }
+}
+
+# 통로가 돌리는 코드. 검사는 쓰기 앞에 기다림만 끼워 넣는다 (Write-WtDataFile은 그대로 돈다)
+$script:writeJob = { param($p, $json) Write-WtDataFile $p $json }
+
+# 파일 하나의 기록 (버전 · 받아들인 것 · 실패로 남은 것)
+function Get-WtDataFileRecord([string]$Path) {
+    $k = $Path.ToLowerInvariant()
+    if (-not $script:writeFiles.ContainsKey($k)) {
+        $script:writeFiles[$k] = @{ Path = $Path; Version = 0; Accepted = $null; Confirmed = 0; Failed = $null; LastError = $null; Told = $false }
+    }
+    $script:writeFiles[$k]
+}
+
+# 쓰기 하나를 통로에 넣는다. 넣는 순간 받아들인 버전이 된다.
+# 같은 파일의 아직 시작하지 않은 쓰기는 새 내용으로 바꾼다 (새 내용이 앞 내용을 담고 있다)
+function Submit-WtDataWrite([string]$Path, [string]$Json) {
+    $rec = Get-WtDataFileRecord $Path
+    for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) {
+        if ($script:writeQueue[$i].Path -ieq $Path) { $script:writeQueue[$i].State = 'superseded'; $script:writeQueue.RemoveAt($i) }
+    }
+    $rec.Version++
+    $entry = @{ Path = $Path; Json = $Json; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
+    $rec.Accepted = $entry
+    $rec.Failed = $null   # 실패로 남아 있던 앞 내용은 이 내용이 담고 있다. 이 쓰기도 실패하면 이 내용이 남는다
+    $script:writeQueue.Add($entry)
+    Start-WtDataWriteNext
+    $entry
+}
+
+# 쓰는 것이 없으면 다음 차례를 시작한다. 한 번에 하나만 쓴다 (같은 임시 파일 · 바꿔치기가 겹치지 않게).
+# 시작 자체가 실패해도 늦은 실패와 같은 길로 남기고 다음 차례로 간다
+function Start-WtDataWriteNext {
+    while (-not $script:writeCurrent -and $script:writeQueue.Count) {
+        $entry = $script:writeQueue[0]
+        $script:writeQueue.RemoveAt(0)
+        $entry.State = 'writing'
+        try {
+            $script:writeCurrent = $entry
+            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile) }
+            $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Reserved `
+                -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
+        } catch {
+            $script:writeCurrent = $null
+            Set-WtDataWriteFailed $entry $_.Exception
+        }
     }
 }
+$script:writeFunctions = $null
+
+# 쓰기 하나가 끝났을 때 (화면 스레드): 성공이면 확인된 버전을 올리고, 실패면 실패로 남긴다. 그 뒤 다음 차례를 시작한다
+function Complete-WtDataWrite($Work) {
+    $entry = $Work.Context
+    if ([object]::ReferenceEquals($script:writeCurrent, $entry)) { $script:writeCurrent = $null }
+    if ($Work.State -eq 'done') {
+        $entry.State = 'done'
+        $rec = Get-WtDataFileRecord $entry.Path
+        if ($entry.Version -gt $rec.Confirmed) { $rec.Confirmed = $entry.Version }
+        Update-WtDataFileState $rec
+    } else {
+        Set-WtDataWriteFailed $entry $(if ($Work.Exception) { $Work.Exception } else { [System.IO.IOException]::new("저장하지 못했습니다. $($Work.Error)") })
+    }
+    Start-WtDataWriteNext
+}
+
+# 쓰기 실패가 지나는 단 하나의 길 (바로 실패 · 시작 실패 · 늦은 실패): 이유를 적고, 받아들인 내용을 실패로 남기고, 알린다
+function Set-WtDataWriteFailed($Entry, [Exception]$Exception) {
+    $Entry.State = 'failed'
+    $Entry.Exception = $Exception
+    $rec = Get-WtDataFileRecord $Entry.Path
+    $rec.LastError = $Exception
+    Update-WtDataFileState $rec
+}
+
+# 버전을 맞추고(실패로 남기기 · 지우기) 화면에 알린다. 실패로 남으면 저장될 때까지 한 번만 알린다
+function Update-WtDataFileState($Rec) {
+    $acc = $Rec.Accepted
+    $flying = Get-WtDataWriteFlying $Rec.Path
+    if (-not $acc -or $acc.Version -le $Rec.Confirmed) { $Rec.Failed = $null }
+    elseif ($flying -and $flying.Version -ge $acc.Version) { $Rec.Failed = $null }   # 그 내용(이나 더 새 내용)을 쓰는 중이다
+    elseif (-not $Rec.Failed -or $Rec.Failed.Version -lt $acc.Version) {
+        $Rec.Failed = @{ Path = $acc.Path; Json = $acc.Json; Version = $acc.Version
+            Exception = if ($acc.Exception) { $acc.Exception } elseif ($Rec.LastError) { $Rec.LastError } else { [System.IO.IOException]::new('저장하지 못했습니다.') } }
+    }
+    $tell = $false
+    if ($Rec.Failed) { if (-not $Rec.Told) { $tell = $true; $Rec.Told = $true } }
+    elseif (-not $flying) { $Rec.Told = $false }
+    Invoke-WtDataWriteHandlers $Rec $tell
+}
+# 이 파일을 쓰는 중이거나 차례를 기다리는 것 중 가장 새 것
+function Get-WtDataWriteFlying([string]$Path) {
+    for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) { if ($script:writeQueue[$i].Path -ieq $Path) { return $script:writeQueue[$i] } }
+    if ($script:writeCurrent -and $script:writeCurrent.Path -ieq $Path) { return $script:writeCurrent }
+    $null
+}
+
+# 이 쓰기가 끝날 때까지 정한 시간만 기다린다. 앞 차례가 이미 오래 걸리면(응답 없는 폴더) 기다리지 않는다
+function Wait-WtDataWrite($Entry, [int]$Milliseconds) {
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($Entry.State -eq 'queued' -or $Entry.State -eq 'writing') {
+        $left = $Milliseconds - $watch.ElapsedMilliseconds
+        if ($left -le 0) { break }
+        $current = $script:writeCurrent
+        if (-not $current) { break }
+        if (-not [object]::ReferenceEquals($current, $Entry) -and $current.Watch.ElapsedMilliseconds -ge $Milliseconds) { break }
+        [void](Wait-WtWork $current.Work -Milliseconds $left)
+        if (-not $current.Work.Finished) { break }
+    }
+}
+
+# 이 파일에 아직 파일에 쓰이지 않은 내용: 쓰는 중인 가장 새 것, 없으면 실패로 남은 것
+function Get-WtDataWritePending([string]$Path) {
+    $flying = Get-WtDataWriteFlying $Path
+    if ($flying) { return $flying }
+    $k = $Path.ToLowerInvariant()
+    if ($script:writeFiles.ContainsKey($k)) { return $script:writeFiles[$k].Failed }
+    $null
+}
+
+<#
+파일 하나의 저장 상태. 시간이 아니라 버전으로 정한다.
+  State: saved(받아들인 내용이 파일에 쓰였다) · writing(쓰는 중이거나 차례를 기다림) · failed(쓰지 못한 내용을 앱이 가지고 있음)
+  Message: failed일 때 이유
+#>
+function Get-WtDataWriteStatus([string]$Path) {
+    if (Get-WtDataWriteFlying $Path) { return [pscustomobject]@{ State = 'writing'; Message = '' } }
+    $k = $Path.ToLowerInvariant()
+    $failed = if ($script:writeFiles.ContainsKey($k)) { $script:writeFiles[$k].Failed } else { $null }
+    if ($failed) { return [pscustomobject]@{ State = 'failed'; Message = [string]$failed.Exception.Message } }
+    [pscustomobject]@{ State = 'saved'; Message = '' }
+}
+
+# 쓰지 못한 내용을 앱이 가지고 있는 파일들 @{ Path; Name; Message }
+function Get-WtDataUnsaved {
+    foreach ($rec in @($script:writeFiles.Values)) {
+        if ($rec.Failed -and -not (Get-WtDataWriteFlying $rec.Path)) {
+            [pscustomobject]@{ Path = $rec.Path; Name = [System.IO.Path]::GetFileName($rec.Path); Message = [string]$rec.Failed.Exception.Message }
+        }
+    }
+}
+
+# 쓰지 못한 내용을 다시 쓴다 (사용자가 [다시 시도] · Ctrl+S를 눌렀을 때). -Path가 없으면 모두. 화면은 정한 시간만 기다린다
+function Resume-WtDataWrites([string]$Path = '') {
+    $entries = foreach ($rec in @($script:writeFiles.Values)) {
+        if (-not $rec.Failed -or ($Path -and $rec.Path -ine $Path) -or (Get-WtDataWriteFlying $rec.Path)) { continue }
+        Submit-WtDataWrite $rec.Path $rec.Failed.Json
+    }
+    foreach ($e in @($entries)) { Wait-WtDataWrite $e $script:writeWaitMs }
+}
+
+# 저장 중이거나 쓰지 못한 내용이 있는지
+function Test-WtDataWriting { [bool]($script:writeCurrent -or $script:writeQueue.Count) }
+
+# 사용자가 「저장하지 않고 끝내기」를 골랐을 때만 셸이 부른다. 남은 쓰기와 쓰지 못한 내용을 버린다
+# (임시 파일에 쓰는 중이면 원래 파일은 그대로다)
+function Stop-WtDataWrites {
+    foreach ($e in $script:writeQueue) { $e.State = 'dropped' }
+    $script:writeQueue.Clear()
+    if ($script:writeCurrent) {
+        $script:writeCurrent.State = 'dropped'
+        Stop-WtWork $script:writeCurrent.Work
+        $script:writeCurrent = $null
+    }
+    foreach ($rec in @($script:writeFiles.Values)) { $rec.Failed = $null; $rec.Accepted = $null }
+}
+
+# 저장 통로 상태: 남은 수 · 「응답 없음」(지금 쓰는 것이 $script:writeSlowMs를 넘김) · 걸린 초
+function Get-WtDataWriteState {
+    $current = $script:writeCurrent
+    $ms = if ($current) { $current.Watch.ElapsedMilliseconds } else { 0 }
+    [pscustomobject]@{ Count = $script:writeQueue.Count + [int][bool]$current; Slow = $ms -ge $script:writeSlowMs; Seconds = [int][Math]::Floor($ms / 1000) }
+}
+
+# 파일 저장 상태가 바뀔 때(쓰기가 끝남 · 실패로 남음 · 다시 써서 저장됨) 부를 처리기 { param($path, $state) }.
+# $state는 Get-WtDataWriteStatus의 State. 나중에(화면 스레드가 한가할 때) 부른다
+function Register-WtDataWriteHandler([scriptblock]$Handler) { $script:writeHandlers.Add($Handler) }
+
+# 알릴 것을 모아 두고, 화면 스레드가 한가할 때 한 번에 알린다 (처리기 안에서 다시 저장해도 이 함수 안에서 겹치지 않게)
+function Invoke-WtDataWriteHandlers($Rec, [bool]$Tell) {
+    if (-not $script:writeHandlers.Count -and -not $Tell) { return }
+    $type = 'System.Windows.Threading.Dispatcher' -as [type]
+    $dispatcher = if ($type) { [System.Windows.Threading.Dispatcher]::FromThread([System.Threading.Thread]::CurrentThread) } else { $null }
+    if (-not $dispatcher) { return }
+    $script:writeNotices.Add(@{ Path = $Rec.Path; Tell = $Tell; Message = if ($Rec.Failed) { [string]$Rec.Failed.Exception.Message } else { '' } })
+    if ($script:writeNoticeQueued) { return }
+    $script:writeNoticeQueued = $true
+    [void]$dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [Action]{ Send-WtDataWriteNotices })
+}
+
+function Send-WtDataWriteNotices {
+    $script:writeNoticeQueued = $false
+    $list = @($script:writeNotices.ToArray()); $script:writeNotices.Clear()
+    foreach ($n in $list) {
+        if ($n.Tell) {
+            $name = [System.IO.Path]::GetFileName($n.Path)
+            try { Show-WtMessage "데이터 폴더에 저장하지 못했습니다 ($name).`n$($n.Message)`n`n그 내용은 앱이 가지고 있습니다. 다시 저장하거나(메모는 Ctrl+S), 끝낼 때 다시 시도할지 묻습니다." 'WorkTool' 'Warning' } catch { }
+        }
+        $state = (Get-WtDataWriteStatus $n.Path).State
+        foreach ($h in @($script:writeHandlers)) { try { [void](& $h $n.Path $state) } catch { } }
+    }
+}
+$script:writeNotices = [System.Collections.Generic.List[object]]::new()
+$script:writeNoticeQueued = $false
+$script:writeFiles = @{}
 
 function Get-WtStorePath {
     param([Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$Name)
     Join-Path (Get-WtDataRoot) "$Name.json"
 }
 
-function Test-WtStore([string]$Name) { Test-Path -LiteralPath (Get-WtStorePath $Name) }
+function Test-WtStore([string]$Name) {
+    $path = Get-WtStorePath $Name
+    if (Get-WtDataWritePending $path) { return $true }
+    Invoke-WtDataCall (New-WtCall ([System.IO.Path]) Exists $path)
+}
 
 # 데이터 폴더 안의 하위 폴더(예: 사용자가 파일을 넣어 두는 곳). -Create면 없을 때 만든다
 function Get-WtDataFolder {
     param([Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$Name, [switch]$Create)
     $path = Join-Path (Get-WtDataRoot) $Name
-    if ($Create -and -not (Test-Path -LiteralPath $path -PathType Container)) { [void][System.IO.Directory]::CreateDirectory($path) }
+    if ($Create) { [void](Invoke-WtDataCall (New-WtCall ([System.IO.Directory]) CreateDirectory $path)) }
     $path
 }
 
-# 화면에서 변경 여부를 판단하는 표식. 파일 조회와 읽고 쓰기는 이 모듈로 모은다.
+# 화면에서 변경 여부를 판단하는 표식: 내용의 크기 · 해시. 같은 크기 · 시각으로 덮어쓴 외부 변경도 놓치지 않는다.
+# 다른 프로그램(동기화 · 백신 등)이 잡고 있어 못 읽거나 데이터 폴더가 답하지 않으면 매번 다른 표식을 돌려줘, 화면이 그냥 다시 읽게 한다
+# (읽기 실패는 다시 읽을 때 알린다)
 function Get-WtStoreStamp([string]$Name) {
     $path = Get-WtStorePath $Name
-    $info = [System.IO.FileInfo]::new($path)
-    $info.Refresh()
-    if (-not $info.Exists) { return "$path|missing" }
-    # 같은 크기·시각으로 덮어쓴 외부 변경도 놓치지 않는다. JSON 해석 없이 작은 버퍼로 읽는다.
-    # 다른 프로그램(동기화 · 백신 등)이 잠깐 잡고 있어 못 읽으면 매번 다른 표식을 돌려줘, 화면이 그냥 다시 읽게 한다
-    try {
-        $stream = [System.IO.File]::OpenRead($path)
-        try { $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($stream)) }
-        finally { $stream.Dispose() }
-    } catch [System.IO.IOException], [System.UnauthorizedAccessException] { $hash = "unread-$([guid]::NewGuid().ToString('N'))" }
-    "$path|$($info.LastWriteTimeUtc.Ticks)|$($info.CreationTimeUtc.Ticks)|$($info.Length)|$hash"
+    # 저장 중인 내용은 다 쓴 뒤의 파일과 같은 표식이 되게 같은 바이트(UTF-8, BOM 없음)로 잰다
+    $pending = Get-WtDataWritePending $path
+    if ($pending) {
+        $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($pending.Json)
+        return "$path|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)))"
+    }
+    try { $bytes = Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllBytes $path) }
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return "$path|missing" }
+    catch { return "$path|unread-$([guid]::NewGuid().ToString('N'))" }
+    "$path|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
 }
 
 # 저장소 하나를 읽는다. 파일이 없으면 $null.
@@ -115,7 +411,7 @@ function Read-WtStore {
     }
     if ($from -lt $Schema) {
         if (-not $Migrate) { throw "$Name.json을 schema $from에서 $Schema(으)로 바꾸는 방법이 없습니다." }
-        Copy-Item -LiteralPath $path -Destination "$path.schema$from.bak" -Force
+        [void](Invoke-WtDataIo Copy -Arguments $path, "$path.schema$from.bak")
         while ($from -lt $Schema) {
             $doc = & $Migrate $doc $from
             $from++
@@ -153,7 +449,8 @@ function New-WtId { [guid]::NewGuid().ToString('N').Substring(0, 12) }
 
 # ---- 예전(WinForms) WorkTool 데이터 ----------------------------------------------------------
 
-# 예전 데이터 폴더를 찾는다. 설정에 적은 위치 → 이 파일 옆 data → 한 단계 위 data 순서
+# 예전 데이터 폴더를 찾는다. 설정에 적은 위치 → 이 파일 옆 data → 한 단계 위 data 순서.
+# 설정한 위치가 응답하지 않으면 못 찾은 것으로 본다 (화면이 기다리지 않게)
 function Find-WtLegacyFolder {
     $candidates = [System.Collections.Generic.List[string]]::new()
     $custom = Get-WtSetting 'legacy.path'
@@ -162,21 +459,19 @@ function Find-WtLegacyFolder {
         $candidates.Add((Join-Path $script:appRoot 'data'))
         $candidates.Add((Join-Path (Split-Path $script:appRoot -Parent) 'data'))
     }
-    foreach ($c in $candidates) {
-        foreach ($f in 'memo.csv', 'schedule.csv', 'attendance.csv') {
-            if (Test-Path -LiteralPath (Join-Path $c $f)) { return (Resolve-Path -LiteralPath $c).ProviderPath }
-        }
-    }
-    $null
+    $full = [System.Collections.Generic.List[string]]::new()
+    foreach ($c in $candidates) { try { $full.Add($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($c)) } catch { } }
+    if (-not $full.Count) { return $null }
+    try { Invoke-WtDataIo FindLegacy -Arguments (, $full.ToArray()) -Key 'legacy' -TimeoutMs $script:legacyTimeoutMs -Where '예전 데이터 위치' }
+    catch { $null }
 }
 
 # 예전 CSV 하나를 읽는다. 파일이 없으면 $null (빈 파일이면 빈 배열)
 function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
-    $path = Join-Path $Folder "$Name.csv"
-    if (-not (Test-Path -LiteralPath $path)) { return $null }
-    , @(Import-Csv -LiteralPath $path -Encoding utf8)
+    Invoke-WtDataIo ReadCsv -Arguments (Join-Path $Folder "$Name.csv") -Key 'legacy' -Where '예전 데이터 위치' -Session Default
 }
 
-Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
+Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
+    Test-WtDataWriting, Get-WtDataWriteState, Get-WtDataWriteStatus, Get-WtDataUnsaved, Resume-WtDataWrites, Register-WtDataWriteHandler, Stop-WtDataWrites,
     Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
     Find-WtLegacyFolder, Import-WtLegacyCsv

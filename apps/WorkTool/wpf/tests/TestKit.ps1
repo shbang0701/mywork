@@ -7,6 +7,7 @@
     - New-WtTestData · Remove-WtTestData: 임시 앱 폴더와 데이터 폴더를 만들고 지운다. 실제 데이터 폴더(문서\WorkTool)는 쓰지 않는다.
     - Write-WtTestLegacyCsv: 예전 WorkTool(WinForms) CSV를 임시 앱 폴더 옆 data에 쓴다.
     - Assert-WtTest: 맞으면 PASS를 찍고, 틀리면 그 자리에서 멈춘다.
+    - New-WtTestGate · Remove-WtTestGate · $wtTestHang: 응답 없는 공유 폴더를 흉내 낸다 (돌아오지 않는 화면 밖 작업).
     - Test-WtTestWpf · New-WtTestView · Get-WtTestTexts: WPF 화면 검사(Windows · STA에서만)를 준비하고, 탭 화면을 창 없이 만들고, 화면에 실린 글을 모은다.
 
 .EXAMPLE
@@ -63,6 +64,34 @@ function Get-WtTestTexts($Element) {
         if ($child -is [System.Windows.DependencyObject]) { Get-WtTestTexts $child }
     }
 }
+
+<#
+응답 없는 공유 폴더 흉내 (외부 프로그램 · 관리자 권한 · 실제 서버 없이). 화면 밖 작업이 이 문을 기다리면 열어 줄 때까지 돌아오지 않는다.
+PowerShell 중지(Stop)에도 반응하지 않는 .NET 대기라서, OS 요청에서 돌아오지 않는 작업과 같다.
+작업 코드(다른 실행 공간)는 같은 프로세스의 [AppDomain]::CurrentDomain.GetData('WtTestGate')로 같은 문을 찾는다: $wtTestHang 참고
+#>
+function New-WtTestGate {
+    $g = @{ Gate = [System.Threading.ManualResetEvent]::new($false); Entered = [System.Threading.ManualResetEvent]::new($false) }
+    [AppDomain]::CurrentDomain.SetData('WtTestGate', $g)
+    $g
+}
+
+# 문을 열어 기다리던 작업을 돌려보내고, 그 작업들이 끝나 치워지기를 잠깐 기다린다 (검사 프로세스가 끝날 때 붙잡히지 않게)
+function Remove-WtTestGate($Gate) {
+    if (-not $Gate) { return }
+    [void]$Gate.Gate.Set()
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($watch.ElapsedMilliseconds -lt 5000) {
+        Update-WtWork
+        $info = Get-WtWorkInfo
+        if (-not $info.Running -and -not $info.Abandoned) { break }
+        Start-Sleep -Milliseconds 20
+    }
+    [AppDomain]::CurrentDomain.SetData('WtTestGate', $null)
+}
+
+# 문 앞에서 멈추는 작업 코드 (들어왔다고 알린 뒤 문이 열릴 때까지 기다린다)
+$wtTestHang = { $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne() }
 
 function Assert-WtTest([string]$Name, [bool]$Ok, $Detail = '') {
     if (-not $Ok) { throw ("FAIL $Name $Detail").TrimEnd() }

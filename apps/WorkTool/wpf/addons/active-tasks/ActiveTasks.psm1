@@ -1,5 +1,5 @@
 # 활성 작업. 창/탭 제목은 메모리에만 두고, 새로 고침 설정만 Settings를 통해 저장한다.
-# 수집/닫기는 별도 MTA runspace에서 Windows 기본 UI Automation으로 처리한다.
+# 수집/닫기는 화면 밖 작업(core\Work.psm1, 호출마다 새 MTA 실행 공간)에서 Windows 기본 UI Automation으로 처리한다.
 $ErrorActionPreference = 'Stop'
 $script:ui = @{}
 $script:items = @()
@@ -9,7 +9,6 @@ $script:listKey = $null
 $script:visible = @()
 $script:expanded = @{}
 $script:job = $null
-$script:workerRunspace = $null
 $script:timer = $null
 $script:paused = $false
 $script:next = [datetime]::MaxValue
@@ -305,40 +304,31 @@ $script:worker = {
 
 function Get-WtTaskWorker { $script:worker }
 
+# 수집 · 닫기 하나는 화면 밖 작업 하나(core\Work.psm1)다. 호출마다 새 실행 공간 · 새 스레드이고, 끝나면 버린다.
+# 응답 없는 프로그램을 기다리는 중에 앱을 끄면 기다리지 않고 버린다.
 function Start-WtTaskJob([string]$Action, [object[]]$Targets = @()) {
     if ($script:job) { return }
     $cancel = [hashtable]::Synchronized(@{ Value = $false })
-    $ps = $null
-    try {
-        if (-not $script:workerRunspace -or $script:workerRunspace.RunspaceStateInfo.State -ne 'Opened') {
-            if ($script:workerRunspace) { $script:workerRunspace.Dispose(); $script:workerRunspace = $null }
-            $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
-            # 실행 공간은 재사용하되 호출마다 새 스레드다. ReuseThread로 남는 실행 스레드를 만들지 않는다.
-            $runspace.ApartmentState = 'MTA'; $runspace.ThreadOptions = 'UseNewThread'
-            try { $runspace.Open(); $script:workerRunspace = $runspace } catch { $runspace.Dispose(); throw }
-        }
-        $runspace = $script:workerRunspace
-        $ps = [powershell]::Create(); $ps.Runspace = $runspace
-        # 부모 조회도 배경에서 한다. 함수와 작업 본문을 스크립트 하나에 그대로 넣어 지역 범위로 돌린다(실행 공간에 남기지 않는다).
-        # 글을 코드로 바꾸는 [scriptblock]::Create는 쓰지 않는다 (AGENTS.md 「코드 규칙」 4번)
-        $runner = "param(`$request)`ntry {`nfunction Get-WtTaskHostIds {`n$((Get-Command Get-WtTaskHostIds).Definition)`n}`n" +
-            "`$request.HostProcessIds = @(Get-WtTaskHostIds)`n& {`n$($script:worker.ToString())`n} `$request`n} finally { `$Error.Clear() }"
-        [void]$ps.AddScript($runner, $true).AddArgument(@{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; Cancel = $cancel })
-        $handle = $ps.BeginInvoke()
-        $script:job = @{ PowerShell = $ps; Runspace = $runspace; Handle = $handle; Cancel = $cancel; Action = $Action; Started = [datetime]::UtcNow }
-        $script:timer.Start()
-        Update-WtTaskStatus
-    } catch { if ($ps) { $ps.Dispose() }; throw }
+    # 부모 조회도 배경에서 한다. 함수와 작업 본문을 스크립트 하나에 그대로 넣어 지역 범위로 돌린다.
+    # 글을 코드로 바꾸는 [scriptblock]::Create는 쓰지 않는다 (AGENTS.md 「코드 규칙」 4번)
+    $runner = "param(`$request)`ntry {`nfunction Get-WtTaskHostIds {`n$((Get-Command Get-WtTaskHostIds).Definition)`n}`n" +
+        "`$request.HostProcessIds = @(Get-WtTaskHostIds)`n& {`n$($script:worker.ToString())`n} `$request`n} finally { `$Error.Clear() }"
+    $request = @{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; Cancel = $cancel }
+    $work = Start-WtWork -Script $runner -ArgumentList (, $request) -Session Default -OnDone { param($w) Complete-WtTaskJob $w }
+    $script:job = @{ Work = $work; Cancel = $cancel; Action = $Action; Started = [datetime]::UtcNow }
+    $script:timer.Start()
+    Update-WtTaskStatus
 }
 
-function Complete-WtTaskJob {
-    if (-not $script:job -or -not $script:job.Handle.IsCompleted) { return }
+# 작업이 끝났을 때 (화면 스레드, core\Work.psm1이 부른다)
+function Complete-WtTaskJob($Work) {
+    if (-not $script:job -or -not [object]::ReferenceEquals($script:job.Work, $Work)) { return }
     $job = $script:job; $script:job = $null
     $scanNext = $false
     try {
-        $output = @($job.PowerShell.EndInvoke($job.Handle))
-        if (-not $output.Count -or $output[-1] -isnot [System.Collections.IDictionary]) { throw ($job.PowerShell.Streams.Error | Select-Object -First 1) }
-        $result = $output[-1]
+        if ($Work.State -ne 'done') { throw $(if ($Work.Exception) { $Work.Exception } else { '작업을 완료하지 못했습니다.' }) }
+        if ($Work.Result -isnot [System.Collections.IDictionary]) { throw '작업 결과가 없습니다.' }
+        $result = $Work.Result
         if ($job.Action -eq 'scan') {
             if (-not $result.Canceled) {
                 Set-WtTaskSnapshot @($result.Items)
@@ -354,14 +344,13 @@ function Complete-WtTaskJob {
             $scanNext = $true
         }
     } catch { $script:lastError = '작업을 완료하지 못했습니다. 다시 시도하세요.'; $script:ui.Status.ToolTip = $_.Exception.Message }
-    finally { $job.PowerShell.Dispose() }
     $option = Get-WtTaskRefresh; $script:next = [datetime]::UtcNow.AddMinutes($option.minutes)
     Update-WtTaskStatus
     if ($scanNext) { Start-WtTaskJob 'scan' }
 }
 
 function Invoke-WtTaskTick {
-    Complete-WtTaskJob
+    Update-WtWork   # 끝난 작업을 지금 거둔다 (보통은 core\Work.psm1의 타이머가 먼저 거둔다)
     if (-not $script:ui.Count) { return }
     # 숨겨진 화면에서도 실행 중인 결과는 회수한다. 완료 뒤에는 다음에 보일 때까지 멈춘다.
     if (-not $script:ui.Root.IsVisible -and -not $script:job) { $script:timer.Stop(); return }
@@ -372,16 +361,13 @@ function Invoke-WtTaskTick {
     if ($script:job -and ([datetime]::UtcNow - $script:job.Started).TotalSeconds -gt 10) { $script:ui.Status.Text = '응답을 기다리는 중입니다. 취소하면 다음 항목부터 중단합니다.' }
 }
 
+# 끝낼 때: 남은 수집 · 닫기는 취소 표시만 하고 기다리지 않고 버린다 (응답 없는 프로그램이 돌려주지 않을 수 있다)
 function Stop-WtTasks {
     if ($script:timer) { $script:timer.Stop(); $script:timer = $null }
-    $runspace = $script:workerRunspace; $script:workerRunspace = $null
     if ($script:job) {
         $job = $script:job; $script:job = $null; $job.Cancel.Value = $true
-        if ($job.Handle.IsCompleted) { $job.PowerShell.Dispose(); $job.Runspace.Dispose() }
-        else { [void]$job.PowerShell.BeginStop($null, $null); $job.Runspace.CloseAsync() }
-        $runspace = $null
+        Stop-WtWork $job.Work
     }
-    if ($runspace) { $runspace.Dispose() }
 }
 
 function Update-WtTaskStatus {

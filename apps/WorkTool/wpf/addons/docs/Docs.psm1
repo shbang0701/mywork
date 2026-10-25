@@ -12,7 +12,8 @@ $script:entries = @()
 $script:selecting = $false   # 코드로 트리를 고르는 중
 $script:jobs = [System.Collections.Generic.List[object]]::new()
 $script:pending = [ordered]@{}
-$script:pollTimer = $null
+$script:folderWaitMs = 80    # 폴더를 열 때 결과를 기다리는 시간. 로컬 폴더는 이 안에 끝나서 「불러오는 중」이 깜빡이지 않는다
+$script:workerFunctions = $null   # 조회 작업에 넣을 함수 (처음 쓸 때 한 번 찾는다)
 $script:filterTimer = $null
 $script:stopping = $false
 $script:treeGeneration = 0
@@ -158,6 +159,7 @@ function Find-WtDocEntry([object[]]$Entries, [string]$Query) {
 
 # ---- 열기 ------------------------------------------------------------------------------------
 
+# 여는 것 · 탐색기에서 보여 주는 것은 확인까지 화면 밖에서 한다 (core\Work.psm1 Open-WtPath). 응답 없는 공유 폴더여도 화면이 멈추지 않는다
 function Open-WtDocEntry($Entry) {
     if (-not $Entry) { return }
     if ($Entry.Missing) { Show-WtMessage "찾을 수 없습니다. 옮기거나 지웠으면 즐겨찾기에서 빼세요.`n$($Entry.Path)"; return }
@@ -166,13 +168,10 @@ function Open-WtDocEntry($Entry) {
     if ($script:runnable -contains $ext) {
         if (-not (Confirm-WtYesNo "'$($Entry.Name)'은(는) 실행되는 파일입니다. 실행할까요?")) { return }
     }
-    try { Invoke-Item -LiteralPath $Entry.Path } catch { Show-WtError $_ '파일 열기' }
+    Open-WtPath $Entry.Path -NotFound "찾을 수 없습니다. 옮기거나 지웠으면 새로 고침하세요.`n$($Entry.Path)"
 }
 
-function Show-WtDocInExplorer([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { Show-WtMessage "찾을 수 없습니다.`n$Path"; return }
-    Start-Process explorer.exe -ArgumentList "/select,`"$Path`""
-}
+function Show-WtDocInExplorer([string]$Path) { Open-WtPath $Path -Reveal }
 
 function Copy-WtDocPath([string]$Path) {
     try { [System.Windows.Clipboard]::SetText($Path) } catch { Show-WtMessage '클립보드를 다른 프로그램이 쓰고 있어서 복사하지 못했습니다. 다시 누르세요.' 'WorkTool' 'Warning'; return }
@@ -203,8 +202,6 @@ function Start-WtDocRequest([string]$Key, [string]$Action, [string]$Path = '', $
     $request = @{ Action = $Action; Path = $Path; Pins = @(Get-WtSetting 'docs.pins'); Cancel = [hashtable]::Synchronized(@{ Value = $false }) }
     if ($Key -eq 'home') { $request.Pins = @($request.Pins | Select-Object -First 6) }
     $script:pending[$Key] = @{ Key = $Key; Request = $request; Context = $Context; Generation = $script:treeGeneration }
-    if (-not $script:pollTimer) { $script:pollTimer = New-WtPollTimer { Complete-WtDocJobs } }
-    $script:pollTimer.Start()
     Start-WtDocJobs
     $true
 }
@@ -218,44 +215,47 @@ function Test-WtDocJobSlot([string]$Key) {
     @($active | Where-Object { $_.Key -notin 'folder', 'home' }).Count -lt 2
 }
 
+# 조회 하나는 화면 밖 작업 하나(core\Work.psm1)다. 끝나면 Complete-WtDocJob이 화면 스레드에서 결과를 넣는다
 function Start-WtDocJobs {
     if ($script:stopping) { return }
     $keys = @(@('folder', 'home') | Where-Object { $script:pending.Contains($_) }) + @($script:pending.Keys | Where-Object { $_ -notin 'folder', 'home' })
     foreach ($key in $keys) {
         if (-not $script:pending.Contains($key) -or -not (Test-WtDocJobSlot $key)) { continue }
         $job = $script:pending[$key]; $script:pending.Remove($key)
-        $state = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
-        foreach ($name in 'Get-WtDocKind', 'Get-WtDocIcon', 'Format-WtDocSize', 'New-WtDocEntry', 'Get-WtDocEntries', 'Get-WtDocSubfolders', 'Get-WtDocPinEntries') {
-            $state.Commands.Add([System.Management.Automation.Runspaces.SessionStateFunctionEntry]::new($name, (Get-Command $name).Definition))
+        $script:jobs.Add($job)
+        if (-not $script:workerFunctions) {
+            $script:workerFunctions = @(Get-Command Get-WtDocKind, Get-WtDocIcon, Format-WtDocSize, New-WtDocEntry, Get-WtDocEntries, Get-WtDocSubfolders, Get-WtDocPinEntries)
         }
-        $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($state)
-        # 작업마다 새 스레드. ReuseThread는 실행 공간을 버리기 전까지 스레드가 남아, 끝낼 때 응답 없는 조회가 있으면 앱 프로세스가 끝나지 않는다
-        $runspace.ApartmentState = 'MTA'; $runspace.ThreadOptions = 'UseNewThread'
-        $ps = [powershell]::Create()
         try {
-            $runspace.Open(); $ps.Runspace = $runspace
-            [void]$ps.AddScript($script:worker.ToString()).AddArgument($job.Request).AddArgument($script:kinds).AddArgument($script:kindIcons)
-            $job.PowerShell = $ps; $job.Runspace = $runspace; $job.Handle = $ps.BeginInvoke()
-            $script:jobs.Add($job)
+            $job.Work = Start-WtWork -Script $script:worker -ArgumentList $job.Request, $script:kinds, $script:kindIcons -Session Default -Context $job `
+                -Functions $script:workerFunctions -OnDone { param($w) Complete-WtDocJob $w }
         } catch {
-            $ps.Dispose(); $runspace.Dispose()
+            [void]$script:jobs.Remove($job)
             Set-WtDocResult $job @{ Items = @(); Error = $_.Exception.Message }
         }
     }
 }
 
+function Complete-WtDocJob($Work) {
+    $job = $Work.Context
+    [void]$script:jobs.Remove($job)
+    $result = if ($Work.State -eq 'done' -and $Work.Result) { $Work.Result }
+    else { @{ Items = @(); Error = $(if ($Work.Error) { $Work.Error } else { '조회가 취소되었거나 완료되지 않았습니다.' }) } }
+    try { if (-not $script:stopping -and -not $job.Request.Cancel.Value) { Set-WtDocResult $job $result } }
+    finally { Start-WtDocJobs }
+}
+
+# 끝난 조회를 지금 거둔다 (검사에서 부른다. 앱에서는 core\Work.psm1의 타이머가 거둔다)
 function Complete-WtDocJobs {
-    foreach ($job in @($script:jobs.ToArray())) {
-        if (-not $job.Handle.IsCompleted) { continue }
-        try {
-            $output = @($job.PowerShell.EndInvoke($job.Handle))
-            $result = if ($output.Count) { $output[-1] } else { @{ Items = @(); Error = '조회가 취소되었거나 완료되지 않았습니다.' } }
-        } catch { $result = @{ Items = @(); Error = $_.Exception.Message } }
-        finally { $job.PowerShell.Dispose(); $job.Runspace.Dispose(); [void]$script:jobs.Remove($job) }
-        if (-not $script:stopping -and -not $job.Request.Cancel.Value) { Set-WtDocResult $job $result }
-    }
+    Update-WtWork
     Start-WtDocJobs
-    if (-not $script:jobs.Count -and -not $script:pending.Count -and $script:pollTimer) { $script:pollTimer.Stop() }
+}
+
+# 지금 폴더 조회를 잠깐 기다린다. 화면을 다 꾸린 뒤에 부른다 (결과를 넣는 처리기가 화면을 바꾸므로)
+function Wait-WtDocJob([string]$Key) {
+    $job = $null
+    foreach ($j in $script:jobs) { if ($j.Key -eq $Key -and $j.Work -and -not $j.Request.Cancel.Value) { $job = $j } }
+    if ($job) { [void](Wait-WtWork $job.Work -Milliseconds $script:folderWaitMs) }
 }
 
 function Set-WtDocResult($Job, $Result) {
@@ -336,21 +336,18 @@ function Complete-WtDocTreeBatch {
     Request-WtDocTreeBatch
 }
 
+# 끝낼 때: 남은 조회는 기다리지 않고 버린다. 응답 없는 공유 폴더의 OS 요청은 돌아오지 않을 수 있기 때문이다
 function Stop-WtDocs {
     $script:stopping = $true
     $script:pending.Clear()
     $script:treeBatches.Clear()
-    foreach ($job in $script:jobs) {
+    foreach ($job in @($script:jobs)) {
         $job.Request.Cancel.Value = $true
         $job.Context = $null
-        if (-not $job.Handle.IsCompleted) {
-            # 응답 없는 OS 호출 중에는 멈추기 · 닫기가 실패할 수 있다. 끝낼 때 오류 창을 띄우지 않는다
-            try { [void]$job.PowerShell.BeginStop($null, $null) } catch { }
-            try { $job.Runspace.CloseAsync() } catch { }
-        }
+        Stop-WtWork $job.Work
     }
+    $script:jobs.Clear()
     if ($script:filterTimer) { $script:filterTimer.Stop() }
-    Complete-WtDocJobs
 }
 
 function Cancel-WtDocFolder {
@@ -461,6 +458,7 @@ function Show-WtDocFolder([string]$Path, [switch]$SelectTree, [string]$Fallback 
     $script:ui.Up.IsEnabled = $Path -and $Path -ne '*' -and -not (@(Get-WtDocRoots) | Where-Object { $_.TrimEnd('\') -ieq $Path.TrimEnd('\') })
     Update-WtDocList
     if ($SelectTree) { Select-WtDocTreePath $Path }
+    Wait-WtDocJob 'folder'
 }
 
 function Update-WtDocList {
@@ -576,7 +574,7 @@ function New-WtDocsView {
     $refresh = New-WtButton '' -Kind Icon -Icon 0xE72C -ToolTip '새로 고침 (F5)'
     $refresh.Add_Click({ Show-WtDocFolder $script:current })
     $openFolder = New-WtButton '탐색기에서 열기' -Kind Link -Icon 0xE838
-    $openFolder.Add_Click({ if ($script:current -and $script:current -ne '*') { Invoke-Item -LiteralPath $script:current } })
+    $openFolder.Add_Click({ if ($script:current -and $script:current -ne '*') { Open-WtPath $script:current } })
     foreach ($b in @($openFolder, $refresh)) { [System.Windows.Controls.DockPanel]::SetDock($b, 'Right'); [void]$top.Children.Add($b) }
     $pathText = New-WtText '' 'T.Strong'
     $pathText.TextWrapping = 'NoWrap'
@@ -730,6 +728,7 @@ function New-WtDocsHomeCard {
     [void](Add-WtChild $col (New-WtText '불러오는 중…' 'T.Sub'))
     $card.Child = $col
     [void](Start-WtDocRequest 'home' 'pins' '' $col)
+    Wait-WtDocJob 'home'
     $card
 }
 

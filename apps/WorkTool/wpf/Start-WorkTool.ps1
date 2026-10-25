@@ -56,7 +56,7 @@ if ($env:WORKTOOL_HARDWARE_RENDER -ne '1') {
 }
 
 #region 모듈 불러오기 (묶음 파일에서는 이 구역이 모듈 소스로 바뀐다)
-$coreModules = 'Storage', 'Settings', 'Theme', 'Ui', 'Highlight', 'Markdown', 'Mermaid', 'Addons', 'Pages', 'Shell'
+$coreModules = 'Work', 'Storage', 'Settings', 'Theme', 'Ui', 'Highlight', 'Markdown', 'Mermaid', 'Addons', 'Pages', 'Shell'
 foreach ($name in $coreModules) {
     Import-Module (Join-Path $PSScriptRoot "core\$name.psm1") -Force -DisableNameChecking
 }
@@ -80,3 +80,7 @@ foreach ($file in (Get-ChildItem (Join-Path $PSScriptRoot 'addons') -Filter '*.p
         [System.Windows.Media.RenderOptions]::ProcessRenderMode = $previousRenderMode
     }
 }
+
+# 이 앱만을 위해 띄운 프로세스(-File로 이 파일을 실행)면 여기서 프로세스를 끝낸다. 응답 없는 공유 폴더를 기다리다
+# 버린 작업이 남아도 창을 닫으면 프로세스가 끝나게 하려는 것이다 (core\Work.psm1의 Exit-WtOwnProcess). 정리는 위에서 모두 끝났다
+if (Get-Command Exit-WtOwnProcess -ErrorAction SilentlyContinue) { Exit-WtOwnProcess -ScriptPath $PSCommandPath }

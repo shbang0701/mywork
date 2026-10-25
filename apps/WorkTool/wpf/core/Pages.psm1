@@ -151,7 +151,7 @@ function New-WtDataCard {
     Set-WtResource $path 'FontFamily' 'Font.Mono'
     $open = New-WtButton '폴더 열기' -Icon 0xE8B7
     $open.Tag = $root
-    $open.Add_Click({ param($s, $e) Invoke-Item -LiteralPath ([string]$s.Tag) })
+    $open.Add_Click({ param($s, $e) Open-WtPath ([string]$s.Tag) })
     $box = New-WtStack Vertical 6
     [void](Add-WtChild $box $path)
     [void](Add-WtChild $box $open)

@@ -187,7 +187,7 @@ function Save-WtMemoTabs {
     try { $null = Set-WtSetting 'memo.tabs' $value } catch { }   # 설정을 못 남겨도 메모 쓰기는 막지 않는다
 }
 
-# 저장 상태 표시 (칸마다): saved · dirty · error · ''(숨김)
+# 저장 상태 표시 (칸마다): saved · dirty · writing · error · ''(숨김)
 function Set-WtMemoStatus($Pane, [string]$State, [string]$Detail = '') {
     $s = $Pane.Status
     $m = if ($Pane.Current) { Get-WtMemoById $Pane.Current.Id } else { $null }
@@ -209,6 +209,12 @@ function Set-WtMemoStatus($Pane, [string]$State, [string]$Detail = '') {
         'error' {
             $s.Content = New-WtButtonContent "저장하지 못했습니다. $Detail" 0xE783
             Set-WtResource $s 'Foreground' 'B.Danger'
+            $s.Visibility = 'Visible'
+        }
+        'writing' {
+            # 실패가 아니다: 데이터 폴더가 늦게 답해 저장 통로가 이어서 쓰는 중. 파일에 쓰이면 「자동 저장됨」이 된다 (Update-WtMemoSaveStatus)
+            $s.Content = New-WtButtonContent '저장하는 중 · 데이터 폴더가 늦게 답합니다' 0xE895
+            Set-WtResource $s 'Foreground' 'B.Warn'
             $s.Visibility = 'Visible'
         }
         default { $s.Visibility = 'Collapsed' }
@@ -246,7 +252,7 @@ function Show-WtMemoPane($Pane) {
     $Pane.EmptyQuick.IsEnabled = [bool]$script:items.Count
     $Pane.EmptyQuick.ToolTip = if ($script:items.Count) { '빠른 이동 (Ctrl+O)' } else { '메모가 없습니다' }
     Update-WtMemoPaneMode $Pane
-    Set-WtMemoStatus $Pane $(if ($m) { 'saved' } else { '' })
+    if ($m) { $look = Get-WtMemoSaveLook; Set-WtMemoStatus $Pane $look[0] $look[1] } else { Set-WtMemoStatus $Pane '' }
 }
 
 # 저장한 뒤 칸의 제목 · 날짜를 고치고, 다른 칸에서 저장해 글이 달라졌으면 다시 불러온다 (커서 · 스크롤 유지)
@@ -784,11 +790,36 @@ function Restore-WtMemoTabs {
 
 # ---- 저장 -------------------------------------------------------------------------------------
 
-# 고친 칸을 모두 바로 저장한다. 저장 시각 · 탭 제목 · 목록도 고친다. 실패하면 $false (고친 표시는 남긴다)
-function Save-WtMemoNow {
+# 저장 표시: 시간이 아니라 저장 통로의 memo.json 상태(받아들인 내용이 파일에 쓰였는지)로 정한다. @(상태, 설명)
+function Get-WtMemoSaveLook {
+    $st = Get-WtDataWriteStatus (Get-WtStorePath 'memo')
+    switch ($st.State) {
+        'writing' { @('writing', '') }
+        'failed' { @('error', "$($st.Message) Ctrl+S로 다시 저장합니다.") }
+        default { @('saved', '') }
+    }
+}
+
+# 고친 칸이 없는 칸의 저장 표시를 저장 통로 상태에 맞춘다
+function Update-WtMemoSaveStatus {
+    if (-not $script:ui.Count) { return }
+    $look = Get-WtMemoSaveLook
+    foreach ($p in $script:panes) { if ($p.Current -and -not $p.Dirty) { Set-WtMemoStatus $p $look[0] $look[1] } }
+}
+
+# 고친 칸을 모두 바로 저장한다. 저장 시각 · 탭 제목 · 목록도 고친다. 편집 중인 메모를 찾지 못하면 $false (고친 표시는 남긴다).
+# 쓰는 중이거나 쓰지 못해도 저장 통로가 이 내용을 가지고 있으므로 $true다 (표시: 「저장하는 중」 → 「자동 저장됨」, 또는 「저장하지 못했습니다」).
+# -Retry(Ctrl+S): 고친 칸이 없어도, 늦게 실패해 앱이 가지고 있는 메모 내용이 있으면 다시 써 본다
+function Save-WtMemoNow([switch]$Retry) {
     if ($script:saveTimer) { $script:saveTimer.Stop() }
     $dirty = @($script:panes | Where-Object { $_.Dirty })
-    if (-not $dirty.Count) { return $true }
+    if (-not $dirty.Count) {
+        if ($Retry -and (Get-WtDataWriteStatus (Get-WtStorePath 'memo')).State -eq 'failed') {
+            try { Resume-WtDataWrites (Get-WtStorePath 'memo') } catch { }
+            Update-WtMemoSaveStatus
+        }
+        return $true
+    }
     # 같은 메모를 두 칸에서 고쳤으면 포커스가 있는 칸의 글을 마지막에 써서 그 글이 남게 한다
     $activePane = Get-WtMemoActivePane
     $ordered = @($dirty | Where-Object { -not [object]::ReferenceEquals($_, $activePane) }) + @($dirty | Where-Object { [object]::ReferenceEquals($_, $activePane) })
@@ -811,10 +842,11 @@ function Save-WtMemoNow {
     $script:items = @(Get-WtMemoSorted $next)
     $script:viewStamp = Get-WtMemoViewStamp
     # 같은 메모를 연 다른 칸은 글을 다시 불러온다 (그 칸은 포커스가 없어 고치는 중이 아님)
+    $look = Get-WtMemoSaveLook
     foreach ($p in $script:panes) {
         if (-not $p.Current -or -not $byId.Contains([string]$p.Current.Id)) { continue }
         Update-WtMemoPaneContent $p
-        Set-WtMemoStatus $p 'saved'
+        Set-WtMemoStatus $p $look[0] $look[1]
     }
     Update-WtMemoTabTexts
     Update-WtMemoList -KeepCurrent
@@ -1093,7 +1125,7 @@ function Invoke-WtMemoKey([System.Windows.Input.Key]$Key, [System.Windows.Input.
     if (-not $ctrl -or $alt) { return $false }
     switch ($name) {
         'N' { if ($shift) { return $false }; [void](Add-WtMemo -Edit); return $true }
-        'S' { [void](Save-WtMemoNow); return $true }
+        'S' { [void](Save-WtMemoNow -Retry); return $true }
         'W' { Close-WtMemoCurrentTab; return $true }
         'Tab' { Select-WtMemoNextTab $(if ($shift) { -1 } else { 1 }); return $true }
         'T' { if (-not $shift) { return $false }; Restore-WtMemoClosedTab; return $true }
@@ -1428,6 +1460,12 @@ function New-WtMemoMarkdownHelpCard {
     [void](Add-WtChild $col $script:helpRaw)
     $card.Child = $col
     $card
+}
+
+# memo.json의 저장 상태가 바뀌면(쓰임 · 실패로 남음) 칸의 표시만 고친다. 다시 저장하지 않는다 (내용은 저장 통로가 가지고 있다)
+Register-WtDataWriteHandler {
+    param($path, $state)
+    if ($script:ui.Count -and $path -ieq (Get-WtStorePath 'memo')) { Update-WtMemoSaveStatus }
 }
 
 Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Order 40 -WarmUp Full `

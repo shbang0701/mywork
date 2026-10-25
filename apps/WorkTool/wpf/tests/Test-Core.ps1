@@ -45,6 +45,69 @@ try {
     }
     Assert-Wt '코드 검사: 함수 안에 대소문자만 다른 변수 이름 없음' (-not $clash) ($clash -join '; ')
 
+    # ---- 화면 밖 작업 (core\Work.psm1) ----
+    $sum = Invoke-WtWork { param($a, $b) $a + $b } -ArgumentList 2, 3 -TimeoutMs 5000
+    $arr = Invoke-WtWork { param($n) , @(1..$n) } -ArgumentList 3 -TimeoutMs 5000
+    $ioError = $null
+    try { [void](Invoke-WtWork { param($p) [System.IO.File]::ReadAllText($p) } -ArgumentList (Join-Path $test.Root '없음.txt') -TimeoutMs 5000) } catch { $ioError = $_.Exception }
+    Assert-Wt '화면 밖 작업: 결과 · 배열 결과 · 작업 안의 예외를 그대로 올린다' ($sum -eq 5 -and $arr.Count -eq 3 -and $ioError -is [System.IO.FileNotFoundException]) "($sum · $($arr.Count) · $($ioError.GetType().Name))"
+    $sta = Invoke-WtWork { [string][System.Threading.Thread]::CurrentThread.GetApartmentState() } -Sta -TimeoutMs 5000
+    $listed = Invoke-WtWork { param($p) @(Get-ChildItem -LiteralPath $p).Count } -Session Default -ArgumentList $test.Root -TimeoutMs 5000
+    Assert-Wt '화면 밖 작업: STA 스레드 · 기본 명령 세션' ($sta -eq 'STA' -and $listed -ge 1)
+    # 응답 없는 공유 폴더 흉내(돌아오지 않는 .NET 대기): 화면 쪽은 정한 시간만 기다리고, 같은 곳은 다시 기다리지 않으며, 끝낼 때는 버린다
+    $gate = New-WtTestGate
+    try {
+        $global:wtTestDone = $null
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        $hung = Start-WtWork $wtTestHang -Key 'path:\\wt-test\hang' -TimeoutMs 300 -OnDone { param($w) $global:wtTestDone = $w.State }
+        $startMs = $watch.ElapsedMilliseconds
+        $entered = $gate.Entered.WaitOne(5000)
+        $waited = Wait-WtWork $hung -Milliseconds 100
+        Start-Sleep -Milliseconds 300
+        Update-WtWork
+        $watch.Restart(); $again = $null
+        try { [void](Invoke-WtWork { 1 } -Key 'path:\\wt-test\hang' -TimeoutMs 5000) } catch { $again = $_.Exception }
+        $againMs = $watch.ElapsedMilliseconds
+        $watch.Restart(); $slow = $null
+        try { [void](Invoke-WtWork $wtTestHang -Key 'path:\\wt-test\other' -TimeoutMs 200) } catch { $slow = $_.Exception }
+        $slowMs = $watch.ElapsedMilliseconds
+        $watch.Restart(); Stop-WtAllWork; $stopMs = $watch.ElapsedMilliseconds
+        Assert-Wt "화면 밖 작업: 돌아오지 않는 작업도 시작 · 기다림 · 끝내기는 정한 시간만 쓴다 (시작 ${startMs} · 시간 초과 ${slowMs} · 다시 ${againMs} · 끝내기 ${stopMs}ms)" (
+            $entered -and -not $waited -and $startMs -lt 500 -and $global:wtTestDone -eq 'timedout' -and (Test-WtWorkStuck 'path:\\wt-test\hang') -and
+            $again -is [System.TimeoutException] -and $againMs -lt 100 -and $slow -is [System.TimeoutException] -and $slowMs -lt 1000 -and $stopMs -lt 100 -and
+            (Get-WtWorkInfo).Running -eq 0)
+    } finally { Remove-WtTestGate $gate }
+    Assert-Wt '화면 밖 작업: 문을 열면 버린 작업도 끝나 치워진다' ((Get-WtWorkInfo).Abandoned -eq 0 -and -not (Test-WtWorkStuck 'path:\\wt-test\hang'))
+    # 앱 전용 프로세스: 돌아오지 않는 작업이 남아도 Exit-WtOwnProcess로 끝난다. 부르지 않으면 PowerShell이 그 작업을 기다리느라 끝나지 않는다
+    $exitChild = Join-Path $test.Root 'work-exit.ps1'
+    Set-Content -LiteralPath $exitChild -Encoding utf8 -Value @"
+param([string]`$Mode)
+. '$(Join-Path $PSScriptRoot 'TestKit.ps1')'
+Import-WtTestCore
+`$gate = New-WtTestGate
+[void](Start-WtWork `$wtTestHang -OnDone { })
+if (-not `$gate.Entered.WaitOne(10000)) { exit 3 }
+Stop-WtAllWork
+if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 7 }
+"@
+    $exitRuns = @{}
+    foreach ($mode in 'own', 'none') {
+        $info = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))
+        foreach ($a in '-NoLogo', '-NoProfile', '-NonInteractive', '-File', $exitChild, '-Mode', $mode) { $info.ArgumentList.Add($a) }
+        $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+        $p = [System.Diagnostics.Process]::Start($info)
+        $exitRuns[$mode] = @{ Process = $p; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
+    }
+    $ownExited = $exitRuns.own.Process.WaitForExit(30000)
+    $ownMs = $exitRuns.own.Watch.ElapsedMilliseconds
+    # 대조: 같은 상황에서 Exit-WtOwnProcess를 부르지 않으면 (시작 시간까지 넉넉히 기다려도) 끝나지 않는다
+    $noneExited = $exitRuns.none.Process.WaitForExit([int][Math]::Max(3000, $ownMs + 3000))
+    foreach ($r in $exitRuns.Values) { if (-not $r.Process.HasExited) { $r.Process.Kill(); [void]$r.Process.WaitForExit(5000) } }
+    Assert-Wt "앱 프로세스: 돌아오지 않는 작업이 남아도 Exit-WtOwnProcess로 끝난다 (${ownMs}ms) · 부르지 않으면 끝나지 않는다 (대조)" (
+        $ownExited -and $exitRuns.own.Process.ExitCode -eq 7 -and -not $noneExited) "(끝남 $ownExited · 코드 $(if ($ownExited) { $exitRuns.own.Process.ExitCode }) · 대조 끝남 $noneExited)"
+    foreach ($r in $exitRuns.Values) { $r.Process.Dispose() }
+    Assert-Wt '앱 프로세스: 이 검사 프로세스(-File Test-Core.ps1)는 앱 전용이 아니라고 본다' (-not (Test-WtOwnProcess (Join-Path $root 'Start-WorkTool.ps1')))
+
     # ---- 저장 ----
     Assert-Wt '데이터 폴더는 datapath.txt를 따른다' ((Get-WtDataRoot) -eq (Resolve-Path $test.Data).ProviderPath)
 
@@ -351,83 +414,135 @@ pie
         $firstInline = $plainTask.Document.Blocks.FirstBlock.ListItems.FirstListItem.Blocks.FirstBlock.Inlines.FirstInline
         Assert-Wt 'WPF: -OnTask가 없으면 체크 표시는 누를 수 없다' ($firstInline -is [System.Windows.Documents.Run] -and $firstInline.Text -eq [string][char]0xE739)
 
-        # 파일 링크 열기: 있는지 · 폴더인지는 화면 밖 작업으로 확인한다. 느린 경로 · 시간 초과는 확인 작업을 바꿔 끼워 흉내 낸다
-        # 알림 · 열기 · 탐색기는 기록만 하고 실제로 열지 않는다
-        & $mdModule {
+        # 파일 · 폴더 열기 (core\Work.psm1 Open-WtPath): 있는지 · 폴더인지 확인과 셸 열기 모두 화면 밖에서 한다.
+        # 속성 읽기와 셸 호출 두 곳만 가짜로 바꾼다 (실제로 열지 않고 할 일만 기록). 여는 작업 · 취소 확인 · 넘김 표시는 그대로 돈다.
+        # 느린 경로는 \\srv\ 경로의 속성 읽기를 문 앞에서 멈춰 흉내 낸다
+        Assert-Wt 'Open-WtPath: 여는 방법 (폴더 · 열 수 있는 종류는 열고, 그 밖은 탐색기에서 선택 · 없음)' (
+            (Get-WtPathOpenAction 16 'C:\d' $false @('.txt')) -eq 'open' -and (Get-WtPathOpenAction 32 'C:\a.txt' $false @('.txt')) -eq 'open' -and
+            (Get-WtPathOpenAction 32 'C:\run.exe' $false @('.txt')) -eq 'reveal' -and (Get-WtPathOpenAction -1 'C:\x' $false @()) -eq 'missing' -and
+            (Get-WtPathOpenAction 32 'C:\run.exe' $false @()) -eq 'open' -and (Get-WtPathOpenAction 32 'C:\a.txt' $true @()) -eq 'reveal')
+        $workModule = Get-Module Work
+        $openLog = [System.Collections.ArrayList]::Synchronized([System.Collections.ArrayList]::new())
+        [AppDomain]::CurrentDomain.SetData('WtTestOpen', @{ Log = $openLog; Attr = @{ 'C:\wt\a.txt' = 32; 'C:\wt\dir' = 16; 'C:\wt\run.exe' = 32; 'C:\wt\none.txt' = -1; '\\srv\share\slow.xlsx' = 32 } })
+        & $workModule {
             $script:testSaid = [System.Collections.Generic.List[string]]::new()
             function script:Show-WtMessage { param($Text, $Title, $Icon) $script:testSaid.Add("msg:$(($Text -split "`n")[0])") }
-            function script:Invoke-Item { param($LiteralPath) $script:testSaid.Add("open:$LiteralPath") }
-            function script:Start-Process { param($FilePath, $ArgumentList) $script:testSaid.Add("select:$ArgumentList") }
-            $script:testSources = @{}
-            $script:testRealProbe = $script:pathProbe
-            $script:pathProbe = { param($path) $src = [System.Threading.Tasks.TaskCompletionSource[System.IO.FileAttributes]]::new(); $script:testSources[$path] = $src; $src.Task }
+            $script:testRealAttr = ${function:Get-WtPathAttributes}; $script:testRealShell = ${function:Invoke-WtShellStart}
+            function script:Get-WtPathAttributes([string]$Path) {
+                $t = [AppDomain]::CurrentDomain.GetData('WtTestOpen')
+                if ($Path -like '\\srv\*') { $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne() }
+                if ($t.Attr.ContainsKey($Path)) { [int]$t.Attr[$Path] } else { -1 }
+            }
+            function script:Invoke-WtShellStart($Start, [string]$Action) {
+                $t = [AppDomain]::CurrentDomain.GetData('WtTestOpen')
+                $target = if ($Action -eq 'reveal') { $Start.Arguments -replace '^/select,"(.*)"$', '$1' } else { $Start.FileName }
+                # 셸이 늦게 여는 경우: late가 들어간 경로는 문 앞에서 기다린 뒤에 「연다」
+                if ($target -like '*late*') { $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne() }
+                [void]$t.Log.Add("${Action}:$target")
+            }
         }
         $fakeState = @{ BaseDir = ''; OnLink = $null; Anchors = @{} }
         $openLink = { param($target) Invoke-WtMarkdownLink $fakeState @{ Kind = 'file'; Target = $target; Text = 'x' } }
+        $gate = New-WtTestGate
         try {
-            & $openLink 'C:/wt/a.txt'; & $openLink 'C:/wt/a.txt'
-            & $openLink 'C:/wt/dir'; & $openLink 'C:/wt/run.exe'; & $openLink 'C:/wt/none.txt'
-            $pending = & $mdModule { @{ Jobs = $script:pathJobs.Count; Probes = $script:testSources.Count; Timer = $script:pathTimer.IsEnabled } }
+            & $openLink 'C:/wt/a.txt'; & $openLink 'C:/wt/dir'; & $openLink 'C:/wt/run.exe'; & $openLink 'C:/wt/none.txt'
+            [void](Wait-WtWork -All -Milliseconds 10000)
+            $said = @(& $workModule { $script:testSaid })
+            Assert-Wt 'WPF 파일 링크: 확인 결과대로 열기 (파일 · 폴더 · 실행 파일은 탐색기에서 선택 · 없음은 알림)' (
+                (@($openLog | Sort-Object) -join '|') -eq 'open:C:\wt\a.txt|open:C:\wt\dir|reveal:C:\wt\run.exe' -and ($said -join '|') -eq 'msg:파일을 찾지 못했습니다.') "$(@($openLog) -join '|') / $($said -join '|')"
+            Assert-Wt 'WPF 파일 링크: 끝나면 작업 · 커서를 정리한다' ((Get-WtWorkInfo).Running -eq 0 -and $null -eq [System.Windows.Input.Mouse]::OverrideCursor)
+
+            # 응답 없는 공유: 같은 경로는 겹쳐 확인하지 않고, 확인 중에는 AppStarting 커서. 시간이 지나면 알리고 커서를 돌려놓으며,
+            # 같은 공유를 또 누르면 새로 묻지 않고 바로 알린다. 늦게 온 답으로는 열지 않는다
+            & $workModule { $script:testSaid.Clear(); $script:openTimeoutMs = 300 }
+            $openLog.Clear()
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            & $openLink '//srv/share/slow.xlsx'; & $openLink '//srv/share/slow.xlsx'
+            $clickMs = $watch.ElapsedMilliseconds
+            $pending = (Get-WtWorkInfo).Running
             $waitCursor = [System.Windows.Input.Mouse]::OverrideCursor
-            & $mdModule {
-                $script:testSources['C:\wt\a.txt'].SetResult([System.IO.FileAttributes]::Archive)
-                $script:testSources['C:\wt\dir'].SetResult([System.IO.FileAttributes]::Directory)
-                $script:testSources['C:\wt\run.exe'].SetResult([System.IO.FileAttributes]::Archive)
-                $script:testSources['C:\wt\none.txt'].SetResult([Enum]::ToObject([System.IO.FileAttributes], -1))   # 없는 경로는 -1
-                Complete-WtMdPathChecks
-            }
-            $said = @(& $mdModule { $script:testSaid })
-            $after = & $mdModule { @{ Jobs = $script:pathJobs.Count; Timer = $script:pathTimer.IsEnabled } }
-            Assert-Wt 'WPF 파일 링크: 같은 링크는 겹쳐 확인하지 않고, 확인 중에는 AppStarting 커서' ($pending.Jobs -eq 4 -and $pending.Probes -eq 4 -and $pending.Timer -and
-                $waitCursor -eq [System.Windows.Input.Cursors]::AppStarting) "(작업 $($pending.Jobs) · 커서 $waitCursor)"
-            Assert-Wt 'WPF 파일 링크: 확인 결과대로 열기 (파일 · 폴더 · 실행 파일은 탐색기에서 선택 · 없음)' (($said -join '|') -eq 'open:C:\wt\a.txt|open:C:\wt\dir|select:/select,"C:\wt\run.exe"|msg:파일을 찾지 못했습니다.') ($said -join '|')
-            Assert-Wt 'WPF 파일 링크: 끝나면 작업 목록 · 타이머 · 커서를 정리한다' ($after.Jobs -eq 0 -and -not $after.Timer -and $null -eq [System.Windows.Input.Mouse]::OverrideCursor)
+            Start-Sleep -Milliseconds 400
+            Update-WtWork
+            $afterTimeout = @{ Said = @(& $workModule { $script:testSaid }); Cursor = [System.Windows.Input.Mouse]::OverrideCursor }
+            & $openLink '//srv/share/other.txt'
+            $quick = @(& $workModule { $script:testSaid })
+            Remove-WtTestGate $gate; $gate = $null
+            $timeoutText = 'msg:경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요. 늦게 답이 와도 열지 않습니다.'
+            Assert-Wt "WPF 파일 링크: 응답 없는 공유도 누르면 바로 돌아오고(${clickMs}ms), 같은 링크는 겹쳐 확인하지 않으며 확인 중에는 AppStarting 커서" (
+                $clickMs -lt 500 -and $pending -eq 1 -and $waitCursor -eq [System.Windows.Input.Cursors]::AppStarting) "(작업 $pending · 커서 $waitCursor)"
+            Assert-Wt 'WPF 파일 링크: 시간 초과면 알리고 커서를 돌려놓으며, 같은 공유를 또 누르면 바로 알리고, 늦게 온 답으로는 열지 않는다' (
+                ($afterTimeout.Said -join '|') -eq $timeoutText -and $null -eq $afterTimeout.Cursor -and ($quick -join '|') -eq "$timeoutText|$timeoutText" -and
+                $openLog.Count -eq 0 -and (Get-WtWorkInfo).Abandoned -eq 0) "$($quick -join ' / ') · 열기 $($openLog.Count)"
 
-            # 시간 초과: 기다리지 않고 알리고, 커서는 돌려놓는다. 답이 없는 동안 또 누르면 새로 확인하지 않고 바로 알린다
-            & $mdModule { $script:testSaid.Clear(); $script:pathTimeoutMs = 50 }
-            & $openLink '//srv/share/slow.xlsx'
-            Start-Sleep -Milliseconds 120
-            & $mdModule { Complete-WtMdPathChecks }
-            & $openLink '//srv/share/slow.xlsx'
-            $slow = & $mdModule { @{ Said = @($script:testSaid); Jobs = $script:pathJobs.Count; Probes = $script:testSources.Count; Timer = $script:pathTimer.IsEnabled } }
-            $slowCursor = [System.Windows.Input.Mouse]::OverrideCursor
-            & $mdModule { $script:testSources['\\srv\share\slow.xlsx'].SetResult([System.IO.FileAttributes]::Archive); Complete-WtMdPathChecks }
-            $late = & $mdModule { @{ Said = @($script:testSaid); Jobs = $script:pathJobs.Count; Timer = $script:pathTimer.IsEnabled } }
-            # 시간이 지난 확인만 남으면 타이머는 멈춘다 (끝내 답하지 않는 작업 때문에 계속 돌지 않게)
-            Assert-Wt 'WPF 파일 링크: 시간 초과면 알리고 커서를 돌려놓으며, 답을 기다리는 경로를 또 누르면 바로 알린다' (
-                ($slow.Said -join '|') -eq 'msg:경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.|msg:경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.' -and
-                $slow.Jobs -eq 1 -and $slow.Probes -eq 5 -and -not $slow.Timer -and $null -eq $slowCursor) ($slow.Said -join '|')
-            Assert-Wt 'WPF 파일 링크: 늦게 온 답은 열지 않고 작업만 정리한다' ($late.Said.Count -eq 2 -and $late.Jobs -eq 0 -and -not $late.Timer)
+            # 확인은 끝나 셸에 넘겼는데 셸이 늦게 여는 경우: 「열지 않는다」고 하지 않고, 늦게 열릴 수 있다고 사실대로 알린다
+            & $workModule { $script:testSaid.Clear() }
+            $openLog.Clear()
+            $gate = New-WtTestGate
+            $lateFile = 'C:\wt\late.txt'
+            ([AppDomain]::CurrentDomain.GetData('WtTestOpen')).Attr[$lateFile] = 32
+            Open-WtPath $lateFile
+            $handed = $gate.Entered.WaitOne(5000)
+            Start-Sleep -Milliseconds 400
+            Update-WtWork
+            $lateSaid = @(& $workModule { $script:testSaid })
+            Remove-WtTestGate $gate; $gate = $null
+            Assert-Wt '열기: 셸에 넘긴 뒤 시간이 지나면 늦게 열릴 수 있다고 알리고, 실제로 늦게 열린다 (넘기기 전이면 위처럼 열지 않는다)' (
+                $handed -and ($lateSaid -join '|') -eq 'msg:열기를 프로그램에 넘겼지만 응답이 늦습니다. 응답이 오면 늦게 열릴 수 있습니다.' -and
+                (@($openLog) -join '|') -eq "open:$lateFile" -and (Get-WtWorkInfo).Abandoned -eq 0) "$($lateSaid -join ' / ') · 열기 $(@($openLog) -join '|')"
 
-            # 실제 확인 작업: 임시 폴더 · 없는 파일
-            & $mdModule { $script:testSaid.Clear(); $script:pathTimeoutMs = 5000; $script:pathProbe = $script:testRealProbe }
-            $realDir = (New-Item -ItemType Directory -Path (Join-Path $test.Root '링크 폴더')).FullName
-            & $openLink ($realDir.Replace('\', '/')); & $openLink (Join-Path $realDir '없는 파일.txt')
-            $watch = [Diagnostics.Stopwatch]::StartNew()
-            while ((& $mdModule { $script:pathJobs.Count }) -and $watch.Elapsed.TotalSeconds -lt 5) { & $mdModule { Complete-WtMdPathChecks }; Start-Sleep -Milliseconds 10 }
-            $real = @(& $mdModule { $script:testSaid })
-            Assert-Wt 'WPF 파일 링크: 실제 확인 작업 (폴더는 열고, 없는 파일은 알린다)' (($real | Sort-Object) -join '|' -eq "msg:파일을 찾지 못했습니다.|open:$realDir") ($real -join '|')
+            # 실제 여는 작업: 없는 파일은 열지 않고 알린다 (있는 파일은 실제로 열려서 검사하지 않는다)
+            . $workModule { $script:testSaid.Clear(); $script:openTimeoutMs = 5000; ${function:Get-WtPathAttributes} = $script:testRealAttr; ${function:Invoke-WtShellStart} = $script:testRealShell }   # 점 소싱: 모듈 범위에 되돌린다
+            Open-WtPath (Join-Path $test.Root '없는 파일.txt') -NotFound '없는 파일'
+            [void](Wait-WtWork -All -Milliseconds 10000)
+            Assert-Wt 'WPF 파일 링크: 실제 확인 작업도 없는 파일은 알린다' ((@(& $workModule { $script:testSaid }) -join '|') -eq 'msg:없는 파일')
         } finally {
-            & $mdModule {
-                $script:pathTimeoutMs = 5000; $script:pathProbe = $script:testRealProbe
-                foreach ($n in 'Show-WtMessage', 'Invoke-Item', 'Start-Process') { Remove-Item -LiteralPath "Function:\$n" -ErrorAction SilentlyContinue }
+            if ($gate) { Remove-WtTestGate $gate }
+            [AppDomain]::CurrentDomain.SetData('WtTestOpen', $null)
+            . $workModule {
+                $script:openTimeoutMs = 5000; ${function:Get-WtPathAttributes} = $script:testRealAttr; ${function:Invoke-WtShellStart} = $script:testRealShell
+                Remove-Item -LiteralPath 'Function:\Show-WtMessage' -ErrorAction SilentlyContinue
             }
         }
 
-        # 앱이 끝날 때 답이 없는 확인 작업이 남아도 프로세스를 붙잡지 않는다 (응답 없는 공유 폴더를 끝나지 않는 작업으로 흉내 냄)
-        $exitScript = Join-Path $test.Root 'path-exit.ps1'
-        Set-Content -LiteralPath $exitScript -Encoding utf8 -Value @"
-. '$(Join-Path $PSScriptRoot 'TestKit.ps1')'
-Import-WtTestCore
-[void](Test-WtTestWpf)
-& (Get-Module Markdown) { `$script:pathProbe = { param(`$p) `$ev = [System.Threading.ManualResetEvent]::new(`$false); [System.Threading.Tasks.Task[bool]]::Run([Func[bool]]`$ev.WaitOne) } }
-Invoke-WtMarkdownLink @{ BaseDir = '' } @{ Kind = 'file'; Target = '//srv/share/hang.txt'; Text = 'x' }
-if (-not (& (Get-Module Markdown) { `$script:pathJobs.Count })) { exit 2 }
-"@
-        $child = Start-Process (Join-Path $PSHOME 'pwsh.exe') -ArgumentList '-NoProfile', '-STA', '-File', "`"$exitScript`"" -PassThru -WindowStyle Hidden
-        $exited = $child.WaitForExit(30000)
-        if (-not $exited) { $child.Kill() }
-        Assert-Wt 'WPF 파일 링크: 답이 없는 확인이 남아도 앱 프로세스는 끝난다' ($exited -and $child.ExitCode -eq 0) "(끝남 $exited · 코드 $(if ($exited) { $child.ExitCode }))"
+        # 그림: 화면 밖에서 읽는다. 로컬 그림은 그리기 안에서 들어가고, 없는 그림은 이름만, 응답 없는 경로는 기다리지 않고 「읽는 중」
+        $png = Join-Path $test.Root '작은 그림.png'
+        $pixels = [System.Windows.Media.Imaging.BitmapSource]::Create(2, 2, 96, 96, [System.Windows.Media.PixelFormats]::Bgra32, $null, [byte[]]::new(16), 8)
+        $encoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
+        $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($pixels))
+        $stream = [System.IO.File]::Create($png); try { $encoder.Save($stream) } finally { $stream.Dispose() }
+        $imgView = New-WtMarkdownView
+        Set-WtMarkdownText $imgView "![작은 그림](<$($png.Replace('\', '/'))>)`n`n![없는 그림](<$((Join-Path $test.Root '없음.png').Replace('\', '/'))>)"
+        $imgBoxes = @($imgView.Document.Blocks | Where-Object { $_ -is [System.Windows.Documents.BlockUIContainer] } | ForEach-Object { $_.Child })
+        Assert-Wt 'WPF 그림: 로컬 그림은 그리기 안에서 들어가고, 없는 그림은 이름과 이유를 둔다' (
+            $imgBoxes.Count -eq 2 -and $imgBoxes[0].Child -is [System.Windows.Controls.Image] -and $imgBoxes[0].Child.Source.PixelWidth -eq 2 -and $imgBoxes[0].Child.ToolTip -eq '작은 그림' -and
+            $imgBoxes[1].Child -is [System.Windows.Controls.TextBlock] -and [string]$imgBoxes[1].ToolTip -like '그림 파일을 찾지 못했습니다*') "($(@($imgBoxes | ForEach-Object { $_.Child.GetType().Name }) -join ','))"
+        $mdModule2 = Get-Module Markdown
+        # 그림이 많아도 한 번에 읽는 수를 묶고(차례 대기), 차례대로 모두 들어온다
+        $manyView = New-WtMarkdownView
+        Set-WtMarkdownText $manyView ((1..20 | ForEach-Object { "![그림 $_](<$($png.Replace('\', '/'))>)" }) -join "`n`n")
+        $peak = & $mdModule2 { $script:imageActive.Count }
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        while ((& $mdModule2 { $script:imageQueue.Count + $script:imageActive.Count }) -and $watch.ElapsedMilliseconds -lt 10000) { [void](Wait-WtWork -All -Milliseconds 200) }
+        $manyBoxes = @($manyView.Document.Blocks | Where-Object { $_ -is [System.Windows.Documents.BlockUIContainer] } | ForEach-Object { $_.Child })
+        Assert-Wt "WPF 그림: 그림이 많아도 한 번에 6개까지만 읽고 차례대로 모두 들어온다 (그린 직후 읽는 중 $peak)" (
+            $manyBoxes.Count -eq 20 -and -not @($manyBoxes | Where-Object { $_.Child -isnot [System.Windows.Controls.Image] }).Count -and $peak -le 6)
+        $gate = New-WtTestGate
+        try {
+            # 그림 읽기가 문 앞에서 멈춘다 (문이 열려도 디스크 · 네트워크에는 가지 않는다)
+            & $mdModule2 {
+                $script:testRealImage = $script:imageCall
+                $script:imageCall = { param($path) New-WtCall ([AppDomain]::CurrentDomain.GetData('WtTestGate').Gate) WaitOne }
+            }
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            Set-WtMarkdownText $imgView '![느린 그림](<//srv/img/slow.png>)'
+            $drawMs = $watch.ElapsedMilliseconds
+            $slowBox = @($imgView.Document.Blocks | Where-Object { $_ -is [System.Windows.Documents.BlockUIContainer] } | ForEach-Object { $_.Child })[0]
+            Assert-Wt "WPF 그림: 응답 없는 경로의 그림도 그리기는 잠깐만 기다리고 「읽는 중」으로 둔다 (${drawMs}ms)" (
+                $drawMs -lt 1000 -and $slowBox.Child -is [System.Windows.Controls.TextBlock] -and [string]$slowBox.ToolTip -like '그림을 읽는 중입니다*')
+        } finally {
+            & $mdModule2 { $script:imageCall = $script:testRealImage }
+            Remove-WtTestGate $gate
+        }
 
         # 창 단축키 넘기기: 등록한 요소(또는 그 안)에 포커스가 있을 때만 그 키를 셸이 처리하지 않는다
         $kp = [System.Windows.Controls.StackPanel]::new()
@@ -587,9 +702,19 @@ if (-not (& (Get-Module Markdown) { `$script:pathJobs.Count })) { exit 2 }
         }
     }
     Assert-Wt '탭 모아 보기: 모듈끼리 내보낸 함수 이름이 겹치지 않는다' (-not $dupes) ($dupes -join ', ')
-    # ReuseThread 실행 공간은 버리기(Dispose) 전까지 스레드가 남는다. 끝낼 때 응답 없는 작업이라 못 버리면 창을 닫아도 앱 프로세스가 끝나지 않는다
-    $reuse = @(Get-ChildItem $root -Filter '*.psm1' -Recurse | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'ThreadOptions\s*=\s*\S*ReuseThread' } | ForEach-Object Name)
-    Assert-Wt '탭 모아 보기: 실행 공간을 ReuseThread로 만들지 않는다 (앱 프로세스가 끝나지 않는다)' (-not $reuse.Count) ($reuse -join ', ')
+    # 화면 밖 작업(실행 공간 · 스레드 · .NET 작업)은 core\Work.psm1만 만든다. 끝낼 때 끝나지 않은 작업을 기다리지 않고 버리는 규칙을
+    # 한 곳에서 지키려는 것이다. 실행 공간의 Stop · Close · Dispose는 응답 없는 작업이 끝나기를 기다려 앱을 멈추거나 프로세스를 남긴다
+    $engine = @(Get-ChildItem $root -Filter '*.psm1' -Recurse | Where-Object {
+            $_.Name -ne 'Work.psm1' -and (Get-Content -LiteralPath $_.FullName -Raw) -match 'RunspaceFactory|\[powershell\]::Create|\.BeginInvoke\(\)|CloseAsync|BeginStop|ThreadOptions|Thread\]::new|Task\[[^\]]+\]\]::Run|Tasks\.Task\]::Run'
+        } | ForEach-Object Name)
+    Assert-Wt '탭 모아 보기: 실행 공간 · 스레드는 core\Work.psm1만 만든다 (탭은 Start-WtWork · Invoke-WtWork)' (-not $engine.Count) ($engine -join ', ')
+    # 파일 · 폴더를 원래 프로그램 · 탐색기로 여는 것은 확인까지 화면 밖에서 하는 Open-WtPath로만 한다 (응답 없는 공유 경로에서 화면이 멈추지 않게)
+    $shellOpen = @(Get-ChildItem $root -Filter '*.psm1' -Recurse | Where-Object { $_.Name -ne 'Work.psm1' -and (Get-Content -LiteralPath $_.FullName -Raw) -match '(?i)Invoke-Item|explorer\.exe' } | ForEach-Object Name)
+    Assert-Wt '탭 모아 보기: 파일 · 폴더 열기는 Open-WtPath로만 한다 (Invoke-Item · explorer.exe 직접 호출 없음)' (-not $shellOpen.Count) ($shellOpen -join ', ')
+    # 진입 스크립트는 앱이 끝난 뒤 Exit-WtOwnProcess로 앱 전용 프로세스를 끝낸다 (버린 작업이 프로세스를 붙잡지 않게)
+    $entryText = [System.IO.File]::ReadAllText((Join-Path $root 'Start-WorkTool.ps1'))
+    Assert-Wt '진입 스크립트: 앱을 끝낸 뒤 Exit-WtOwnProcess로 프로세스를 끝낸다' (
+        $entryText -match '(?m)^if \(Get-Command Exit-WtOwnProcess[^\r\n]*\{ Exit-WtOwnProcess -ScriptPath \$PSCommandPath \}' -and $entryText.LastIndexOf('Exit-WtOwnProcess') -gt $entryText.LastIndexOf('Start-WtApp'))
     # 글을 코드로 바꿔 실행하는 동작(AGENTS.md 「코드 규칙」 4번)은 앱 코드에도 쓰지 않는다. 주석 · 도움말 글은 빼고 구문으로 찾는다
     $dynamic = @(foreach ($f in Get-ChildItem $root -Recurse -Include '*.psm1', '*.ps1' | Where-Object { $_.Name -notlike 'Test-*' -and $_.FullName -notlike '*\tests\*' }) {
             $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$null)
