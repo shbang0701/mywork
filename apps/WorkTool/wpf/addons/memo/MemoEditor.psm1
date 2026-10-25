@@ -115,6 +115,9 @@ function New-WtMemoEditor {
             if ($ed.Island) { Close-WtMemoIsland $ed }
             if ($ed.OnLeave) { & $ed.OnLeave $ed }
         })
+    # 글을 고치는 칸(원문 · 섬)에서는 Ctrl+B가 굵게다. 읽기 모드 등 나머지 자리에서는 셸의 메뉴 접기 그대로
+    Register-WtKeyOwner $box 'Ctrl+B'
+    Register-WtKeyOwner $island 'Ctrl+B'
     for ($i = $script:editors.Count - 1; $i -ge 0; $i--) { if (-not $script:editors[$i].IsAlive) { $script:editors.RemoveAt($i) } }
     $script:editors.Add([System.WeakReference]::new($ed))
     Update-WtMemoEditorMode $ed

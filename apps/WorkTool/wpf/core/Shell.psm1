@@ -273,6 +273,31 @@ function Update-WtCollapsed {
 
 function Switch-WtCollapsed { Set-WtSetting 'nav.collapsed' (-not [bool](Get-WtSetting 'nav.collapsed')) }
 
+<#
+창 단축키를 화면 안 요소가 대신 쓰게 넘긴다. 그 요소(또는 그 안)에 포커스가 있으면 셸은 그 키를 처리하지 않는다.
+  Register-WtKeyOwner $element 'Ctrl+B'     예: 메모 편집기는 Ctrl+B를 굵게로 쓴다. 다른 곳에서는 그대로 메뉴 접기
+요소가 사라지면 등록도 같이 사라진다(약한 참조).
+#>
+$script:keyOwners = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
+
+function Register-WtKeyOwner([Parameter(Mandatory)][System.Windows.DependencyObject]$Element, [Parameter(Mandatory)][string[]]$Keys) {
+    $script:keyOwners.AddOrUpdate($Element, [string[]]$Keys)
+}
+
+# $From: 찾기 시작할 요소 (기본은 키보드 포커스가 있는 요소)
+function Test-WtKeyOwned([string]$Key, $From = [System.Windows.Input.Keyboard]::FocusedElement) {
+    $el = $From
+    while ($el) {
+        $keys = $null
+        if ($script:keyOwners.TryGetValue($el, [ref]$keys) -and $keys -contains $Key) { return $true }
+        $parent = $null
+        if ($el -is [System.Windows.Media.Visual]) { $parent = [System.Windows.Media.VisualTreeHelper]::GetParent($el) }
+        if (-not $parent -and $el -is [System.Windows.DependencyObject]) { $parent = [System.Windows.LogicalTreeHelper]::GetParent($el) }
+        $el = $parent
+    }
+    $false
+}
+
 # ---- 창 크기 · 투명도 -------------------------------------------------------------------------
 
 function Set-WtOpacity([double]$Percent = -1) {
@@ -622,7 +647,7 @@ function Start-WtApp {
             try {
                 $ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
                 $key = if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }
-                if ($ctrl -and $key -eq 'B') { Switch-WtCollapsed; $e.Handled = $true; return }
+                if ($ctrl -and $key -eq 'B' -and -not (Test-WtKeyOwned 'Ctrl+B')) { Switch-WtCollapsed; $e.Handled = $true; return }
                 if ($key -eq 'F11') { Switch-WtFullScreen; $e.Handled = $true; return }
                 if ($key -eq 'Escape' -and $script:fullscreen) { Switch-WtFullScreen; $e.Handled = $true; return }
                 if ($key -eq 'F1') { Select-WtPage '_help'; $e.Handled = $true; return }
@@ -686,5 +711,6 @@ function Start-WtApp {
     }
 }
 
-Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Set-WtOpacity, Test-WtOpacityNeedsRestart,
+Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Register-WtKeyOwner, Test-WtKeyOwned,
+    Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp

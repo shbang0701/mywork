@@ -428,6 +428,21 @@ if (-not (& (Get-Module Markdown) { `$script:pathJobs.Count })) { exit 2 }
         if (-not $exited) { $child.Kill() }
         Assert-Wt 'WPF 파일 링크: 답이 없는 확인이 남아도 앱 프로세스는 끝난다' ($exited -and $child.ExitCode -eq 0) "(끝남 $exited · 코드 $(if ($exited) { $child.ExitCode }))"
 
+        # 창 단축키 넘기기: 등록한 요소(또는 그 안)에 포커스가 있을 때만 그 키를 셸이 처리하지 않는다
+        $kp = [System.Windows.Controls.StackPanel]::new()
+        $owned = [System.Windows.Controls.TextBox]::new()
+        $plain = [System.Windows.Controls.TextBox]::new()
+        $inner = [System.Windows.Controls.Border]::new()
+        $deep = [System.Windows.Controls.TextBox]::new()
+        $inner.Child = $deep
+        foreach ($c in $owned, $plain, $inner) { [void]$kp.Children.Add($c) }
+        Register-WtKeyOwner $owned 'Ctrl+B'
+        Register-WtKeyOwner $inner 'Ctrl+B', 'Ctrl+I'
+        $k1 = (Test-WtKeyOwned 'Ctrl+B' $owned) -and -not (Test-WtKeyOwned 'Ctrl+I' $owned)
+        $k2 = -not (Test-WtKeyOwned 'Ctrl+B' $plain)
+        $k3 = (Test-WtKeyOwned 'Ctrl+B' $deep) -and (Test-WtKeyOwned 'Ctrl+I' $deep) -and -not (Test-WtKeyOwned 'Ctrl+B' $null)
+        Assert-Wt 'WPF 단축키 넘기기: 등록한 칸 · 그 안에서만 셸이 키를 넘긴다' ($k1 -and $k2 -and $k3) "($k1 · $k2 · $k3)"
+
         # 도움말: 탭이 등록한 설명 · 카드를 모은다. 카드 하나가 실패해도 도움말은 연다
         Register-WtAddon -Id 'test-help' -Title '도움' -Order 50 -NewView { } -Help '가짜 탭 설명' -HelpCard { New-WtText '가짜 카드' 'T.Body' }
         Register-WtAddon -Id 'test-broken' -Title '고장' -Order 60 -NewView { } -HelpCard { throw '일부러 낸 오류' }
