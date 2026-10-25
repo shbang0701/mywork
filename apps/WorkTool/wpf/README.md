@@ -141,7 +141,7 @@ wpf/
     home/Home.psm1        홈: 다른 탭의 홈 카드를 모아 보여 줌
     schedule/             일정 (Schedule.psm1 · Test-Schedule.ps1)
     attendance/           근태 (Attendance.psm1 · Test-Attendance.ps1)
-    memo/                 메모 (Memo.psm1 · Test-Memo.ps1: 쓰기 · 화면 · 저장 실패)
+    memo/                 메모 (Memo.psm1 · Test-Memo.ps1: 쓰기 · 화면 · 저장 실패, Test-MemoEditor.ps1: 실시간 편집기 · 알려진 버그는 -KnownBugs)
     docs/                 문서: 폴더 트리 + 파일 목록, 원래 프로그램으로 열기 · 즐겨찾기 (Docs.psm1 · Test-Docs.ps1: 조회 취소 · 목록 가상화)
     active-tasks/         실행 창·탭 표, 선택 닫기, 수동/자동 새로 고침 (ActiveTasks.psm1 · Test-ActiveTasks.ps1: 전용 창 UIA 검사)
     workflows/            업무: 스크립트를 폼으로 실행 · 기록 (Workflows.psm1 · Test-Workflows.ps1: 스크립트 읽기 · 실행 · 취소 · 화면, 저장소 scripts/의 약속 검사)
