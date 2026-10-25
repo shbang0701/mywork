@@ -6,7 +6,8 @@
     - 먼저 크기가 같은 파일끼리 모으고, 그 파일만 해시(SHA-256)로 내용을 견준다. 이름이 달라도 내용이 같으면 중복이다.
     - 결과는 output 폴더에 날짜가 붙은 CSV로 저장한다: 묶음 번호 · 크기 · 경로 · 고친 날짜.
       Excel에서 묶음 번호로 정렬해 남길 파일을 고르면 된다.
-    - 파일을 지우거나 옮기지 않는다. 읽을 권한이 없는 폴더 · 파일은 건너뛴다.
+    - 파일을 지우거나 옮기지 않는다.
+    - 읽지 못한 폴더 · 파일(권한 · 잠금)이 있으면 그 자리를 보이고 실패로 끝난다 (업무 탭에 「실패」). 그때는 「중복 없음」으로 결론 내지 않고, 찾은 중복은 「부분 완료」로 보인다.
     - 큰 폴더는 해시를 구하는 데 시간이 걸린다. 진행 상황을 1,000개마다 보여 준다.
 
 .PARAMETER TargetFolder
@@ -70,6 +71,32 @@ function Get-ContentHash([string]$Path) {
     } catch { $null }
 }
 
+# 폴더 아래 파일을 모두 찾는다. 읽지 못한 폴더는 건너뛰어 숨기지 않고 $Failures에 모은다.
+# 바로 가기 폴더(정션 · 심볼릭 링크)와 시스템 파일은 보지 않는다
+function Get-AllFiles([string]$Root, [string]$Pattern, $Failures) {
+    $options = [System.IO.EnumerationOptions]::new()
+    $options.IgnoreInaccessible = $false
+    $options.AttributesToSkip = [System.IO.FileAttributes]::ReparsePoint -bor [System.IO.FileAttributes]::System
+    $stack = [System.Collections.Generic.Stack[string]]::new()
+    $stack.Push($Root)
+    while ($stack.Count) {
+        $dir = $stack.Pop()
+        $info = [System.IO.DirectoryInfo]::new($dir)
+        try {
+            foreach ($f in $info.EnumerateFiles($Pattern, $options)) { $f }
+            foreach ($d in $info.EnumerateDirectories('*', $options)) { $stack.Push($d.FullName) }
+        } catch {
+            $Failures.Add([pscustomobject]@{ 자리 = $dir; 이유 = $(if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }) })
+        }
+    }
+}
+
+function Show-Failures($Failures) {
+    Write-Host "읽지 못한 곳 $($Failures.Count)곳:"
+    foreach ($f in ($Failures | Select-Object -First 10)) { Write-Host "  $($f.자리) ($($f.이유))" }
+    if ($Failures.Count -gt 10) { Write-Host "  … 그 밖에 $($Failures.Count - 10)곳" }
+}
+
 # ===== 본문 =====
 $folder = $TargetFolder.Trim().Trim('"')
 if (-not (Test-Path -LiteralPath $folder -PathType Container)) { throw "폴더가 없거나 열 수 없습니다: $folder" }
@@ -77,15 +104,13 @@ $folder = (Resolve-Path -LiteralPath $folder).ProviderPath
 if (-not $Filter) { $Filter = '*' }
 $minBytes = [Math]::Max(1, [long]$MinSizeKB * 1KB)   # 빈 파일(0바이트)은 모두 같아 보이므로 뺀다
 
-$options = [System.IO.EnumerationOptions]::new()
-$options.RecurseSubdirectories = $true
-$options.IgnoreInaccessible = $true
-$options.AttributesToSkip = [System.IO.FileAttributes]::ReparsePoint -bor [System.IO.FileAttributes]::System
+$failures = [System.Collections.Generic.List[object]]::new()
+
 
 Write-Host "파일 목록을 모으는 중: $folder"
 $bySize = @{}
 $count = 0
-foreach ($f in [System.IO.DirectoryInfo]::new($folder).EnumerateFiles($Filter, $options)) {
+foreach ($f in Get-AllFiles $folder $Filter $failures) {
     if ($f.Length -lt $minBytes) { continue }
     $count++
     if (-not $bySize.ContainsKey($f.Length)) { $bySize[$f.Length] = [System.Collections.Generic.List[object]]::new() }
@@ -96,12 +121,11 @@ Write-Host "본 파일 ${count}개 · 크기가 같은 파일 $($candidates.Coun
 
 $byHash = @{}
 $done = 0
-$unread = 0
 foreach ($f in $candidates) {
     $done++
     if ($done % 1000 -eq 0) { Write-Host "  … $done / $($candidates.Count)" }
     $hash = Get-ContentHash $f.FullName
-    if (-not $hash) { $unread++; continue }
+    if (-not $hash) { $failures.Add([pscustomobject]@{ 자리 = $f.FullName; 이유 = '파일을 읽지 못함 (쓰는 중이거나 권한 없음)' }); continue }
     $key = "$($f.Length)|$hash"
     if (-not $byHash.ContainsKey($key)) { $byHash[$key] = [System.Collections.Generic.List[object]]::new() }
     $byHash[$key].Add($f)
@@ -109,8 +133,14 @@ foreach ($f in $candidates) {
 
 # 낭비가 큰 묶음부터 (크기 × (개수 - 1))
 $groups = @(@(foreach ($list in $byHash.Values) { if ($list.Count -gt 1) { [pscustomobject]@{ Files = $list.ToArray(); Waste = $list[0].Length * ($list.Count - 1) } } }) | Sort-Object Waste -Descending)
-if ($unread) { Write-Host "읽지 못해 건너뛴 파일: ${unread}개 (다른 프로그램이 쓰는 중이거나 권한 없음)" }
-if (-not $groups.Count) { Write-Host '중복 파일이 없습니다.'; return }
+if (-not $groups.Count) {
+    if ($failures.Count) {
+        Show-Failures $failures
+        Write-Host '읽은 파일에서는 중복이 없지만, 읽지 못한 곳이 있어 「중복 없음」으로 볼 수 없습니다. 권한 · 잠금을 확인하고 다시 실행하세요.'
+        exit 1
+    }
+    Write-Host '중복 파일이 없습니다.'; return
+}
 
 $rows = [System.Collections.Generic.List[object]]::new()
 $wasted = 0
@@ -135,3 +165,8 @@ if ($groups.Count -gt $Config.ShowMax) { Write-Host "… 그 밖에 $($groups.Co
 $out = Get-OutputPath $Config.OutputName '.csv'
 $rows | Export-Csv -LiteralPath $out -Encoding utf8BOM -NoTypeInformation
 Write-Host "저장: $out"
+if ($failures.Count) {
+    Show-Failures $failures
+    Write-Host '부분 완료: 위 결과는 읽은 파일만 견준 것입니다.'
+    exit 1
+}

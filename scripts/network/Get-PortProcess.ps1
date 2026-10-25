@@ -8,6 +8,7 @@
       Ports 없이 IncludeConnections를 켜면 연결된(ESTABLISHED 등) 것도 모두, IncludeUdp를 켜면 UDP도 본다.
     - Windows 기본 명령(Get-NetTCPConnection · Get-NetUDPEndpoint)만 쓴다. 관리자 권한이 필요 없다.
       권한이 없으면 다른 사용자 · 시스템 프로그램의 경로가 비어 보일 수 있다.
+    - 포트 목록을 읽지 못하면 「없음」이라고 하지 않고 실패로 끝난다. 서비스 이름만 못 읽으면 표는 보이고 「부분 완료」(실패 종료)로 알린다.
     - 보기만 한다. 프로그램을 끄지 않는다.
     - SaveCsv를 켜면 결과를 output 폴더에 날짜가 붙은 CSV로 저장한다.
 
@@ -77,9 +78,15 @@ if ($Ports) {
         })
 }
 
-$tcp = @(Get-NetTCPConnection -ErrorAction SilentlyContinue)
+# 목록을 읽지 못하면 「없음」이 아니라 확인하지 못한 것이므로 실패로 끝낸다
+try { $tcp = @(Get-NetTCPConnection -ErrorAction Stop) }
+catch { throw "TCP 포트 목록을 읽지 못했습니다: $($_.Exception.Message) — 「쓰는 프로그램 없음」이 아니라 확인하지 못한 것입니다." }
 if (-not $IncludeConnections -and -not $want.Count) { $tcp = @($tcp | Where-Object State -eq 'Listen') }
-$udp = @(if ($IncludeUdp) { Get-NetUDPEndpoint -ErrorAction SilentlyContinue })
+$udp = @()
+if ($IncludeUdp) {
+    try { $udp = @(Get-NetUDPEndpoint -ErrorAction Stop) }
+    catch { throw "UDP 포트 목록을 읽지 못했습니다: $($_.Exception.Message)" }
+}
 if ($want.Count) {
     $tcp = @($tcp | Where-Object { $_.LocalPort -in $want -or $_.RemotePort -in $want })
     $udp = @($udp | Where-Object { $_.LocalPort -in $want })
@@ -89,11 +96,12 @@ if ($want.Count) {
 $procs = @{}
 foreach ($p in Get-Process) { $procs[$p.Id] = $p }
 $services = @{}
+$serviceError = ''
 try {
     foreach ($s in Get-CimInstance Win32_Service -Filter 'ProcessId > 0' -ErrorAction Stop) {
         $services[[int]$s.ProcessId] = @($services[[int]$s.ProcessId] | Where-Object { $_ }) + $s.Name
     }
-} catch { Write-Host '서비스 목록을 읽지 못해 서비스 이름은 비워 둡니다.' }
+} catch { $serviceError = $_.Exception.Message; Write-Host "서비스 목록을 읽지 못해 서비스 이름은 비워 둡니다: $serviceError" }
 
 function New-Row([string]$Protocol, $Entry, [string]$State, [string]$Remote, $RemotePort) {
     $id = [int]$Entry.OwningProcess
@@ -125,6 +133,7 @@ $sorted = @($rows | Sort-Object 프로토콜, '로컬 포트', 상태, '로컬 �
 
 if (-not $sorted.Count) {
     Write-Host $(if ($want.Count) { "포트 $($want -join ', ')을(를) 쓰는 프로그램이 없습니다." } else { '대기 중인 포트가 없습니다.' })
+    if ($serviceError) { exit 1 }
     return
 }
 Show-Table $sorted @('프로토콜', '로컬 주소', '로컬 포트', '원격 주소', '원격 포트', '상태', 'PID', '프로그램', '서비스')
@@ -134,4 +143,8 @@ if ($SaveCsv) {
     $out = Get-OutputPath '포트사용' '.csv'
     $sorted | Export-Csv -LiteralPath $out -Encoding utf8BOM -NoTypeInformation
     Write-Host "저장: $out"
+}
+if ($serviceError) {
+    Write-Host '부분 완료: 포트 · 프로그램은 위와 같지만 서비스 이름은 확인하지 못했습니다.'
+    exit 1
 }

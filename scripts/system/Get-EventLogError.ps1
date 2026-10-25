@@ -6,7 +6,8 @@
     - 기본은 이 PC의 System · Application 로그에서 위험 · 오류 · 경고 수준만 읽는다.
     - 화면에는 같은 원본 · 이벤트 ID끼리 묶어 횟수 · 마지막 시각 · 메시지 한 줄을 많은 순으로 보인다 (장애 시각 전후 확인용).
     - 이벤트 하나하나는 output 폴더에 날짜가 붙은 CSV로 저장한다 (Excel 2016에서 한글이 깨지지 않게 UTF-8 BOM).
-    - 관리자 권한 없이 읽을 수 있는 로그만 본다. Security 로그처럼 권한이 필요한 로그는 「읽지 못함」으로 알리고 넘어간다.
+    - 관리자 권한 없이 읽을 수 있는 로그만 본다. Security 로그처럼 권한이 필요한 로그 · 없는 로그는 「읽지 못함」으로 알린다.
+      읽지 못한 로그가 하나라도 있으면 「이벤트 없음」으로 결론 내지 않고 실패로 끝난다 (업무 탭에 「실패」). 나머지 로그의 결과는 「부분 완료」로 보인다.
     - 로그를 지우거나 설정을 바꾸지 않는다.
 
 .PARAMETER Hours
@@ -76,6 +77,7 @@ $since = (Get-Date).AddHours(-$Hours)
 Write-Host "로그: $($logs -join ', ') · $($since.ToString('yyyy-MM-dd HH:mm')) 이후 · $Level"
 
 $events = [System.Collections.Generic.List[object]]::new()
+$failedLogs = [System.Collections.Generic.List[string]]::new()
 foreach ($log in $logs) {
     try {
         $found = @(Get-WinEvent -FilterHashtable @{ LogName = $log; Level = $levels; StartTime = $since } -MaxEvents $Config.MaxEvents -ErrorAction Stop)
@@ -84,10 +86,16 @@ foreach ($log in $logs) {
         foreach ($e in $found) { $events.Add($e) }
     } catch {
         if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { Write-Host "  $log`: 0개" }
-        else { Write-Host "  $log`: 읽지 못함 ($($_.Exception.Message))" }
+        else { Write-Host "  $log`: 읽지 못함 ($($_.Exception.Message))"; $failedLogs.Add($log) }
     }
 }
-if (-not $events.Count) { Write-Host '해당하는 이벤트가 없습니다.'; return }
+if (-not $events.Count) {
+    if ($failedLogs.Count) {
+        Write-Host "읽지 못한 로그가 $($failedLogs.Count)개 있어($($failedLogs -join ', ')) 「이벤트 없음」으로 볼 수 없습니다. 로그 이름 · 권한을 확인하세요."
+        exit 1
+    }
+    Write-Host '해당하는 이벤트가 없습니다.'; return
+}
 
 $rows = @(foreach ($e in ($events | Sort-Object TimeCreated -Descending)) {
         $message = $null
@@ -122,3 +130,7 @@ if ($groups.Count -gt $Config.ShowMax) { Write-Host "… 그 밖에 $($groups.Co
 $out = Get-OutputPath $Config.OutputName '.csv'
 $rows | Export-Csv -LiteralPath $out -Encoding utf8BOM -NoTypeInformation
 Write-Host "저장: $out"
+if ($failedLogs.Count) {
+    Write-Host "부분 완료: 읽지 못한 로그 $($failedLogs.Count)개($($failedLogs -join ', ')). 위 결과는 읽은 로그만 센 것입니다."
+    exit 1
+}

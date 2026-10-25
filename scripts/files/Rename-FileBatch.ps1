@@ -6,7 +6,9 @@
     - 대상 폴더에서 Filter에 맞는 파일만 바꾼다. 하위 폴더는 Recurse를 켤 때만 본다.
     - 먼저 -WhatIf(업무 탭의 [미리보기])로 바뀔 이름을 표로 보고, 맞으면 그대로 실행한다.
     - 바꿀 이름에 이미 파일이 있거나, 두 파일이 같은 이름이 되면 그 파일은 건너뛴다. 덮어쓰거나 지우지 않는다.
-    - 실제로 바꾸면 원래 이름 · 새 이름을 output 폴더의 CSV에 남긴다. 되돌릴 때 이 표를 본다.
+    - 바꾸기 전에 할 일(원래 이름 · 새 이름)을 output 폴더의 CSV에 「예정」으로 먼저 적고, 하나 바꿀 때마다 결과 줄을 바로 이어 적는다.
+      도중에 끝나도(업무 탭 [취소] 포함) 「바꿈」 줄로 어디까지 바뀌었는지 알 수 있다. 되돌릴 때 이 표를 본다.
+      기록 파일을 만들 수 없으면 아무것도 바꾸지 않고 끝낸다.
     - Office가 만드는 임시 파일(~$로 시작)은 건너뛴다.
     - 방식
       앞에 날짜: 20261025_보고서.xlsx · 뒤에 날짜: 보고서_20261025.xlsx
@@ -88,6 +90,10 @@ function Get-OutputPath([string]$BaseName, [string]$Extension) {
     $path
 }
 
+function ConvertTo-CsvLine([object[]]$Values) {
+    @($Values | ForEach-Object { '"' + ([string]$_).Replace('"', '""') + '"' }) -join ','
+}
+
 function Show-Table($Rows, [object[]]$Property) {
     $text = ($Rows | Format-Table -Property $Property -AutoSize | Out-String -Width 250).Trim("`r", "`n")
     if ($text) { Write-Host $text }
@@ -158,13 +164,41 @@ foreach ($f in $files) {
 }
 
 $todo = @($plan | Where-Object { $_.Row.결과 -eq '바꿀 것' })
-foreach ($p in $todo) {
-    if ($WhatIfPreference) { $p.Row.결과 = '미리보기' ; continue }
-    if (-not $PSCmdlet.ShouldProcess((Join-Path $p.Row.폴더 $p.Row.'원래 이름'), "이름 바꾸기 → $($p.Row.'새 이름')")) { $p.Row.결과 = '건너뜀: 취소'; continue }
-    try {
-        Rename-Item -LiteralPath $p.File.FullName -NewName $p.Row.'새 이름'
-        $p.Row.결과 = '바꿈'
-    } catch { $p.Row.결과 = "실패: $($_.Exception.Message)" }
+$log = $null
+$writer = $null
+try {
+    if ($todo.Count -and -not $WhatIfPreference) {
+        # 바꾸기 전에 할 일 전체를 기록에 먼저 적는다. 기록을 못 만들면 아무것도 바꾸지 않는다.
+        # 그 뒤 하나 바꿀 때마다 결과 줄을 바로 이어 적어서, 도중에 끝나도(업무 탭 [취소] 포함) 어디까지 바뀌었는지 남는다
+        try {
+            $log = Get-OutputPath '이름바꾸기' '.csv'
+            $writer = [System.IO.StreamWriter]::new($log, $false, [System.Text.UTF8Encoding]::new($true))
+            $writer.AutoFlush = $true
+            $writer.WriteLine((ConvertTo-CsvLine @('순서', '시각', '폴더', '원래 이름', '새 이름', '결과')))
+            $now = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+            for ($i = 0; $i -lt $todo.Count; $i++) {
+                $r = $todo[$i].Row
+                $writer.WriteLine((ConvertTo-CsvLine @(($i + 1), $now, $r.폴더, $r.'원래 이름', $r.'새 이름', '예정')))
+            }
+        } catch {
+            throw "기록 파일을 만들지 못해 아무것도 바꾸지 않았습니다: $($_.Exception.Message) — 설정 블록의 OutputFolder를 쓸 수 있는 폴더로 바꾸세요."
+        }
+        Write-Host "기록: $log"
+    }
+    for ($i = 0; $i -lt $todo.Count; $i++) {
+        $p = $todo[$i]
+        if ($WhatIfPreference) { $p.Row.결과 = '미리보기'; continue }
+        if (-not $PSCmdlet.ShouldProcess((Join-Path $p.Row.폴더 $p.Row.'원래 이름'), "이름 바꾸기 → $($p.Row.'새 이름')")) { $p.Row.결과 = '건너뜀: 취소' }
+        else {
+            try {
+                Rename-Item -LiteralPath $p.File.FullName -NewName $p.Row.'새 이름'
+                $p.Row.결과 = '바꿈'
+            } catch { $p.Row.결과 = "실패: $($_.Exception.Message)" }
+        }
+        $writer.WriteLine((ConvertTo-CsvLine @(($i + 1), (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $p.Row.폴더, $p.Row.'원래 이름', $p.Row.'새 이름', $p.Row.결과)))
+    }
+} finally {
+    if ($writer) { $writer.Dispose() }
 }
 
 $rows = @($plan | ForEach-Object { $_.Row })
@@ -179,9 +213,5 @@ if ($WhatIfPreference) {
     return
 }
 Write-Host "바꿈 ${done}개 · 건너뜀 ${skipped}개 · 실패 ${failed}개"
-if ($done) {
-    $log = Get-OutputPath '이름바꾸기' '.csv'
-    $rows | Export-Csv -LiteralPath $log -Encoding utf8BOM -NoTypeInformation
-    Write-Host "기록: $log"
-}
+if ($log) { Write-Host "기록: $log" }
 if ($failed) { throw "${failed}개 파일의 이름을 바꾸지 못했습니다. 위 표의 「실패」 줄을 보세요." }

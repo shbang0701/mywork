@@ -34,9 +34,10 @@
 ## 바로 쓰는 예제
 
 관리자 권한 없이 돌고, 원본을 지우거나 덮어쓰지 않습니다. 파일을 바꾸는 것은 `Rename-FileBatch.ps1` 하나이고, 업무 탭의 [미리보기] 버튼(콘솔에서는 `-WhatIf`)으로 먼저 확인합니다.
+권한 · 잠금 때문에 읽지 못한 폴더 · 파일 · 로그가 있으면 「없음」 · 「모두 같음」으로 결론 내지 않습니다. 읽지 못한 자리를 보이고 실패로 끝나서(종료 코드 1) 업무 탭에 「실패」로 남습니다. 읽은 부분의 결과는 「부분 완료」로 같이 보입니다.
 
 **사무 (`files/`)**
-- [Rename-FileBatch.ps1](files/Rename-FileBatch.ps1) — 폴더 안 파일 이름을 한꺼번에 바꿉니다: 앞 · 뒤에 날짜, 찾아 바꾸기, 번호 매기기. 같은 이름이 되는 파일은 건너뛰고, 바꾼 기록을 CSV로 남깁니다.
+- [Rename-FileBatch.ps1](files/Rename-FileBatch.ps1) — 폴더 안 파일 이름을 한꺼번에 바꿉니다: 앞 · 뒤에 날짜, 찾아 바꾸기, 번호 매기기. 같은 이름이 되는 파일은 건너뜁니다. 바꾸기 전에 할 일을 기록 CSV에 「예정」으로 먼저 적고 하나 바꿀 때마다 결과를 이어 적어서, 도중에 끝나도 어디까지 바뀌었는지 남습니다. 기록을 못 만들면 아무것도 바꾸지 않습니다.
 - [Find-OldLargeFile.ps1](files/Find-OldLargeFile.ps1) — 큰 파일 · 오래 안 고친 파일을 크기 순으로 보이고 CSV로 저장합니다 (공유 폴더 정리).
 - [Find-DuplicateFile.ps1](files/Find-DuplicateFile.ps1) — 크기 → 해시(SHA-256) 순으로 내용이 똑같은 파일을 묶음별로 찾습니다.
 - [Compare-Folder.ps1](files/Compare-Folder.ps1) — 두 폴더를 견줘 한쪽에만 있는 파일 · 다른 파일을 보입니다. 기본은 크기 · 고친 시각, `-CompareHash`면 내용까지.
@@ -48,7 +49,7 @@
 - [Get-EventLogError.ps1](system/Get-EventLogError.ps1) — 최근 N시간 System · Application 로그의 오류 · 경고를 원본 · ID별로 묶어 많은 순으로 보이고, 하나하나는 CSV로 저장합니다.
 
 **IT 개발 (`text/` · `network/`)**
-- [Find-LogPattern.ps1](text/Find-LogPattern.ps1) — 로그 파일들에서 정규식을 찾아 파일별 · 찾은 글자별(예: 오류 코드) 개수를 세고 찾은 줄을 CSV로 저장합니다. UTF-8 · CP949 로그를 알아서 읽습니다.
+- [Find-LogPattern.ps1](text/Find-LogPattern.ps1) — 로그 파일들에서 정규식을 찾아 파일별 · 찾은 글자별(예: 오류 코드) 개수를 세고 찾은 줄을 CSV로 저장합니다. UTF-8 · CP949 로그를 알아서 읽고, 잘못 고르면 `Encoding` 칸으로 직접 정합니다. `CaseSensitive`면 ERROR · error를 따로 셉니다.
 - [Get-PortProcess.ps1](network/Get-PortProcess.ps1) — 어느 프로그램(PID · 서비스)이 어느 포트를 쓰는지 보입니다 ("포트가 이미 사용 중" 확인).
 
 ## 목록
