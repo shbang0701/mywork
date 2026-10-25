@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800">
+<title>WorkTool 홈 - 시안 A</title>
+<style>.tn{font-variant-numeric:tabular-nums}</style>
+<rect x="0" y="0" width="1280" height="800" rx="0" fill="#F3F3F3"/>
+<rect x="16" y="8" width="16" height="16" rx="4" fill="#005FB8"/>
+<text x="24" y="16.5" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="10" font-weight="700" fill="#FFFFFF" text-anchor="middle" dominant-baseline="central">W</text>
+<text x="44" y="16" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">WorkTool</text>
+<text x="1165" y="16" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE921;</text>
+<text x="1211" y="16" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE922;</text>
+<text x="1257" y="16" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8BB;</text>
+<text x="24" y="58" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE700;</text>
+<rect x="4" y="84" width="272" height="36" rx="4" fill="rgba(0,0,0,0.06)"/>
+<rect x="4" y="94" width="3" height="16" rx="1.5" fill="#005FB8"/>
+<text x="28" y="102" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE80F;</text>
+<text x="52" y="102" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">홈</text>
+<text x="28" y="142" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE787;</text>
+<text x="52" y="142" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">일정</text>
+<text x="28" y="182" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE823;</text>
+<text x="52" y="182" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">근태</text>
+<text x="28" y="222" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE70B;</text>
+<text x="52" y="222" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">메모</text>
+<text x="28" y="262" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8B7;</text>
+<text x="52" y="262" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">문서</text>
+<text x="28" y="302" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE756;</text>
+<text x="52" y="302" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">업무</text>
+<text x="28" y="342" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE7C4;</text>
+<text x="52" y="342" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">활성 작업</text>
+<line x1="16" y1="715.5" x2="264" y2="715.5" stroke="#EBEBEB" stroke-width="1"/>
+<text x="28" y="738" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE897;</text>
+<text x="52" y="738" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">도움말</text>
+<text x="28" y="778" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE713;</text>
+<text x="52" y="778" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">설정</text>
+<path d="M280,800 V40 A8,8 0 0 1 288,32 H1280 V800 Z" fill="#F9F9F9" stroke="none" stroke-width="1"/>
+<path d="M280.5,800 V40 A7.5,7.5 0 0 1 288,32.5 H1280" fill="none" stroke="#E5E5E5" stroke-width="1"/>
+<text x="304" y="74" font-family="'Segoe UI Variable Display','Segoe UI','Malgun Gothic',sans-serif" font-size="28" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">홈</text>
+<text x="348.84" y="77" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">2026년 10월 27일 화요일</text>
+<rect x="1160.5" y="58.5" width="95" height="31" rx="3.5" fill="#FBFBFB" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="1164" y1="89.5" x2="1252" y2="89.5" stroke="#CCCCCC" stroke-width="1"/>
+<text x="1180" y="74.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE710;</text>
+<text x="1196" y="74.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">새 메모</text>
+<rect x="1056.5" y="58.5" width="95" height="31" rx="3.5" fill="#FBFBFB" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="1060" y1="89.5" x2="1148" y2="89.5" stroke="#CCCCCC" stroke-width="1"/>
+<text x="1076" y="74.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE710;</text>
+<text x="1092" y="74.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">새 일정</text>
+<rect x="304.5" y="116.5" width="619" height="215" rx="3.5" fill="#FFFFFF" stroke="#E5E5E5" stroke-width="1"/>
+<text x="328" y="142" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE787;</text>
+<text x="348" y="142" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">오늘 일정</text>
+<text x="888" y="142" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#005FB8" text-anchor="end" dominant-baseline="central">일정 열기</text>
+<text x="902" y="142" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#005FB8" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+<text x="320" y="194" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#666666" text-anchor="start" dominant-baseline="central" class="tn">10:00</text>
+<text x="380" y="194" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">주간 점검</text>
+<text x="908" y="194" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="end" dominant-baseline="central">매주 화요일</text>
+<text x="832.712" y="194" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE8EE;</text>
+<line x1="320" y1="220.5" x2="908" y2="220.5" stroke="#EBEBEB" stroke-width="1"/>
+<text x="320" y="246" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central" class="tn">14:00</text>
+<text x="380" y="246" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">SRV-01 펌웨어 업데이트</text>
+<rect x="542.132" y="236.5" width="39.0" height="19" rx="3.5" fill="none" stroke="#8A8A8A" stroke-width="1"/>
+<text x="561.632" y="246" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">다음</text>
+<text x="908" y="246" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="end" dominant-baseline="central">40분 후</text>
+<line x1="320" y1="272.5" x2="908" y2="272.5" stroke="#EBEBEB" stroke-width="1"/>
+<text x="320" y="298" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central" class="tn">18:00</text>
+<text x="380" y="298" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">백업 확인</text>
+<text x="908" y="298" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="end" dominant-baseline="central">알람</text>
+<text x="872.0" y="298" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xEA8F;</text>
+<rect x="304.5" y="344.5" width="619" height="215" rx="3.5" fill="#FFFFFF" stroke="#E5E5E5" stroke-width="1"/>
+<text x="328" y="370" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE70B;</text>
+<text x="348" y="370" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">최근 메모</text>
+<text x="888" y="370" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#005FB8" text-anchor="end" dominant-baseline="central">메모 열기</text>
+<text x="902" y="370" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#005FB8" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+<text x="320" y="413" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">서버 점검 체크리스트</text>
+<text x="908" y="413" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#666666" text-anchor="end" dominant-baseline="central">오늘 13:18</text>
+<text x="320" y="432" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">디스크 사용량 · 이벤트 로그 · 백업 작업 결과 · 인증서 만료일</text>
+<line x1="320" y1="448.5" x2="908" y2="448.5" stroke="#EBEBEB" stroke-width="1"/>
+<text x="320" y="465" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">펌웨어 업데이트 절차</text>
+<text x="908" y="465" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#666666" text-anchor="end" dominant-baseline="central">어제</text>
+<text x="320" y="484" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">작업 전 iLO 펌웨어 버전 확인, 이중화 상태 점검 후 한 대씩 진행</text>
+<line x1="320" y1="500.5" x2="908" y2="500.5" stroke="#EBEBEB" stroke-width="1"/>
+<text x="320" y="517" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">장애 대응 기록 INC-1234</text>
+<text x="908" y="517" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#666666" text-anchor="end" dominant-baseline="central">10-24</text>
+<text x="320" y="536" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">22:10 접수 · 원격 접속 · 서비스 재시작 후 정상 확인</text>
+<rect x="304.5" y="572.5" width="619" height="175" rx="3.5" fill="#FFFFFF" stroke="#E5E5E5" stroke-width="1"/>
+<text x="328" y="598" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE7C1;</text>
+<text x="348" y="598" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">다가오는 7일</text>
+<text x="320" y="644" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central" class="tn">10-29 (목)</text>
+<rect x="408" y="634" width="68" height="20" rx="2" fill="#DDF1F0"/>
+<path d="M410,634 H411 V654 H410 A2,2 0 0 1 408,652 V636 A2,2 0 0 1 410,634 Z" fill="#00696B" stroke="none" stroke-width="1"/>
+<text x="415" y="644.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">개인 휴무</text>
+<text x="908" y="644" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="end" dominant-baseline="central">하루 종일</text>
+<line x1="320" y1="664.5" x2="908" y2="664.5" stroke="#EBEBEB" stroke-width="1"/>
+<text x="320" y="684" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#B92B1C" text-anchor="start" dominant-baseline="central" class="tn">11-03 (화)</text>
+<text x="416" y="684" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#B92B1C" text-anchor="middle" dominant-baseline="central">&#xE7C1;</text>
+<text x="430" y="684" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#B92B1C" text-anchor="start" dominant-baseline="central">공휴일</text>
+<text x="908" y="684" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="end" dominant-baseline="central">예시</text>
+<text x="320" y="722" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#666666" text-anchor="start" dominant-baseline="central">그 밖의 일정은 없습니다.</text>
+<rect x="936.5" y="116.5" width="319" height="327" rx="3.5" fill="#FFFFFF" stroke="#E5E5E5" stroke-width="1"/>
+<text x="960" y="142" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE823;</text>
+<text x="980" y="142" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">근태</text>
+<text x="1220" y="142" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#005FB8" text-anchor="end" dominant-baseline="central">근태 열기</text>
+<text x="1234" y="142" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#005FB8" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+<text x="952" y="182" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">오늘 출근</text>
+<text x="952" y="208" font-family="'Segoe UI Variable Display','Segoe UI','Malgun Gothic',sans-serif" font-size="28" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central" class="tn">08:52</text>
+<text x="1032.6392" y="212" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">근무 중 · 4시간 28분</text>
+<rect x="952" y="236" width="84" height="32" rx="4" fill="#005FB8"/>
+<text x="964" y="252.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#FFFFFF" text-anchor="start" dominant-baseline="central">퇴근 기록</text>
+<rect x="1048.5" y="236.5" width="123" height="31" rx="3.5" fill="#FBFBFB" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="1052" y1="267.5" x2="1168" y2="267.5" stroke="#CCCCCC" stroke-width="1"/>
+<text x="1068" y="252.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE70F;</text>
+<text x="1084" y="252.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">기록 고치기</text>
+<line x1="952" y1="284.5" x2="1240" y2="284.5" stroke="#EBEBEB" stroke-width="1"/>
+<text x="960" y="306" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#6B3FA0" text-anchor="middle" dominant-baseline="central">&#xE708;</text>
+<text x="976" y="306" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">지난주 업무외 2건</text>
+<text x="1240" y="306" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="end" dominant-baseline="central">2시간 40분</text>
+<rect x="952" y="332" width="3" height="40" rx="1.5" fill="#6B3FA0"/>
+<text x="964" y="343" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central" class="tn">10-24 (토)</text>
+<text x="1032.116" y="343" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central" class="tn">22:10–23:40</text>
+<text x="964" y="362" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">원격 · 장애 대응 INC-1234</text>
+<rect x="952" y="384" width="3" height="40" rx="1.5" fill="#6B3FA0"/>
+<text x="964" y="395" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central" class="tn">10-21 (수)</text>
+<text x="1029.876" y="395" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central" class="tn">19:30–20:40</text>
+<text x="964" y="414" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">현장 · 랙 증설 지원</text>
+<text x="936" y="478" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">바로 가기</text>
+<rect x="936.5" y="496.5" width="319" height="59" rx="3.5" fill="#FFFFFF" stroke="#E5E5E5" stroke-width="1"/>
+<text x="964" y="526" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8B7;</text>
+<text x="992" y="517" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">점검 결과</text>
+<text x="992" y="536" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">문서 · 폴더</text>
+<text x="1232" y="526" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+<rect x="936.5" y="560.5" width="319" height="59" rx="3.5" fill="#FFFFFF" stroke="#E5E5E5" stroke-width="1"/>
+<text x="964" y="590" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8A5;</text>
+<text x="992" y="581" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">월간 보고 양식.xlsx</text>
+<text x="992" y="600" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">문서 · 즐겨찾기</text>
+<text x="1232" y="590" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+<rect x="936.5" y="624.5" width="319" height="59" rx="3.5" fill="#FFFFFF" stroke="#E5E5E5" stroke-width="1"/>
+<text x="964" y="654" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE768;</text>
+<text x="992" y="645" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">웹 서버 점검</text>
+<text x="992" y="664" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">업무 · Test-TcpPort</text>
+<text x="1232" y="654" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+<rect x="936.5" y="688.5" width="319" height="59" rx="3.5" fill="#FFFFFF" stroke="#E5E5E5" stroke-width="1"/>
+<text x="964" y="718" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE7C4;</text>
+<text x="992" y="709" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">활성 작업</text>
+<text x="992" y="728" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">창 9개 · 탭 23개</text>
+<text x="1232" y="718" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+</svg>

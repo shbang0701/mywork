@@ -1,0 +1,284 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800">
+<title>WorkTool 시안 B — 일정</title>
+<rect x="0" y="0" width="1280" height="800" fill="#F4F4F2"/>
+<rect x="12" y="8" width="16" height="16" rx="4" fill="#4A52C4"/>
+<text x="20" y="20" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="10" font-weight="700" fill="#FFFFFF" text-anchor="middle">W</text>
+<text x="36" y="20.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">WorkTool</text>
+<text x="1165" y="21" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#53534E" text-anchor="middle"></text>
+<text x="1211" y="21" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#53534E" text-anchor="middle"></text>
+<text x="1257" y="21" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#53534E" text-anchor="middle"></text>
+<rect x="8.5" y="40.5" width="207" height="31" rx="4" fill="#FFFFFF" stroke="#E0E0DC" stroke-width="1"/>
+<text x="24" y="64" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#65655F" text-anchor="middle"></text>
+<text x="40" y="61.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#65655F" xml:space="preserve">검색 · 명령</text>
+<rect x="163.5" y="46.5" width="44" height="19" rx="4" fill="#F7F7F5" stroke="#E0E0DC" stroke-width="1"/>
+<text x="169" y="60.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">Ctrl+K</text>
+<text x="28" y="108" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<text x="48" y="105.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">홈</text>
+<rect x="8" y="116" width="208" height="32" rx="4" fill="#E4E4E0"/>
+<rect x="8" y="124" width="3" height="16" rx="1.5" fill="#4A52C4"/>
+<text x="28" y="140" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1C1C1A" text-anchor="middle"></text>
+<text x="48" y="137.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" xml:space="preserve">일정</text>
+<text x="204" y="136.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">3</text>
+<text x="28" y="172" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<text x="48" y="169.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">근태</text>
+<text x="204" y="168.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:52</text>
+<text x="28" y="204" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<text x="48" y="201.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">메모</text>
+<text x="28" y="236" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<text x="48" y="233.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">문서</text>
+<text x="28" y="268" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<text x="48" y="265.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">업무</text>
+<text x="28" y="300" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<text x="48" y="297.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">활성 작업</text>
+<text x="28" y="752" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<text x="48" y="749.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">도움말</text>
+<text x="204" y="748.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">F1</text>
+<text x="28" y="784" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<text x="48" y="781.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">설정</text>
+<rect x="224.5" y="32.5" width="1047" height="759" rx="8" fill="#FFFFFF" stroke="#E0E0DC" stroke-width="1"/>
+<line x1="225" y1="80.5" x2="1271" y2="80.5" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="225" y1="764.5" x2="1271" y2="764.5" stroke="#EBEBE8" stroke-width="1"/>
+<text x="240" y="782.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" xml:space="preserve">10월  ·  출근 18일  ·  업무외 2건 (3:00)  ·  휴가 1일</text>
+<text x="1256" y="782.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">새 일정</text>
+<rect x="1164.5" y="768.5" width="46" height="19" rx="4" fill="#F7F7F5" stroke="#E0E0DC" stroke-width="1"/>
+<text x="1170" y="782.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">Ctrl+N</text>
+<text x="1148" y="782.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">오늘</text>
+<rect x="1074.5" y="768.5" width="43" height="19" rx="4" fill="#F7F7F5" stroke="#E0E0DC" stroke-width="1"/>
+<text x="1080" y="782.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">Home</text>
+<text x="1058" y="782.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">달 이동</text>
+<rect x="938.5" y="768.5" width="74" height="19" rx="4" fill="#F7F7F5" stroke="#E0E0DC" stroke-width="1"/>
+<text x="944" y="782.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">PgUp/PgDn</text>
+<text x="248" y="63.2" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="20" fill="#1C1C1A" font-weight="600" xml:space="preserve">2026년 10월</text>
+<text x="384.72" y="64" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<text x="416.72" y="64" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<rect x="439.22" y="42.5" width="51" height="27" rx="4" fill="#FFFFFF" stroke="#CFCFCA" stroke-width="1"/>
+<text x="450.72" y="61.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" xml:space="preserve">오늘</text>
+<rect x="1099" y="42" width="149" height="28" rx="4" fill="#4A52C4"/>
+<text x="1119" y="64" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#FFFFFF" text-anchor="middle"></text>
+<text x="1135" y="61.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#FFFFFF" xml:space="preserve">새 일정</text>
+<rect x="1189.5" y="46.5" width="46" height="19" rx="4" fill="none" stroke="#FFFFFF" stroke-opacity="0.45"/>
+<text x="1195" y="60.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#FFFFFF" xml:space="preserve">Ctrl+N</text>
+<rect x="955" y="42" width="132" height="28" rx="4" fill="#F1F1EF"/>
+<rect x="957.5" y="44.5" width="37" height="23" rx="4" fill="#FFFFFF" stroke="#E0E0DC" stroke-width="1"/>
+<text x="969" y="61.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" xml:space="preserve">월</text>
+<text x="1007" y="61.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">주</text>
+<text x="1045" y="61.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">목록</text>
+<rect x="240" y="88" width="52" height="24" rx="4" fill="#F1F1EF"/>
+<text x="252" y="106" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#1C1C1A" text-anchor="middle"></text>
+<text x="262" y="104.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">일정</text>
+<rect x="298" y="88" width="52" height="24" rx="4" fill="#F1F1EF"/>
+<text x="310" y="106" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#1C1C1A" text-anchor="middle"></text>
+<text x="320" y="104.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">근태</text>
+<rect x="356" y="88" width="64" height="24" rx="4" fill="#F1F1EF"/>
+<text x="368" y="106" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#1C1C1A" text-anchor="middle"></text>
+<text x="378" y="104.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">휴무일</text>
+<line x1="434.5" y1="92" x2="434.5" y2="108" stroke="#E0E0DC" stroke-width="1"/>
+<rect x="444" y="96" width="8" height="8" rx="2" fill="#2D6A9F"/>
+<text x="456" y="104.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">출근</text>
+<rect x="494" y="96" width="8" height="8" rx="2" fill="#6542AA"/>
+<text x="506" y="104.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">업무외</text>
+<rect x="556" y="96" width="8" height="8" rx="2" fill="#0D6967"/>
+<text x="568" y="104.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">출장</text>
+<rect x="606" y="96" width="8" height="8" rx="2" fill="#94480C"/>
+<text x="618" y="104.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">휴가</text>
+<rect x="656.5" y="95.5" width="9" height="9" rx="2" fill="#F7F7F5" stroke="#CFCFCA" stroke-width="1"/>
+<text x="670" y="104.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">휴무일</text>
+<text x="258" y="136.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#B3322A" text-anchor="middle" xml:space="preserve">일</text>
+<text x="362" y="136.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="middle" xml:space="preserve">월</text>
+<text x="466" y="136.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="middle" xml:space="preserve">화</text>
+<text x="570" y="136.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="middle" xml:space="preserve">수</text>
+<text x="674" y="136.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="middle" xml:space="preserve">목</text>
+<text x="778" y="136.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="middle" xml:space="preserve">금</text>
+<text x="882" y="136.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="middle" xml:space="preserve">토</text>
+<rect x="240" y="144" width="104" height="100" fill="#F7F7F5"/>
+<text x="258" y="164.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#B3322A" text-anchor="middle" xml:space="preserve">27</text>
+<text x="362" y="164.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#65655F" text-anchor="middle" xml:space="preserve">28</text>
+<text x="466" y="164.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#65655F" text-anchor="middle" xml:space="preserve">29</text>
+<text x="570" y="164.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#65655F" text-anchor="middle" xml:space="preserve">30</text>
+<text x="674" y="164.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">1</text>
+<text x="752" y="164.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:49</text>
+<rect x="715" y="157" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<text x="778" y="164.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">2</text>
+<text x="856" y="164.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:55</text>
+<rect x="819" y="157" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<rect x="864" y="144" width="104" height="100" fill="#F7F7F5"/>
+<text x="882" y="164.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">3</text>
+<rect x="240" y="244" width="104" height="100" fill="#F7F7F5"/>
+<text x="258" y="264.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#B3322A" text-anchor="middle" xml:space="preserve">4</text>
+<text x="362" y="264.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">5</text>
+<text x="440" y="264.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:51</text>
+<rect x="404" y="257" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<text x="466" y="264.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">6</text>
+<text x="544" y="264.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:46</text>
+<rect x="507" y="257" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<rect x="452" y="274" width="92" height="20" rx="4" fill="#F1F1EF"/>
+<text x="458" y="288.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">10:00 </text>
+<text x="487" y="288.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">주간 점검</text>
+<text x="570" y="264.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">7</text>
+<text x="648" y="264.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:58</text>
+<rect x="611" y="257" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<text x="674" y="264.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">8</text>
+<text x="752" y="264.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:50</text>
+<rect x="715" y="257" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<text x="778" y="264.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">9</text>
+<rect x="864" y="244" width="104" height="100" fill="#F7F7F5"/>
+<text x="882" y="264.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">10</text>
+<rect x="240" y="344" width="104" height="100" fill="#F7F7F5"/>
+<text x="258" y="364.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#B3322A" text-anchor="middle" xml:space="preserve">11</text>
+<text x="362" y="364.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">12</text>
+<text x="440" y="364.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:48</text>
+<rect x="403" y="357" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<text x="466" y="364.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">13</text>
+<text x="544" y="364.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:53</text>
+<rect x="507" y="357" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<rect x="452" y="374" width="92" height="20" rx="4" fill="#F1F1EF"/>
+<text x="458" y="388.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">10:00 </text>
+<text x="487" y="388.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">주간 점검</text>
+<text x="570" y="364.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">14</text>
+<text x="648" y="364.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:50</text>
+<rect x="611" y="357" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<text x="674" y="364.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">15</text>
+<text x="752" y="364.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:47</text>
+<rect x="715" y="357" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<text x="778" y="364.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">16</text>
+<text x="856" y="364.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:52</text>
+<rect x="819" y="357" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<rect x="864" y="344" width="104" height="100" fill="#F7F7F5"/>
+<text x="882" y="364.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">17</text>
+<rect x="240" y="444" width="104" height="100" fill="#F7F7F5"/>
+<text x="258" y="464.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#B3322A" text-anchor="middle" xml:space="preserve">18</text>
+<text x="362" y="464.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">19</text>
+<text x="440" y="464.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:49</text>
+<rect x="403" y="457" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<text x="466" y="464.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">20</text>
+<text x="544" y="464.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:51</text>
+<rect x="508" y="457" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<rect x="452" y="474" width="92" height="20" rx="4" fill="#F1F1EF"/>
+<text x="458" y="488.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">10:00 </text>
+<text x="487" y="488.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">주간 점검</text>
+<text x="570" y="464.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">21</text>
+<text x="648" y="464.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:55</text>
+<rect x="611" y="457" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<text x="674" y="464.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">22</text>
+<text x="752" y="464.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:50</text>
+<rect x="715" y="457" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<rect x="660" y="474" width="77" height="20" rx="4" fill="#F0EBF9"/>
+<text x="666" y="488.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#6542AA" xml:space="preserve">업무외 19:30</text>
+<text x="778" y="464.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">23</text>
+<text x="856" y="464.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:46</text>
+<rect x="819" y="457" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<rect x="864" y="444" width="104" height="100" fill="#F7F7F5"/>
+<text x="882" y="464.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">24</text>
+<rect x="868" y="474" width="77" height="20" rx="4" fill="#F0EBF9"/>
+<text x="874" y="488.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#6542AA" xml:space="preserve">업무외 22:10</text>
+<rect x="240" y="544" width="104" height="100" fill="#F7F7F5"/>
+<text x="258" y="564.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#B3322A" text-anchor="middle" xml:space="preserve">25</text>
+<text x="362" y="564.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">26</text>
+<text x="440" y="564.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:47</text>
+<rect x="403" y="557" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<rect x="448" y="544" width="104" height="100" fill="#EEEFFB"/>
+<circle cx="466" cy="560" r="12" fill="#4A52C4"/>
+<text x="466" y="564.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#FFFFFF" font-weight="600" text-anchor="middle" xml:space="preserve">27</text>
+<text x="544" y="564.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" text-anchor="end" xml:space="preserve">08:52</text>
+<rect x="507" y="557" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<rect x="452" y="574" width="92" height="20" rx="4" fill="#FFFFFF"/>
+<text x="458" y="588.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">10:00 </text>
+<text x="487" y="588.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">주간 점검</text>
+<rect x="452" y="596" width="86" height="20" rx="4" fill="#FFFFFF"/>
+<text x="458" y="610.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">14:00 </text>
+<text x="487" y="610.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">SRV-01…</text>
+<rect x="452" y="618" width="90" height="20" rx="4" fill="#FFFFFF"/>
+<text x="464" y="634" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#53534E" text-anchor="middle"></text>
+<text x="474" y="632.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">18:00 </text>
+<text x="503" y="632.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">백업…</text>
+<text x="570" y="564.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">28</text>
+<rect x="556" y="574" width="89" height="20" rx="4" fill="#F1F1EF"/>
+<text x="562" y="588.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">15:00 </text>
+<text x="591" y="588.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">월간 보…</text>
+<rect x="656" y="544" width="104" height="100" fill="#F7F7F5"/>
+<text x="674" y="564.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">29</text>
+<text x="752" y="564.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" text-anchor="end" xml:space="preserve">개인 휴무</text>
+<rect x="660" y="574" width="69" height="20" rx="4" fill="#FAEBDF"/>
+<text x="666" y="588.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#94480C" xml:space="preserve">휴가 · 연차</text>
+<text x="778" y="564.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">30</text>
+<rect x="764" y="574" width="89" height="20" rx="4" fill="#F1F1EF"/>
+<text x="770" y="588.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">16:00 </text>
+<text x="799" y="588.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#1C1C1A" xml:space="preserve">장비 반…</text>
+<rect x="864" y="544" width="104" height="100" fill="#F7F7F5"/>
+<text x="882" y="564.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#1C1C1A" text-anchor="middle" xml:space="preserve">31</text>
+<rect x="240" y="644" width="104" height="100" fill="#F7F7F5"/>
+<text x="258" y="664.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#B3322A" text-anchor="middle" xml:space="preserve">1</text>
+<text x="362" y="664.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#65655F" text-anchor="middle" xml:space="preserve">2</text>
+<rect x="448" y="644" width="104" height="100" fill="#F7F7F5"/>
+<text x="466" y="664.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#B3322A" text-anchor="middle" xml:space="preserve">3</text>
+<text x="544" y="664.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#B3322A" text-anchor="end" xml:space="preserve">공휴일</text>
+<text x="570" y="664.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#65655F" text-anchor="middle" xml:space="preserve">4</text>
+<text x="674" y="664.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#65655F" text-anchor="middle" xml:space="preserve">5</text>
+<text x="778" y="664.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#65655F" text-anchor="middle" xml:space="preserve">6</text>
+<rect x="864" y="644" width="104" height="100" fill="#F7F7F5"/>
+<text x="882" y="664.7" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="13" fill="#65655F" text-anchor="middle" xml:space="preserve">7</text>
+<line x1="240" y1="144.5" x2="968" y2="144.5" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="240" y1="244.5" x2="968" y2="244.5" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="240" y1="344.5" x2="968" y2="344.5" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="240" y1="444.5" x2="968" y2="444.5" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="240" y1="544.5" x2="968" y2="544.5" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="240" y1="644.5" x2="968" y2="644.5" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="240" y1="744.5" x2="968" y2="744.5" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="240.5" y1="144" x2="240.5" y2="744" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="344.5" y1="144" x2="344.5" y2="744" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="448.5" y1="144" x2="448.5" y2="744" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="552.5" y1="144" x2="552.5" y2="744" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="656.5" y1="144" x2="656.5" y2="744" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="760.5" y1="144" x2="760.5" y2="744" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="864.5" y1="144" x2="864.5" y2="744" stroke="#EBEBE8" stroke-width="1"/>
+<line x1="968.5" y1="144" x2="968.5" y2="744" stroke="#EBEBE8" stroke-width="1"/>
+<rect x="448.5" y="544.5" width="104" height="100" fill="none" stroke="#4A52C4" stroke-width="1"/>
+<line x1="984.5" y1="81" x2="984.5" y2="764" stroke="#E0E0DC" stroke-width="1"/>
+<text x="1000" y="109.8" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="16" fill="#1C1C1A" font-weight="600" xml:space="preserve">10월 27일 화요일</text>
+<text x="1000" y="132.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" xml:space="preserve">오늘 · 일정 3</text>
+<text x="1000" y="169.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" font-weight="600" xml:space="preserve">근태</text>
+<rect x="1000" y="182" width="6" height="6" rx="1" fill="#2D6A9F"/>
+<text x="1014" y="190.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" xml:space="preserve">출근 08:52</text>
+<text x="1014" y="209.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" xml:space="preserve">퇴근 기록 없음</text>
+<rect x="1172.5" y="180.5" width="83" height="27" rx="4" fill="#FFFFFF" stroke="#CFCFCA" stroke-width="1"/>
+<text x="1184" y="199.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" xml:space="preserve">퇴근 기록</text>
+<text x="1000" y="249.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" font-weight="600" xml:space="preserve">일정</text>
+<text x="1036" y="249.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#65655F" xml:space="preserve">3</text>
+<rect x="992" y="260" width="272" height="48" rx="4" fill="#F1F1EF"/>
+<text x="1000" y="281.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">10:00</text>
+<text x="1048" y="281.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" xml:space="preserve">주간 점검</text>
+<text x="1054" y="300" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#65655F" text-anchor="middle"></text>
+<text x="1064" y="298.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" xml:space="preserve">매주 화요일 · 1시간</text>
+<text x="1000" y="329.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">14:00</text>
+<text x="1048" y="329.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" xml:space="preserve">SRV-01 펌웨어 업데이트</text>
+<text x="1054" y="348" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#65655F" text-anchor="middle"></text>
+<text x="1064" y="346.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" xml:space="preserve">10분 전 알림</text>
+<text x="1000" y="377.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">18:00</text>
+<text x="1056" y="380" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#53534E" text-anchor="middle"></text>
+<text x="1072" y="377.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" xml:space="preserve">백업 확인</text>
+<text x="1048" y="394.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" xml:space="preserve">알람</text>
+<text x="1000" y="433.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" font-weight="600" xml:space="preserve">휴무일</text>
+<text x="1000" y="465.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">10-29 (목)</text>
+<text x="1080" y="465.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" xml:space="preserve">개인 휴무</text>
+<rect x="1220" y="450" width="36" height="20" rx="4" fill="#FAEBDF"/>
+<text x="1226" y="464.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#94480C" xml:space="preserve">휴가</text>
+<text x="1000" y="497.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">11-03 (화)</text>
+<text x="1080" y="497.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#B3322A" xml:space="preserve">공휴일</text>
+<text x="1000" y="545.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#1C1C1A" font-weight="600" xml:space="preserve">지난주 업무외</text>
+<text x="1096.16" y="545.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#65655F" xml:space="preserve">2</text>
+<rect x="1000" y="562" width="48" height="20" rx="4" fill="#F0EBF9"/>
+<text x="1006" y="576.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#6542AA" xml:space="preserve">업무외</text>
+<text x="1060" y="577.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">10-24 (토)</text>
+<text x="1256" y="577.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" text-anchor="end" xml:space="preserve">1:30</text>
+<text x="1060" y="596.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" xml:space="preserve">원격 · 장애 대응 INC-1234</text>
+<rect x="1000" y="606" width="48" height="20" rx="4" fill="#F0EBF9"/>
+<text x="1006" y="620.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#6542AA" xml:space="preserve">업무외</text>
+<text x="1060" y="621.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" xml:space="preserve">10-22 (목)</text>
+<text x="1256" y="621.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#53534E" text-anchor="end" xml:space="preserve">1:30</text>
+<text x="1060" y="640.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#65655F" xml:space="preserve">정기 패치 작업</text>
+<rect x="1000.5" y="716.5" width="255" height="31" rx="4" fill="#FFFFFF" stroke="#8A8A84" stroke-width="1"/>
+<text x="1020" y="740" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#65655F" text-anchor="middle"></text>
+<text x="1036" y="737.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" fill="#65655F" xml:space="preserve">새 일정 제목</text>
+<rect x="1209.5" y="722.5" width="38" height="19" rx="4" fill="#F7F7F5" stroke="#E0E0DC" stroke-width="1"/>
+<text x="1215" y="736.3" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" fill="#53534E" xml:space="preserve">Enter</text>
+</svg>

@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800">
+<title>WorkTool 업무 - 시안 A</title>
+<style>.tn{font-variant-numeric:tabular-nums}</style>
+<rect x="0" y="0" width="1280" height="800" rx="0" fill="#F3F3F3"/>
+<rect x="16" y="8" width="16" height="16" rx="4" fill="#005FB8"/>
+<text x="24" y="16.5" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="10" font-weight="700" fill="#FFFFFF" text-anchor="middle" dominant-baseline="central">W</text>
+<text x="44" y="16" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">WorkTool</text>
+<text x="1165" y="16" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE921;</text>
+<text x="1211" y="16" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE922;</text>
+<text x="1257" y="16" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8BB;</text>
+<text x="24" y="58" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE700;</text>
+<text x="28" y="102" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE80F;</text>
+<text x="52" y="102" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">홈</text>
+<text x="28" y="142" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE787;</text>
+<text x="52" y="142" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">일정</text>
+<text x="28" y="182" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE823;</text>
+<text x="52" y="182" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">근태</text>
+<text x="28" y="222" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE70B;</text>
+<text x="52" y="222" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">메모</text>
+<text x="28" y="262" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8B7;</text>
+<text x="52" y="262" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">문서</text>
+<rect x="4" y="284" width="272" height="36" rx="4" fill="rgba(0,0,0,0.06)"/>
+<rect x="4" y="294" width="3" height="16" rx="1.5" fill="#005FB8"/>
+<text x="28" y="302" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE756;</text>
+<text x="52" y="302" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">업무</text>
+<text x="28" y="342" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE7C4;</text>
+<text x="52" y="342" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">활성 작업</text>
+<line x1="16" y1="715.5" x2="264" y2="715.5" stroke="#EBEBEB" stroke-width="1"/>
+<text x="28" y="738" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE897;</text>
+<text x="52" y="738" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">도움말</text>
+<text x="28" y="778" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE713;</text>
+<text x="52" y="778" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">설정</text>
+<path d="M280,800 V40 A8,8 0 0 1 288,32 H1280 V800 Z" fill="#F9F9F9" stroke="none" stroke-width="1"/>
+<path d="M280.5,800 V40 A7.5,7.5 0 0 1 288,32.5 H1280" fill="none" stroke="#E5E5E5" stroke-width="1"/>
+<rect x="520" y="32" width="760" height="768" rx="0" fill="#FFFFFF"/>
+<line x1="520.5" y1="32" x2="520.5" y2="800" stroke="#E5E5E5" stroke-width="1"/>
+<rect x="292.5" y="44.5" width="215" height="31" rx="3.5" fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="294" y1="75.5" x2="506" y2="75.5" stroke="#8A8A8A" stroke-width="1"/>
+<text x="304" y="60.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">스크립트 검색</text>
+<text x="490" y="60.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE721;</text>
+<text x="302" y="104" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE70D;</text>
+<text x="322" y="104" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE734;</text>
+<text x="338" y="104" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">저장한 업무</text>
+<text x="342" y="136" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE768;</text>
+<text x="358" y="136" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">웹 서버 점검</text>
+<text x="342" y="168" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE768;</text>
+<text x="358" y="168" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">백업 서버 포트 확인</text>
+<text x="302" y="200" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE70D;</text>
+<text x="322" y="200" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8B7;</text>
+<text x="338" y="200" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">내 스크립트</text>
+<text x="322" y="232" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE70D;</text>
+<text x="342" y="232" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8B7;</text>
+<text x="358" y="232" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">network</text>
+<rect x="284" y="248" width="232" height="32" rx="4" fill="rgba(0,0,0,0.06)"/>
+<rect x="284" y="256" width="3" height="16" rx="1.5" fill="#005FB8"/>
+<text x="362" y="264" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE756;</text>
+<text x="378" y="264" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">Test-TcpPort.ps1</text>
+<text x="362" y="296" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE756;</text>
+<text x="378" y="296" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">Watch-MultiPing.ps1</text>
+<text x="322" y="328" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+<text x="342" y="328" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8B7;</text>
+<text x="358" y="328" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">files</text>
+<text x="322" y="360" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+<text x="342" y="360" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8B7;</text>
+<text x="358" y="360" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">system</text>
+<text x="302" y="392" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="10" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+<text x="322" y="392" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="14" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8B7;</text>
+<text x="338" y="392" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">예제 스크립트</text>
+<rect x="292.5" y="756.5" width="107" height="31" rx="3.5" fill="#FBFBFB" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="296" y1="787.5" x2="396" y2="787.5" stroke="#CCCCCC" stroke-width="1"/>
+<text x="312" y="772.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE710;</text>
+<text x="328" y="772.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">폴더 추가</text>
+<text x="544" y="52" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">내 스크립트</text>
+<text x="617.288" y="52" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="8" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE76C;</text>
+<text x="627.288" y="52" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">network</text>
+<text x="544" y="80" font-family="'Segoe UI Variable Display','Segoe UI','Malgun Gothic',sans-serif" font-size="20" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">Test-TcpPort.ps1</text>
+<text x="544" y="108" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">여러 호스트의 TCP 포트가 열려 있는지 확인합니다.</text>
+<rect x="1164.5" y="64.5" width="91" height="31" rx="3.5" fill="#FBFBFB" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="1168" y1="95.5" x2="1252" y2="95.5" stroke="#CCCCCC" stroke-width="1"/>
+<text x="1184" y="80.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE897;</text>
+<text x="1200" y="80.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">도움말</text>
+<rect x="1032.5" y="64.5" width="123" height="31" rx="3.5" fill="#FBFBFB" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="1036" y1="95.5" x2="1152" y2="95.5" stroke="#CCCCCC" stroke-width="1"/>
+<text x="1052" y="80.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE734;</text>
+<text x="1068" y="80.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">업무로 저장</text>
+<text x="544" y="150" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">호스트 목록 (필수)</text>
+<text x="666.072" y="150" font-family="Consolas,'Malgun Gothic',monospace" font-size="12" font-weight="400" fill="#666666" text-anchor="start" dominant-baseline="central">-ComputerName · string[]</text>
+<rect x="544.5" y="168.5" width="711" height="31" rx="3.5" fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1"/>
+<rect x="545" y="198" width="710" height="2" fill="#005FB8"/>
+<text x="556" y="184.0" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">SRV-01, SRV-02, 10.0.0.10</text>
+<rect x="735.75" y="175.0" width="1" height="18" fill="#1B1B1B"/>
+<text x="544" y="216" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">확인할 호스트 이름이나 IP. 쉼표로 여러 개를 넣습니다.</text>
+<text x="544" y="250" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">포트 (필수)</text>
+<text x="620.236" y="250" font-family="Consolas,'Malgun Gothic',monospace" font-size="12" font-weight="400" fill="#666666" text-anchor="start" dominant-baseline="central">-Port · int[]</text>
+<rect x="544.5" y="268.5" width="347" height="31" rx="3.5" fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="546" y1="299.5" x2="890" y2="299.5" stroke="#8A8A8A" stroke-width="1"/>
+<text x="556" y="284.0" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">22, 443</text>
+<text x="544" y="316" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">쉼표로 여러 개를 넣습니다.</text>
+<text x="908" y="250" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">시간 제한</text>
+<text x="975.836" y="250" font-family="Consolas,'Malgun Gothic',monospace" font-size="12" font-weight="400" fill="#666666" text-anchor="start" dominant-baseline="central">-TimeoutMs · int</text>
+<rect x="908.5" y="268.5" width="347" height="31" rx="3.5" fill="#FFFFFF" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="910" y1="299.5" x2="1254" y2="299.5" stroke="#8A8A8A" stroke-width="1"/>
+<text x="920" y="284.0" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">3000</text>
+<text x="1244" y="284.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#545454" text-anchor="end" dominant-baseline="central">ms</text>
+<text x="908" y="316" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">기본값 3000</text>
+<rect x="544" y="348" width="76" height="32" rx="4" fill="#005FB8"/>
+<text x="564" y="364.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#FFFFFF" text-anchor="middle" dominant-baseline="central">&#xE768;</text>
+<text x="580" y="364.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#FFFFFF" text-anchor="start" dominant-baseline="central">실행</text>
+<rect x="628.5" y="348.5" width="107" height="31" rx="3.5" fill="#FBFBFB" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="632" y1="379.5" x2="732" y2="379.5" stroke="#CCCCCC" stroke-width="1"/>
+<text x="648" y="364.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8C8;</text>
+<text x="664" y="364.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">명령 복사</text>
+<text x="760" y="364" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central">실행 위치</text>
+<rect x="832.336" y="348.5" width="139" height="31" rx="3.5" fill="#FBFBFB" stroke="#E0E0E0" stroke-width="1"/>
+<line x1="835.836" y1="379.5" x2="967.836" y2="379.5" stroke="#CCCCCC" stroke-width="1"/>
+<text x="843.836" y="364.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">앱 안에서</text>
+<text x="953.836" y="364.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#545454" text-anchor="middle" dominant-baseline="central">&#xE70D;</text>
+<text x="1256" y="364" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#666666" text-anchor="end" dominant-baseline="central">F5로 실행</text>
+<line x1="544" y1="404.5" x2="1256" y2="404.5" stroke="#EBEBEB" stroke-width="1"/>
+<text x="544" y="436" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="600" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">출력</text>
+<rect x="584.84" y="424" width="60" height="24" rx="4" fill="#DFF6DD"/>
+<text x="598.84" y="436" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="12" fill="#0E6F0E" text-anchor="middle" dominant-baseline="central">&#xE73E;</text>
+<text x="610.84" y="436" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#0E6F0E" text-anchor="start" dominant-baseline="central">성공</text>
+<text x="656.84" y="436" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="12" font-weight="400" fill="#545454" text-anchor="start" dominant-baseline="central" class="tn">종료 코드 0 · 3.2초 · 13:05:15</text>
+<text x="1184" y="436.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE74D;</text>
+<text x="1200" y="436.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">지우기</text>
+<text x="1104" y="436.0" font-family="'Segoe Fluent Icons','Segoe MDL2 Assets'" font-size="16" fill="#1B1B1B" text-anchor="middle" dominant-baseline="central">&#xE8C8;</text>
+<text x="1120" y="436.0" font-family="'Segoe UI Variable Text','Segoe UI','Malgun Gothic',sans-serif" font-size="14" font-weight="400" fill="#1B1B1B" text-anchor="start" dominant-baseline="central">복사</text>
+<rect x="544.5" y="464.5" width="711" height="311" rx="3.5" fill="#F5F5F5" stroke="#E5E5E5" stroke-width="1"/>
+<text x="556" y="482" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" dominant-baseline="central" xml:space="preserve"><tspan fill="#666666">PS&gt; </tspan><tspan fill="#6639BA">.\Test-TcpPort.ps1</tspan><tspan fill="#0B6E6D"> -ComputerName </tspan><tspan fill="#1B1B1B">SRV-01,SRV-02,10.0.0.10</tspan><tspan fill="#0B6E6D"> -Port </tspan><tspan fill="#1B1B1B">22,443</tspan><tspan fill="#0B6E6D"> -TimeoutMs </tspan><tspan fill="#1B1B1B">3000</tspan></text>
+<text x="556" y="522" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" dominant-baseline="central" xml:space="preserve"><tspan fill="#1B1B1B">ComputerName  Port  Open    Ms</tspan></text>
+<text x="556" y="542" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" dominant-baseline="central" xml:space="preserve"><tspan fill="#666666">------------  ----  ----    --</tspan></text>
+<text x="556" y="562" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" dominant-baseline="central" xml:space="preserve"><tspan fill="#1B1B1B">SRV-01          22  True     3</tspan></text>
+<text x="556" y="582" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" dominant-baseline="central" xml:space="preserve"><tspan fill="#1B1B1B">SRV-01         443  True     4</tspan></text>
+<text x="556" y="602" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" dominant-baseline="central" xml:space="preserve"><tspan fill="#1B1B1B">SRV-02          22  True     5</tspan></text>
+<text x="556" y="622" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" dominant-baseline="central" xml:space="preserve"><tspan fill="#1B1B1B">SRV-02         443  True     6</tspan></text>
+<text x="556" y="642" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" dominant-baseline="central" xml:space="preserve"><tspan fill="#1B1B1B">10.0.0.10       22  True     2</tspan></text>
+<text x="556" y="662" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" dominant-baseline="central" xml:space="preserve"><tspan fill="#1B1B1B">10.0.0.10      443  False 3000</tspan></text>
+<text x="556" y="702" font-family="Consolas,'Malgun Gothic',monospace" font-size="13" dominant-baseline="central" xml:space="preserve"><tspan fill="#1B1B1B">6개 중 5개 열림 · 1개 시간 초과 (10.0.0.10:443)</tspan></text>
+</svg>
