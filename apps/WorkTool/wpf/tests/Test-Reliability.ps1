@@ -26,8 +26,10 @@ try {
     $child = Join-Path $test.Root 'lock-child.ps1'
     @'
 param($Source, $App)
-Import-Module $Source -Force
+Import-Module (Join-Path (Split-Path $Source) 'Work.psm1') -Force -DisableNameChecking
+Import-Module $Source -Force -DisableNameChecking
 Set-WtAppRoot $App
+try { [void](Get-WtDataRoot) } catch { exit 5 }
 try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
 '@ | Set-Content -LiteralPath $child -Encoding utf8
     $instance = Open-WtDataLock
@@ -43,6 +45,31 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
     try { Set-WtSetting 'test.mode' 'preview' } catch { $threw = $true }
     Assert-WtTest '안정성: 설정 저장 실패 시 메모리 값도 유지한다' ($threw -and (Get-WtSetting 'test.mode') -eq 'edit')
     $held.Dispose(); $held = $null
+
+    # 데이터 폴더가 응답 없는 공유 폴더: 저장은 정한 시간만 기다리고 실패(IOException)로 올린다.
+    # 답 없는 쓰기가 남아 있는 동안 다른 읽기 · 쓰기는 기다리지 않고 바로 실패한다. 답이 오면 다시 저장된다
+    $storage = Get-Module Storage
+    $gate = New-WtTestGate
+    try {
+        & $storage { param($hang) $script:testIo = $script:io.Write; $script:io.Write = $hang; $script:testTimeout = $script:ioTimeoutMs; $script:ioTimeoutMs = 300 } $wtTestHang
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        $writeError = $null; try { Write-WtStore -Name 'hang-test' -Items @() } catch { $writeError = $_.Exception }
+        $writeMs = $watch.ElapsedMilliseconds
+        $watch.Restart()
+        $readError = $null; try { [void](Read-WtStore 'hang-test') } catch { $readError = $_.Exception }
+        $stamp = Get-WtStoreStamp 'hang-test'
+        $settingError = $null; try { Set-WtSetting 'test.mode' 'hang' } catch { $settingError = $_.Exception }
+        $fastMs = $watch.ElapsedMilliseconds
+        Assert-WtTest "안정성: 데이터 폴더가 답하지 않으면 저장은 정한 시간만 기다리고(${writeMs}ms) 실패로 올리며, 그동안 다른 읽기 · 쓰기는 바로 실패한다(${fastMs}ms)" (
+            $writeError -is [System.IO.IOException] -and $writeError.Message -like '데이터 폴더가 응답하지 않습니다*' -and $writeMs -lt 1500 -and
+            $readError -is [System.IO.IOException] -and $settingError -is [System.IO.IOException] -and $stamp -like '*|unread-*' -and $fastMs -lt 300 -and
+            (Get-WtSetting 'test.mode') -eq 'edit')
+    } finally {
+        & $storage { $script:io.Write = $script:testIo; $script:ioTimeoutMs = $script:testTimeout }
+        Remove-WtTestGate $gate
+    }
+    Write-WtStore -Name 'hang-test' -Items @([ordered]@{ id = 'h1' })
+    Assert-WtTest '안정성: 답 없던 작업이 끝나면 다시 저장 · 읽기가 된다' ((Get-WtStoreItems 'hang-test')[0].id -eq 'h1')
 
     if (-not (Test-WtTestWpf)) { Write-Host 'SKIP 안정성 WPF/WinForms (Windows STA에서만)'; return }
 
@@ -86,6 +113,20 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
     $pending.Saved = $false
     $allowed = & $shellModule { $script:exiting = $false; $script:frame = [pscustomobject]@{ Continue = $true }; $script:testAsked = @(); $script:testChoices.Enqueue('proceed'); Stop-WtApp }
     Assert-WtTest '안정성: 저장하지 못해도 [끝내기]를 고르면 정리하고 끝낸다' ($allowed -and $exitCounter.Count -eq 2 -and -not (& $shellModule { $script:frame.Continue }) -and (& $shellModule { $script:testAsked -join ',' }) -eq 'exit')
+
+    # 끝낼 때: 탭이 남긴 화면 밖 작업이 OS 요청에서 돌아오지 않아도(응답 없는 공유 폴더) 종료 처리는 기다리지 않고 버린다.
+    # 그 뒤 앱 전용 프로세스가 실제로 끝나는지는 tests\Test-Core.ps1(Exit-WtOwnProcess)과 tests\Test-Launcher.ps1이 본다
+    $gate = New-WtTestGate
+    try {
+        [void](Start-WtWork $wtTestHang -OnDone { })
+        $entered = $gate.Entered.WaitOne(5000)
+        $pending.Saved = $true
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        $allowed = & $shellModule { $script:exiting = $false; $script:frame = [pscustomobject]@{ Continue = $true }; Stop-WtApp }
+        $exitMs = $watch.ElapsedMilliseconds
+        Assert-WtTest "안정성: 돌아오지 않는 화면 밖 작업이 남아도 종료 처리는 기다리지 않고 버린다 (${exitMs}ms)" (
+            $entered -and $allowed -and $exitMs -lt 500 -and -not (& $shellModule { $script:frame.Continue }) -and (Get-WtWorkInfo).Running -eq 0 -and (Get-WtWorkInfo).Abandoned -ge 1)
+    } finally { Remove-WtTestGate $gate }
 
     # ---- 기존 WinForms도 실제 FormClosing에서 저장 실패를 처리해야 한다: 끝낼지 묻고, [아니요]면 취소한다 ----
     $legacyRoot = Split-Path $root -Parent

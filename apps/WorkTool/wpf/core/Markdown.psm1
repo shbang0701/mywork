@@ -28,18 +28,16 @@ $script:openable = @('.md', '.txt', '.log', '.csv', '.tsv', '.json', '.xml', '.y
     '.xlsx', '.xls', '.xlsm', '.docx', '.doc', '.pptx', '.ppt', '.vsdx', '.vsd', '.htm', '.html', '.zip')
 $script:imageExt = @('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.ico', '.webp')
 
-# 파일 링크를 열기 전 경로 확인 (있는지 · 폴더인지). 화면 밖(.NET 작업)에서 하고 타이머로 결과를 받는다
-$script:pathJobs = [System.Collections.Generic.List[object]]::new()
-$script:pathTimer = $null
-$script:pathTimeoutMs = 5000   # 이 시간 안에 답이 없으면 기다리지 않고 알린다
-$script:pathMaxJobs = 8        # 답이 없는 확인이 이만큼 남아 있으면 새로 시작하지 않는다
-$script:pathCursor = $null     # 확인 중 커서를 바꾸기 전 값 (@{ Old })
-# 확인 작업 만들기: 경로 → 끝나면 파일 속성(없으면 -1)을 주는 Task. 검사가 느린 경로를 흉내 내려고 바꿔 끼운다
-$script:pathProbe = {
-    param($path)
-    $info = [System.IO.FileInfo]::new($path)
-    [System.Threading.Tasks.Task[System.IO.FileAttributes]]::Run([Func[System.IO.FileAttributes]]$info.get_Attributes)
-}
+# 그림은 화면 밖(core\Work.psm1)에서 읽고, 읽은 바이트로 화면에서 그린다. 응답 없는 공유 폴더의 그림도 그리기를 멈추지 않는다
+$script:imageWaitMs = 150        # 그리기를 끝내기 전에 그림을 기다리는 시간. 로컬 그림은 이 안에 읽혀 자리가 바뀌지 않는다
+$script:imageTimeoutMs = 10000   # 이 시간 안에 못 읽으면 「응답하지 않음」으로 둔다
+$script:imageMaxBytes = 64MB     # 이보다 큰 그림 파일은 그리지 않는다
+$script:imageParallel = 6        # 한 번에 읽는 그림 수. 나머지는 차례를 기다린다 (그림이 많은 글도 스레드가 한꺼번에 늘지 않게)
+$script:imageQueue = [System.Collections.Generic.List[object]]::new()   # 읽을 차례를 기다리는 그림 자리
+$script:imageActive = [System.Collections.Generic.List[object]]::new()  # 읽고 있는 그림 작업
+$script:imageSlowKeys = [System.Collections.Generic.HashSet[string]]::new()   # 기다리는 시간 안에 못 읽은 곳(드라이브 · 공유). 다음 그리기에서는 기다리지 않는다
+# 그림 하나 읽기: .NET 호출 하나라서 스레드 풀에서 바로 부른다 (없으면 FileNotFound). 검사가 느린 경로를 흉내 내려고 바꿔 끼운다 (경로 → New-WtCall)
+$script:imageCall = { param($path) New-WtCall ([System.IO.File]) ReadAllBytes $path }
 
 # ---- 등록 -------------------------------------------------------------------------------------
 
@@ -649,6 +647,7 @@ function New-WtMarkdownView {
     $v.Tag = @{
         Text = ''; BaseDir = $BaseDir; OnLink = $OnLink; OnTask = $OnTask; Strict = [bool]$StrictLineBreaks
         Anchors = @{}; Remeasure = $false; Error = $null; ListDepth = 0
+        Images = [System.Collections.Generic.List[object]]::new()   # 이번에 그리면서 읽기 시작한 그림 (끝내기 전에 잠깐 기다린다)
     }
     for ($i = $script:views.Count - 1; $i -ge 0; $i--) { if (-not $script:views[$i].IsAlive) { $script:views.RemoveAt($i) } }
     $script:views.Add([System.WeakReference]::new($v))
@@ -683,7 +682,63 @@ function Set-WtMarkdownText {
         $raw.Inlines.Add((New-WtMdRun $st.Text))
         $doc.Blocks.Add($raw)
     }
+    Wait-WtMdImages $st
     $View.Document = $doc
+}
+
+# 이번에 그리면서 읽기 시작한 그림을 모두 합쳐 $script:imageWaitMs까지만 기다린다. 그 안에 읽힌 그림은 처음 배치 전에 들어가서
+# 자리가 바뀌지 않는다. 못 읽은 그림은 그 자리에 이름을 두고, 다 읽히면 그때 그린다. 이미 느린 곳(공유)의 그림은 기다리지 않는다
+function Wait-WtMdImages($St) {
+    if ($null -eq $St.Images -or -not $St.Images.Count) { return }
+    $boxes = @($St.Images)
+    $St.Images.Clear()
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        # 앞 그림이 끝나면 차례를 기다리던 그림이 이어서 시작하므로 매번 다시 모은다
+        $done = [System.Collections.Generic.List[object]]::new()
+        $waitFor = $null
+        foreach ($b in $boxes) {
+            $w = $b.Tag.Work
+            if (-not $w -or $w.Finished) { continue }
+            if ($w.Handle.IsCompleted) { $done.Add($w) }
+            elseif (-not $waitFor -and -not $script:imageSlowKeys.Contains($w.Key)) { $waitFor = $w }
+        }
+        if ($done.Count) { [void](Wait-WtWork $done.ToArray() -Milliseconds 1); continue }
+        $left = $script:imageWaitMs - $watch.ElapsedMilliseconds
+        if ($left -le 0 -or -not $waitFor) { break }
+        [void](Wait-WtWork $waitFor -Milliseconds $left)
+    }
+    foreach ($b in $boxes) {
+        $w = $b.Tag.Work
+        if ($w -and -not $w.Finished) { [void]$script:imageSlowKeys.Add($w.Key) }
+        if (-not $b.Child) { Set-WtMdImageNote $b 'loading' }   # 아직 못 읽은 그림 (읽기 전 자리는 비워 두었다)
+    }
+}
+
+# 차례를 기다리는 그림을 읽기 시작한다 (한 번에 $script:imageParallel개까지)
+function Start-WtMdImageReads {
+    # 끝났거나 시간이 지나 버린 작업은 자리를 차지하지 않는다 (같은 곳의 다음 그림은 아래에서 바로 「응답 없음」)
+    for ($i = $script:imageActive.Count - 1; $i -ge 0; $i--) {
+        if ($script:imageActive[$i].Finished -or $script:imageActive[$i].State -ne 'running') { $script:imageActive.RemoveAt($i) }
+    }
+    while ($script:imageActive.Count -lt $script:imageParallel -and $script:imageQueue.Count) {
+        $box = $script:imageQueue[0]
+        $script:imageQueue.RemoveAt(0)
+        $key = Get-WtPathKey $box.Tag.Path
+        if (Test-WtWorkStuck $key) { Set-WtMdImageNote $box 'slow'; continue }
+        try {
+            $box.Tag.Work = Start-WtWork -Call (& $script:imageCall $box.Tag.Path) -Key $key -TimeoutMs $script:imageTimeoutMs -Context $box `
+                -OnDone { param($w) Complete-WtMdImageRead $w }
+            $script:imageActive.Add($box.Tag.Work)
+        } catch { Set-WtMdImageNote $box 'error' $_.Exception.Message }
+    }
+}
+
+function Complete-WtMdImageRead($Work) {
+    if ($Work.State -eq 'done') { [void]$script:imageSlowKeys.Remove($Work.Key) }
+    try { Set-WtMdImageResult $Work }
+    catch { Set-WtMdImageNote $Work.Context 'error' $_.Exception.Message }
+    finally { Start-WtMdImageReads }
 }
 
 # 단위 하나를 Section 하나로 그린다 (Section.Tag = 단위). 보기의 상태(링크 처리 등)를 같이 쓴다.
@@ -706,7 +761,7 @@ function New-WtMarkdownUnitSection {
             return $sec
         }
         $st.ListDepth = [int]$Unit.Depth
-        try { Add-WtMdBlock $sec.Blocks $model $st } finally { $st.ListDepth = 0 }
+        try { Add-WtMdBlock $sec.Blocks $model $st } finally { $st.ListDepth = 0; Wait-WtMdImages $st }
         if ($Unit.Kind -eq 'list-item') {
             # 항목마다 따로 그린 목록을 이어 붙여 하나처럼 보이게: 들여쓰기 = 목록 안쪽 여백 × 깊이, 항목 사이 = 항목 아래 여백
             $list = $sec.Blocks.FirstBlock
@@ -965,7 +1020,7 @@ function New-WtMdHyperlink($Link, $St) {
 그 밖에는 -OnLink를 먼저 부르고, 처리하지 않았으면 기본 동작:
   url  http · https · mailto만 기본 브라우저 · 메일 프로그램으로 연다
   file 폴더는 탐색기로, 문서 · 그림은 기본 프로그램으로 연다. 실행 파일 · 스크립트는 열지 않고 탐색기에서 그 파일을 보여 준다
-       있는지 · 폴더인지는 화면 밖에서 확인한다 (Start-WtMdPathCheck). 응답 없는 공유 폴더에서도 화면이 멈추지 않는다
+       있는지 · 폴더인지 확인과 열기는 화면 밖에서 한다 (core\Work.psm1 Open-WtPath). 응답 없는 공유 폴더에서도 화면이 멈추지 않는다
   wiki 연결할 곳을 모른다고 알린다 (메모 · 문서 화면이 -OnLink로 처리한다)
 #>
 function Invoke-WtMarkdownLink($St, $Link) {
@@ -987,7 +1042,7 @@ function Invoke-WtMarkdownLink($St, $Link) {
         'file' {
             $path = Resolve-WtMdPath $Link.Target $St.BaseDir
             if (-not $path) { Show-WtMessage "파일을 찾지 못했습니다.`n$($Link.Target)"; return }
-            Start-WtMdPathCheck $path $Link.Target
+            Open-WtPath $path -OpenTypes $script:openable -NotFound "파일을 찾지 못했습니다.`n$($Link.Target)"
         }
         'wiki' { Show-WtMessage "연결된 문서를 찾지 못했습니다: $($Link.Target)" }
     }
@@ -1019,110 +1074,78 @@ function Test-WtMdFolderLike([string]$Path) {
 }
 
 <#
-파일 링크의 경로(있는지 · 폴더인지)를 화면 밖에서 확인하고, 끝나면 Invoke-WtMdPathResult로 연다.
-응답 없는 공유 폴더 · 끊긴 네트워크 드라이브에서도 화면이 멈추지 않는다. 로컬 드라이브도 끊긴 네트워크 드라이브일 수 있어서 모두 이 길로 간다.
-- 실행 공간 대신 .NET 작업(Task)으로 확인한다. 실행 공간은 응답 없는 OS 호출 중이면 Close · Dispose를 해도 앱 프로세스가 끝나지 않는다.
-  작업은 PowerShell 없이 스레드 풀(백그라운드 스레드)에서 돌아서, 끝나지 않은 채 남아도 프로세스를 붙잡지 않는다.
-- 확인하는 동안 커서는 AppStarting(화살표 + 모래시계). 기다리는 동안에도 앱은 쓸 수 있다.
-- 같은 경로를 확인 중에 또 누르면 겹쳐 시작하지 않는다. $script:pathTimeoutMs 안에 답이 없으면 기다리지 않고 알린다.
+로컬 그림 파일이면 그림 자리(Border)를, 아니면 $null (웹 주소의 그림은 내려받지 않는다).
+그리는 중에 디스크 · 네트워크를 건드리지 않는다: 파일은 화면 밖에서 읽고(Start-WtMdImageReads), 읽히면 자리에 그림을 넣는다.
+읽는 동안 · 없을 때 · 응답이 없을 때는 자리에 그림 아이콘과 이름을 두고, 마우스를 올리면 이유가 보인다.
+같은 곳(드라이브 · 공유)에 답 없는 그림이 남아 있으면 다시 묻지 않고 「응답하지 않음」으로 둔다.
 #>
-function Start-WtMdPathCheck([string]$Path, [string]$Target) {
-    $key = $Path.ToLowerInvariant()
-    # 시간이 지난 뒤에 끝난 확인은 여기서 치운다 (타이머는 기다리는 확인이 없으면 멈춰 있다)
-    foreach ($job in @($script:pathJobs.ToArray())) { if ($job.TimedOut -and $job.Task.IsCompleted) { [void]$script:pathJobs.Remove($job) } }
-    $same = @($script:pathJobs | Where-Object { $_.Key -eq $key })
-    if (@($same | Where-Object { -not $_.TimedOut }).Count) { return }
-    # 앞서 시간이 지난 확인이 아직 답을 기다리면, 또 기다리지 않고 바로 알린다
-    if ($same.Count) { Show-WtMessage (Get-WtMdPathTimeoutText $Path) 'WorkTool' 'Warning'; return }
-    if ($script:pathJobs.Count -ge $script:pathMaxJobs) {
-        Show-WtMessage "응답하지 않는 경로가 많아 지금은 열지 않습니다. 네트워크 연결을 확인하고 잠시 뒤 다시 누르세요.`n$Path" 'WorkTool' 'Warning'
-        return
-    }
-    try { $task = & $script:pathProbe $Path | Select-Object -Last 1 }
-    catch { Show-WtMessage "경로를 확인하지 못했습니다. 경로가 맞는지 확인하세요.`n$Path`n$($_.Exception.Message)" 'WorkTool' 'Warning'; return }
-    $script:pathJobs.Add(@{ Key = $key; Path = $Path; Target = $Target; Task = $task; Watch = [System.Diagnostics.Stopwatch]::StartNew(); TimedOut = $false })
-    Update-WtMdPathCursor
-    if (-not $script:pathTimer) { $script:pathTimer = New-WtPollTimer { Complete-WtMdPathChecks } }
-    $script:pathTimer.Start()
-}
-
-function Get-WtMdPathTimeoutText([string]$Path) {
-    "경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.`n$Path"
-}
-
-# 타이머가 부른다: 끝난 확인은 목록에서 빼고 열고, 시간이 지난 확인은 알린다 (작업은 끝날 때까지 목록에 남아 겹쳐 시작하지 않게 한다)
-function Complete-WtMdPathChecks {
-    $done = [System.Collections.Generic.List[object]]::new()
-    foreach ($job in @($script:pathJobs.ToArray())) {
-        if ($job.Task.IsCompleted) {
-            [void]$script:pathJobs.Remove($job)
-            if (-not $job.TimedOut) { $done.Add($job) }   # 시간이 지난 확인은 이미 알렸으므로 결과를 버린다
-        } elseif (-not $job.TimedOut -and $job.Watch.ElapsedMilliseconds -ge $script:pathTimeoutMs) {
-            $job.TimedOut = $true
-            $done.Add($job)
-        }
-    }
-    Update-WtMdPathCursor
-    # 기다리는 확인이 없으면 멈춘다. 시간이 지난 확인이 끝내 답하지 않아도 타이머가 계속 돌지 않게
-    if (-not @($script:pathJobs | Where-Object { -not $_.TimedOut }).Count -and $script:pathTimer) { $script:pathTimer.Stop() }
-    # 알림 창이 떠 있는 동안에도 타이머가 돌 수 있으므로, 목록을 다 정리한 뒤에 연다
-    foreach ($job in $done) {
-        try { Invoke-WtMdPathResult $job } catch { Show-WtError $_ '링크 열기' }
-    }
-}
-
-# 확인 결과대로 연다: 폴더 → 탐색기, 열 수 있는 종류 → 기본 프로그램, 그 밖 → 탐색기에서 선택, 없음 → 알림
-function Invoke-WtMdPathResult($Job) {
-    $path = $Job.Path
-    if ($Job.TimedOut) { Show-WtMessage (Get-WtMdPathTimeoutText $path) 'WorkTool' 'Warning'; return }
-    if ($Job.Task.IsFaulted -or $Job.Task.IsCanceled) {
-        $why = if ($Job.Task.Exception) { $Job.Task.Exception.GetBaseException().Message } else { '' }
-        Show-WtMessage "경로를 확인하지 못했습니다. 접근 권한과 경로를 확인하세요.`n$path`n$why" 'WorkTool' 'Warning'
-        return
-    }
-    $attr = [int]$Job.Task.Result
-    if ($attr -eq -1) { Show-WtMessage "파일을 찾지 못했습니다.`n$($Job.Target)"; return }
-    if ($attr -band [int][System.IO.FileAttributes]::Directory) { Invoke-Item -LiteralPath $path; return }
-    if ($script:openable -contains [System.IO.Path]::GetExtension($path).ToLowerInvariant()) { Invoke-Item -LiteralPath $path; return }
-    Start-Process explorer.exe -ArgumentList "/select,`"$path`""
-}
-
-# 확인 중이면 커서를 AppStarting으로, 기다리는 확인이 없으면 원래대로
-function Update-WtMdPathCursor {
-    $waiting = @($script:pathJobs | Where-Object { -not $_.TimedOut }).Count -gt 0
-    $busy = [System.Windows.Input.Cursors]::AppStarting
-    if ($waiting -and -not $script:pathCursor) {
-        $script:pathCursor = @{ Old = [System.Windows.Input.Mouse]::OverrideCursor }
-        [System.Windows.Input.Mouse]::OverrideCursor = $busy
-    } elseif (-not $waiting -and $script:pathCursor) {
-        if ([object]::ReferenceEquals([System.Windows.Input.Mouse]::OverrideCursor, $busy)) { [System.Windows.Input.Mouse]::OverrideCursor = $script:pathCursor.Old }
-        $script:pathCursor = $null
-    }
-}
-
-# 로컬 그림 파일이면 Image 요소, 아니면 $null (웹 주소의 그림은 내려받지 않는다)
 function New-WtMdImage($X, $St, [switch]$Inline) {
     if ((Get-WtMdLinkKind $X.Url) -ne 'file') { return $null }
     $path = Resolve-WtMdPath ([uri]::UnescapeDataString($X.Url)) $St.BaseDir
-    if (-not $path -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    if (-not $path) { return $null }
     if ($script:imageExt -notcontains [System.IO.Path]::GetExtension($path).ToLowerInvariant()) { return $null }
+    $box = [System.Windows.Controls.Border]::new()
+    $box.HorizontalAlignment = 'Left'
+    $box.Tag = @{ X = $X; Inline = [bool]$Inline; Path = $path; Work = $null }
+    $script:imageQueue.Add($box)
+    Start-WtMdImageReads
+    # 그리기 끝에 잠깐 기다릴 그림으로 둔다. 그 안에 읽히면 「읽는 중」 자리를 만들지 않는다 (Wait-WtMdImages)
+    if ($null -ne $St.Images) { $St.Images.Add($box) } elseif (-not $box.Child) { Set-WtMdImageNote $box 'loading' }
+    $box
+}
+
+# 그림을 다 읽었을 때 (화면 스레드): 읽은 바이트로 그림을 만들어 자리에 넣는다
+function Set-WtMdImageResult($Work) {
+    $box = $Work.Context
+    if ($Work.State -ne 'done') {
+        $state = if ($Work.TimedOut) { 'slow' }
+        elseif ($Work.Exception -is [System.IO.FileNotFoundException] -or $Work.Exception -is [System.IO.DirectoryNotFoundException]) { 'missing' }
+        else { 'error' }
+        Set-WtMdImageNote $box $state $(if ($state -eq 'error') { $Work.Error })
+        return
+    }
+    if (([byte[]]$Work.Result).Length -gt $script:imageMaxBytes) { Set-WtMdImageNote $box 'large'; return }
     try {
         $bmp = [System.Windows.Media.Imaging.BitmapImage]::new()
         $bmp.BeginInit()
-        $bmp.CacheOption = 'OnLoad'   # 파일을 잡고 있지 않게 바로 읽는다
-        $bmp.UriSource = [uri]$path
+        $bmp.CacheOption = 'OnLoad'
+        $bmp.StreamSource = [System.IO.MemoryStream]::new([byte[]]$Work.Result, $false)
         $bmp.EndInit()
         $bmp.Freeze()
-    } catch { return $null }
+    } catch { Set-WtMdImageNote $box 'error' $_.Exception.Message; return }
+    $x = $box.Tag.X
     $img = [System.Windows.Controls.Image]::new()
     $img.Source = $bmp
     $img.Stretch = 'Uniform'
     $img.StretchDirection = 'DownOnly'
     $img.HorizontalAlignment = 'Left'
-    $img.MaxWidth = if ($X.Width) { $X.Width } else { $bmp.PixelWidth }
-    if ($Inline -and -not $X.Width) { $img.MaxHeight = 240 }
-    if ($X.Alt) { $img.ToolTip = $X.Alt }
-    $img
+    $img.MaxWidth = if ($x.Width) { $x.Width } else { $bmp.PixelWidth }
+    if ($box.Tag.Inline -and -not $x.Width) { $img.MaxHeight = 240 }
+    if ($x.Alt) { $img.ToolTip = $x.Alt }
+    $box.ToolTip = $null
+    $box.Child = $img
+}
+
+# 그림 대신 보일 이름: 그림 아이콘 + 대체 글(없으면 경로). 마우스를 올리면 상태가 보인다
+function Set-WtMdImageNote($Box, [string]$State, [string]$Detail = '') {
+    $x = $Box.Tag.X
+    $path = $Box.Tag.Path
+    $t = [System.Windows.Controls.TextBlock]::new()
+    $t.TextWrapping = 'Wrap'
+    Set-WtResource $t 'Foreground' 'B.SubText'
+    $icon = [System.Windows.Documents.Run]::new([string][char]0xE91B)
+    Set-WtResource $icon 'FontFamily' 'Font.Icon'
+    $t.Inlines.Add($icon)
+    $t.Inlines.Add([System.Windows.Documents.Run]::new(" $(if ($x.Alt) { $x.Alt } else { $x.Url })"))
+    $why = switch ($State) {
+        'loading' { '그림을 읽는 중입니다' }
+        'missing' { '그림 파일을 찾지 못했습니다' }
+        'slow' { '그림 경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인하세요' }
+        'large' { "그림 파일이 너무 커서($([int]($script:imageMaxBytes / 1MB))MB 넘음) 보여 주지 않습니다" }
+        default { '그림을 읽지 못했습니다' }
+    }
+    $Box.ToolTip = (@($why, $Detail, $path) | Where-Object { $_ }) -join "`n"
+    $Box.Child = $t
 }
 
 function New-WtMdList($B, $St, [bool]$Nested) {

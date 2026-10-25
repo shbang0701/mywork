@@ -502,6 +502,7 @@ function Save-WtPendingChanges([ValidateSet('check', 'switch', 'exit')][string]$
 }
 
 # 저장을 확인한 뒤에만(또는 저장하지 않고 끝내기를 고른 뒤에만) 트레이·타이머를 정리하고 메시지 돌리기를 멈춘다.
+# 탭의 OnExit 뒤에 남은 화면 밖 작업(응답 없는 공유 폴더 조회 등)은 기다리지 않고 모두 버린다 (core\Work.psm1)
 function Stop-WtApp {
     if (-not $script:exiting) {
         if (-not (Save-WtPendingChanges -Purpose exit)) { return $false }
@@ -510,6 +511,7 @@ function Stop-WtApp {
         }
     }
     $script:exiting = $true
+    try { Stop-WtAllWork } catch { }
     if ($script:warmTimer) { $script:warmTimer.Stop() }
     try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
     try { if ($script:icon) { $script:icon.Dispose() } } catch { }
@@ -707,7 +709,7 @@ function Start-WtApp {
         try {
             if ($script:notify) { $script:notify.Visible = $false; $script:notify.Dispose() }
             if ($script:icon) { $script:icon.Dispose() }
-        } finally { $dataLock.Dispose() }
+        } finally { Close-WtDataLock $dataLock }
     }
 }
 

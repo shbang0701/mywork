@@ -84,7 +84,7 @@ try {
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml, System.Windows.Forms, System.Drawing
 $source = '__SOURCE__'
-foreach ($name in 'Storage','Settings','Theme','Ui','Highlight','Markdown','Mermaid','Addons','Pages','Shell') {
+foreach ($name in 'Work','Storage','Settings','Theme','Ui','Highlight','Markdown','Mermaid','Addons','Pages','Shell') {
     Import-Module (Join-Path $source "core/$name.psm1") -Force -DisableNameChecking
 }
 Import-Module (Join-Path $source 'addons/home/Home.psm1') -Force -DisableNameChecking
@@ -97,7 +97,10 @@ $script:sampleTimer.Interval = [timespan]::FromMilliseconds(50)
 $script:sampleTimer.Add_Tick({
     $window = Get-WtWindow
     if ($window -and $window.IsVisible -and -not $script:sampleReported) {
+        # 응답 없는 공유 폴더를 기다리는 것처럼 끝나지 않는 화면 밖 작업을 남긴다. 그래도 창을 닫으면 프로세스가 끝나야 한다
+        $script:sampleHung = Start-WtWork { [void][System.Threading.ManualResetEvent]::new($false).WaitOne() } -OnDone { }
         [pscustomobject]@{
+            HungWork = $script:sampleHung.State
             Pid = $PID; Visible = $window.IsVisible; WindowState = [string]$window.WindowState
             IconWidth = $window.Icon.PixelWidth; HasOverlay = [bool]$window.TaskbarItemInfo.Overlay
             Description = $window.TaskbarItemInfo.Description
@@ -113,6 +116,8 @@ $script:sampleTimer.Add_Tick({
 })
 $script:sampleTimer.Start()
 try { Start-WtApp -AppRoot $PSScriptRoot } finally { $script:sampleTimer.Stop() }
+# 실제 진입 스크립트(Start-WorkTool.ps1)처럼 앱 전용 프로세스를 끝낸다
+Exit-WtOwnProcess -ScriptPath $PSCommandPath
 '@
     $sample = $sample.Replace('__SOURCE__', $root.Replace("'", "''"))
     [IO.File]::WriteAllText($entry, $sample, [Text.UTF8Encoding]::new($false))
@@ -142,7 +147,7 @@ try { Start-WtApp -AppRoot $PSScriptRoot } finally { $script:sampleTimer.Stop() 
     Assert-Launcher 'GUI는 STA·보통 창 상태로 실행한다' ($state.Apartment -eq 'STA' -and $state.WindowState -eq 'Normal')
     Assert-Launcher 'GUI가 계층 컴파일 끄기 설정을 상속한다' ($state.Tiered -ceq '0')
     Assert-Launcher '전체 창 아이콘을 적용하고 작은 배지를 제거한다' ($state.IconWidth -eq 32 -and -not $state.HasOverlay -and $state.Description -eq 'WorkTool')
-    Assert-Launcher 'GUI 종료 뒤 프로세스도 끝난다' (Stop-WtLauncherGui $run $fixture)
+    Assert-Launcher '끝나지 않는 화면 밖 작업이 남아 있어도(응답 없는 공유 폴더 흉내) GUI 종료 뒤 프로세스가 끝난다' ($state.HungWork -eq 'running' -and (Stop-WtLauncherGui $run $fixture))
 
     $dev = Invoke-WtLauncherCmd $devFixture 'start-dev.cmd'
     Assert-Launcher '저장소 실행 파일(start-dev.cmd)도 CMD는 끝나고 원본 GUI만 STA로 남는다' ($dev.Bootstrap.HasExited -and -not $dev.Gui.HasExited -and $dev.State.Visible -and $dev.State.Apartment -eq 'STA')

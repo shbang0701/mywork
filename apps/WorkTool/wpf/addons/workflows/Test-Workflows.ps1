@@ -575,6 +575,84 @@ try {
     Assert-WtTest 'WPF 업무: 기본 폴더(내 스크립트 · 예제 스크립트)가 처음부터 보이고, 빼면 다시 생기지 않는다' (
         ($defaultTop -join '/') -eq '저장한 업무/내 스크립트/예제 스크립트' -and $emptyTip -like '*.ps1 파일을 넣고 F5*' -and ($removedTop -join '/') -eq '저장한 업무/예제 스크립트' -and
         (& $mod { $script:ui.Sub.Text }) -eq '왼쪽에서 스크립트나 저장한 업무를 고르세요.') "($($defaultTop -join '/') → $($removedTop -join '/'))"
+
+    # ---- 응답 없는 공유 폴더: 스크립트 폴더 찾기 · 스크립트 읽기 · 프로세스 시작이 돌아오지 않아도 화면은 짧게만 기다린다 ----
+    # 가짜 서버 이름(\\wt-hang-*)의 경로만 문 앞에서 멈추고, 문이 열린 뒤에도 디스크 · 네트워크에는 가지 않는다
+    $hangRoot = '\\wt-hang-scan\share\scripts'
+    $gate = New-WtTestGate
+    try {
+        & $mod {
+            $script:savedWork = @{ Scan = $script:scanWork; Read = $script:readCall; Start = $script:startWork; ScanTimeout = $script:scanTimeoutMs; ReadTimeout = $script:readTimeoutMs }
+            $script:scanWork = {
+                param($root, $max)
+                if ($root -like '\\wt-hang-*') {
+                    $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne()
+                    return [pscustomobject]@{ Root = $root; Missing = $true; Scripts = @() }
+                }
+                @(Find-WtFlowScripts @($root) $max)[0]
+            }
+            # 읽기는 .NET 호출 하나라서 문을 기다리는 호출로 바꾼다 (문이 열리면 끝나고, 디스크에는 가지 않는다)
+            $script:readCall = {
+                param($path)
+                if ($path -like '\\wt-hang-*') { return (New-WtCall ([AppDomain]::CurrentDomain.GetData('WtTestGate').Gate) WaitOne) }
+                New-WtCall ([System.IO.File]) ReadAllText $path
+            }
+            $script:startWork = { param($start) $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Gate.WaitOne(); $null }
+            $script:scanTimeoutMs = 400; $script:readTimeoutMs = 400
+        }
+        Set-WtSetting 'workflows.roots' @($scriptsRoot, $hangRoot)
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        [void](& $addon.Refresh $view)
+        $refreshMs = $watch.ElapsedMilliseconds
+        $entered = $gate.Entered.WaitOne(5000)
+        $hangLabels = & $mod { @($script:ui.Tree.Items | ForEach-Object { $_.Header.Children[1].Text }) }
+        Assert-WtTest "WPF 업무 안정성: 응답 없는 스크립트 폴더가 있어도 목록은 잠깐만 기다리고 다른 폴더는 바로 보인다 (${refreshMs}ms)" (
+            $entered -and $refreshMs -lt 2000 -and $hangLabels -contains 'share\scripts · 읽는 중…' -and $hangLabels -contains '스크립트 폴더') ($hangLabels -join ' / ')
+        Start-Sleep -Milliseconds 500
+        Update-WtWork
+        & $mod { Show-WtFlowTree }
+        $slowLabels = & $mod { @($script:ui.Tree.Items | ForEach-Object { $_.Header.Children[1].Text }) }
+        $stuckBefore = (Get-WtWorkInfo).Abandoned
+        $watch.Restart(); [void](& $addon.Refresh $view); $againMs = $watch.ElapsedMilliseconds
+        Assert-WtTest "WPF 업무 안정성: 시간이 지나면 「응답 없음」으로 보이고, F5를 눌러도 답 없는 폴더에는 새로 묻지 않는다 (${againMs}ms)" (
+            $slowLabels -contains 'share\scripts · 응답 없음' -and $stuckBefore -eq 1 -and (Get-WtWorkInfo).Abandoned -eq 1 -and $againMs -lt 2000 -and
+            (& $mod { @($script:ui.Tree.Items | ForEach-Object { $_.Header.Children[1].Text }) }) -contains 'share\scripts · 응답 없음') ($slowLabels -join ' / ')
+        # 같은 공유에 답 없는 작업이 남아 있으면 그 폴더의 스크립트는 읽으러 가지 않고 바로 알린다
+        & $mod { param($p) Select-WtFlowNode @{ Kind = 'script'; Path = $p } } "$hangRoot\Any.ps1"
+        Assert-WtTest 'WPF 업무 안정성: 답 없는 공유의 스크립트를 고르면 기다리지 않고 응답 없음을 알린다' ((& $mod { $script:ui.Sub.Text }) -like '스크립트 폴더가 응답하지 않습니다*' -and -not (& $mod { $script:ui.RunButton.IsEnabled }))
+        # 스크립트 읽기가 돌아오지 않음: 「읽는 중」을 보였다가 시간이 지나면 응답 없음으로 바꾼다
+        $watch.Restart()
+        & $mod { Select-WtFlowNode @{ Kind = 'script'; Path = '\\wt-hang-read\share\Slow.ps1' } }
+        $readMs = $watch.ElapsedMilliseconds
+        $reading = & $mod { @{ Sub = $script:ui.Sub.Text; Run = $script:ui.RunButton.IsEnabled; Loading = $script:info.Loading } }
+        Start-Sleep -Milliseconds 500
+        Update-WtWork
+        $readSlow = & $mod { @{ Sub = $script:ui.Sub.Text; Run = $script:ui.RunButton.IsEnabled } }
+        Assert-WtTest "WPF 업무 안정성: 스크립트 읽기가 돌아오지 않아도 잠깐만 기다리고 「읽는 중」 → 응답 없음 (${readMs}ms)" (
+            $readMs -lt 1500 -and $reading.Loading -and $reading.Sub -eq '스크립트를 읽는 중입니다…' -and -not $reading.Run -and $readSlow.Sub -like '스크립트 폴더가 응답하지 않습니다*' -and -not $readSlow.Run) "($($reading.Sub) → $($readSlow.Sub))"
+        # 프로세스 시작이 돌아오지 않음(작업 폴더가 응답 없는 공유): [실행]은 잠깐만 기다리고, [취소] · 끄기는 기다리지 않는다
+        Set-WtSetting 'workflows.roots' @($scriptsRoot)
+        & $mod { param($p) Select-WtFlowNode @{ Kind = 'script'; Path = $p }; foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq 'app') } } (Join-Path $scriptsRoot 'NoHelp-Script.ps1')
+        $watch.Restart(); & $mod { Invoke-WtFlowRun }; $startMs = $watch.ElapsedMilliseconds
+        $startState = & $mod { @{ Starting = [bool]$script:starting; Run = [bool]$script:run; RunButton = $script:ui.RunButton.IsEnabled; Cancel = $script:ui.Cancel.IsEnabled; Note = $script:ui.Note.Text } }
+        & $mod { Stop-WtFlowRun }
+        $cancelState = & $mod { @{ Starting = [bool]$script:starting; Note = $script:ui.Note.Text; RunButton = $script:ui.RunButton.IsEnabled } }
+        Assert-WtTest "WPF 업무 안정성: 시작이 돌아오지 않아도 [실행]은 잠깐만 기다리고, [취소]하면 바로 풀린다 (${startMs}ms)" (
+            $startMs -lt 2500 -and $startState.Starting -and -not $startState.Run -and -not $startState.RunButton -and $startState.Cancel -and $startState.Note -like '스크립트를 시작하는 중*' -and
+            -not $cancelState.Starting -and $cancelState.Note -eq '실행을 취소했습니다.' -and $cancelState.RunButton) ($startState | ConvertTo-Json -Compress)
+        $startWork = & $mod { Invoke-WtFlowRun; $script:starting.Work }
+        $watch.Restart(); & $addon.OnExit; $exitMs = $watch.ElapsedMilliseconds
+        Assert-WtTest "WPF 업무 안정성: 시작 중인 실행이 남아도 앱을 끌 때 기다리지 않고 버린다 (${exitMs}ms)" ($exitMs -lt 300 -and -not (& $mod { $script:starting }) -and $startWork.State -eq 'stopped' -and $startWork.Cancel.Value)
+    } finally {
+        Remove-WtTestGate $gate
+        & $mod {
+            if ($script:savedWork) {
+                $script:scanWork = $script:savedWork.Scan; $script:readCall = $script:savedWork.Read; $script:startWork = $script:savedWork.Start
+                $script:scanTimeoutMs = $script:savedWork.ScanTimeout; $script:readTimeoutMs = $script:savedWork.ReadTimeout
+            }
+        }
+    }
+    Assert-WtTest 'WPF 업무 안정성: 문을 열면 남은 화면 밖 작업이 모두 끝나 치워진다' ((Get-WtWorkInfo).Running -eq 0 -and (Get-WtWorkInfo).Abandoned -eq 0 -and -not (Test-WtWorkStuck (Get-WtPathKey $hangRoot)))
 } finally {
     foreach ($r in $running) { try { if ($r.Process -and -not $r.Process.HasExited) { $r.Process.Kill($true) } } catch { } }
     & $mod { if ($script:timer) { $script:timer.Stop() } }

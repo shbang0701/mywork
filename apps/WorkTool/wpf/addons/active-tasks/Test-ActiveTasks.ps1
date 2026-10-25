@@ -209,45 +209,48 @@ try {
             $script:timer = [Windows.Threading.DispatcherTimer]::new()
             Start-WtTaskJob 'scan'
             $first = $script:job
-            $script:testFirstRunspace = $first.Runspace; $script:testFirstPowerShell = $first.PowerShell
             Start-WtTaskJob 'scan'
             if (-not [object]::ReferenceEquals($first, $script:job)) { throw '중복 작업이 시작되었습니다.' }
         }
         try {
             $watch = [Diagnostics.Stopwatch]::StartNew()
-            while ((& $module { [bool]$script:job }) -and $watch.Elapsed.TotalSeconds -lt 5) {
-                Start-Sleep -Milliseconds 25; & $module { Complete-WtTaskJob }
-            }
+            while ((& $module { [bool]$script:job }) -and $watch.Elapsed.TotalSeconds -lt 5) { Start-Sleep -Milliseconds 25; Update-WtWork }
             Assert-Active '비동기 수집 완료 · 중복 실행 방지' (-not (& $module { [bool]$script:job }) -and (& $module { $script:items.Count }) -eq 0)
+            # 호출마다 새 스레드: 앞 호출의 변수가 남지 않는다 (실행 공간은 상태를 지운 뒤 다시 쓸 수 있다). 끝난 작업은 실행 공간을 놓는다
+            $seen = [Collections.Generic.List[object]]::new()
+            [AppDomain]::CurrentDomain.SetData('WtTestTaskSeen', $seen)
             & $module {
-                $script:testThreads = [Collections.Generic.List[int]]::new()
-                $script:workerRunspace.SessionStateProxy.SetVariable('testThreads', $script:testThreads)
                 $script:worker = {
                     param($request)
-                    $global:testThreads.Add([Threading.Thread]::CurrentThread.ManagedThreadId)
+                    [AppDomain]::CurrentDomain.GetData('WtTestTaskSeen').Add(@{
+                            Thread = [Threading.Thread]::CurrentThread.ManagedThreadId; Runspace = [runspace]::DefaultRunspace.InstanceId
+                            Left = [bool](Get-Variable testLeftover -Scope Global -ErrorAction SilentlyContinue)
+                        })
+                    $global:testLeftover = 1
                     @{ Items = @(); FailedWindows = 0; Canceled = $false }
                 }
             }
-            foreach ($i in 1..2) {
-                & $module { Start-WtTaskJob 'scan'; $script:testLastPowerShell = $script:job.PowerShell }
+            $works = foreach ($i in 1..2) {
+                & $module { Start-WtTaskJob 'scan'; $script:job.Work }
                 $watch.Restart()
-                while ((& $module { [bool]$script:job }) -and $watch.Elapsed.TotalSeconds -lt 5) {
-                    Start-Sleep -Milliseconds 25; & $module { Complete-WtTaskJob }
-                }
+                while ((& $module { [bool]$script:job }) -and $watch.Elapsed.TotalSeconds -lt 5) { Start-Sleep -Milliseconds 25; Update-WtWork }
             }
-            Assert-Active '실행 공간만 재사용하고 PowerShell 객체·스레드는 호출마다 새로 만든다' (& $module {
-                [object]::ReferenceEquals($script:testFirstRunspace,$script:workerRunspace) -and
-                    -not [object]::ReferenceEquals($script:testFirstPowerShell,$script:testLastPowerShell) -and
-                    $script:testThreads.Count -eq 2 -and $script:testThreads[0] -ne $script:testThreads[1]
-            })
-            Assert-Active '완료 뒤 요청·worker 변수가 실행 공간 전역에 남지 않는다' (& $module {
-                $null -eq $script:workerRunspace.SessionStateProxy.GetVariable('request') -and
-                    $null -eq $script:workerRunspace.SessionStateProxy.GetVariable('workerSource')
-            })
+            [AppDomain]::CurrentDomain.SetData('WtTestTaskSeen', $null)
+            Assert-Active '호출마다 새 스레드이고, 앞 호출의 변수가 남지 않으며, 끝난 작업은 실행 공간을 놓는다' (
+                $seen.Count -eq 2 -and $seen[0].Thread -ne $seen[1].Thread -and
+                -not $seen[0].Left -and -not $seen[1].Left -and @($works | Where-Object { $_.Finished -and -not $_.Runspace }).Count -eq 2)
             & $module { Invoke-WtTaskTick }
             Assert-Active '숨긴 탭도 실행 결과 회수 뒤 타이머 중지' (-not (& $module { $script:timer.IsEnabled }))
+            # 응답 없는 프로그램: 수집이 돌아오지 않아도 끝낼 때 기다리지 않고 버린다
+            $gate = New-WtTestGate
+            try {
+                & $module { param($hang) $script:worker = $hang; Start-WtTaskJob 'scan' } $wtTestHang
+                $entered = $gate.Entered.WaitOne(5000)
+                $watch.Restart(); & $module { Stop-WtTasks }; $stopMs = $watch.ElapsedMilliseconds
+                Assert-Active "응답 없는 수집이 남아도 끝낼 때 기다리지 않는다 (${stopMs}ms)" ($entered -and $stopMs -lt 200 -and -not (& $module { $script:job }) -and (Get-WtWorkInfo).Running -eq 0)
+            } finally { Remove-WtTestGate $gate }
         } finally { & $module { Stop-WtTasks; $script:worker = $script:savedWorker } }
-        Assert-Active '끝낼 때 재사용 실행 공간도 닫는다' (& $module { $null -eq $script:workerRunspace -and $script:testFirstRunspace.RunspaceStateInfo.State -eq 'Closed' })
+        Assert-Active '끝낸 뒤 남은 화면 밖 작업이 없다' ((Get-WtWorkInfo).Running -eq 0 -and (Get-WtWorkInfo).Abandoned -eq 0)
         if ($PreviewPath) {
             $bitmap = [Windows.Media.Imaging.RenderTargetBitmap]::new(1048, 632, 96, 96, [Windows.Media.PixelFormats]::Pbgra32)
             $bitmap.Render($view)
