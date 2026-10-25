@@ -361,11 +361,61 @@ try {
         }
     } else { Write-Host 'SKIP 저장소 scripts/ 검사 (scripts 폴더 없음)' }
 
+    # ---- 기본 스크립트 폴더 ----
+    $dataScripts = Join-Path $test.Data 'scripts'
+    $reset = { & $mod { $script:defaultRoots = $null } }
+    & $reset
+    $first = @(& $mod { Get-WtFlowRoots })
+    Assert-WtTest '업무: 처음에는 데이터 폴더의 scripts(내 스크립트)가 목록에 있고, 없으면 만든다' (
+        $first.Count -eq 1 -and $first[0] -eq $dataScripts -and (Test-Path -LiteralPath $dataScripts -PathType Container) -and (& $mod { param($p) Get-WtFlowRootLabel $p } $dataScripts) -eq '내 스크립트') ($first -join ' / ')
+    $appScripts = Join-Path $test.App 'scripts'
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $appScripts 'files'))
+    [System.IO.File]::WriteAllText((Join-Path $appScripts 'files\Get-Example.ps1'), "<#`n.SYNOPSIS`n    예제`n#>`n'ok'", [System.Text.UTF8Encoding]::new($false))
+    & $reset
+    $withApp = @(& $mod { Get-WtFlowRoots })
+    $appGroup = @(Find-WtFlowScripts @($appScripts))[0]
+    Assert-WtTest '업무: 앱 파일 옆 scripts(예제 스크립트)도 저절로 목록에 넣는다' (
+        $withApp.Count -eq 2 -and $withApp[1] -eq $appScripts -and (& $mod { param($p) Get-WtFlowRootLabel $p } $appScripts) -eq '예제 스크립트' -and $appGroup.Scripts[0].Name -eq 'Get-Example') ($withApp -join ' / ')
+    Set-WtSetting 'workflows.roots' @("$dataScripts\", $scriptsRoot)
+    $dedup = @(& $mod { Get-WtFlowRoots })
+    Assert-WtTest '업무: [폴더 추가]한 폴더가 기본 폴더와 같으면 한 번만 보인다' ($dedup.Count -eq 3 -and $dedup[2] -eq $scriptsRoot) ($dedup -join ' / ')
+    Set-WtSetting 'workflows.roots' @()
+    # 빼면 기억해서, 다시 켜도(설정을 다시 읽어도) 생기지 않는다. [폴더 추가]로 고르면 다시 보인다
+    & $mod { param($p) Remove-WtFlowRootPath $p } $dataScripts
+    & $mod { param($p) Remove-WtFlowRootPath $p } $appScripts
+    Initialize-WtSettings; & $reset
+    $afterRemove = @(& $mod { Get-WtFlowRoots })
+    Assert-WtTest '업무: 기본 폴더를 목록에서 빼면 다시 켜도 생기지 않는다 (폴더는 그대로)' (
+        $afterRemove.Count -eq 0 -and @(Get-WtSetting 'workflows.hiddenRoots').Count -eq 2 -and (Test-Path -LiteralPath $dataScripts) -and (Test-Path -LiteralPath $appScripts)) ($afterRemove -join ' / ')
+    $readd = & $mod { param($p) Add-WtFlowRootPath $p } $appScripts
+    $again = & $mod { param($p) Add-WtFlowRootPath $p } $appScripts
+    $afterAdd = @(& $mod { Get-WtFlowRoots })
+    Assert-WtTest '업무: 뺀 기본 폴더를 [폴더 추가]로 고르면 다시 보이고, 같은 폴더를 또 더하지 않는다' (
+        $readd -and -not $again -and $afterAdd.Count -eq 1 -and $afterAdd[0] -eq $appScripts -and @(Get-WtSetting 'workflows.roots').Count -eq 0) ($afterAdd -join ' / ')
+    Set-WtSetting 'workflows.hiddenRoots' @()
+    # 저장소 원본으로 띄울 때(앱 폴더 = apps\WorkTool\wpf): 저장소 맨 위 scripts/ 중 _template.ps1이 있는 것만 잡는다
+    $repo = Join-Path $test.Root 'repo'
+    $repoApp = Join-Path $repo 'apps\WorkTool\wpf'
+    [void][System.IO.Directory]::CreateDirectory($repoApp)
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $repo 'scripts'))
+    Set-Content -LiteralPath (Join-Path $repoApp 'datapath.txt') -Value $test.Data -Encoding utf8
+    try {
+        Set-WtAppRoot $repoApp; & $reset
+        $noMark = @(& $mod { Get-WtFlowRoots })
+        [System.IO.File]::WriteAllText((Join-Path $repo 'scripts\_template.ps1'), "'템플릿'", [System.Text.UTF8Encoding]::new($false))
+        & $reset
+        $marked = @(& $mod { Get-WtFlowRoots })
+    } finally { Set-WtAppRoot $test.App; & $reset }
+    Assert-WtTest '업무: 저장소 원본으로 띄우면 저장소 맨 위 scripts/(_template.ps1 있음)를 예제 스크립트로 넣는다' (
+        $noMark.Count -eq 1 -and $marked.Count -eq 2 -and $marked[1] -eq (Join-Path $repo 'scripts')) "($($noMark -join ' / ') | $($marked -join ' / '))"
+
     if (-not (Test-WtTestWpf)) { Write-Host 'SKIP 업무 화면 (Windows STA에서만)'; return }
 
     # ---- 화면 ----
     Save-WtFlows @()
     Write-WtStore -Name 'workflow-runs' -Schema 1 -Items @()
+    # 아래 화면 검사는 더한 폴더만 본다. 기본 폴더는 맨 끝에서 따로 본다
+    Set-WtSetting 'workflows.hiddenRoots' @($dataScripts, $appScripts)
     Set-WtSetting 'workflows.roots' @($scriptsRoot, (Join-Path $test.Root '없는 폴더'))
     $addon = Get-WtAddon -Id 'workflows'
     $view = New-WtTestView 'workflows'
@@ -514,6 +564,17 @@ try {
     Assert-WtTest 'WPF 업무: 선택·폴더가 없어도 외부 업무 추가·비우기에 안내 갱신' (
         $emptySub -eq '스크립트 폴더를 더하면 그 안의 스크립트를 폼으로 실행합니다.' -and
         $addedSub -eq '왼쪽에서 스크립트나 저장한 업무를 고르세요.' -and (& $mod { $script:ui.Sub.Text }) -eq $emptySub)
+    # 기본 폴더: 처음부터 목록에 정해 둔 이름으로 보이고, [목록에서 빼기]로 빼면 다시 들어와도 생기지 않는다
+    Set-WtSetting 'workflows.hiddenRoots' @()
+    & $mod { Update-WtFlowsView }
+    $defaultTop = & $mod { @($script:ui.Tree.Items | ForEach-Object { $_.Header.Children[1].Text }) }
+    $emptyTip = & $mod { [string]$script:ui.Tree.Items[1].Items[0].ToolTip }
+    & $mod { $n = $script:ui.Tree.Items[1]; $n.IsSelected = $true; Select-WtFlowNode $n.Tag; Remove-WtFlowRoot }
+    [void](& $addon.Refresh $view)
+    $removedTop = & $mod { @($script:ui.Tree.Items | ForEach-Object { $_.Header.Children[1].Text }) }
+    Assert-WtTest 'WPF 업무: 기본 폴더(내 스크립트 · 예제 스크립트)가 처음부터 보이고, 빼면 다시 생기지 않는다' (
+        ($defaultTop -join '/') -eq '저장한 업무/내 스크립트/예제 스크립트' -and $emptyTip -like '*.ps1 파일을 넣고 F5*' -and ($removedTop -join '/') -eq '저장한 업무/예제 스크립트' -and
+        (& $mod { $script:ui.Sub.Text }) -eq '왼쪽에서 스크립트나 저장한 업무를 고르세요.') "($($defaultTop -join '/') → $($removedTop -join '/'))"
 } finally {
     foreach ($r in $running) { try { if ($r.Process -and -not $r.Process.HasExited) { $r.Process.Kill($true) } } catch { } }
     & $mod { if ($script:timer) { $script:timer.Stop() } }

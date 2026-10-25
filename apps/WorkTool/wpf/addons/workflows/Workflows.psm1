@@ -2,7 +2,8 @@
 # - 스크립트는 실행하지 않고 구문만 읽어서 목록 · 폼을 만든다 (Read-WtFlowScript). param 하나 = 폼 칸 하나.
 # - 실행은 별도 pwsh 프로세스로 한다. 앱 안: 창 없이 출력을 받아 보여 줌 · 콘솔 창: 보이는 창에서 -NoExit.
 #   출력은 UI 타이머에서 완료된 읽기만 꺼낸다 (다른 스레드에서 PowerShell 코드를 돌리지 않는다).
-# - 저장소 workflows.json(저장한 업무) · workflow-runs.json(실행 기록, 최근 100건). 설정 workflows.roots(스크립트 폴더)
+# - 저장소 workflows.json(저장한 업무) · workflow-runs.json(실행 기록, 최근 100건). 설정 workflows.roots(더한 스크립트 폴더)
+#   · workflows.hiddenRoots(목록에서 뺀 기본 폴더). 기본 폴더는 데이터 폴더의 scripts와 앱 옆 scripts (Get-WtFlowDefaultRoots)
 # 단축키(업무 화면 안): F5 스크립트 목록 새로 고침
 
 $ErrorActionPreference = 'Stop'
@@ -29,8 +30,11 @@ $script:threeColumns = 912   # 세 칸이 다 들어가는 폭: 목록 240 + 가
 $script:helpNarrow = $false  # 창이 좁아 설명을 가운데 위에 겹쳐 여는 중인지 (Update-WtFlowHelp)
 $script:helpOverlay = $false # 좁을 때 겹쳐 연 설명이 열려 있는지
 
-Register-WtSettingDefault 'workflows.roots' @()   # 스크립트 폴더 목록
+Register-WtSettingDefault 'workflows.roots' @()   # 사용자가 [폴더 추가]한 스크립트 폴더 목록
+Register-WtSettingDefault 'workflows.hiddenRoots' @()   # 사용자가 목록에서 뺀 기본 스크립트 폴더 (다시 넣지 않는다)
 Register-WtSettingDefault 'workflows.help' $true  # 오른쪽 설명 패널을 펼침
+$script:defaultRoots = $null # 기본 스크립트 폴더 (Get-WtFlowDefaultRoots, 앱 · 데이터 폴더가 같으면 다시 찾지 않음)
+$script:madeRoot = $null     # 이번에 만든(있는지 본) 데이터 폴더의 scripts
 
 # ---- 스크립트 읽기 (WPF 없이) -------------------------------------------------------------------
 
@@ -472,7 +476,87 @@ function Get-WtFlowRunSpan($Record) {
 
 # ---- 화면: 목록 ---------------------------------------------------------------------------------
 
-function Get-WtFlowRoots { @(Get-WtSetting 'workflows.roots' | Where-Object { $_ }) }
+# 같은 폴더인지 견줄 때 쓰는 모양 (끝의 \ · 대소문자 · 상대 경로 차이를 없앤다)
+function ConvertTo-WtFlowPathKey([string]$Path) {
+    if (-not $Path) { return '' }
+    try { [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/').ToLowerInvariant() } catch { $Path.TrimEnd('\', '/').ToLowerInvariant() }
+}
+
+function Test-WtFlowPathIn([string]$Path, $List) {
+    $key = ConvertTo-WtFlowPathKey $Path
+    foreach ($p in @($List)) { if ($p -and (ConvertTo-WtFlowPathKey ([string]$p)) -eq $key) { return $true } }
+    $false
+}
+
+# 처음부터 목록에 있는 스크립트 폴더: @{ Path; Label; Data }
+# - 내 스크립트: 데이터 폴더의 scripts (기본 문서\WorkTool\scripts). 여기에 .ps1을 복사해 넣으면 바로 보인다
+# - 예제 스크립트: 앱 파일 옆 scripts (개인 PC zip을 푼 곳). 저장소 원본으로 띄우면 앱 폴더 위로 3단계 안의
+#   scripts 중 _template.ps1이 있는 것 (저장소 맨 위 scripts/). 엉뚱한 scripts 폴더를 잡지 않게 표식 파일을 본다
+function Get-WtFlowDefaultRoots {
+    $app = Get-WtAppRoot
+    $data = Get-WtDataFolder 'scripts'
+    $key = "$app|$data"
+    if ($script:defaultRoots -and $script:defaultRoots.Key -ceq $key) { return $script:defaultRoots.Items }
+    $items = [System.Collections.Generic.List[object]]::new()
+    $items.Add([pscustomobject]@{ Path = $data; Label = '내 스크립트'; Data = $true })
+    $dir = $app
+    for ($i = 0; $i -le 3 -and $dir; $i++) {
+        $candidate = Join-Path $dir 'scripts'
+        if ((Test-Path -LiteralPath $candidate -PathType Container) -and
+            ($i -eq 0 -or (Test-Path -LiteralPath (Join-Path $candidate '_template.ps1') -PathType Leaf))) {
+            if (-not (Test-WtFlowPathIn $candidate $data)) { $items.Add([pscustomobject]@{ Path = $candidate; Label = '예제 스크립트'; Data = $false }) }
+            break
+        }
+        $dir = Split-Path $dir -Parent
+    }
+    $script:defaultRoots = @{ Key = $key; Items = $items.ToArray() }
+    $script:defaultRoots.Items
+}
+
+# 목록에 보이는 스크립트 폴더: 기본 폴더(뺀 것 제외) → [폴더 추가]한 폴더. 같은 폴더는 한 번만
+function Get-WtFlowRoots {
+    $hidden = @(Get-WtSetting 'workflows.hiddenRoots' | Where-Object { $_ })
+    $list = [System.Collections.Generic.List[string]]::new()
+    foreach ($d in @(Get-WtFlowDefaultRoots)) {
+        if (Test-WtFlowPathIn $d.Path $hidden) { continue }
+        # 데이터 폴더의 scripts는 없으면 만든다. 사용자가 그 폴더를 찾아 파일만 넣으면 되게
+        if ($d.Data -and $script:madeRoot -cne $d.Path) { [void](Get-WtDataFolder 'scripts' -Create); $script:madeRoot = $d.Path }
+        $list.Add($d.Path)
+    }
+    foreach ($r in @(Get-WtSetting 'workflows.roots' | Where-Object { $_ })) {
+        if (-not (Test-WtFlowPathIn $r $list)) { $list.Add([string]$r) }
+    }
+    $list.ToArray()
+}
+
+# 기본 폴더의 이름 (트리에 보이는 것). 기본 폴더가 아니면 $null
+function Get-WtFlowRootLabel([string]$Path) {
+    foreach ($d in @(Get-WtFlowDefaultRoots)) { if (Test-WtFlowPathIn $Path $d.Path) { return $d.Label } }
+    $null
+}
+
+# 폴더를 목록에 넣는다. 뺐던 기본 폴더면 다시 보이게만 한다. 이미 있으면 $false
+function Add-WtFlowRootPath([string]$Path) {
+    $hidden = @(Get-WtSetting 'workflows.hiddenRoots' | Where-Object { $_ })
+    if (@(Get-WtFlowDefaultRoots | Where-Object { Test-WtFlowPathIn $_.Path $Path }).Count -and (Test-WtFlowPathIn $Path $hidden)) {
+        Set-WtSetting 'workflows.hiddenRoots' @($hidden | Where-Object { -not (Test-WtFlowPathIn ([string]$_) $Path) })
+        return $true
+    }
+    if (Test-WtFlowPathIn $Path (Get-WtFlowRoots)) { return $false }
+    Set-WtSetting 'workflows.roots' @(@(Get-WtSetting 'workflows.roots' | Where-Object { $_ }) + $Path)
+    $true
+}
+
+# 폴더를 목록에서 뺀다. 기본 폴더는 뺀 것을 기억해서 다시 생기지 않는다 (폴더와 파일은 그대로)
+function Remove-WtFlowRootPath([string]$Path) {
+    $roots = @(Get-WtSetting 'workflows.roots' | Where-Object { $_ })
+    $rest = @($roots | Where-Object { -not (Test-WtFlowPathIn ([string]$_) $Path) })
+    if ($rest.Count -ne $roots.Count) { Set-WtSetting 'workflows.roots' $rest }
+    $hidden = @(Get-WtSetting 'workflows.hiddenRoots' | Where-Object { $_ })
+    if (@(Get-WtFlowDefaultRoots | Where-Object { Test-WtFlowPathIn $_.Path $Path }).Count -and -not (Test-WtFlowPathIn $Path $hidden)) {
+        Set-WtSetting 'workflows.hiddenRoots' @($hidden + $Path)
+    }
+}
 
 function New-WtFlowTreeItem([string]$Label, [int]$Icon, $Tag, [string]$ToolTip, [switch]$Muted) {
     $item = [System.Windows.Controls.TreeViewItem]::new()
@@ -505,6 +589,7 @@ function Update-WtFlowTree {
     # 다른 탭에 다녀와도 고치던 칸 값과 실행 방식은 그대로 둔다
     $carry = if ($keep -and $script:fields.Count) { @{ Key = $keep; Values = (Get-WtFlowFormValues); Mode = (Get-WtFlowMode) } } else { $null }
     if ($script:pendingFlow) { $keep = "flow:$($script:pendingFlow)"; $script:pendingFlow = $null }
+    $script:defaultRoots = $null   # 들어올 때 · F5마다 기본 폴더를 다시 찾는다 (앱 옆에 scripts를 나중에 넣어도 보이게)
     $flows = @(Get-WtFlows)
     $groups = @(Find-WtFlowScripts (Get-WtFlowRoots))
     $missingPaths = @{}
@@ -540,11 +625,14 @@ function Update-WtFlowTree {
             }
             [void]$tree.Items.Add($saved)
             # 이름이 같은 스크립트 폴더가 둘 이상이면 위 폴더 이름을 붙여 구분한다 (예: mywork\scripts)
+            # 기본 폴더(내 스크립트 · 예제 스크립트)는 정해 둔 이름으로 보인다
             $leafCount = @{}
             foreach ($g in $groups) { $leaf = Split-Path $g.Root -Leaf; $leafCount[$leaf] = 1 + [int]$leafCount[$leaf] }
             foreach ($group in $groups) {
                 $rootName = Split-Path $group.Root -Leaf
-                if (-not $rootName) { $rootName = $group.Root }
+                $fixedName = Get-WtFlowRootLabel $group.Root
+                if ($fixedName) { $rootName = $fixedName }
+                elseif (-not $rootName) { $rootName = $group.Root }
                 elseif ($leafCount[$rootName] -gt 1) {
                     $parentName = Split-Path (Split-Path $group.Root -Parent) -Leaf
                     if ($parentName) { $rootName = "$parentName\$rootName" }
@@ -566,7 +654,7 @@ function Update-WtFlowTree {
                     if ($keep -eq "script:$($s.Path)") { $found = $node }
                 }
                 if (-not $group.Missing -and -not $group.Scripts.Count) {
-                    $hint = New-WtFlowTreeItem '.ps1 파일 없음' 0xE946 @{ Kind = 'hint' } -Muted
+                    $hint = New-WtFlowTreeItem '.ps1 파일 없음' 0xE946 @{ Kind = 'hint' } "이 폴더에 .ps1 파일을 넣고 F5를 누르면 여기에 보입니다: $($group.Root)" -Muted
                     $hint.Focusable = $false
                     [void]$rootNode.Items.Add($hint)
                 }
@@ -592,17 +680,16 @@ function Add-WtFlowRoot {
     $dlg.Description = '업무 탭에서 실행할 스크립트(.ps1)가 있는 폴더를 고르세요'
     if ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
     $path = $dlg.SelectedPath
-    $roots = @(Get-WtFlowRoots)
-    if (-not ($roots | Where-Object { $_ -ieq $path })) { Set-WtSetting 'workflows.roots' @($roots + $path) }
+    $added = Add-WtFlowRootPath $path
     Update-WtFlowTree
-    Set-WtFlowNote "스크립트 폴더를 더했습니다: $path"
+    Set-WtFlowNote $(if ($added) { "스크립트 폴더를 더했습니다: $path" } else { "이미 목록에 있는 폴더입니다: $path" })
 }
 
 function Remove-WtFlowRoot {
     $node = $script:ui.Tree.SelectedItem
     if (-not $node -or $node.Tag.Kind -ne 'root') { return }
     $path = $node.Tag.Path
-    Set-WtSetting 'workflows.roots' @(Get-WtFlowRoots | Where-Object { $_ -ine $path })
+    Remove-WtFlowRootPath $path
     Clear-WtFlowSelection
     Update-WtFlowTree
     Set-WtFlowNote "목록에서 뺐습니다: $path (폴더와 파일은 그대로)"
@@ -1554,7 +1641,7 @@ Register-WtAddon -Id 'workflows' -Title '업무' -Icon 0xE756 -Order 70 -WarmUp 
     -Refresh { param($view) Update-WtFlowsView } `
     -HomeCard { New-WtFlowsHomeCard } `
     -OnExit { Stop-WtFlows } `
-    -Help '업무는 스크립트 폴더의 PowerShell 스크립트를 폼으로 실행합니다. 스크립트의 param이 입력 칸이 되고, 자주 쓰는 값은 [업무로 저장]해 두고 다시 씁니다.' `
+    -Help '업무는 스크립트 폴더의 PowerShell 스크립트를 폼으로 실행합니다. 스크립트의 param이 입력 칸이 되고, 자주 쓰는 값은 [업무로 저장]해 두고 다시 씁니다. 「내 스크립트」(데이터 폴더의 scripts)는 처음부터 목록에 있어서, 그 폴더에 .ps1을 넣으면 바로 보입니다.' `
     -Shortcuts (, @('F5', '스크립트 목록 새로 고침'))
 
 Export-ModuleMember -Function Read-WtFlowScript, Find-WtFlowScripts, Test-WtFlowValues, Get-WtFlowArgs, Get-WtFlowStaleNames,

@@ -7,8 +7,12 @@
 
 - **[scripts/](scripts/)** — 복사 한 번으로 끝나는 단독 PowerShell 스크립트. 새로 만들 때는 [scripts/README.md](scripts/README.md)
   - [network/Watch-MultiPing.ps1](scripts/network/Watch-MultiPing.ps1) — 여러 서버에 ping(또는 TCP 포트)을 계속 보내 응답 · 끊김을 한 화면에 보고, 바뀐 시각을 CSV로 남김 (점검 · 재부팅 확인용)
+  - 바로 쓰는 예제 (WorkTool 업무 탭에서 폼으로 실행, zip에도 들어 있음)
+    - 사무: [files/Rename-FileBatch.ps1](scripts/files/Rename-FileBatch.ps1) 이름 한꺼번에 바꾸기 · [files/Find-OldLargeFile.ps1](scripts/files/Find-OldLargeFile.ps1) 큰 · 오래된 파일 · [files/Find-DuplicateFile.ps1](scripts/files/Find-DuplicateFile.ps1) 중복 파일 · [files/Compare-Folder.ps1](scripts/files/Compare-Folder.ps1) 두 폴더 비교
+    - IT 운영: [network/Test-TcpPort.ps1](scripts/network/Test-TcpPort.ps1) TCP 포트 확인 · [network/Get-CertificateExpiry.ps1](scripts/network/Get-CertificateExpiry.ps1) 인증서 만료일 · [system/Get-DiskSpace.ps1](scripts/system/Get-DiskSpace.ps1) 디스크 · 공유 폴더 용량 · [system/Get-EventLogError.ps1](scripts/system/Get-EventLogError.ps1) 이벤트 로그 오류 · 경고
+    - IT 개발: [text/Find-LogPattern.ps1](scripts/text/Find-LogPattern.ps1) 로그에서 패턴 찾기 · 세기 · [network/Get-PortProcess.ps1](scripts/network/Get-PortProcess.ps1) 포트를 쓰는 프로그램
 - **[apps/design.md](apps/design.md)** — 모든 GUI 앱의 공통 디자인 원칙 (Windows 디자인 지침 기반)
-- **[worktool.zip](worktool.zip)** — WorkTool 새 버전(WPF)을 바로 실행하는 묶음. 압축을 풀고 `Start-WorkTool.cmd`를 더블클릭 (개인 PC용, 아래 「업무 PC로 가져가기」 참고)
+- **[worktool.zip](worktool.zip)** — WorkTool 새 버전(WPF)을 바로 실행하는 묶음. 압축을 풀고 `Start-WorkTool.cmd`를 더블클릭 (개인 PC용, 아래 「업무 PC로 가져가기」 참고). 예제 `scripts\`가 같이 들어 있어 업무 탭에 바로 보입니다
   - 실행 보조 파일 원본: [start-worktool.cmd](apps/WorkTool/wpf/build/start-worktool.cmd) · [start-launcher.ps1](apps/WorkTool/wpf/build/start-launcher.ps1). 시작 뒤 콘솔 창을 남기지 않습니다.
   - 저장소를 받아 둔 PC는 zip 대신 [start-dev.cmd](apps/WorkTool/wpf/start-dev.cmd)를 더블클릭 — 원본을 바로 띄워서 고친 내용이 바로 보입니다.
   - [실행 파일 검사](apps/WorkTool/wpf/tests/Test-Launcher.ps1) — 임시 전용 GUI로 콘솔 없는 실행·아이콘·특수문자 경로·시작 오류와 `start-dev.cmd`를 검사합니다.
