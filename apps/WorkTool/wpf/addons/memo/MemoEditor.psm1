@@ -106,6 +106,8 @@ function New-WtMemoEditor {
     $island.Tag = $ed
     $island.IsUndoEnabled = $false
     $island.IsInactiveSelectionHighlightEnabled = $true
+    # IsReadOnly는 부모에서 물려받는 속성이다. 섬은 읽기 전용 RichTextBox 안에 들어가므로 직접 끈다
+    $island.IsReadOnly = $false
     $island.Add_TextChanged({
             param($s, $e)
             $ed = $s.Tag
@@ -253,6 +255,8 @@ function Set-WtMemoEditorText($Ed, [AllowEmptyString()][string]$Text) {
         Set-WtMemoLines $Ed $Text
         $Ed.Undo.Clear()
         $Ed.Redo.Clear()
+        $Ed.LastEdit = [datetime]::MinValue   # 불러온 뒤 처음 치는 글은 새 실행 취소 단위
+        $Ed.LeftLiveText = $null
         if ($Ed.Island) { $Ed.Island.Holder.Child = $null }
         $Ed.Island = $null
         $Ed.Caret = @{ Line = 0; Col = 0 }
@@ -277,7 +281,8 @@ function Set-WtMemoLines($Ed, [string]$Text) {
 }
 
 function Get-WtMemoEditorText($Ed) {
-    if ($Ed.Mode -eq 'source') { return [string]$Ed.Source.Text }
+    # 원문 칸은 Enter가 \r\n을 넣으므로 \n 글이면 줄바꿈이 섞인다. 글의 줄바꿈으로 맞춘다
+    if ($Ed.Mode -eq 'source') { return [regex]::Replace([string]$Ed.Source.Text, "\r\n|\r|\n", $Ed.NewLine) }
     if ($Ed.Island) {
         $isl = $Ed.Island
         $mid = @($Ed.IslandBox.Text -split "\r?\n")
@@ -295,6 +300,13 @@ function Set-WtMemoEditorMode($Ed, [ValidateSet('live', 'source', 'read')][strin
     $Ed.Busy++
     try {
         if ($Ed.Island) { Close-WtMemoIsland $Ed -NoRender }
+        # 실시간을 떠날 때의 글. 원문 · 읽기에서 고치고 돌아오면 이 글을 실행 취소 기록에 넣는다(그 고친 것만 되돌리게)
+        $norm = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+        if ($Ed.Mode -eq 'live') { $Ed.LeftLiveText = $norm }
+        elseif ($Mode -eq 'live' -and $null -ne $Ed.LeftLiveText -and $Ed.LeftLiveText -cne $norm) {
+            Add-WtMemoUndoEntry $Ed @{ Text = $Ed.LeftLiveText; Line = $Ed.Caret.Line; Col = $Ed.Caret.Col }
+            $Ed.LastEdit = [datetime]::MinValue
+        }
         $Ed.Mode = $Mode
         $Ed.Loading = $true
         try {
@@ -689,6 +701,10 @@ function Close-WtMemoIsland($Ed, [switch]$NoRender) {
     } finally { $Ed.Busy-- }
 }
 
+function Get-WtMemoWideMarks([string]$Text) {
+    '{0}|{1}|{2}' -f ([regex]::Matches($Text, '<!--').Count), ([regex]::Matches($Text, '-->').Count), ([regex]::Matches($Text, '(?m)^\s*\$\$').Count)
+}
+
 # 고친 섬 둘레만 다시 나눈다. 같이 다시 나누는 이웃(문맥에 따라 모양이 바뀔 수 있어서):
 #   빈 줄 없이 붙은 단위, 같은 목록(ListId)의 항목, 들여 쓴 줄로 시작하는 쪽의 앞 단위
 # 코드 울타리 줄이 하나라도 바뀌면(짝 · 길이 · 글자) 아래 전체가 달라질 수 있으므로 전체를 다시 나눈다
@@ -700,7 +716,10 @@ function Update-WtMemoRegion($Ed, $Isl, [int]$NewCount, $After) {
     $fence = '^\s{0,3}(```|~~~)'
     $fenceOld = @($oldText | Where-Object { $_ -match $fence } | ForEach-Object { $_.Trim() }) -join "`n"
     $fenceNew = @($islText | Where-Object { $_ -match $fence } | ForEach-Object { $_.Trim() }) -join "`n"
-    if ($fenceOld -cne $fenceNew -or -not $units.Count) {
+    # 아래 글 전체의 뜻을 바꿀 수 있는 것: HTML 주석 열고 닫기(<!-- -->), 수식 블록($$)
+    $wideOld = Get-WtMemoWideMarks ($oldText -join "`n")
+    $wideNew = Get-WtMemoWideMarks ($islText -join "`n")
+    if ($fenceOld -cne $fenceNew -or $wideOld -cne $wideNew -or -not $units.Count) {
         # 섬 다음 블록부터 끝까지 이미 문서에 있으니 전체를 새로 꾸린다
         Update-WtMemoLive $Ed
         return
@@ -720,7 +739,9 @@ function Update-WtMemoRegion($Ed, $Isl, [int]$NewCount, $After) {
             $firstText = $null
             for ($l = $rs; $l -lt $re; $l++) { if ($Ed.Lines[$l].Trim()) { $firstText = $Ed.Lines[$l]; break } }
             $indented = $firstText -and $firstText -match '^\s'
-            if ($p.End -eq $rs -or $sameList -or $indented) {
+            # 목록 표지로 시작하면(빈 항목 '1. ' 등) 앞 글에 따라 목록 · 문단이 갈리므로 앞 단위를 하나 같이 본다
+            $listStart = $firstText -and $firstText -match $listy -and $p.Kind -ne 'list-item'
+            if ($p.End -eq $rs -or $sameList -or $indented -or $listStart) {
                 $a--; $rs = $p.Start; $grew = $true
                 if ($p.Kind -eq 'list-item') { $hasList = $true }
             }
@@ -896,6 +917,13 @@ function Join-WtMemoIsland($Ed, [switch]$Next) {
 
 # ---- 실시간: 키 -------------------------------------------------------------------------------
 
+# 글자 위치가 든 화면 줄(줄바꿈 포함 · 접힌 줄 기준). 섬을 막 열어 배치 전이면 -1이 나오므로 그때만 배치를 맞춘다
+function Get-WtMemoBoxLine($Box, [int]$Index) {
+    $l = $Box.GetLineIndexFromCharacterIndex($Index)
+    if ($l -lt 0 -or $Box.LineCount -lt 0) { $Box.UpdateLayout(); $l = $Box.GetLineIndexFromCharacterIndex($Index) }
+    $l
+}
+
 function Invoke-WtMemoIslandKey($S, $E) {
     $ed = $S.Tag
     if (-not $ed.Island -or $E.Handled) { return }
@@ -917,21 +945,22 @@ function Invoke-WtMemoIslandKey($S, $E) {
         switch ($key) {
             'Up' {
                 if ($alt -or $ctrl) { return }
-                $first = $box.GetLineIndexFromCharacterIndex($caret) -le 0
+                $first = (Get-WtMemoBoxLine $box $caret) -le 0
                 if ($first) { $E.Handled = Move-WtMemoIsland $ed Up -Extend:$shift }
             }
             'Down' {
                 if ($alt -or $ctrl) { return }
-                $lastLine = $box.LineCount - 1
-                $last = $lastLine -lt 0 -or $box.GetLineIndexFromCharacterIndex($caret + $(if ($shift) { $box.SelectionLength } else { 0 })) -ge $lastLine
+                $at = Get-WtMemoBoxLine $box ($caret + $(if ($shift) { $box.SelectionLength } else { 0 }))
+                $last = $at -ge $box.LineCount - 1
                 if ($last) { $E.Handled = Move-WtMemoIsland $ed Down -Extend:$shift }
             }
             'Left' { if (-not $shift -and -not $ctrl -and $noSel -and $caret -eq 0) { $E.Handled = Move-WtMemoIsland $ed Left } }
             'Right' { if (-not $shift -and -not $ctrl -and $noSel -and $caret -eq $len) { $E.Handled = Move-WtMemoIsland $ed Right } }
             'Home' { if ($ctrl -and -not $shift) { $E.Handled = Move-WtMemoIsland $ed Home } }
             'End' { if ($ctrl -and -not $shift) { $E.Handled = Move-WtMemoIsland $ed End } }
-            'PageUp' { $E.Handled = Move-WtMemoIslandPage $ed -1 }
-            'PageDown' { $E.Handled = Move-WtMemoIslandPage $ed 1 }
+            # Key.PageUp · PageDown은 Prior · Next와 같은 값이라 글자로는 Prior · Next로 나온다
+            { $_ -in 'Prior', 'PageUp' } { $E.Handled = Move-WtMemoIslandPage $ed -1 }
+            { $_ -in 'Next', 'PageDown' } { $E.Handled = Move-WtMemoIslandPage $ed 1 }
             'Back' {
                 if ($noSel -and $caret -eq 0 -and -not $ctrl -and $ed.Island.Start -gt 0) {
                     Push-WtMemoUndo $ed
@@ -985,15 +1014,43 @@ function Move-WtMemoIslandPage($Ed, [int]$Dir) {
     $sv = Get-WtMemoScroller $Ed.Live
     if (-not $sv) { return $false }
     $box = $Ed.IslandBox
+    # 섬을 연 뒤 미뤄 둔 '커서를 화면 안으로'가 아직이면 먼저 한다 (스크롤 자리가 커서 기준이어야 한 화면씩 간다)
+    if ($script:caretPending) {
+        $Ed.Live.UpdateLayout()
+        Show-WtMemoIslandCaret $script:caretPending
+        $script:caretPending = $null
+        $Ed.Live.UpdateLayout()
+    }
     $r = $box.GetRectFromCharacterIndex($box.CaretIndex)
     $pt = $box.TranslatePoint([System.Windows.Point]::new($r.X, $r.Y + $r.Height / 2), $Ed.Live)
-    $sv.ScrollToVerticalOffset($sv.VerticalOffset + $Dir * $sv.ViewportHeight)
+    # 아래로 갈 때 아직 안 그린 단위가 있으면 한 화면 넘게 먼저 그린다
+    if ($Dir -gt 0) {
+        $Ed.Live.UpdateLayout()
+        while ($Ed.Rendered -lt $Ed.Units.Count -and $sv.ExtentHeight -lt $sv.VerticalOffset + 2 * $sv.ViewportHeight) {
+            Complete-WtMemoRender $Ed ($Ed.Rendered + 20)
+            $Ed.Live.UpdateLayout()
+        }
+    }
+    $was = $sv.VerticalOffset
+    $sv.ScrollToVerticalOffset($was + $Dir * $sv.ViewportHeight)
     $Ed.Live.UpdateLayout()
-    $y = $pt.Y
+    # 한 화면만큼 다 못 갔으면(글 처음 · 끝에 닿음) 처음 · 끝 단위로 간다
+    $edge = [Math]::Abs($sv.VerticalOffset - $was) -lt $sv.ViewportHeight - 1
     $Ed.Busy++
     try { Close-WtMemoIsland $Ed } finally { $Ed.Busy-- }
+    if ($edge -and $Ed.Units.Count) {
+        if ($Dir -gt 0) {
+            Complete-WtMemoRender $Ed ($Ed.Units.Count - 1)
+            $u = $Ed.Units[$Ed.Units.Count - 1]
+            Open-WtMemoIsland $Ed $u.Start $u.End ($u.End - 1) $Ed.Lines[$u.End - 1].Length
+        } else {
+            $u = $Ed.Units[0]
+            Open-WtMemoIsland $Ed $u.Start $u.End $u.Start 0
+        }
+        return $true
+    }
     $Ed.Live.UpdateLayout()
-    $hit = Find-WtMemoLiveHit $Ed ([System.Windows.Point]::new($pt.X, $y))
+    $hit = Find-WtMemoLiveHit $Ed $pt
     if ($hit) { Open-WtMemoIslandAt $Ed $hit.Line $hit.Col }
     else { Open-WtMemoIslandAt $Ed $Ed.Caret.Line $Ed.Caret.Col }
     $true
@@ -1013,7 +1070,7 @@ function Find-WtMemoLiveHit($Ed, [System.Windows.Point]$Point) {
     if (-not $sec) { return $null }
     $u = $sec.Tag
     $rendered = ''
-    try { $rendered = [System.Windows.Documents.TextRange]::new($sec.ContentStart, $tp).Text } catch { }
+    try { $rendered = Get-WtMemoRenderedPrefix $sec.ContentStart $tp } catch { }
     $offset = Get-WtMemoSourceOffset $rendered $u.Text
     $parts = @($u.Text.Substring(0, $offset) -split "`n")
     $line = $u.Start + $parts.Count - 1
@@ -1021,6 +1078,29 @@ function Find-WtMemoLiveHit($Ed, [System.Windows.Point]$Point) {
     $isl = $Ed.Island
     if ($isl -and $u.Start -ge $isl.End) { $line += @($Ed.IslandBox.Text -split "\r?\n").Count - ($isl.End - $isl.Start) }
     @{ Line = $line; Col = $parts[-1].Length; Unit = $u }
+}
+
+# 그린 글의 [Start, End) 글자. TextRange.Text는 표 칸에 걸치면 칸 · 행 전체로 넓혀 버려서 직접 따라가며 모은다.
+# 문단 · 줄바꿈 · 칸 경계는 공백 문자로 둔다 (원문과 맞출 때 건너뛴다)
+function Get-WtMemoRenderedPrefix($Start, $End) {
+    $sb = [System.Text.StringBuilder]::new()
+    $tp = $Start
+    $guard = 0
+    while ($tp -and $tp.CompareTo($End) -lt 0 -and $guard -lt 100000) {
+        $guard++
+        $ctx = $tp.GetPointerContext('Forward')
+        if ($ctx -eq 'Text') {
+            $run = $tp.GetTextInRun('Forward')
+            $left = $tp.GetOffsetToPosition($End)
+            if ($left -lt $run.Length) { [void]$sb.Append($run.Substring(0, [Math]::Max(0, $left))); break }
+            [void]$sb.Append($run)
+            $tp = $tp.GetPositionAtOffset($run.Length)
+            continue
+        }
+        if ($ctx -eq 'ElementEnd' -or $ctx -eq 'EmbeddedElement') { [void]$sb.Append("`n") }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
+    $sb.ToString()
 }
 
 function Get-WtMemoSourceOffset([string]$Rendered, [string]$Source) {
@@ -1031,7 +1111,15 @@ function Get-WtMemoSourceOffset([string]$Rendered, [string]$Source) {
         if ($k -lt 0 -or $k - $j -gt 400) { continue }
         $j = $k + 1
     }
-    # 기호 바로 뒤에서 멈췄으면(예: 제목 '# ' 뒤 · 목록 '- ' 뒤) 글자 앞에 둔다
+    # 그린 글이 공백 · 줄바꿈으로 끝났으면(낱말 사이 · 표 칸 · 다음 줄) 원문의 공백 · 표 칸 기호를 건너 다음 글자 앞에 둔다
+    if ($Rendered.Length -and [char]::IsWhiteSpace($Rendered[$Rendered.Length - 1])) {
+        while ($j -lt $Source.Length -and $Source[$j] -in ' ', "`t", '|', "`n") { $j++ }
+    }
+    # 줄 맨 앞이면 제목 · 목록 · 할 일 · 인용 기호 뒤(글자 앞)에 둔다
+    if ($j -lt $Source.Length -and ($j -eq 0 -or $Source[$j - 1] -eq "`n")) {
+        $m = [regex]::Match($Source.Substring($j), '^\s*(?:>\s?)*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d{1,9}[.)]\s+(?:\[[ xX]\]\s+)?)?')
+        $j += $m.Length
+    }
     $j
 }
 
@@ -1240,8 +1328,7 @@ function Complete-WtMemoImePending {
             { $_ -in 'up', 'down' } {
                 # 커서가 그대로 블록 끝에 있으면 옆 블록으로
                 if (-not $ed.Island -or $box -ne $ed.IslandBox -or $box.CaretIndex -ne $p.Caret) { return }
-                $box.UpdateLayout()
-                $line = $box.GetLineIndexFromCharacterIndex($box.CaretIndex)
+                $line = Get-WtMemoBoxLine $box $box.CaretIndex
                 if ($p.Kind -eq 'up' -and $line -le 0) { [void](Move-WtMemoIsland $ed Up) }
                 if ($p.Kind -eq 'down' -and $line -ge $box.LineCount - 1) { [void](Move-WtMemoIsland $ed Down) }
             }

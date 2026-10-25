@@ -16,22 +16,9 @@
       - Sections[i].Tag = Units[i], $ed.Lines를 다시 나눈 결과 = $ed.Units (Start · End · Kind · Depth · Text)
       - 섬의 Original = 그 줄들, First · Last = 섬이 덮는 단위
 
-    알려진 버그 (편집기를 고친 뒤 -KnownBugs로 돌려 통과하면 아래 목록과 $bugList에서 뺀다)
-      island-readonly         섬(TextBox)이 보기 RichTextBox의 IsReadOnly=True를 물려받아 글자가 안 들어가고 섬 안 ↑↓ · Delete가 안 된다
-                              (검사는 New-EdEditor에서 섬에 IsReadOnly=false를 넣어 우회하고 나머지를 본다)
-      pagedown-key            PageDown 키를 처리하지 않는다 (Key.PageDown의 이름이 'Next'라서 switch 'PageDown'에 안 걸림)
-      delete-after-new-lines  섬에서 줄을 늘린 뒤(Enter) 섬 끝에서 Delete를 누르면 다음 단위와 잇지 않는다
-      fence-kind-change       코드 울타리 종류 · 길이를 바꾸면(``` → ~~~ · ````), 또는 닫히지 않은 울타리 아래를 고치면 그 둘레만 다시 나눈다
-      html-comment-open       섬에서 <!-- 를 열면 아래 단위를 다시 나누지 않는다 (아래 글이 주석인데 그대로 그림)
-      list-continuation       목록 아래 빈 줄 다음 줄을 들여쓰면(목록 항목에 이어지는 문단) 그 줄만 따로 나눈다
-      empty-list-item         빈 목록 항목(1. ) 바로 아래를 고치면 둘레만 나눈 결과가 글 전체로 나눈 것과 다르다 (Markdig가 앞 글에 따라 다르게 읽음)
-      unclosed-fence          (core/Markdown.psm1) 닫히지 않은 ``` 는 첫 줄만 코드 단위, 나머지는 raw가 된다 (읽기 모드는 끝까지 코드)
-      hit-offset              그린 글 클릭 → 원문 칸: 공백 · 표 칸 뒤 첫 글자는 한 칸 앞, 제목 · 목록 첫 글자는 # · - 앞(0칸)
-      undo-after-source-edit  원문 모드에서 고친 뒤 실시간에서 Ctrl+Z 한 번에 원문 모드 편집과 그 앞 실시간 편집이 함께 사라진다
-      undo-after-load         치다가 1.2초 안에 다른 글을 불러와 바로 치면 Ctrl+Z로 불러온 글로 못 돌아간다 (LastEdit을 안 비움)
-      source-newline-mix      \n 글을 원문 칸에서 Enter(목록 밖)로 고치면 \r\n이 섞인다
-      pagedown-near-end       끝에서 한 화면이 안 남았을 때 PageDown이 마지막 단위로 가지 않는다
-      focus-end-with-island   섬이 열린 채 Set-WtMemoEditorFocus -End를 부르면 글 끝으로 가지 않는다
+    알려진 버그: 지금은 없다. 새로 찾으면 그 검사에 -Bug '이름'을 달고 아래와 $bugList에 적는다(기본은 건너뜀, -KnownBugs로 돌림).
+      처음 찾은 14건(섬 읽기 전용 · PageDown 키 · 울타리 · HTML 주석 · 목록 이어 쓰기 · 빈 항목 · 닫히지 않은 울타리 · 클릭 위치 ·
+      실행 취소 3건 · 줄바꿈 섞임 · 끝 PageDown · 포커스 -End)은 편집기에서 고쳤다(2026-10-25)
 
 .PARAMETER KnownBugs
     알려진 버그 검사도 돌린다(기본은 건너뜀). 편집기를 고친 뒤 확인할 때 쓴다.
@@ -68,7 +55,7 @@ if (-not (Test-WtTestWpf)) {
 
 # ---- 알려진 버그 · 결과 세기 ---------------------------------------------------------------------
 
-$bugList = @('island-readonly', 'pagedown-key', 'delete-after-new-lines', 'fence-kind-change', 'html-comment-open', 'unclosed-fence', 'hit-offset', 'pagedown-near-end', 'focus-end-with-island', 'source-newline-mix', 'undo-after-source-edit', 'list-continuation', 'undo-after-load', 'empty-list-item')
+$bugList = @()
 
 $script:edPass = 0
 $script:edContract = 0
@@ -202,9 +189,6 @@ function New-EdEditor([switch]$AsIs) {
     $x = New-WtMemoEditor -OnChanged { param($one) $one.TestChanged++ } -OnLeave { param($one) $one.TestLeft++ }
     $x.TestChanged = 0
     $x.TestLeft = 0
-    # 알려진 버그 island-readonly 우회: 섬이 보기(읽기 전용 RichTextBox)의 IsReadOnly를 물려받아 글자가 안 들어간다.
-    # 다른 검사를 계속하려고 섬에 직접 false를 넣는다. 편집기에서 고치면 이 줄은 아무 일도 안 한다
-    if (-not $AsIs) { $x.IslandBox.IsReadOnly = $false }
     $script:edHost.Children.Clear()
     [void]$script:edHost.Children.Add($x.Root)
     $script:win.UpdateLayout()
@@ -250,11 +234,21 @@ function Send-EdKey($Ed, [string]$Key, [int]$Times = 1) {
     for ($n = 0; $n -lt $Times; $n++) {
         Wait-EdModifiers
         $target = Get-EdBox $Ed
-        foreach ($ev in [System.Windows.Input.Keyboard]::PreviewKeyDownEvent, [System.Windows.Input.Keyboard]::KeyDownEvent) {
+        $handled = $false
+        $enter = $Key -in 'Return', 'Enter'
+        # Enter는 PreviewKeyDown만 올린다. 시험 창에서 TextBox의 KeyDown은 Enter를 처리됨으로만 표시하고 줄을 바로 바꾸지 않아서
+        $events = if ($enter) { @([System.Windows.Input.Keyboard]::PreviewKeyDownEvent) } else { @([System.Windows.Input.Keyboard]::PreviewKeyDownEvent, [System.Windows.Input.Keyboard]::KeyDownEvent) }
+        foreach ($ev in $events) {
             $a = [System.Windows.Input.KeyEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $src, 0, [System.Windows.Input.Key]$Key)
             $a.RoutedEvent = $ev
             $target.RaiseEvent($a)
-            if ($a.Handled) { break }
+            if ($a.Handled) { $handled = $true; break }
+        }
+        # 편집기가 처리하지 않은 Enter는 TextBox가 줄을 바꾼다. 그 일을 직접 한다
+        if (-not $handled -and $enter) {
+            $i = $target.SelectionStart
+            $target.SelectedText = "`r`n"
+            $target.Select($i + 2, 0)
         }
         Sync-EdUi
     }
@@ -585,8 +579,16 @@ try {
         Assert-Ed '편집기 Delete: 빈 줄 없이 붙은 다음 단위와 잇는다' ((Get-EdText $ed) -ceq '# HP')
         Close-Ed $ed
         [void](Test-EdContract $ed 'Delete 붙은 단위')
-        Send-EdKey $ed Back   # 섬이 닫혀 있으면 아무것도 안 한다
-        Assert-Ed '편집기: 섬이 닫혀 있을 때 키는 무시' ((Get-EdText $ed) -ceq '# HP')
+        # 섬이 닫혀 있으면 키는 보기(포커스가 있는 곳)로 간다. 보기는 커서 자리에 섬을 열 뿐 글은 바꾸지 않는다
+        Sync-EdUi
+        $src = [System.Windows.PresentationSource]::FromVisual($script:win)
+        foreach ($ev in [System.Windows.Input.Keyboard]::PreviewKeyDownEvent, [System.Windows.Input.Keyboard]::KeyDownEvent) {
+            $a = [System.Windows.Input.KeyEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $src, 0, [System.Windows.Input.Key]::Back)
+            $a.RoutedEvent = $ev
+            $ed.Live.RaiseEvent($a)
+        }
+        Sync-EdUi
+        Assert-Ed '편집기: 섬이 닫혀 있을 때 키는 글을 바꾸지 않는다' ((Get-EdText $ed) -ceq '# HP') "$((Get-EdText $ed).Replace("`n", '\n'))"
     }
     Invoke-EdCase 'Delete: 섬에서 줄을 늘린 뒤 끝에서 Delete' {
         $ed = New-EdEditor
@@ -885,9 +887,11 @@ try {
         $null = Set-WtMemoEditorState $ed @{ Line = 999; Col = 999; Scroll = 0 }
         Assert-Ed '편집기 상태: 범위 밖 줄 · 칸은 끝으로 줄인다' ($ed.Caret.Line -eq 25 -and $ed.Caret.Col -eq $sample[25].Length) "$($ed.Caret.Line):$($ed.Caret.Col)"
         $null = Set-WtMemoEditorMode $ed 'source'
-        $null = Set-WtMemoEditorState $ed @{ Caret = 12; Line = 0; Col = 0; Scroll = 0 }
+        # 상태는 모드와 상관없이 줄 · 칸 (원문 칸에서는 그 자리의 글자 위치로 바꿔 넣는다)
+        $null = Set-WtMemoEditorState $ed @{ Line = 2; Col = 3; Scroll = 0 }
         $st = Get-WtMemoEditorState $ed
-        Assert-Ed '편집기 상태(원문): 커서 위치' ($st.Caret -eq 12 -and $ed.Source.CaretIndex -eq 12)
+        $want = (($ed.Source.Text -split "`r?`n")[0..1] | ForEach-Object { $_.Length + $(if ($ed.Source.Text.Contains("`r`n")) { 2 } else { 1 }) } | Measure-Object -Sum).Sum + 3
+        Assert-Ed '편집기 상태(원문): 커서 줄 · 칸' ($st.Line -eq 2 -and $st.Col -eq 3 -and $ed.Source.CaretIndex -eq $want) "$($st.Line):$($st.Col) 커서 $($ed.Source.CaretIndex) 기대 $want"
         $null = Set-WtMemoEditorMode $ed 'live'
         [void](Complete-EdRender $ed)
         Assert-Ed '편집기 상태: OnChanged를 부르지 않는다' ($ed.TestChanged -eq 0)
