@@ -184,7 +184,7 @@ function New-WtScheduleHomeCards {
     $script:homeCards
 }
 
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Order 20 `
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Order 20 -WarmUp Full `
     -NewView { New-WtScheduleView } `
     -Refresh { param($view) Update-WtScheduleView } `
     -HomeCard { New-WtScheduleHomeCards } `

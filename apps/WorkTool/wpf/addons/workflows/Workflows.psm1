@@ -1549,7 +1549,7 @@ function Stop-WtFlows {
     $script:consoles.Clear()
 }
 
-Register-WtAddon -Id 'workflows' -Title '업무' -Icon 0xE756 -Order 70 `
+Register-WtAddon -Id 'workflows' -Title '업무' -Icon 0xE756 -Order 70 -WarmUp View `
     -NewView { New-WtFlowsView } `
     -Refresh { param($view) Update-WtFlowsView } `
     -HomeCard { New-WtFlowsHomeCard } `

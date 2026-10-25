@@ -733,7 +733,7 @@ function New-WtDocsHomeCard {
     $card
 }
 
-Register-WtAddon -Id 'docs' -Title '문서' -Icon 0xE8B7 -Order 50 `
+Register-WtAddon -Id 'docs' -Title '문서' -Icon 0xE8B7 -Order 50 -WarmUp View `
     -NewView { New-WtDocsView } `
     -Refresh { param($view) Update-WtDocsView } `
     -HomeCard { New-WtDocsHomeCard } `

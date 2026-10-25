@@ -342,6 +342,26 @@ pie
         Assert-Wt 'WPF 설정: 바뀐 설정은 재진입 때 다시 읽는다' (-not [object]::ReferenceEquals($settings2.View, $settings3.View))
         Set-WtSetting 'window.closeToTray' $close
 
+        # 미리 만들기: WarmUp을 준 탭만 만든다. Full은 새로 고침까지, View는 화면만. 설정 · 도움말도 만들고, 이미 연 화면은 건너뛴다
+        $global:warmCalls = @{ FullNew = 0; FullRefresh = 0; ViewNew = 0; ViewRefresh = 0; NoneNew = 0 }
+        Register-WtAddon -Id 'test-warm-full' -Title '미리1' -Order 70 -WarmUp Full -NewView { $global:warmCalls.FullNew++; New-WtText '미리 만든 화면' } -Refresh { param($v) $global:warmCalls.FullRefresh++ }
+        Register-WtAddon -Id 'test-warm-view' -Title '미리2' -Order 71 -WarmUp View -NewView { $global:warmCalls.ViewNew++; New-WtText '틀만' } -Refresh { param($v) $global:warmCalls.ViewRefresh++ }
+        Register-WtAddon -Id 'test-warm-none' -Title '미리3' -Order 72 -NewView { $global:warmCalls.NoneNew++; New-WtText '안 함' }
+        $warm = & (Get-Module Shell) {
+            $script:ui = @{ WarmHost = [System.Windows.Controls.ContentControl]::new() }
+            $script:ui.WarmHost.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $script:ui.WarmHost.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+            $script:views = @{}; $script:current = 'test-a'
+            $run = { Start-WtWarmUp; $script:warmTimer.Stop(); $n = 0; while ((Invoke-WtWarmUpStep) -and $n -lt 30) { $n++ } }
+            & $run
+            $first = @{ Views = @($script:views.Keys | Sort-Object); HostEmpty = $null -eq $script:ui.WarmHost.Content }
+            & $run
+            $first
+        }
+        Assert-Wt '미리 만들기: WarmUp을 준 탭만 만들고(Full은 새로 고침까지), 설정 · 도움말도 만든다' (
+            ($warm.Views -join ',') -eq '_help,_settings,test-warm-full,test-warm-view' -and $warm.HostEmpty -and
+            $global:warmCalls.FullNew -eq 1 -and $global:warmCalls.FullRefresh -eq 1 -and $global:warmCalls.ViewNew -eq 1 -and $global:warmCalls.ViewRefresh -eq 0 -and $global:warmCalls.NoneNew -eq 0) (
+            "($($warm.Views -join ',') · $(($global:warmCalls.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' '))")
+
         # 공통 모양: 스크롤 막대는 화살표 없이 손잡이만 두고, 가로 · 세로 막대가 만나는 모서리에 회색 칸이 없다. 막대를 누르면 한 화면씩 움직인다
         $box = [System.Windows.Controls.Border]::new()
         $box.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $box.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))

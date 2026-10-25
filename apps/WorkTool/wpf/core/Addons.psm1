@@ -24,6 +24,9 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   Shortcuts    도움말 「단축키」에 넣을 @('키', '설명') 목록. 키 처리는 탭 화면이 직접 한다 (선택)
                하나만 줄 때는 앞에 쉼표를 붙인다: -Shortcuts (, @('F5', '새로 고침'))
   HelpCard     { } → 도움말에 따로 놓을 카드 요소를 돌려준다 (선택)
+  WarmUp       켠 뒤 한가할 때 화면을 미리 만들어 둘지 (선택). 처음 누를 때도 빨리 뜨게 하려는 것이다
+               'Full' → NewView · Refresh를 미리 부른다. 이 탭의 데이터 파일만 읽고 밖에 영향이 없을 때만 쓴다
+               'View' → NewView만 미리 부른다. Refresh가 폴더 조회 · 다른 창 수집처럼 느리거나 밖에 닿을 때 쓴다
 #>
 function Register-WtAddon {
     param(
@@ -38,6 +41,7 @@ function Register-WtAddon {
         [scriptblock]$ImportLegacy,
         [scriptblock]$OnExit,
         [scriptblock]$SavePending,
+        [ValidateSet('', 'View', 'Full')][string]$WarmUp = '',
         [string]$Description = '',
         [string[]]$Help = @(),
         [object[]]$Shortcuts = @(),
@@ -55,7 +59,7 @@ function Register-WtAddon {
             Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Required = [bool]$Required
             NewView = $NewView; Refresh = $Refresh; HomeCard = $HomeCard; ImportLegacy = $ImportLegacy; OnExit = $OnExit
             Description = $Description
-            SavePending = $SavePending
+            SavePending = $SavePending; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
         })
 }

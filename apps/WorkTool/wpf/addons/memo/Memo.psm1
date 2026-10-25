@@ -626,7 +626,7 @@ function New-WtMemoMarkdownHelpCard {
     $card
 }
 
-Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Order 40 `
+Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Order 40 -WarmUp Full `
     -NewView { New-WtMemoView } `
     -Refresh { param($view) Update-WtMemoView } `
     -HomeCard { New-WtMemoHomeCard } `

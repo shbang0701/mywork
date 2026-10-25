@@ -191,7 +191,7 @@ function New-WtAttendanceHomeCard {
     $card
 }
 
-Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Order 30 `
+Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Order 30 -WarmUp Full `
     -NewView { New-WtAttendanceView } `
     -Refresh { param($view) Update-WtAttendanceView } `
     -HomeCard { New-WtAttendanceHomeCard } `

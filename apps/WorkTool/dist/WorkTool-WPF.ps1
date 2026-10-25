@@ -4523,6 +4523,9 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   Shortcuts    도움말 「단축키」에 넣을 @('키', '설명') 목록. 키 처리는 탭 화면이 직접 한다 (선택)
                하나만 줄 때는 앞에 쉼표를 붙인다: -Shortcuts (, @('F5', '새로 고침'))
   HelpCard     { } → 도움말에 따로 놓을 카드 요소를 돌려준다 (선택)
+  WarmUp       켠 뒤 한가할 때 화면을 미리 만들어 둘지 (선택). 처음 누를 때도 빨리 뜨게 하려는 것이다
+               'Full' → NewView · Refresh를 미리 부른다. 이 탭의 데이터 파일만 읽고 밖에 영향이 없을 때만 쓴다
+               'View' → NewView만 미리 부른다. Refresh가 폴더 조회 · 다른 창 수집처럼 느리거나 밖에 닿을 때 쓴다
 #>
 function Register-WtAddon {
     param(
@@ -4537,6 +4540,7 @@ function Register-WtAddon {
         [scriptblock]$ImportLegacy,
         [scriptblock]$OnExit,
         [scriptblock]$SavePending,
+        [ValidateSet('', 'View', 'Full')][string]$WarmUp = '',
         [string]$Description = '',
         [string[]]$Help = @(),
         [object[]]$Shortcuts = @(),
@@ -4554,7 +4558,7 @@ function Register-WtAddon {
             Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Required = [bool]$Required
             NewView = $NewView; Refresh = $Refresh; HomeCard = $HomeCard; ImportLegacy = $ImportLegacy; OnExit = $OnExit
             Description = $Description
-            SavePending = $SavePending
+            SavePending = $SavePending; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
         })
 }
@@ -4892,6 +4896,8 @@ $script:fullFromMax = $false   # 최대화 상태에서 전체 화면으로 갔�
 $script:settingBounds = $false # 코드로 창 위치 · 크기를 바꾸는 중
 $script:icon = $null
 $script:lastImport = $null
+$script:warmQueue = $null      # 켠 뒤 미리 만들 화면 ID (Start-WtWarmUp)
+$script:warmTimer = $null
 
 $script:shellXaml = @'
 <Window {NS}
@@ -4954,7 +4960,11 @@ $script:shellXaml = @'
             <TextBlock Text="&#xE8BB;" Style="{DynamicResource T.Icon}" FontSize="10"/>
           </Button>
         </StackPanel>
-        <ContentControl x:Name="PageHost" Focusable="False"/>
+        <Grid>
+          <!-- 미리 만든 화면을 잠깐 붙여 배치만 해 보는 자리 (Invoke-WtWarmUpStep). 보이지 않고 누를 수도 없다 -->
+          <ContentControl x:Name="WarmHost" Focusable="False" Visibility="Hidden" IsHitTestVisible="False"/>
+          <ContentControl x:Name="PageHost" Focusable="False"/>
+        </Grid>
       </DockPanel>
     </Grid>
   </Border>
@@ -5027,6 +5037,42 @@ function Reset-WtViews {
         $script:current = $null
         Select-WtPage $id
     }
+}
+
+# ---- 미리 만들기 ------------------------------------------------------------------------------
+
+# 켠 뒤 한가할 때 아직 안 연 화면을 하나씩 미리 만들어 둔다. 처음 누를 때도 다시 누를 때처럼 빨리 뜨게 하려는 것이다.
+# 탭은 등록할 때 WarmUp을 준 것만(Addons.psm1 참고), 그다음 설정 · 도움말 차례다.
+# 화면 하나를 만드는 동안은 화면 스레드를 쓰므로, 하나 끝날 때마다 쉬어서 그사이 들어온 입력을 먼저 처리한다
+function Start-WtWarmUp {
+    $ids = @(Get-WtAddon | Where-Object { $_.WarmUp } | ForEach-Object { $_.Id }) + @('_settings', '_help')
+    $script:warmQueue = [System.Collections.Generic.Queue[string]]::new([string[]]$ids)
+    if (-not $script:warmTimer) {
+        $script:warmTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::ApplicationIdle)
+        $script:warmTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+        $script:warmTimer.Add_Tick({ if (-not (Invoke-WtWarmUpStep)) { $script:warmTimer.Stop() } })
+    }
+    $script:warmTimer.Start()
+}
+
+# 미리 만들기 한 단계. 아직 남은 것이 있으면 $true
+function Invoke-WtWarmUpStep {
+    while ($script:warmQueue -and $script:warmQueue.Count) {
+        $id = $script:warmQueue.Dequeue()
+        if ($id -eq $script:current -or ($id -notlike '_*' -and $script:views.ContainsKey($id))) { continue }   # 이미 열었다
+        try {
+            $page = Get-WtPageView $id
+            if (-not $page) { continue }
+            if ($page.Addon -and $page.Addon.WarmUp -eq 'Full' -and $page.Addon.Refresh) { [void](& $page.Addon.Refresh $page.View) }
+            # 안 보이는 자리에 잠깐 붙여 틀 적용 · 글자 배치까지 해 두고, 바로 떼어 실제 자리로 옮길 수 있게 한다
+            $script:ui.WarmHost.Content = $page.View
+            $script:ui.WarmHost.UpdateLayout()
+        } catch {
+            # 미리 만들기는 덤이다. 실패하면 그 화면을 열 때 원래대로 만들고, 오류도 그때 알린다
+        } finally { $script:ui.WarmHost.Content = $null }
+        return [bool]$script:warmQueue.Count
+    }
+    $false
 }
 
 # ---- 왼쪽 메뉴 --------------------------------------------------------------------------------
@@ -5286,6 +5332,7 @@ function Stop-WtApp {
         }
     }
     $script:exiting = $true
+    if ($script:warmTimer) { $script:warmTimer.Stop() }
     try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
     try { if ($script:icon) { $script:icon.Dispose() } } catch { }
     if ($script:frame) { $script:frame.Continue = $false }
@@ -5370,7 +5417,7 @@ function Start-WtApp {
     }
 
     Update-WtAppIcon
-    $w.Add_ContentRendered({ Update-WtAppIcon })
+    $w.Add_ContentRendered({ Update-WtAppIcon; Start-WtWarmUp })
     $script:ui.TodayText.Text = Format-WtDate (Get-Date) 'yyyy년 M월 d일 dddd'
 
     # 제목 줄 · 메뉴 아래 버튼
@@ -6113,7 +6160,7 @@ function New-WtActiveTasksView {
     $page.Root
 }
 
-Register-WtAddon -Id 'active-tasks' -Title '활성 작업' -Icon 0xE7C4 -Order 60 `
+Register-WtAddon -Id 'active-tasks' -Title '활성 작업' -Icon 0xE7C4 -Order 60 -WarmUp View `
     -NewView { New-WtActiveTasksView } -Refresh { param($view) Start-WtTaskJob 'scan' } -OnExit { Stop-WtTasks } `
     -Help @(
         '활성 작업은 열린 창과 Chrome·Edge·웨일 탭을 모아 보고 선택한 항목을 닫습니다. 새로 고침 버튼을 우클릭하면 수동·자동을 고를 수 있고, 자동은 분 단위 간격을 설정합니다.'
@@ -6320,7 +6367,7 @@ function New-WtAttendanceHomeCard {
     $card
 }
 
-Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Order 30 `
+Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Order 30 -WarmUp Full `
     -NewView { New-WtAttendanceView } `
     -Refresh { param($view) Update-WtAttendanceView } `
     -HomeCard { New-WtAttendanceHomeCard } `
@@ -7069,7 +7116,7 @@ function New-WtDocsHomeCard {
     $card
 }
 
-Register-WtAddon -Id 'docs' -Title '문서' -Icon 0xE8B7 -Order 50 `
+Register-WtAddon -Id 'docs' -Title '문서' -Icon 0xE8B7 -Order 50 -WarmUp View `
     -NewView { New-WtDocsView } `
     -Refresh { param($view) Update-WtDocsView } `
     -HomeCard { New-WtDocsHomeCard } `
@@ -7777,7 +7824,7 @@ function New-WtMemoMarkdownHelpCard {
     $card
 }
 
-Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Order 40 `
+Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Order 40 -WarmUp Full `
     -NewView { New-WtMemoView } `
     -Refresh { param($view) Update-WtMemoView } `
     -HomeCard { New-WtMemoHomeCard } `
@@ -7981,7 +8028,7 @@ function New-WtScheduleHomeCards {
     $script:homeCards
 }
 
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Order 20 `
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Order 20 -WarmUp Full `
     -NewView { New-WtScheduleView } `
     -Refresh { param($view) Update-WtScheduleView } `
     -HomeCard { New-WtScheduleHomeCards } `
@@ -9545,7 +9592,7 @@ function Stop-WtFlows {
     $script:consoles.Clear()
 }
 
-Register-WtAddon -Id 'workflows' -Title '업무' -Icon 0xE756 -Order 70 `
+Register-WtAddon -Id 'workflows' -Title '업무' -Icon 0xE756 -Order 70 -WarmUp View `
     -NewView { New-WtFlowsView } `
     -Refresh { param($view) Update-WtFlowsView } `
     -HomeCard { New-WtFlowsHomeCard } `
