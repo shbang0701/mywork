@@ -1138,6 +1138,36 @@ $script:stylesXaml = @'
   <Style x:Key="Memo.IslandBox" TargetType="BlockUIContainer">
     <Setter Property="Margin" Value="0,0,0,12"/>
   </Style>
+  <!-- [[ 자동 완성 팝업: 떠 있는 패널(모서리 8 · 테두리). 항목은 포커스를 받지 않는다(입력칸에 커서를 둔 채 고름) -->
+  <Style x:Key="Memo.Suggest" TargetType="Border">
+    <Setter Property="Background" Value="{DynamicResource B.Card}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="8"/>
+    <Setter Property="Padding" Value="4"/>
+    <Setter Property="MinWidth" Value="240"/>
+    <Setter Property="MaxWidth" Value="400"/>
+  </Style>
+  <Style x:Key="Memo.SuggestRow" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
+    <Setter Property="Padding" Value="8,6"/>
+    <Setter Property="Margin" Value="0"/>
+    <Setter Property="Focusable" Value="False"/>
+  </Style>
+  <DataTemplate x:Key="Memo.SuggestItem">
+    <TextBlock Text="{Binding}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+  </DataTemplate>
+  <Style x:Key="Memo.SuggestList" TargetType="ListBox" BasedOn="{StaticResource List}">
+    <Setter Property="ItemContainerStyle" Value="{StaticResource Memo.SuggestRow}"/>
+    <Setter Property="ItemTemplate" Value="{StaticResource Memo.SuggestItem}"/>
+    <Setter Property="MaxHeight" Value="240"/>
+  </Style>
+  <!-- 편집기 위 찾기 · 바꾸기 막대 -->
+  <Style x:Key="Memo.FindBar" TargetType="Border">
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
+    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+    <Setter Property="Padding" Value="0,0,0,8"/>
+    <Setter Property="Margin" Value="0,0,0,12"/>
+  </Style>
 
   <Style x:Key="Task.Check" TargetType="CheckBox">
     <Setter Property="VerticalAlignment" Value="Center"/>
