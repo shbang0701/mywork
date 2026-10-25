@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    메모 편집기(MemoEditor.psm1)를 화면 밖 시험 창에서 검사한다: 불러오기 · 섬 · 이동 · 잇기 · 실행 취소 · 모드 · 할 일 · 클릭 위치 · 나눠 그리기 · 편집 명령.
+    메모 편집기(MemoEditor.psm1)를 화면 밖 시험 창에서 검사한다: 불러오기 · 섬 · 이동 · 잇기 · 실행 취소 · 모드 · 할 일 · 클릭 위치 · 나눠 그리기 · 편집 명령 · 섬 나누기(Enter).
 
 .DESCRIPTION
     tests\Test-Core.ps1이 찾아서 돌린다. 혼자 돌려도 된다. 실제 데이터 폴더(문서\WorkTool)는 쓰지 않는다.
@@ -320,6 +320,22 @@ function Set-EdCaret($Ed, [int]$Line, [int]$Col) {
     $i = & $script:em { param($x, $l, $c) Get-WtMemoIslandIndex $x $l $c } $Ed $Line $Col
     $Ed.IslandBox.Select($i, 0)
 }
+# 섬 글꼴(스타일) 이름: Memo.Island · Memo.IslandH1..H6 · Memo.IslandCode
+function Get-EdIslandStyle($Ed) {
+    foreach ($n in @('Memo.Island', 'Memo.IslandCode') + @(1..6 | ForEach-Object { "Memo.IslandH$_" })) {
+        if ([object]::ReferenceEquals($Ed.IslandBox.Style, $script:edHost.FindResource($n))) { return $n }
+    }
+    '(모름)'
+}
+# 섬에서 한글 조합이 시작 · 끝난 것처럼 알린다 (입력기 없이 TextCompositionManager 이벤트만 올린다)
+function Send-EdComposition($Ed, [ValidateSet('Start', 'End')][string]$Stage, [string]$Text = '') {
+    $box = $Ed.IslandBox
+    $ev = if ($Stage -eq 'Start') { [System.Windows.Input.TextCompositionManager]::PreviewTextInputStartEvent } else { [System.Windows.Input.TextCompositionManager]::PreviewTextInputEvent }
+    $tc = [System.Windows.Input.TextComposition]::new([System.Windows.Input.InputManager]::Current, $box, $Text)
+    $a = [System.Windows.Input.TextCompositionEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $tc)
+    $a.RoutedEvent = $ev
+    $box.RaiseEvent($a)
+}
 # 실행 취소 단위를 끊는다 (사용자가 쉬었다 치는 것처럼)
 function Suspend-EdTyping($Ed) { $Ed.LastEdit = [datetime]::MinValue }
 # 왼쪽 단추를 누른 채 움직인 MouseEventArgs 흉내. GetPosition은 묻는 요소와 상관없이 $X, $Y를 돌려준다
@@ -370,6 +386,23 @@ function Invoke-EdTaskClick($View, [int]$Line) {
     $h = Find-EdTaskLink $View $Line
     if (-not $h) { throw "할 일 체크 표시를 찾지 못했습니다 (줄 $Line)" }
     $h.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Documents.Hyperlink]::ClickEvent, $h))
+}
+# 실시간 보기에서 원문이 $UnitText인 단위의 할 일 체크 표시를 누른다 (그릴 때 줄 번호와 상관없이)
+function Invoke-EdTaskClickOf($Ed, [string]$UnitText) {
+    $sec = @($Ed.Sections | Where-Object { $_ -and $_.Tag.Text -ceq $UnitText })[0]
+    if (-not $sec) { throw "단위를 찾지 못했습니다 ($UnitText)" }
+    $tp = $sec.ContentStart
+    while ($tp -and $tp.CompareTo($sec.ContentEnd) -lt 0) {
+        if ($tp.GetPointerContext('Forward') -eq 'ElementStart') {
+            $el = $tp.GetAdjacentElement('Forward')
+            if ($el -is [System.Windows.Documents.Hyperlink] -and $el.Tag -is [hashtable] -and $el.Tag.ContainsKey('State')) {
+                $el.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Documents.Hyperlink]::ClickEvent, $el))
+                return
+            }
+        }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
+    throw "할 일 체크 표시를 찾지 못했습니다 ($UnitText)"
 }
 
 # ---- 검사 글 ---------------------------------------------------------------------------------------
@@ -465,9 +498,9 @@ try {
         [void](Test-EdContract $ed '고치고 닫기')
         Assert-Ed '편집기 섬: 고치고 닫으면 줄 목록 · 단위가 바뀐다' ((Join-EdLines @($ed.Lines)) -ceq (Join-EdLines $want) -and $ed.Units[1].Text -ceq ($want[2] + "`n" + $want[3]))
 
-        # 빈 줄에 서면 앞 단위에 붙는다
+        # 빈 줄에 서면 그 빈 줄만 (앞 단위는 그린 그대로)
         Open-EdAt $ed 4 0
-        Assert-Ed '편집기 섬: 빈 줄에서 열면 앞 단위와 같이 연다' ($ed.Island.Start -eq 2 -and $ed.Island.End -eq 5) "$($ed.Island.Start)..$($ed.Island.End)"
+        Assert-Ed '편집기 섬: 빈 줄에서 열면 그 빈 줄만 연다' ($ed.Island.Start -eq 4 -and $ed.Island.End -eq 5 -and $ed.Island.First -eq 2 -and $ed.Island.Last -eq 1) "$($ed.Island.Start)..$($ed.Island.End) First $($ed.Island.First) Last $($ed.Island.Last)"
         [void](Test-EdContract $ed '빈 줄에서 섬')
         Close-Ed $ed
 
@@ -844,6 +877,18 @@ try {
         $null = Set-WtMemoEditorMode $ed 'live'
     }
 
+    Invoke-EdCase '할 일: 위쪽에 항목을 더한 뒤' {
+        $ed = New-EdEditor
+        Set-EdText $ed "- [ ] a`n- [ ] b`n- [ ] c"
+        Open-EdAt $ed 0 7
+        Send-EdKey $ed Return
+        Send-EdText $ed 'n'
+        Close-Ed $ed
+        Invoke-EdTaskClickOf $ed '- [ ] c'
+        Assert-Ed '편집기 할 일(실시간): 위쪽에 항목을 더해 다시 그린 뒤 눌러도 그 항목 (다시 쓴 Section의 줄 번호)' ((Get-EdText $ed) -ceq "- [ ] a`n- [ ] n`n- [ ] b`n- [x] c") ((Get-EdText $ed).Replace("`n", '¶'))
+        [void](Test-EdContract $ed '위쪽에 항목 더한 뒤 할 일')
+    }
+
     # ---- 누른 자리 → 줄 · 칸 ----
     Invoke-EdCase '클릭 위치' {
         $ed = New-EdEditor
@@ -996,6 +1041,103 @@ try {
         [void](Complete-EdRender $ed)
         Assert-EdContract $ed '편집기: <!-- 를 열면 아래(닫는 --> 까지)도 다시 나눈다'
     } -Bug 'html-comment-open'
+
+    # ---- Enter로 블록이 나뉠 때: 커서가 있는 블록만 원문, 나머지는 바로 그린다 ----
+    Invoke-EdCase 'Enter: 제목 뒤 · 코드 블록 쓰기' {
+        $ed = New-EdEditor
+        Set-EdText $ed '# 임'
+        Open-EdAt $ed 0 3
+        Send-EdKey $ed Return
+        [void](Test-EdContract $ed '제목 뒤 Enter')
+        Assert-Ed '편집기 Enter: 제목 끝에서 Enter를 치면 제목은 바로 그리고 섬은 새 줄만 (본문 글꼴)' ((Get-EdText $ed) -ceq "# 임`n" -and $ed.Island.Start -eq 1 -and $ed.Island.First -eq 1 -and (Get-EdCaret $ed) -eq '1:0' -and (Get-EdIslandStyle $ed) -eq 'Memo.Island') "섬 $($ed.Island.Start)..$($ed.Island.End) First $($ed.Island.First) 커서 $(Get-EdCaret $ed) $(Get-EdIslandStyle $ed)"
+        # ``` 자동 닫기 → 언어 → Enter → 코드 (실제 입력처럼 ` 를 하나씩)
+        foreach ($ch in '`', '`', '`') { Send-EdText $ed $ch }
+        Send-EdText $ed 'python'
+        Send-EdKey $ed Return
+        Send-EdText $ed 'print(1)'
+        [void](Test-EdContract $ed '코드 블록 쓰는 중')
+        Assert-Ed '편집기 Enter: 코드 블록을 쓰는 동안 제목은 그린 그대로, 섬은 코드 블록만 (코드 글꼴)' ((Get-EdText $ed) -ceq "# 임`n``````python`nprint(1)`n``````" -and $ed.Island.Start -eq 1 -and @($ed.IslandBox.Text -split "\r?\n").Count -eq 3 -and (Get-EdIslandStyle $ed) -eq 'Memo.IslandCode') "글 [$((Get-EdText $ed).Replace("`n", '¶'))] 섬 $($ed.Island.Start)..$($ed.Island.End) $(Get-EdIslandStyle $ed)"
+        # 닫는 울타리 뒤에서 Enter → 코드 블록 밖 글
+        Set-EdCaret $ed 3 3
+        Send-EdKey $ed Return
+        Send-EdText $ed '뒤 글'
+        [void](Test-EdContract $ed '닫는 울타리 뒤 Enter')
+        $code = @($ed.Units | Where-Object { $_.Kind -eq 'code' })
+        Assert-Ed '편집기 Enter: 닫는 ``` 뒤에서 Enter를 치면 코드 블록은 바로 그리고, 새 줄은 코드 바탕 없이 본문 글꼴' ((Get-EdText $ed) -ceq "# 임`n``````python`nprint(1)`n```````n뒤 글" -and $code.Count -eq 1 -and $ed.Island.Start -eq 4 -and $ed.Island.First -eq 2 -and (Get-EdIslandStyle $ed) -eq 'Memo.Island') "섬 $($ed.Island.Start)..$($ed.Island.End) First $($ed.Island.First) $(Get-EdIslandStyle $ed)"
+        Assert-Ed '편집기 Enter: 블록을 나눠도 OnChanged는 고칠 때마다 한 번씩' ($ed.TestChanged -eq 9) "$($ed.TestChanged)"
+        Close-Ed $ed
+        [void](Test-EdContract $ed '코드 블록 쓰고 닫기')
+        $guard = 0
+        while ($ed.Undo.Count -and $guard -lt 50) { Invoke-EdCommand $ed 'Ctrl+Z'; $guard++ }
+        Assert-Ed '편집기 Enter: 블록을 나눈 뒤에도 실행 취소를 끝까지 하면 처음 글' ((Get-EdText $ed) -ceq '# 임') "($guard 번) [$((Get-EdText $ed).Replace("`n", '¶'))]"
+        [void](Test-EdContract $ed '코드 블록 실행 취소 끝')
+    }
+    Invoke-EdCase 'Enter: 코드 블록 섬에서 닫는 울타리 뒤' {
+        $ed = New-EdEditor
+        Set-EdText $ed "``````ps`nGet-Date`n``````"
+        Open-EdAt $ed 2 3
+        $before = Get-EdIslandStyle $ed
+        Send-EdKey $ed Return
+        Send-EdText $ed 'abc'
+        [void](Test-EdContract $ed '코드 섬 닫는 울타리 뒤')
+        Assert-Ed '편집기 Enter: 코드 블록 섬의 닫는 ``` 뒤 Enter → 그 줄은 코드 섬 밖 (코드 바탕 없음)' ($before -eq 'Memo.IslandCode' -and $ed.Island.Start -eq 3 -and $ed.Island.First -eq 1 -and (Get-EdIslandStyle $ed) -eq 'Memo.Island') "처음 $before → 섬 $($ed.Island.Start)..$($ed.Island.End) First $($ed.Island.First) $(Get-EdIslandStyle $ed)"
+        Close-Ed $ed
+        Assert-Ed '편집기 Enter: 닫는 ``` 뒤 글은 코드 블록 밖 문단' ((Get-EdText $ed) -ceq "``````ps`nGet-Date`n```````nabc" -and (@($ed.Units | ForEach-Object Kind) -join ',') -eq 'code,para') (@($ed.Units | ForEach-Object Kind) -join ',')
+        [void](Test-EdContract $ed '코드 섬 닫기')
+    }
+    Invoke-EdCase '코드 블록 아래 빈 줄 누르기' {
+        $ed = New-EdEditor
+        Set-EdText $ed "``````ps`nGet-Date`n```````n"
+        Open-EdAt $ed 3 0
+        [void](Test-EdContract $ed '코드 아래 빈 줄 섬')
+        Assert-Ed '편집기 섬: 코드 블록 아래 빈 줄에서 열면 그 빈 줄만 (코드 블록은 그린 그대로, 본문 글꼴)' ($ed.Island.Start -eq 3 -and $ed.Island.End -eq 4 -and $ed.Island.First -eq 1 -and (Get-EdIslandStyle $ed) -eq 'Memo.Island') "섬 $($ed.Island.Start)..$($ed.Island.End) First $($ed.Island.First) $(Get-EdIslandStyle $ed)"
+        Send-EdText $ed 'abc'
+        Close-Ed $ed
+        Assert-Ed '편집기 섬: 코드 블록 아래 빈 줄에 쓴 글은 문단' ((Get-EdText $ed) -ceq "``````ps`nGet-Date`n```````nabc" -and $ed.Units.Count -eq 2 -and $ed.Units[1].Kind -eq 'para')
+        [void](Test-EdContract $ed '코드 아래 빈 줄에 쓰기')
+    }
+    Invoke-EdCase 'Enter: 목록 · 문단' {
+        $ed = New-EdEditor
+        Set-EdText $ed '- a'
+        Open-EdAt $ed 0 3
+        Send-EdKey $ed Return
+        [void](Test-EdContract $ed '목록 Enter')
+        Assert-Ed '편집기 Enter: 목록 이어 쓰기 뒤 앞 항목은 바로 그리고 섬은 새 항목만' ((Get-EdText $ed) -ceq "- a`n- " -and $ed.Island.Start -eq 1 -and $ed.Island.First -eq 1 -and (Get-EdCaret $ed) -eq '1:2') "섬 $($ed.Island.Start)..$($ed.Island.End) 커서 $(Get-EdCaret $ed)"
+        Send-EdText $ed 'b'
+        Invoke-EdCommand $ed 'Ctrl+Z'
+        Invoke-EdCommand $ed 'Ctrl+Z'
+        Assert-Ed '편집기 Enter: 목록 이어 쓰기를 나눈 뒤에도 실행 취소로 처음 글' ((Get-EdText $ed) -ceq '- a') (Get-EdText $ed)
+        [void](Test-EdContract $ed '목록 Enter 실행 취소')
+        Set-EdText $ed 'abc'
+        Open-EdAt $ed 0 1
+        Send-EdKey $ed Return
+        Assert-Ed '편집기 Enter: 문단 가운데 Enter(같은 문단)는 섬 그대로' ((Get-EdText $ed) -ceq "a`nbc" -and $ed.Island.Start -eq 0 -and $ed.Island.End -eq 1 -and (Get-EdCaret $ed) -eq '1:0') "섬 $($ed.Island.Start)..$($ed.Island.End) 커서 $(Get-EdCaret $ed)"
+        [void](Test-EdContract $ed '문단 가운데 Enter')
+    }
+    Invoke-EdCase 'Enter: 한글 조합 중' {
+        $ed = New-EdEditor
+        Set-EdText $ed '# 임'
+        Open-EdAt $ed 0 3
+        # 조합이 이어지는 동안 줄이 바뀌어도(입력기가 넣은 줄바꿈) 섬을 옮기지 않는다
+        Send-EdComposition $ed Start
+        $b = $ed.IslandBox
+        $b.SelectedText = "`r`n"; $b.Select($b.Text.Length, 0)
+        Sync-EdUi
+        Assert-Ed '편집기 한글 조합: 조합 중에는 줄이 바뀌어도 섬을 나누지 않는다' ($ed.Island.Start -eq 0 -and [object]::ReferenceEquals($ed.IslandBox.Parent, $ed.Island.Holder)) "섬 $($ed.Island.Start)..$($ed.Island.End)"
+        Send-EdComposition $ed End '임'
+        Sync-EdUi
+        Assert-Ed '편집기 한글 조합: 조합이 끝나면 섬을 나눈다 (제목을 그림)' ($ed.Island.Start -eq 1 -and (Get-EdCaret $ed) -eq '1:0') "섬 $($ed.Island.Start)..$($ed.Island.End) 커서 $(Get-EdCaret $ed)"
+        [void](Test-EdContract $ed '조합 끝난 뒤')
+        # 조합 중 Enter(목록): 입력기가 줄을 바꾼 뒤의 목록 이어 쓰기가 먼저, 섬 나누기는 그 뒤
+        Set-EdText $ed '- 가'
+        Open-EdAt $ed 0 3
+        & $em { param($x) Add-WtMemoImePending $x 'enter' } $ed.IslandBox
+        $b = $ed.IslandBox
+        $b.SelectedText = "`r`n"; $b.Select($b.Text.Length, 0)
+        Sync-EdUi
+        Assert-Ed '편집기 한글 조합 Enter(목록): 목록 이어 쓰기를 한 뒤 새 항목만 섬' ((Get-EdText $ed) -ceq "- 가`n- " -and $ed.Island.Start -eq 1 -and (Get-EdCaret $ed) -eq '1:2') "글 [$((Get-EdText $ed).Replace("`n", '¶'))] 섬 $($ed.Island.Start)..$($ed.Island.End) 커서 $(Get-EdCaret $ed)"
+        [void](Test-EdContract $ed '조합 중 Enter 목록')
+    }
 
     # ---- 긴 글: 나눠 그리기 ----
     Invoke-EdCase '긴 글' {

@@ -26,6 +26,8 @@
 #   - 글은 줄 목록($ed.Lines)으로 들고, Get-WtMarkdownUnits로 블록(단위)을 나눠 단위마다 Section 하나로 그린다.
 #   - 커서가 있는 단위만 BlockUIContainer 안의 TextBox(섬)로 바꿔 원문을 고친다. 한글 입력 · 선택 · 붙여넣기는 TextBox 그대로다.
 #   - 섬 밖으로 나가면(↑↓←→ · 클릭) 고친 줄을 되돌려 넣고 바뀐 단위만 다시 그린다(그린 Section은 원문이 같으면 다시 쓴다).
+#   - 섬에서 줄 수가 바뀌어(Enter · 붙여넣기 · 줄 지우기) 단위가 여럿이 되면, 조합이 끝난 뒤 커서가 있는 단위만 남기고 나머지는 바로 그린다(섬 나누기).
+#     빈 줄에 선 섬은 빈 줄만 덮는다.
 #   - 실행 취소는 편집기가 따로 든다(글 전체 + 커서 자리). 섬을 옮겨 다녀도 이어진다.
 #
 # 이벤트 처리기는 나중에 불리므로 보낸 요소($s)의 Tag(= $ed, 보기는 Tag.Editor)와 $script: 변수만 쓴다.
@@ -49,6 +51,7 @@ function New-WtMemoEditor {
         Island = $null; Caret = @{ Line = 0; Col = 0 }; Drag = $null
         Undo = [System.Collections.Generic.List[object]]::new(); Redo = [System.Collections.Generic.List[object]]::new()
         LastEdit = [datetime]::MinValue; IslandPrev = ''; ReadText = $null
+        Composing = $false; SplitWanted = $null; SplitQueued = $false
     }
     $ed.Lines.Add('')
     # 편집기 = 위 찾기 막대(숨김) + 본문(원문 칸 · 실시간 보기 · 읽기 보기 중 하나만 보임)
@@ -112,10 +115,21 @@ function New-WtMemoEditor {
             param($s, $e)
             $ed = $s.Tag
             if ($ed.Loading -or -not $ed.Island) { return }
+            $prev = $ed.IslandPrev
             Add-WtMemoTypingUndo $ed
             $ed.IslandPrev = $s.Text
             Invoke-WtMemoEditorChanged $ed
+            if (Test-WtMemoLineChange $prev $s.Text $e.Changes) { Request-WtMemoIslandSplit $ed }
         })
+    # 한글 조합 중인지: 조합 시작(TextInputStart) ~ 확정(TextInput). 조합 중에는 섬을 나누지 않는다
+    [System.Windows.Input.TextCompositionManager]::AddPreviewTextInputStartHandler($island, [System.Windows.Input.TextCompositionEventHandler] { param($s, $e) $s.Tag.Composing = $true })
+    $island.AddHandler([System.Windows.Input.TextCompositionManager]::PreviewTextInputEvent, [System.Windows.Input.TextCompositionEventHandler] {
+            param($s, $e)
+            $ed = $s.Tag
+            $ed.Composing = $false
+            if ($ed.SplitWanted) { Request-WtMemoIslandSplit $ed }
+        }, $true)
+    $island.Add_LostKeyboardFocus({ param($s, $e) $s.Tag.Composing = $false })
     Add-WtMemoBoxHandlers $island -Island
     $island.Add_PreviewMouseWheel({ param($s, $e) Invoke-WtMemoIslandWheel $s $e })
     $ed.IslandBox = $island
@@ -461,11 +475,15 @@ function Set-WtMemoListIds($Ed, $Units, [int]$From, [int]$To) {
     }
 }
 
-# 단위 하나의 Section. 원문 · 깊이 · 여백이 같은 Section이 쉬고 있으면 다시 쓴다
+# 같은 모양으로 그리는 단위인지 가르는 열쇠: 종류 · 깊이 · 여백(Last) · 원문
+function Get-WtMemoUnitKey($Unit) { '{0}|{1}|{2}|{3}' -f $Unit.Kind, $Unit.Depth, $Unit.Last, $Unit.Text }
+
+# 단위 하나의 Section. 원문 · 깊이 · 여백이 같은 Section이 쉬고 있으면 다시 쓴다.
+# 다시 쓸 때는 그린 모델의 줄 번호 기준(Base)을 그릴 때 것으로 맞춘다 (할 일을 누를 때 줄을 찾는 데 쓴다)
 function Get-WtMemoUnitSection($Ed, $Unit) {
-    $key = '{0}|{1}|{2}|{3}' -f $Unit.Kind, $Unit.Depth, $Unit.Last, $Unit.Text
+    $key = Get-WtMemoUnitKey $Unit
     $sec = $null
-    if ($Ed.Cache.TryGetValue($key, [ref]$sec) -and -not $sec.Parent) { $sec.Tag = $Unit; return $sec }
+    if ($Ed.Cache.TryGetValue($key, [ref]$sec) -and -not $sec.Parent) { $Unit.Base = $sec.Tag.Base; $sec.Tag = $Unit; return $sec }
     $sec = New-WtMarkdownUnitSection $Ed.Live $Unit
     $Ed.Cache[$key] = $sec
     # 다이어그램 크기를 다시 재는 것은 편집기가 직접 한다 (보기 공통 처리기가 문서를 통째로 바꾸지 않게)
@@ -559,11 +577,10 @@ function Get-WtMemoUnitRange($Ed, [int]$From, [int]$To) {
     if (-not $units.Count) { return @(0, $Ed.Lines.Count) }
     $a = Find-WtMemoUnitIndex $Ed $From
     $b = Find-WtMemoUnitIndex $Ed $To
-    if ($a -lt 0) { $a = 0 }
-    if ($b -lt 0) { $b = 0 }
-    $start = [Math]::Min($units[$a].Start, $From)
-    $end = [Math]::Max($units[$b].End, $To + 1)
-    # 빈 줄에 섰으면 앞 단위에 붙인다 (빈 줄만 따로 섬이 되지 않게)
+    # 끝 줄이 단위 안이면 그 단위 전체로 넓힌다. 빈 줄(어느 단위에도 없는 줄)이면 그 줄만 (앞 단위는 그린 그대로)
+    $start = $From; $end = $To + 1
+    if ($a -ge 0 -and $units[$a].End -gt $From) { $start = $units[$a].Start }
+    if ($b -ge 0 -and $units[$b].End -gt $To) { $end = [Math]::Max($end, $units[$b].End) }
     @($start, [Math]::Min($end, $Ed.Lines.Count))
 }
 
@@ -590,7 +607,8 @@ function Open-WtMemoIsland($Ed, [int]$Start, [int]$End, [int]$Line, [int]$Col, [
         $box = $Ed.IslandBox
         $holder = [System.Windows.Documents.BlockUIContainer]::new()
         Set-WtStyle $holder 'Memo.IslandBox'
-        Set-WtStyle $box (Get-WtMemoIslandStyle $covered)
+        $style = Get-WtMemoIslandStyle $covered
+        Set-WtStyle $box $style
         if ($box.Parent) { $box.Parent.Child = $null }
         $holder.Child = $box
         if ($last + 1 -lt $Ed.Rendered) { $doc.Blocks.InsertBefore($Ed.Sections[$last + 1], $holder) } else { $doc.Blocks.Add($holder) }
@@ -598,7 +616,9 @@ function Open-WtMemoIsland($Ed, [int]$Start, [int]$End, [int]$Line, [int]$Col, [
         $Ed.Loading = $true
         try { $box.Text = (@($Ed.Lines.GetRange($Start, $End - $Start)) -join "`r`n") } finally { $Ed.Loading = $false }
         $Ed.IslandPrev = $box.Text
-        $Ed.Island = @{ Start = $Start; End = $End; Holder = $holder; Original = $box.Text; First = $first; Last = $last }
+        $Ed.Island = @{ Start = $Start; End = $End; Holder = $holder; Original = $box.Text; First = $first; Last = $last; Style = $style }
+        $Ed.Composing = $false
+        $Ed.SplitWanted = $null
         $caret = Get-WtMemoIslandIndex $Ed $Line $Col
         if ($ToLine -ge 0) {
             $to = Get-WtMemoIslandIndex $Ed $ToLine $ToCol
@@ -701,83 +721,247 @@ function Close-WtMemoIsland($Ed, [switch]$NoRender) {
     } finally { $Ed.Busy-- }
 }
 
+# ---- 실시간: 섬 나누기 (Enter 등으로 줄 수가 바뀌었을 때) ---------------------------------------
+
+# 고친 것에 줄바꿈이 들거나 빠졌는가. 바뀐 곳(TextChange)만 본다 (긴 섬에서 키마다 글 전체를 훑지 않게)
+function Test-WtMemoLineChange([string]$Prev, [string]$Text, $Changes) {
+    $list = @($Changes)
+    if ($list.Count -ne 1) { return ($Prev.Split("`n").Count -ne $Text.Split("`n").Count) }
+    $c = $list[0]
+    if ($c.AddedLength -and $c.Offset + $c.AddedLength -le $Text.Length -and $Text.IndexOf("`n", $c.Offset, $c.AddedLength) -ge 0) { return $true }
+    if ($c.RemovedLength -and $c.Offset + $c.RemovedLength -le $Prev.Length -and $Prev.IndexOf("`n", $c.Offset, $c.RemovedLength) -ge 0) { return $true }
+    $false
+}
+
+# 섬 나누기를 남긴다. 고치는 중(편집 명령이 글을 바꾸고 커서를 놓는 사이)에는 나누지 않도록 지금 하던 일이 끝난 뒤(Normal)에 한다.
+# 한글 조합 중이면 확정 뒤에, 조합 중 키의 뒤처리(Add-WtMemoImePending)가 남았으면 그 뒤에 다시 부른다
+$script:splitPending = [System.Collections.Generic.List[object]]::new()
+function Request-WtMemoIslandSplit($Ed) {
+    if (-not $Ed.Island) { return }
+    $Ed.SplitWanted = $Ed.Island
+    if ($Ed.Composing -or $script:imePending -or $Ed.SplitQueued) { return }
+    $Ed.SplitQueued = $true
+    $script:splitPending.Add($Ed)
+    if ($script:splitPending.Count -eq 1) {
+        [void]$Ed.Live.Dispatcher.BeginInvoke([System.Action] { Complete-WtMemoIslandSplits }, [System.Windows.Threading.DispatcherPriority]::Normal)
+    }
+}
+
+function Complete-WtMemoIslandSplits {
+    $list = @($script:splitPending)
+    $script:splitPending.Clear()
+    foreach ($ed in $list) {
+        $ed.SplitQueued = $false
+        try { Split-WtMemoIsland $ed } catch { Show-WtError $_ '메모 편집' }
+    }
+}
+
+# 섬 글을 다시 나눠, 커서(고른 곳)가 든 단위만 섬으로 남기고 나머지는 그린다. 빈 줄에 섰으면 그 빈 줄들만.
+# 이미 그 단위만 덮고 있으면 섬은 그대로 두고 글꼴만 맞춘다(``` 를 치면 코드 글꼴).
+# 섬 상자는 문서에서 빼지 않고 그 자리에 둔다(포커스 · 입력기가 끊기지 않고, 긴 글에서 배치가 덜 든다). 섬 앞 · 뒤로 나간 단위만 그려 넣는다.
+# 아래 글 전체를 다시 나눠야 하면(울타리 · 주석 · 수식) 섬을 닫고 다시 연다
+function Split-WtMemoIsland($Ed) {
+    $isl = $Ed.Island
+    if (-not $isl -or -not [object]::ReferenceEquals($Ed.SplitWanted, $isl) -or $Ed.Mode -ne 'live') { $Ed.SplitWanted = $null; return }
+    if ($Ed.Composing -or $script:imePending) { return }   # 남겨 둔다. 확정 · 뒤처리 끝에 다시 부른다
+    $Ed.SplitWanted = $null
+    if ($Ed.Busy -or $Ed.Drag) { return }
+    $box = $Ed.IslandBox
+    $lines = @($box.Text -split "\r?\n")
+    $islEnd = $isl.Start + $lines.Count
+    $hasSel = $box.SelectionLength -gt 0
+    $a = Get-WtMemoIslandCaret $Ed $box.SelectionStart
+    $z = Get-WtMemoIslandCaret $Ed ($box.SelectionStart + $box.SelectionLength)
+    # 섬 글만 나눈다(줄 번호는 글 전체 기준). 실제 범위는 섬을 열 때 글 전체의 단위로 다시 맞춘다
+    $units = Get-WtMarkdownUnits ($lines -join "`n") -LineOffset $isl.Start
+    if ($null -eq $units) { $units = @() }
+    $from = $a.Line; $to = $z.Line + 1
+    $mine = [System.Collections.Generic.List[object]]::new()
+    foreach ($u in $units) {
+        if ($u.End -gt $a.Line -and $u.Start -le $z.Line) { $mine.Add($u); $from = [Math]::Min($from, $u.Start); $to = [Math]::Max($to, $u.End) }
+    }
+    if (-not $mine.Count) {
+        # 빈 줄: 섬 안에서 이어진 빈 줄까지
+        while ($from -gt $isl.Start -and -not $lines[$from - 1 - $isl.Start].Trim()) { $from-- }
+        while ($to -lt $islEnd -and -not $lines[$to - $isl.Start].Trim()) { $to++ }
+    }
+    if ($from -le $isl.Start -and $to -ge $islEnd) {
+        $style = Get-WtMemoIslandStyle $units
+        if ($style -ne $isl.Style) { Set-WtStyle $box $style; $isl.Style = $style }
+        return
+    }
+    $Ed.Busy++
+    try {
+        if ((Test-WtMemoWideChange $Ed $isl $lines) -or $isl.Last -ge $Ed.Rendered) {
+            Close-WtMemoIsland $Ed
+            if ($hasSel) { Open-WtMemoIsland $Ed $from $to $a.Line $a.Col $z.Line $z.Col }
+            else { Open-WtMemoIsland $Ed $from $to $a.Line $a.Col }
+            return
+        }
+        # 섬 글을 줄 목록에 넣고 둘레를 다시 나눈다. [from, to)에 걸친 단위는 섬이 계속 덮는다(그 Section은 만들어 두기만)
+        $Ed.Lines.RemoveRange($isl.Start, $isl.End - $isl.Start)
+        $Ed.Lines.InsertRange($isl.Start, [string[]]$lines)
+        $hole = @{ From = $from; To = $to; Holder = $isl.Holder; First = 0; Last = -1 }
+        Update-WtMemoRegion $Ed $isl $lines.Count $isl.Holder.NextBlock $hole
+        $first = $hole.First; $last = $hole.Last
+        $start = $from; $end = $to
+        if ($last -ge $first) {
+            $start = [Math]::Min($start, $Ed.Units[$first].Start)
+            $end = [Math]::Max($end, $Ed.Units[$last].End)
+        }
+        $style = Get-WtMemoIslandStyle @(for ($i = $first; $i -le $last; $i++) { $Ed.Units[$i] })
+        if ($style -ne $isl.Style) { Set-WtStyle $box $style }
+        $text = @($Ed.Lines.GetRange($start, $end - $start)) -join "`r`n"
+        $Ed.Island = @{ Start = $start; End = $end; Holder = $isl.Holder; Original = $text; First = $first; Last = $last; Style = $style }
+        $Ed.IslandPrev = $text
+        $Ed.SplitWanted = $null
+        # 글 바꾸기와 커서 놓기를 한 묶음으로 (따로 하면 바꿀 때마다 입력기 쪽이 배치를 다시 재게 해서 긴 글에서 느리다)
+        $Ed.Loading = $true
+        $box.BeginChange()
+        try {
+            $box.Text = $text
+            $caret = Get-WtMemoIslandIndex $Ed $a.Line $a.Col
+            if (-not $hasSel) { $box.Select($caret, 0) }
+        } finally { $box.EndChange(); $Ed.Loading = $false }
+        if ($hasSel) { Select-WtMemoIslandRange $box $caret (Get-WtMemoIslandIndex $Ed $z.Line $z.Col) }
+        # 위쪽 블록 높이가 바뀌었을 수 있으니 배치 뒤에 커서를 화면 안으로 (Open-WtMemoIsland와 같게)
+        $script:caretPending = $Ed
+        [void]$box.Dispatcher.BeginInvoke([System.Action] { if ($script:caretPending) { Show-WtMemoIslandCaret $script:caretPending; $script:caretPending = $null } }, [System.Windows.Threading.DispatcherPriority]::Loaded)
+    } finally { $Ed.Busy-- }
+}
+
+# 섬에서 고친 것이 아래 글 전체의 뜻을 바꿀 수 있는가: 코드 울타리 줄(짝 · 길이 · 글자), HTML 주석 열고 닫기(<!-- -->), 수식 블록($$)
+function Test-WtMemoWideChange($Ed, $Isl, [string[]]$NewLines) {
+    if (-not $Ed.Units.Count) { return $true }
+    $oldText = $Isl.Original -split "\r?\n"
+    $fence = '^\s{0,3}(```|~~~)'
+    $fenceOld = @($oldText | Where-Object { $_ -match $fence } | ForEach-Object { $_.Trim() }) -join "`n"
+    $fenceNew = @($NewLines | Where-Object { $_ -match $fence } | ForEach-Object { $_.Trim() }) -join "`n"
+    if ($fenceOld -cne $fenceNew) { return $true }
+    (Get-WtMemoWideMarks ($oldText -join "`n")) -cne (Get-WtMemoWideMarks ($NewLines -join "`n"))
+}
+
+# 들여쓰기 없는 목록 표지 줄의 표지 종류: '-' · '*' · '+', 번호 목록은 구분 기호 '.' · ')'. 아니면 ''.
+# 같은 종류의 표지 줄은 앞 항목 뒤에서 늘 새 형제 항목이다 (다른 종류면 앞 문단에 이어지는 글일 수 있다)
+function Get-WtMemoTopMarker([string]$Line) {
+    $m = [regex]::Match($Line, '^(?:([-*+])|\d{1,9}([.)]))(?:[ \t]|$)')
+    if (-not $m.Success) { return '' }
+    if ($m.Groups[1].Success) { return $m.Groups[1].Value }
+    $m.Groups[2].Value
+}
+
+# 단위 번호 Index가 든 목록(이어진 목록 항목 단위들)이 빽빽한가: 항목 사이 · 항목 안에 빈 줄이 없다. 목록마다 한 번만 센다($Memo)
+function Test-WtMemoTightList($Units, [int]$Index, [hashtable]$Memo) {
+    $i = $Index
+    while ($i -gt 0 -and $Units[$i - 1].Kind -eq 'list-item') { $i-- }
+    if ($Memo.ContainsKey($i)) { return $Memo[$i] }
+    $ok = $true
+    for ($k = $i; $k -lt $Units.Count -and $Units[$k].Kind -eq 'list-item'; $k++) {
+        $u = $Units[$k]
+        if ($u.Text.Contains("`n") -and $u.Text -match '\n[ \t]*(\n|$)') { $ok = $false; break }
+        if ($k + 1 -lt $Units.Count -and $Units[$k + 1].Kind -eq 'list-item' -and $Units[$k + 1].Start -ne $u.End) { $ok = $false; break }
+    }
+    $Memo[$i] = $ok
+    $ok
+}
+
 function Get-WtMemoWideMarks([string]$Text) {
     '{0}|{1}|{2}' -f ([regex]::Matches($Text, '<!--').Count), ([regex]::Matches($Text, '-->').Count), ([regex]::Matches($Text, '(?m)^\s*\$\$').Count)
 }
 
 # 고친 섬 둘레만 다시 나눈다. 같이 다시 나누는 이웃(문맥에 따라 모양이 바뀔 수 있어서):
 #   빈 줄 없이 붙은 단위, 같은 목록(ListId)의 항목, 들여 쓴 줄로 시작하는 쪽의 앞 단위
-# 코드 울타리 줄이 하나라도 바뀌면(짝 · 길이 · 글자) 아래 전체가 달라질 수 있으므로 전체를 다시 나눈다
-function Update-WtMemoRegion($Ed, $Isl, [int]$NewCount, $After) {
+# 아래 글 전체의 뜻이 바뀔 수 있으면(Test-WtMemoWideChange) 전체를 다시 나눈다.
+# $Hole(섬 나누기): @{ From; To; Holder } 줄 범위에 걸친 단위는 문서에 넣지 않고 섬이 계속 덮는다. 섬 상자(Holder)는 문서에 그대로 있고,
+#   그 앞 단위는 Holder 앞에, 뒤 단위는 $After 앞에 넣는다. 덮는 단위 번호를 $Hole.First · Last에 적어 준다(없으면 Last = First - 1)
+function Update-WtMemoRegion($Ed, $Isl, [int]$NewCount, $After, $Hole = $null) {
     $units = $Ed.Units
     $delta = $NewCount - ($Isl.End - $Isl.Start)
     $islText = @($Ed.Lines.GetRange($Isl.Start, $NewCount))
-    $oldText = $Isl.Original -split "\r?\n"
-    $fence = '^\s{0,3}(```|~~~)'
-    $fenceOld = @($oldText | Where-Object { $_ -match $fence } | ForEach-Object { $_.Trim() }) -join "`n"
-    $fenceNew = @($islText | Where-Object { $_ -match $fence } | ForEach-Object { $_.Trim() }) -join "`n"
-    # 아래 글 전체의 뜻을 바꿀 수 있는 것: HTML 주석 열고 닫기(<!-- -->), 수식 블록($$)
-    $wideOld = Get-WtMemoWideMarks ($oldText -join "`n")
-    $wideNew = Get-WtMemoWideMarks ($islText -join "`n")
-    if ($fenceOld -cne $fenceNew -or $wideOld -cne $wideNew -or -not $units.Count) {
+    if (Test-WtMemoWideChange $Ed $Isl $islText) {
         # 섬 다음 블록부터 끝까지 이미 문서에 있으니 전체를 새로 꾸린다
         Update-WtMemoLive $Ed
         return
     }
-    $a = $Isl.First; $b = $Isl.Last
-    $rs = $Isl.Start; $re = $Isl.Start + $NewCount
     $listy = '^\s*([-*+]|\d{1,9}[.)])(\s|$)'
-    $hasList = @($islText | Where-Object { $_ -match $listy }).Count -gt 0
-    for ($i = $a; $i -le $b; $i++) { if ($units[$i].Kind -eq 'list-item') { $hasList = $true } }
-    do {
-        $grew = $false
-        if ($a -gt 0) {
-            $p = $units[$a - 1]
-            $cur = if ($a -le $b) { $units[$a] } else { $null }
-            $sameList = $p.Kind -eq 'list-item' -and $hasList -and (-not $cur -or ($cur.Kind -eq 'list-item' -and $cur.ListId -eq $p.ListId))
-            # 영역 첫 글 줄이 들여 써 있으면 앞 단위에 따라 뜻이 바뀐다(목록 이어 쓰기 · 코드)
-            $firstText = $null
-            for ($l = $rs; $l -lt $re; $l++) { if ($Ed.Lines[$l].Trim()) { $firstText = $Ed.Lines[$l]; break } }
-            $indented = $firstText -and $firstText -match '^\s'
-            # 목록 표지로 시작하면(빈 항목 '1. ' 등) 앞 글에 따라 목록 · 문단이 갈리므로 앞 단위를 하나 같이 본다
-            $listStart = $firstText -and $firstText -match $listy -and $p.Kind -ne 'list-item'
-            if ($p.End -eq $rs -or $sameList -or $indented -or $listStart) {
-                $a--; $rs = $p.Start; $grew = $true
-                if ($p.Kind -eq 'list-item') { $hasList = $true }
+    $hasList0 = @($islText | Where-Object { $_ -match $listy }).Count -gt 0
+    for ($i = $Isl.First; $i -le $Isl.Last; $i++) { if ($units[$i].Kind -eq 'list-item') { $hasList0 = $true } }
+    # 빽빽한 목록에서 영역 끝과 이웃 항목이 들여쓰기 없는 같은 표지 줄(형제 항목)이면 목록 나머지는 같이 나누지 않는다 (긴 목록에서 Enter마다 목록 전체를 나누지 않게).
+    # 느슨한 목록(항목 사이 · 안에 빈 줄)은 항목 하나만 바뀌어도 모든 항목 모양이 바뀐다. 섬 글에 빈 줄이 있으면 새로 느슨해질 수 있으니 그때도 예전처럼 목록 전체.
+    # 나눈 뒤 영역 끝이 정말 맨 앞 목록 항목인지 보고(앞 문단에 이어지는 글이면 아님), 아니면 목록 전체로 다시 나눈다
+    $allowSibling = -not (@($islText | Where-Object { -not $_.Trim() }).Count)
+    $tight = @{}
+    for ($try = 0; $try -lt 2; $try++) {
+        $a = $Isl.First; $b = $Isl.Last
+        $rs = $Isl.Start; $re = $Isl.Start + $NewCount
+        $hasList = $hasList0
+        $upSib = $false; $downSib = $false
+        do {
+            $grew = $false
+            if ($a -gt 0) {
+                $p = $units[$a - 1]
+                $cur = if ($a -le $b) { $units[$a] } else { $null }
+                $sameList = $p.Kind -eq 'list-item' -and $hasList -and (-not $cur -or ($cur.Kind -eq 'list-item' -and $cur.ListId -eq $p.ListId))
+                # 영역 첫 글 줄이 들여 써 있으면 앞 단위에 따라 뜻이 바뀐다(목록 이어 쓰기 · 코드)
+                $firstText = $null
+                for ($l = $rs; $l -lt $re; $l++) { if ($Ed.Lines[$l].Trim()) { $firstText = $Ed.Lines[$l]; break } }
+                $indented = $firstText -and $firstText -match '^\s'
+                # 목록 표지로 시작하면(빈 항목 '1. ' 등) 앞 글에 따라 목록 · 문단이 갈리므로 앞 단위를 하나 같이 본다
+                $listStart = $firstText -and $firstText -match $listy -and $p.Kind -ne 'list-item'
+                $sibling = $false
+                if ($allowSibling -and $p.Kind -eq 'list-item' -and $p.Depth -eq 0) {
+                    $mk = Get-WtMemoTopMarker $Ed.Lines[$rs]
+                    $sibling = $mk -and $mk -ceq (Get-WtMemoTopMarker $Ed.Lines[$p.Start]) -and (Test-WtMemoTightList $units ($a - 1) $tight)
+                }
+                $upSib = $sibling
+                if (-not $sibling -and ($p.End -eq $rs -or $sameList -or $indented -or $listStart)) {
+                    $a--; $rs = $p.Start; $grew = $true
+                    if ($p.Kind -eq 'list-item') { $hasList = $true }
+                }
             }
-        }
-        if ($b + 1 -lt $units.Count) {
-            $n = $units[$b + 1]
-            $cur = if ($a -le $b) { $units[$b] } else { $null }
-            $sameList = $n.Kind -eq 'list-item' -and $hasList -and (-not $cur -or ($cur.Kind -eq 'list-item' -and $cur.ListId -eq $n.ListId))
-            $nStart = $n.Start + $delta
-            $indented = $Ed.Lines[$nStart] -match '^\s'
-            if ($nStart -eq $re -or $sameList -or $indented) {
-                Complete-WtMemoRender $Ed ($b + 1)
-                $b++; $re = $n.End + $delta; $grew = $true
-                if ($n.Kind -eq 'list-item') { $hasList = $true }
+            if ($b + 1 -lt $units.Count) {
+                $n = $units[$b + 1]
+                $cur = if ($a -le $b) { $units[$b] } else { $null }
+                $sameList = $n.Kind -eq 'list-item' -and $hasList -and (-not $cur -or ($cur.Kind -eq 'list-item' -and $cur.ListId -eq $n.ListId))
+                $nStart = $n.Start + $delta
+                $indented = $Ed.Lines[$nStart] -match '^\s'
+                $sibling = $false
+                if ($allowSibling -and $n.Kind -eq 'list-item' -and $n.Depth -eq 0 -and $re -gt $rs) {
+                    $mk = Get-WtMemoTopMarker $Ed.Lines[$nStart]
+                    $sibling = $mk -and $mk -ceq (Get-WtMemoTopMarker $Ed.Lines[$re - 1]) -and (Test-WtMemoTightList $units ($b + 1) $tight)
+                }
+                $downSib = $sibling
+                if (-not $sibling -and ($nStart -eq $re -or $sameList -or $indented)) {
+                    Complete-WtMemoRender $Ed ($b + 1)
+                    $b++; $re = $n.End + $delta; $grew = $true
+                    if ($n.Kind -eq 'list-item') { $hasList = $true }
+                }
             }
-        }
-    } while ($grew)
-    $rs = [Math]::Min($rs, $Isl.Start)
-    $re = [Math]::Max($re, $Isl.Start + $NewCount)
+        } while ($grew)
+        $rs = [Math]::Min($rs, $Isl.Start)
+        $re = [Math]::Max($re, $Isl.Start + $NewCount)
+        # 바로 뒤 빈 줄까지 같이 나눈다. 닫히지 않은 울타리 · 들여 쓴 코드 · 빈 목록 항목은 뒤 빈 줄을 자기 것으로 잡는다 (빈 줄은 어느 단위의 시작도 아니다)
+        $reParse = $re
+        while ($reParse -lt $Ed.Lines.Count -and -not $Ed.Lines[$reParse].Trim()) { $reParse++ }
+        $region = @($Ed.Lines.GetRange($rs, $reParse - $rs)) -join "`n"
+        $fresh = Get-WtMarkdownUnits $region -LineOffset $rs   # 배열 하나로 돌려준다 (@()로 다시 감싸지 않는다)
+        if ($null -eq $fresh) { $fresh = @() }
+        if (-not ($upSib -or $downSib)) { break }
+        # 형제 항목으로 보고 멈춘 끝: 영역 첫 단위가 맨 앞 줄에서 시작하는 깊이 0 항목, 마지막 단위가 끝 줄 하나짜리 깊이 0 항목이어야 한다
+        $ok = $fresh.Count -gt 0
+        if ($ok -and $upSib) { $f = $fresh[0]; $ok = $f.Kind -eq 'list-item' -and $f.Depth -eq 0 -and $f.Start -eq $rs }
+        if ($ok -and $downSib) { $f = $fresh[$fresh.Count - 1]; $ok = $f.Kind -eq 'list-item' -and $f.Depth -eq 0 -and $f.Start -eq $re - 1 -and $f.End -eq $re }
+        if ($ok) { break }
+        $allowSibling = $false
+    }
 
     $doc = $Ed.Live.Document
-    # 다시 나눌 단위의 Section 빼기 (섬이 덮었던 First..Last는 이미 빠져 있음)
-    for ($i = $a; $i -le $b; $i++) {
-        if ($i -ge $Isl.First -and $i -le $Isl.Last) { continue }
-        $sec = $Ed.Sections[$i]
-        if ($sec -and $sec.Parent) {
-            if ($After -eq $sec) { $After = $sec.NextBlock }
-            [void]$doc.Blocks.Remove($sec)
-        }
-    }
-    for ($i = $b + 1; $i -lt $units.Count; $i++) { $units[$i].Start += $delta; $units[$i].End += $delta }
-    $region = @($Ed.Lines.GetRange($rs, $re - $rs)) -join "`n"
-    $fresh = Get-WtMarkdownUnits $region -LineOffset $rs   # 배열 하나로 돌려준다 (@()로 다시 감싸지 않는다)
-    if ($null -eq $fresh) { $fresh = @() }
     $removed = $b - $a + 1
     $wasRendered = $b -lt $Ed.Rendered
+    # 다시 나누기 전 영역의 단위 · Section (섬이 덮었던 First..Last의 Section은 이미 문서에서 빠져 있음)
+    $oldUnits = @(for ($i = $a; $i -le $b; $i++) { $units[$i] })
+    $oldSecs = @(for ($i = $a; $i -le $b; $i++) { $Ed.Sections[$i] })
+    for ($i = $b + 1; $i -lt $units.Count; $i++) { $units[$i].Start += $delta; $units[$i].End += $delta }
     $units.RemoveRange($a, $removed)
     $Ed.Sections.RemoveRange($a, $removed)
     $units.InsertRange($a, [object[]]$fresh)
@@ -787,12 +971,61 @@ function Update-WtMemoRegion($Ed, $Isl, [int]$NewCount, $After) {
     $from = [Math]::Max(0, $a - 1); $to = [Math]::Min($units.Count - 1, $a + $fresh.Count)
     $before = @(for ($i = $from; $i -le $to; $i++) { $units[$i].Last })
     Set-WtMemoListIds $Ed $units $from $to
+    # 섬 앞 · 뒤에서 다시 나눠도 같은 단위(Get-WtMemoUnitKey의 종류 · 깊이 · 여백 · 원문이 같음)는 그린 Section을 그 자리에 둔다.
+    # 긴 목록에서 Enter를 칠 때 목록 전체를 빼고 다시 넣지 않게. 앞은 섬 앞(First 앞), 뒤는 섬 뒤(Last 뒤)만 본다.
+    # 단위가 많을 수 있어 열쇠 함수를 부르지 않고 칸을 바로 견준다. 자리(Start)도 같아야 한다(섬 뒤는 줄 수 차이만큼 옮긴 자리)
+    $keep = 0; $keepEnd = 0
     if ($wasRendered) {
-        for ($k = 0; $k -lt $fresh.Count; $k++) {
+        $n = [Math]::Min($oldUnits.Count, $fresh.Count)
+        while ($keep -lt $n -and $a + $keep -lt $Isl.First) {
+            $o = $oldUnits[$keep]; $f = $fresh[$keep]; $sec = $oldSecs[$keep]
+            if (-not ($sec -and $sec.Parent -and $o.Start -eq $f.Start -and $o.Kind -ceq $f.Kind -and $o.Depth -eq $f.Depth -and $o.Last -eq $f.Last -and $o.Text -ceq $f.Text)) { break }
+            $keep++
+        }
+        while ($keepEnd -lt $n - $keep) {
+            $i = $oldUnits.Count - 1 - $keepEnd
+            $o = $oldUnits[$i]; $f = $fresh[$fresh.Count - 1 - $keepEnd]; $sec = $oldSecs[$i]
+            if ($a + $i -le $Isl.Last -or -not ($sec -and $sec.Parent -and $o.Start + $delta -eq $f.Start -and $o.Kind -ceq $f.Kind -and $o.Depth -eq $f.Depth -and $o.Last -eq $f.Last -and $o.Text -ceq $f.Text)) { break }
+            $keepEnd++
+        }
+    }
+    # 섬 나누기: 섬이 계속 덮을 새 단위 [cover, coverEnd] (없으면 coverEnd = cover - 1, cover는 섬 뒤 첫 단위)
+    $cover = $fresh.Count; $coverEnd = $fresh.Count - 1
+    if ($Hole) {
+        $cover = 0
+        while ($cover -lt $fresh.Count -and $fresh[$cover].End -le $Hole.From) { $cover++ }
+        $coverEnd = $cover - 1
+        while ($coverEnd + 1 -lt $fresh.Count -and $fresh[$coverEnd + 1].Start -lt $Hole.To) { $coverEnd++ }
+        $Hole.First = $a + $cover; $Hole.Last = $a + $coverEnd
+    }
+    # 나머지 Section은 뺀다
+    for ($o = $keep; $o -lt $oldUnits.Count - $keepEnd; $o++) {
+        $sec = $oldSecs[$o]
+        if ($sec -and $sec.Parent) {
+            if ($After -eq $sec) { $After = $sec.NextBlock }
+            [void]$doc.Blocks.Remove($sec)
+        }
+    }
+    if ($keepEnd) { $After = $oldSecs[$oldUnits.Count - $keepEnd] }
+    # 둔 Section은 새 단위를 단다. 그린 모델의 줄 번호 기준(Base)은 그릴 때 것을 이어 쓴다
+    for ($k = 0; $k -lt $keep + $keepEnd; $k++) {
+        $o = if ($k -lt $keep) { $k } else { $oldUnits.Count - $keepEnd + ($k - $keep) }
+        $f = if ($k -lt $keep) { $k } else { $fresh.Count - $keepEnd + ($k - $keep) }
+        $sec = $oldSecs[$o]
+        $fresh[$f].Base = $oldUnits[$o].Base
+        $sec.Tag = $fresh[$f]
+        $Ed.Sections[$a + $f] = $sec
+    }
+    if ($wasRendered) {
+        for ($k = $keep; $k -lt $fresh.Count - $keepEnd; $k++) {
+            if ($k -ge $cover -and $k -le $coverEnd) { continue }
             $sec = Get-WtMemoUnitSection $Ed $fresh[$k]
             $Ed.Sections[$a + $k] = $sec
-            if ($After) { $doc.Blocks.InsertBefore($After, $sec) } else { $doc.Blocks.Add($sec) }
+            $at = if ($Hole -and $k -lt $cover) { $Hole.Holder } else { $After }
+            if ($at) { $doc.Blocks.InsertBefore($at, $sec) } else { $doc.Blocks.Add($sec) }
         }
+        # 섬이 덮는 단위의 Section은 만들어 두기만 한다 (섬을 안 고치고 닫으면 이것을 돌려놓는다). 넣은 것과 겹쳐 쓰지 않게 맨 나중에
+        for ($k = $cover; $k -le $coverEnd; $k++) { $Ed.Sections[$a + $k] = Get-WtMemoUnitSection $Ed $fresh[$k] }
         foreach ($i in @($from, $to)) {
             if ($i -ge $a -and $i -lt $a + $fresh.Count) { continue }
             if ($i -ge $Ed.Rendered -or $units[$i].Last -eq $before[$i - $from]) { continue }
@@ -1345,6 +1578,10 @@ function Complete-WtMemoImePending {
             }
         }
     } catch { Show-WtError $_ '메모 편집' }
+    finally {
+        # 뒤처리를 기다리던 섬 나누기 (입력기가 넣은 줄바꿈 등)
+        if ($ed.SplitWanted) { Request-WtMemoIslandSplit $ed }
+    }
 }
 
 function Invoke-WtMemoBoxKey($S, $E) {
