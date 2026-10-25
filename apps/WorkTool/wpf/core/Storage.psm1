@@ -6,8 +6,8 @@
 # - 읽기는 화면 밖(core\Work.psm1)에서 하고 $script:ioTimeoutMs까지만 기다린다. 데이터 폴더가 응답 없는 공유 폴더여도 화면이 멈추지 않고
 #   읽기 실패(IOException)로 올라간다. 그 폴더에 답 없는 읽기가 남아 있으면 기다리지 않고 바로 실패한다.
 # - 쓰기는 저장 통로(Submit-WtDataWrite)가 한 번에 하나씩 들어온 차례대로 한다. 읽기 작업과 따로라 읽기가 많이 남아도 막히지 않는다.
-#   화면은 $script:writeWaitMs까지만 기다린다. 그 안에 끝나지 않은 쓰기도 받아들인 것이다: 통로가 파일에 쓰였다고 확인될 때까지 가지고 있고,
-#   실패하면 다시 시도하거나 사용자가 버리기를 고를 때까지 둔다. 그동안 그 파일을 읽으면 그 내용을 돌려준다.
+#   화면은 $script:writeWaitMs까지만 기다린다. 넣은 쓰기는 넣는 순간 받아들인 것이다: 통로가 파일에 쓰였다고 확인될 때까지 가지고 있고,
+#   실패하면(바로 · 시작에서 · 늦게, 모두 같은 길) 다시 시도하거나 사용자가 버리기를 고를 때까지 둔다. 그동안 그 파일을 읽으면 그 내용을 돌려준다.
 #   저장 상태는 시간이 아니라 파일마다의 버전으로 정한다(받아들인 버전 = 확인된 버전이면 저장됨, Get-WtDataWriteStatus).
 #   셸은 끝내기 전에 쓰는 중이면 끝날 때까지 기다리고(창이 멈추지 않게), 쓰지 못한 내용이 있으면 사용자에게 묻는다.
 
@@ -130,22 +130,19 @@ function Read-WtJsonFile([string]$Path) {
 
 <#
 JSON 파일 하나를 바꿔치기로 쓴다. 직전 파일은 <파일>.bak. 저장 통로에 넣고 $script:writeWaitMs까지만 기다린다.
-  그 안에 끝났으면 돌아온다. 그 안에 실패했으면 그 예외를 올린다 (부른 쪽이 자기 상태를 그대로 둔다).
-  아직 쓰는 중이면 그냥 돌아온다. 이 내용은 받아들인 것이다: 통로가 파일에 쓰였다고 확인될 때까지 가지고 있고,
-  실패하면 다시 시도하거나 사용자가 버리기를 고를 때까지 둔다 (Get-WtDataUnsaved · Resume-WtDataWrites · 셸의 끝내기 확인).
+들어온 순간 받아들인 내용이다(버전을 받는다). 그 버전은 파일에 쓰였다고 확인되거나(저장됨), 실패하면 앱이 가지고 있다가
+다시 시도하거나 사용자가 버리기를 고를 때까지 둔다 — 둘 중 하나로만 끝난다. 그래서 쓰기 실패로는 예외를 올리지 않는다.
+  바로 실패 · 쓰기 시작 실패 · 늦은 실패 모두 같은 길(Set-WtDataWriteFailed)로 남는다. 실패는 한 번 알리고, 셸이 끝내기 전에 묻는다.
   기다리는 시간은 화면이 얼마나 기다릴지만 정한다. 저장 상태(저장됨 · 쓰는 중 · 실패)는 Get-WtDataWriteStatus가 버전으로 정한다
 #>
 function Write-WtJsonFile([string]$Path, $Data) {
     $json = ConvertTo-Json -InputObject $Data -Depth 20
     $entry = Submit-WtDataWrite $Path $json
     Wait-WtDataWrite $entry $script:writeWaitMs
-    if ($entry.State -eq 'failed') { throw $entry.Exception }
-    Set-WtDataWriteAccepted $entry
 }
 
 # ---- 저장 통로 --------------------------------------------------------------------------------
-# 파일마다 버전을 센다: 넣은 쓰기마다 버전이 하나씩 오른다.
-#   받아들인 버전(Accepted): 부른 쪽이 「저장했다」고 보고 넘어간 가장 새 내용 (기다리는 안에 끝났거나, 쓰는 중에 돌아왔거나)
+# 파일마다 버전을 센다: 넣은 쓰기마다 버전이 하나씩 오르고, 넣은 순간 받아들인 버전(Accepted)이 된다.
 #   확인된 버전(Confirmed): 파일에 쓰였다고 확인된 가장 새 버전
 # 받아들인 버전 > 확인된 버전인데 쓰는 중인 것이 없으면, 그 내용을 실패로 남겨 둔다(Failed). 버전이 같아져야 「저장됨」이다
 
@@ -169,27 +166,24 @@ function Get-WtDataFileRecord([string]$Path) {
     $script:writeFiles[$k]
 }
 
-# 쓰기 하나를 통로에 넣는다. 같은 파일의 아직 시작하지 않은 쓰기는 새 내용으로 바꾼다 (새 내용이 앞 내용을 담고 있다)
+# 쓰기 하나를 통로에 넣는다. 넣는 순간 받아들인 버전이 된다.
+# 같은 파일의 아직 시작하지 않은 쓰기는 새 내용으로 바꾼다 (새 내용이 앞 내용을 담고 있다)
 function Submit-WtDataWrite([string]$Path, [string]$Json) {
     $rec = Get-WtDataFileRecord $Path
     for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) {
         if ($script:writeQueue[$i].Path -ieq $Path) { $script:writeQueue[$i].State = 'superseded'; $script:writeQueue.RemoveAt($i) }
     }
     $rec.Version++
-    $entry = @{ Path = $Path; Json = $Json; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Retry = $false; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
+    $entry = @{ Path = $Path; Json = $Json; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
+    $rec.Accepted = $entry
+    $rec.Failed = $null   # 실패로 남아 있던 앞 내용은 이 내용이 담고 있다. 이 쓰기도 실패하면 이 내용이 남는다
     $script:writeQueue.Add($entry)
     Start-WtDataWriteNext
     $entry
 }
 
-# 부른 쪽이 이 내용을 저장한 것으로 보고 넘어간다. 실패로 남아 있던 앞 내용은 이 내용이 담고 있으므로 이 쓰기가 맡는다
-function Set-WtDataWriteAccepted($Entry) {
-    $rec = Get-WtDataFileRecord $Entry.Path
-    if (-not $rec.Accepted -or $Entry.Version -gt $rec.Accepted.Version) { $rec.Accepted = $Entry }
-    Update-WtDataFileRecord $rec
-}
-
-# 쓰는 것이 없으면 다음 차례를 시작한다. 한 번에 하나만 쓴다 (같은 임시 파일 · 바꿔치기가 겹치지 않게)
+# 쓰는 것이 없으면 다음 차례를 시작한다. 한 번에 하나만 쓴다 (같은 임시 파일 · 바꿔치기가 겹치지 않게).
+# 시작 자체가 실패해도 늦은 실패와 같은 길로 남기고 다음 차례로 간다
 function Start-WtDataWriteNext {
     while (-not $script:writeCurrent -and $script:writeQueue.Count) {
         $entry = $script:writeQueue[0]
@@ -202,49 +196,51 @@ function Start-WtDataWriteNext {
                 -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
         } catch {
             $script:writeCurrent = $null
-            $entry.State = 'failed'; $entry.Exception = $_.Exception
-            (Get-WtDataFileRecord $entry.Path).LastError = $_.Exception
+            Set-WtDataWriteFailed $entry $_.Exception
         }
     }
 }
 $script:writeFunctions = $null
 
-# 쓰기 하나가 끝났을 때 (화면 스레드): 결과를 적고 버전을 맞춘 뒤 다음 차례를 시작하고, 화면에 알린다
+# 쓰기 하나가 끝났을 때 (화면 스레드): 성공이면 확인된 버전을 올리고, 실패면 실패로 남긴다. 그 뒤 다음 차례를 시작한다
 function Complete-WtDataWrite($Work) {
     $entry = $Work.Context
-    $rec = Get-WtDataFileRecord $entry.Path
+    if ([object]::ReferenceEquals($script:writeCurrent, $entry)) { $script:writeCurrent = $null }
     if ($Work.State -eq 'done') {
         $entry.State = 'done'
+        $rec = Get-WtDataFileRecord $entry.Path
         if ($entry.Version -gt $rec.Confirmed) { $rec.Confirmed = $entry.Version }
-        # 기다리는 안에 끝난 쓰기도 부른 쪽은 저장된 것으로 보고 넘어간다
-        if (-not $rec.Accepted -or $entry.Version -gt $rec.Accepted.Version) { $rec.Accepted = $entry }
+        Update-WtDataFileState $rec
     } else {
-        $entry.State = 'failed'
-        $entry.Exception = if ($Work.Exception) { $Work.Exception } else { [System.IO.IOException]::new("저장하지 못했습니다. $($Work.Error)") }
-        $rec.LastError = $entry.Exception
+        Set-WtDataWriteFailed $entry $(if ($Work.Exception) { $Work.Exception } else { [System.IO.IOException]::new("저장하지 못했습니다. $($Work.Error)") })
     }
-    if ([object]::ReferenceEquals($script:writeCurrent, $entry)) { $script:writeCurrent = $null }
     Start-WtDataWriteNext
-    Update-WtDataFileRecord $rec
-    # 실패로 남으면 한 번 알린다 (저장될 때까지 다시 알리지 않는다. 사용자가 다시 시도해 또 실패한 것은 부른 쪽이 상태로 보인다)
-    $tell = $false
-    if ($rec.Failed) { if (-not $rec.Told -and -not $rec.Failed.Retry) { $tell = $true; $rec.Told = $true } }
-    elseif (-not $rec.Accepted -or $rec.Accepted.Version -le $rec.Confirmed) { $rec.Told = $false }
-    Invoke-WtDataWriteHandlers $rec $tell
 }
 
-# 받아들인 버전이 아직 파일에 쓰이지 않았는데 쓰는 중인 것도 없으면, 그 내용을 실패로 남긴다. 확인되면 지운다
-function Update-WtDataFileRecord($Rec) {
+# 쓰기 실패가 지나는 단 하나의 길 (바로 실패 · 시작 실패 · 늦은 실패): 이유를 적고, 받아들인 내용을 실패로 남기고, 알린다
+function Set-WtDataWriteFailed($Entry, [Exception]$Exception) {
+    $Entry.State = 'failed'
+    $Entry.Exception = $Exception
+    $rec = Get-WtDataFileRecord $Entry.Path
+    $rec.LastError = $Exception
+    Update-WtDataFileState $rec
+}
+
+# 버전을 맞추고(실패로 남기기 · 지우기) 화면에 알린다. 실패로 남으면 저장될 때까지 한 번만 알린다
+function Update-WtDataFileState($Rec) {
     $acc = $Rec.Accepted
-    if (-not $acc -or $acc.Version -le $Rec.Confirmed) { $Rec.Failed = $null; return }
     $flying = Get-WtDataWriteFlying $Rec.Path
-    if ($flying -and $flying.Version -ge $acc.Version) { $Rec.Failed = $null; return }   # 더 새 내용을 쓰는 중이다
-    if (-not $Rec.Failed -or $Rec.Failed.Version -lt $acc.Version) {
-        $Rec.Failed = @{ Path = $acc.Path; Json = $acc.Json; Version = $acc.Version; Retry = $acc.Retry
+    if (-not $acc -or $acc.Version -le $Rec.Confirmed) { $Rec.Failed = $null }
+    elseif ($flying -and $flying.Version -ge $acc.Version) { $Rec.Failed = $null }   # 그 내용(이나 더 새 내용)을 쓰는 중이다
+    elseif (-not $Rec.Failed -or $Rec.Failed.Version -lt $acc.Version) {
+        $Rec.Failed = @{ Path = $acc.Path; Json = $acc.Json; Version = $acc.Version
             Exception = if ($acc.Exception) { $acc.Exception } elseif ($Rec.LastError) { $Rec.LastError } else { [System.IO.IOException]::new('저장하지 못했습니다.') } }
     }
+    $tell = $false
+    if ($Rec.Failed) { if (-not $Rec.Told) { $tell = $true; $Rec.Told = $true } }
+    elseif (-not $flying) { $Rec.Told = $false }
+    Invoke-WtDataWriteHandlers $Rec $tell
 }
-
 # 이 파일을 쓰는 중이거나 차례를 기다리는 것 중 가장 새 것
 function Get-WtDataWriteFlying([string]$Path) {
     for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) { if ($script:writeQueue[$i].Path -ieq $Path) { return $script:writeQueue[$i] } }
@@ -301,10 +297,7 @@ function Get-WtDataUnsaved {
 function Resume-WtDataWrites([string]$Path = '') {
     $entries = foreach ($rec in @($script:writeFiles.Values)) {
         if (-not $rec.Failed -or ($Path -and $rec.Path -ine $Path) -or (Get-WtDataWriteFlying $rec.Path)) { continue }
-        $e = Submit-WtDataWrite $rec.Path $rec.Failed.Json
-        $e.Retry = $true
-        Set-WtDataWriteAccepted $e
-        $e
+        Submit-WtDataWrite $rec.Path $rec.Failed.Json
     }
     foreach ($e in @($entries)) { Wait-WtDataWrite $e $script:writeWaitMs }
 }

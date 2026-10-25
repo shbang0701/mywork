@@ -807,8 +807,8 @@ function Update-WtMemoSaveStatus {
     foreach ($p in $script:panes) { if ($p.Current -and -not $p.Dirty) { Set-WtMemoStatus $p $look[0] $look[1] } }
 }
 
-# 고친 칸을 모두 바로 저장한다. 저장 시각 · 탭 제목 · 목록도 고친다. 실패하면 $false (고친 표시는 남긴다)
-# 데이터 폴더가 늦게 답해 쓰는 중이어도 저장 통로가 이 내용을 맡으므로 $true다 (표시는 「저장하는 중」 → 쓰이면 「자동 저장됨」).
+# 고친 칸을 모두 바로 저장한다. 저장 시각 · 탭 제목 · 목록도 고친다. 편집 중인 메모를 찾지 못하면 $false (고친 표시는 남긴다).
+# 쓰는 중이거나 쓰지 못해도 저장 통로가 이 내용을 가지고 있으므로 $true다 (표시: 「저장하는 중」 → 「자동 저장됨」, 또는 「저장하지 못했습니다」).
 # -Retry(Ctrl+S): 고친 칸이 없어도, 늦게 실패해 앱이 가지고 있는 메모 내용이 있으면 다시 써 본다
 function Save-WtMemoNow([switch]$Retry) {
     if ($script:saveTimer) { $script:saveTimer.Stop() }

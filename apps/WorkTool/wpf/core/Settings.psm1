@@ -49,7 +49,7 @@ function Set-WtSetting([string]$Key, $Value) {
     }
     $sorted = [ordered]@{}
     foreach ($k in ($next.Keys | Sort-Object)) { $sorted[$k] = $next[$k] }
-    # 정한 시간 안에 실패하면 예외로 올라와 메모리 값도 그대로 둔다. 늦게 답하면 저장 통로가 이 내용을 맡는다 (나중에 실패해도 가지고 있다)
+    # 저장 통로가 이 내용을 맡는다. 쓰지 못해도 버리지 않고 가지고 있다가(다시 읽어도 나온다) 끝내기 전에 셸이 묻는다
     Write-WtJsonFile (Get-WtSettingsPath) ([ordered]@{ schema = 1; values = $sorted })
     $script:values = $next
     foreach ($h in @($script:handlers)) { & $h $Key $Value }

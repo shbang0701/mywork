@@ -52,7 +52,7 @@ $script:scanFunctions = $null   # 찾기 작업에 넣을 함수 (처음 쓸 때
 $script:redrawQueued = $false
 $script:rescanQueued = $false
 $script:readSeq = 0          # 고른 스크립트 읽기 차례 (늦게 온 읽기 결과를 버린다)
-$script:selection = $null    # 지금 고른 것의 수명 @{ Key = 'script:경로' | 'flow:id'; Edits = 고치던 칸 값 · 실행 방식 } (Enter-WtFlowSelection)
+$script:selection = $null    # 지금 고른 것의 수명 @{ Key = 'script:경로' | 'flow:id'; Edits = 고치던 칸 값; Mode = 사용자가 고른 실행 방식 } (Enter-WtFlowSelection)
 $script:starting = $null     # 화면 밖에서 시작 중인 실행 @{ Work; Cancelled; ... }
 # 화면 밖에서 돌리는 코드 (검사가 응답 없는 폴더를 흉내 내려고 바꿔 끼운다)
 $script:scanWork = { param($root, $max) @(Find-WtFlowScripts @($root) $max)[0] }   # 스크립트 폴더 하나 찾기
@@ -935,15 +935,26 @@ function Reset-WtFlowOutput([string]$Key) {
 #>
 function Enter-WtFlowSelection([string]$Key, [bool]$Keep) {
     if ($Keep -and $script:selection -and $script:selection.Key -ceq $Key) { Save-WtFlowEdits; return }
-    $script:selection = @{ Key = $Key; Edits = $null }
+    $script:selection = @{ Key = $Key; Edits = $null; Mode = $null }
 }
 
-# 지금 폼의 칸 값 · 실행 방식을 고른 것의 수명에 남긴다. 실행 방식은 칸이 없는 스크립트도 남긴다.
-# 폼이 「읽는 중」이거나 읽지 못해 그려지지 않았으면 앞서 남긴 값을 그대로 둔다
+# 지금 폼의 칸 값을 고른 것의 수명에 남긴다. 폼이 「읽는 중」이거나 칸이 없으면 앞서 남긴 값을 그대로 둔다.
+# 실행 방식은 사용자가 바꾸는 순간 수명에 남는다 (Set-WtFlowModeChoice). 칸 수 · 읽는 중과 상관없다
 function Save-WtFlowEdits {
     $sel = $script:selection
-    if (-not $sel -or -not $script:info -or $script:info.Loading -or $script:info.Error) { return }
-    $sel.Edits = @{ Values = $(if ($script:fields.Count) { Get-WtFlowFormValues } else { @{} }); Mode = (Get-WtFlowMode) }
+    if (-not $sel -or -not $script:fields.Count -or -not $script:info -or $script:info.Loading) { return }
+    $sel.Edits = @{ Values = (Get-WtFlowFormValues) }
+}
+
+# 사용자가 실행 방식을 바꿨을 때: 고른 것의 수명에 바로 남긴다 (화면이 단추를 맞추는 중이면 사용자가 고른 것이 아니다)
+function Set-WtFlowModeChoice([string]$Value) {
+    if (-not $script:modeSync -and $script:selection) { $script:selection.Mode = $Value }
+}
+
+# 실행 방식 단추를 맞춘다 (사용자가 고른 것으로 남기지 않는다)
+function Set-WtFlowModeButtons([string]$Mode) {
+    $script:modeSync = $true
+    try { foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq $Mode) } } finally { $script:modeSync = $false }
 }
 
 function Select-WtFlowNode($Tag, [switch]$Reuse) {
@@ -999,7 +1010,6 @@ function Set-WtFlowScriptInfo($Ctx, $Info, [switch]$Waiting) {
     $edits = $Ctx.Life.Edits
     if ($Waiting -or -not $edits -or $Info.Error) { return }
     Set-WtFlowFormValues $edits.Values
-    foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq $edits.Mode) }
 }
 
 # 가운데 · 오른쪽을 고른 것에 맞춘다
@@ -1073,9 +1083,10 @@ function Update-WtFlowCenter([switch]$Reuse) {
         $skip.TextWrapping = 'Wrap'
         [void](Add-WtChild $u.Form $skip)
     }
-    # 실행 방식: 업무에 저장한 것 → 스크립트가 정한 것(.NOTES의 WorkTool: 콘솔, 폼에 못 넣는 필수 값) → 앱 안
-    $mode = if ($script:flow -and $script:flow.mode) { [string]$script:flow.mode } elseif ($info.Console -or $info.NeedsConsole.Count) { 'console' } else { 'app' }
-    foreach ($rb in $u.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq $mode) }
+    # 실행 방식: 이번에 고른 것에서 사용자가 바꾼 것 → 업무에 저장한 것 → 스크립트가 정한 것(.NOTES의 WorkTool: 콘솔, 폼에 못 넣는 필수 값) → 앱 안
+    $mode = if ($script:selection -and $script:selection.Mode) { [string]$script:selection.Mode }
+    elseif ($script:flow -and $script:flow.mode) { [string]$script:flow.mode } elseif ($info.Console -or $info.NeedsConsole.Count) { 'console' } else { 'app' }
+    Set-WtFlowModeButtons $mode
     $u.SaveFlow.Content = New-WtButtonContent $(if ($script:flow) { '업무 저장' } else { '업무로 저장' }) 0xE74E
     $u.SaveFlow.ToolTip = if ($script:flow) { '지금 값과 실행 방식을 이 업무에 저장합니다' } else { '지금 값과 실행 방식을 업무로 저장해 왼쪽 목록에 둡니다' }
     $u.DeleteFlow.Visibility = if ($script:flow) { 'Visible' } else { 'Collapsed' }
@@ -1803,7 +1814,7 @@ function New-WtFlowsView {
     $preview.Add_Click({ Invoke-WtFlowRun -WhatIf })
     $cancel = New-WtButton '취소' -Icon 0xE711
     $cancel.Add_Click({ Stop-WtFlowRun })
-    $mode = New-WtSegmented @(@('app', '앱 안에서'), @('console', '콘솔 창에서')) 'app' 'WtFlowMode' { param($value) Update-WtFlowCommands }
+    $mode = New-WtSegmented @(@('app', '앱 안에서'), @('console', '콘솔 창에서')) 'app' 'WtFlowMode' { param($value) Set-WtFlowModeChoice $value; Update-WtFlowCommands }
     $mode.ToolTip = '앱 안: 출력을 아래 칸에 보여 줍니다 · 콘솔 창: 자기 화면이 있거나 키 입력을 받는 스크립트'
     foreach ($b in @($runButton, $preview, $cancel, $mode)) {
         [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($b, $true)

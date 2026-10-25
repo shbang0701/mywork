@@ -321,32 +321,40 @@ try {
     }
     $memoPath = Get-WtStorePath 'memo'
     $original = [System.IO.File]::ReadAllText($memoPath)
+    # 저장 모듈의 알림 창만 바꾼다 (몇 번 알렸는지 센다). 저장 통로 · 버전은 그대로 돈다
+    $storage = Get-Module Storage
+    & $storage { $script:testTold = [System.Collections.Generic.List[string]]::new(); function script:Show-WtMessage { param($Text, $Title, $Icon) $script:testTold.Add($Text) } }
+    $pump = { [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{ }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle) }
+    $settle = { param($ms) $w = [System.Diagnostics.Stopwatch]::StartNew(); while ($w.ElapsedMilliseconds -lt $ms) { Update-WtWork; & $pump; Start-Sleep -Milliseconds 20 } }
     $held = [System.IO.File]::Open($memoPath, 'Open', 'Read', 'Read')
-    Assert-WtTest '메모 안정성: 잠긴 파일 저장은 실패를 돌려준다' (-not (& $memoModule { Save-WtMemoNow }))
+    $savedNow = & $memoModule { Save-WtMemoNow }
+    & $pump
     $st0 = & $memoModule { $script:panes[0].Status }
-    Assert-WtTest '메모 안정성: 저장 실패는 그 칸에 오류로 보인다' (@(Get-WtTestTexts $st0 | Where-Object { $_ -like '저장하지 못했습니다*' }).Count -eq 1)
-    Set-TestBody 0 'unsaved draft'
+    Assert-WtTest '메모 안정성: 잠긴 파일에 저장하지 못해도 그 내용은 앱이 가지고 있고(다시 읽어도 보임), 그 칸에 실패가 보이고 한 번 알린다' (
+        $savedNow -and -not (& $memoModule { $script:panes[0].Dirty }) -and @(Get-WtTestTexts $st0 | Where-Object { $_ -like '저장하지 못했습니다*' }).Count -eq 1 -and
+        ((Get-WtMemoItems) | Where-Object id -eq $one.id).body -eq 'unsaved draft' -and (& $storage { $script:testTold.Count }) -eq 1) "($(@(Get-WtTestTexts $st0) -join ' '))"
+    Set-TestBody 0 'unsaved draft 2'
     Assert-WtTest '메모 안정성: 저장 오류 뒤 다시 입력하면 저장 안 됨 표시' (@(Get-WtTestTexts $st0) -contains '저장 안 됨')
+    [void](& $memoModule { Save-WtMemoNow })
+    & $pump
     & $memoModule { Update-WtMemoView }
-    Assert-WtTest '메모 안정성: 실패 후 새로 고침해도 작성 중인 본문·dirty를 유지한다' ((Get-TestBody 0) -eq 'unsaved draft' -and (& $memoModule { $script:panes[0].Dirty }))
+    Assert-WtTest '메모 안정성: 또 실패해도 다시 알리지 않고, 새로 고쳐도 고친 본문이 그대로 보인다' ((Get-TestBody 0) -eq 'unsaved draft 2' -and (& $storage { $script:testTold.Count }) -eq 1)
     & $memoModule { param($id) Select-WtMemoItem $id } $two.id
-    Assert-WtTest '메모 안정성: 실패 후 다른 메모 선택을 취소한다' ((Get-TestTabs).Current[0] -eq $one.id -and (& $memoModule { $script:ui.List.SelectedItem.Id }) -eq $one.id)
-    [void](Send-TestKey Tab Control); [void](Send-TestKey W Control); [void](Send-TestKey Oem5 Control)
-    $s = Get-TestTabs
-    Assert-WtTest '메모 안정성: 실패 후 탭 바꾸기 · 닫기 · 나누기를 하지 않는다' ($s.Panes -eq 1 -and $s.Current[0] -eq $one.id -and $s.Tabs[0] -eq "$($one.id),$($two.id)" -and (Get-TestBody 0) -eq 'unsaved draft')
-    & $memoModule { $script:ui.Search.Text = 'B'; [void](Add-WtMemo -Edit); Remove-WtMemoCurrent }
-    Assert-WtTest '메모 안정성: 실패 후 검색·추가·삭제가 초안을 버리지 않는다' ((Get-TestBody 0) -eq 'unsaved draft' -and (Get-WtMemoItems).Count -eq 2)
+    $moved = (Get-TestTabs).Current[0] -eq $two.id
+    & $memoModule { param($id) Select-WtMemoItem $id } $one.id
+    Assert-WtTest '메모 안정성: 저장하지 못해도 다른 메모로 옮길 수 있고, 돌아오면 고친 본문이 그대로다' ($moved -and (Get-TestBody 0) -eq 'unsaved draft 2')
 
-    # 셸과 맞물리는 곳: 저장 실패를 셸이 알아듣고 묻는다 (묻는 흐름 자체는 tests\Test-Reliability.ps1)
-    $asked = & $shellModule { $script:testAsked = @(); [void](Save-WtPendingChanges -Purpose exit); $script:testAsked -join ',' }
-    Assert-WtTest '메모 안정성: 저장 실패를 셸이 끝내기 전에 묻는다' ($asked -eq 'exit')
-    $moved = & $shellModule { $script:testChoices.Enqueue('proceed'); Save-WtPendingChanges -Purpose switch -Only 'memo' }
-    Assert-WtTest '메모 안정성: [이동]을 골라도 저장하지 못한 초안을 메모 화면에 둔다' ($moved -and (Get-TestBody 0) -eq 'unsaved draft' -and (& $memoModule { $script:panes[0].Dirty }))
+    # 셸과 맞물리는 곳: 저장하지 못한 내용이 있으면 셸이 끝내기 전에 묻는다 (묻는 흐름 자체는 tests\Test-Reliability.ps1)
+    $asked = & $shellModule { $script:testAsked = @(); $script:writingDropped = $false; [void](Save-WtPendingChanges -Purpose exit); [void](Confirm-WtDataWrites); $script:testAsked -join ',' }
+    Assert-WtTest '메모 안정성: 저장하지 못한 내용이 있으면 셸이 끝내기 전에 묻는다' ($asked -eq 'exit') $asked
     Assert-WtTest '메모 안정성: 저장 실패로 원본 파일을 바꾸지 않는다' ([System.IO.File]::ReadAllText($memoPath) -ceq $original)
 
     $held.Dispose(); $held = $null
-    Assert-WtTest '메모 안정성: 잠금 해제 후 같은 초안을 저장할 수 있다' (& $memoModule { Save-WtMemoNow })
-    Assert-WtTest '메모 안정성: 재시도한 본문을 다시 읽을 수 있다' (((Get-WtMemoItems) | Where-Object id -eq $one.id).body -eq 'unsaved draft')
+    [void](Send-TestKey S Control)
+    & $settle 600
+    Assert-WtTest '메모 안정성: 잠금이 풀린 뒤 Ctrl+S가 가지고 있던 내용을 다시 써서 저장한다' (
+        ([System.IO.File]::ReadAllText($memoPath) -match 'unsaved draft 2') -and @(Get-WtTestTexts $st0 | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1 -and -not @(Get-WtDataUnsaved).Count)
+    Assert-WtTest '메모 안정성: 재시도한 본문을 다시 읽을 수 있다' (((Get-WtMemoItems) | Where-Object id -eq $one.id).body -eq 'unsaved draft 2')
     & $memoModule { $script:ui.Search.Text = '' }
     Set-TestBody 0 'next draft'
     & $memoModule { param($id) Select-WtMemoItem $id } $two.id
@@ -420,18 +428,18 @@ try {
         & $storage { $script:writeJob = $script:testJob }
         Remove-WtTestGate $gate
     }
-    # 실패한 삭제 · 실행 취소를 여러 번 해도 배열이 먼저 바뀌지 않는다
+    # 저장하지 못해도 삭제 · 실행 취소는 화면과 앱이 가진 내용이 같다. 실행 취소를 두 번 해도 중복 항목을 만들지 않는다
+    $before = & $memoModule { $script:items.Count }
     $held = [System.IO.File]::Open($memoPath, 'Open', 'Read', 'Read')
-    & $memoModule { Remove-WtMemoCurrent; Remove-WtMemoCurrent; [void](Add-WtMemo) }
-    Assert-WtTest '메모 안정성: 삭제·추가 실패 시 메모리 배열을 유지한다' ((& $memoModule { $script:items.Count }) -eq 2)
+    & $memoModule { Remove-WtMemoCurrent; Restore-WtMemoDeleted; Restore-WtMemoDeleted }
+    $mem = @(& $memoModule { $script:items | ForEach-Object { [string]$_.id } })
+    $read = @((Get-WtMemoItems).id | ForEach-Object { [string]$_ })
+    Assert-WtTest '메모 안정성: 저장하지 못해도 삭제 · 실행 취소 결과가 다시 읽은 내용과 같고, 실행 취소를 두 번 해도 중복 항목을 만들지 않는다' (
+        $mem.Count -eq $before -and (($mem | Sort-Object) -join ',') -eq (($read | Sort-Object) -join ',') -and @($mem | Sort-Object -Unique).Count -eq $before) "($($mem -join ',') / $($read -join ','))"
     $held.Dispose(); $held = $null
-    & $memoModule { Remove-WtMemoCurrent }
-    $held = [System.IO.File]::Open($memoPath, 'Open', 'Read', 'Read')
-    & $memoModule { Restore-WtMemoDeleted; Restore-WtMemoDeleted }
-    Assert-WtTest '메모 안정성: 실행 취소 실패를 재시도해도 중복 항목을 만들지 않는다' ((& $memoModule { $script:items.Count }) -eq 1)
-    $held.Dispose(); $held = $null
-    & $memoModule { Restore-WtMemoDeleted }
-    Assert-WtTest '메모 안정성: 실행 취소 성공 뒤 ID가 모두 고유하다' ((Get-WtMemoItems).Count -eq 2 -and @((Get-WtMemoItems).id | Sort-Object -Unique).Count -eq 2)
+    [void](Send-TestKey S Control)
+    & $settle 600
+    Assert-WtTest '메모 안정성: 다시 쓴 뒤 파일도 같고 ID가 모두 고유하다' ((Get-WtMemoItems).Count -eq $before -and @((Get-WtMemoItems).id | Sort-Object -Unique).Count -eq $before -and -not @(Get-WtDataUnsaved).Count)
 } finally {
     if ($held) { $held.Dispose() }
     if ($win) { try { $win.Close() } catch { } }

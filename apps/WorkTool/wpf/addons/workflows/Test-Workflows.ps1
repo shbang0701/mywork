@@ -751,6 +751,23 @@ try {
         while ((& $mod { $script:info -and $script:info.Loading }) -and $watch.ElapsedMilliseconds -lt 3000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
         $modeAfter = & $mod { Get-WtFlowMode }
         Assert-WtTest '업무 안정성: 칸 없는 스크립트도 다시 읽기가 늦어도 고른 실행 방식이 남는다' ($during -and $modeAfter -eq 'console') "(다시 읽음 $during · 방식 $modeAfter)"
+        # 「읽는 중」 화면에서 바꾼 실행 방식도 바꾸는 순간 수명에 남는다 (읽기가 끝나도, 앞서 남긴 방식이 덮지 않는다)
+        $tcs = [System.Threading.Tasks.TaskCompletionSource[string]]::new()
+        [AppDomain]::CurrentDomain.SetData('WtTestRead', @{ Path = $noField; Task = $tcs.Task })
+        & $mod { Show-WtFlowTree }
+        $loadingNow = & $mod { [bool]$script:info.Loading }
+        & $mod { foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq 'app') } }
+        $tcs.SetResult([System.IO.File]::ReadAllText($noField))
+        $watch.Restart()
+        while ((& $mod { $script:info -and $script:info.Loading }) -and $watch.ElapsedMilliseconds -lt 3000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+        $modeAfter = & $mod { Get-WtFlowMode }
+        & $mod { foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq 'console') } }
+        & $mod { param($p) Select-WtFlowNode @{ Kind = 'script'; Path = $p } } $editScript
+        $watch.Restart()
+        while ((& $mod { $script:info -and $script:info.Loading }) -and $watch.ElapsedMilliseconds -lt 3000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+        $otherMode = & $mod { Get-WtFlowMode }
+        Assert-WtTest '업무 안정성: 「읽는 중」에 바꾼 실행 방식도 읽은 뒤에 남고, 다른 스크립트를 고르면 그 스크립트의 방식으로 시작한다' (
+            $loadingNow -and $modeAfter -eq 'app' -and $otherMode -eq 'app') "(읽는 중 $loadingNow · 읽은 뒤 $modeAfter · 다른 스크립트 $otherMode)"
         # 읽는 동안 업무를 지우면, 늦게 온 결과가 가운데를 다시 채우지 않는다
         Save-WtFlows @([pscustomobject](New-WtFlow '지울 업무' $editScript @{ Target = 'x' } 'app'))
         [void](& $addon.Refresh $view)
@@ -765,6 +782,35 @@ try {
     } finally {
         [AppDomain]::CurrentDomain.SetData('WtTestRead', $null)
         & $mod { param($s) $script:readCall = $s.Read; $script:readWaitMs = $s.Wait } $savedRead
+    }
+
+    # 끝낼 때 실행 기록(workflow-runs.json)을 바로 쓰지 못해도 버리지 않는다: 앱이 기록을 가지고 있고(다시 읽어도 나옴),
+    # 셸이 끝내기 전에 묻고, [다시 시도]로 써진다. 셸의 묻는 창만 바꾼다 (잡고 있던 파일을 놓고 [다시 시도])
+    $runsPath = Get-WtStorePath 'workflow-runs'
+    $shellModule = Get-Module Shell
+    & (Get-Module Storage) { function script:Show-WtMessage { param($Text, $Title, $Icon) } }
+    & $shellModule {
+        $script:testAsked = @()
+        function script:Show-WtPendingChoice { param($Purpose, $Title) $script:testAsked += $Purpose; $h = [AppDomain]::CurrentDomain.GetData('WtTestHeld'); if ($h) { $h.Dispose() }; 'retry' }
+    }
+    $held = $null
+    try {
+        $sleepInfo = Read-WtFlowScript $sleeper
+        $run = Start-WtFlowProcess (New-WtFlowStartInfo $sleepInfo @{} 'app') (New-WtFlowRecord $sleepInfo @{} 'app' $false '끝낼 때 기록')
+        $running.Add($run)
+        & $mod { param($r) $script:run = $r } $run
+        $held = [System.IO.File]::Open($runsPath, 'Open', 'Read', 'Read')
+        [AppDomain]::CurrentDomain.SetData('WtTestHeld', $held)
+        & $addon.OnExit
+        $keptRun = @(Get-WtFlowRuns | Where-Object { $_.flow -eq '끝낼 때 기록' }).Count
+        $unsavedNames = @(Get-WtDataUnsaved).Name
+        $asked = & $shellModule { $script:writingDropped = $false; [void](Confirm-WtDataWrites -NoCancel); $script:testAsked -join ',' }
+        $onDisk = [System.IO.File]::ReadAllText($runsPath) -match '끝낼 때 기록'
+        Assert-WtTest '업무 안정성: 끝낼 때 실행 기록을 바로 쓰지 못해도 앱이 가지고 있다가(다시 읽어도 나옴), 끝내기 전에 묻고 다시 쓴다' (
+            $keptRun -eq 1 -and $unsavedNames -contains 'workflow-runs.json' -and $asked -eq 'exit' -and $onDisk -and -not @(Get-WtDataUnsaved).Count) "(기록 $keptRun · 쓰지 못함 $($unsavedNames -join ',') · 물음 '$asked' · 파일 $onDisk)"
+    } finally {
+        if ($held) { $held.Dispose() }
+        [AppDomain]::CurrentDomain.SetData('WtTestHeld', $null)
     }
 } finally {
     foreach ($r in $running) { try { if ($r.Process -and -not $r.Process.HasExited) { $r.Process.Kill($true) } } catch { } }

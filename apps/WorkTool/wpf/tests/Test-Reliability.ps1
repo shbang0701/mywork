@@ -18,6 +18,8 @@ $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'TestKit.ps1')
 Import-WtTestCore
 $test = New-WtTestData 'reliability'
+# 저장 모듈의 알림 창은 처음부터 바꿔 둔다 (쓰기 실패 검사가 실제 알림 창을 띄우지 않게). 알린 글만 모은다
+& (Get-Module Storage) { $script:testTold = [System.Collections.Generic.List[string]]::new(); function script:Show-WtMessage { param($Text, $Title, $Icon) $script:testTold.Add($Text) } }
 $held = $null; $instance = $null; $legacyForm = $null
 $shellModule = Get-Module Shell
 
@@ -41,10 +43,16 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
 
     Set-WtSetting 'test.mode' 'edit'
     $held = [System.IO.File]::Open((Get-WtSettingsPath), 'Open', 'Read', 'Read')
+    # 바로 실패해도 늦은 실패와 같은 길: 예외 없이 그 값을 앱이 가지고 있고(다시 읽어도 나온다), 쓰지 못한 내용으로 남는다
     $threw = $false
     try { Set-WtSetting 'test.mode' 'preview' } catch { $threw = $true }
-    Assert-WtTest '안정성: 설정 저장 실패 시 메모리 값도 유지한다' ($threw -and (Get-WtSetting 'test.mode') -eq 'edit')
+    Initialize-WtSettings
+    Assert-WtTest '안정성: 설정을 바로 저장하지 못해도 그 값을 앱이 가지고 있고(다시 읽어도 나옴) 쓰지 못한 내용으로 남는다' (
+        -not $threw -and (Get-WtSetting 'test.mode') -eq 'preview' -and @(Get-WtDataUnsaved).Count -eq 1 -and (Get-WtDataWriteStatus (Get-WtSettingsPath)).State -eq 'failed')
     $held.Dispose(); $held = $null
+    Resume-WtDataWrites
+    Assert-WtTest '안정성: 잠금이 풀린 뒤 다시 쓰면 파일에 남고 쓰지 못한 내용이 없어진다' (
+        ([System.IO.File]::ReadAllText((Get-WtSettingsPath)) | ConvertFrom-Json).values.'test.mode' -eq 'preview' -and -not @(Get-WtDataUnsaved).Count)
 
     # 데이터 폴더가 늦게 답하는 저장 (응답 없는 공유 폴더): 실제 쓰기(Write-WtDataFile) 앞에 기다림만 끼운다. 통로 · 상태 바꾸기는 그대로 돈다.
     # 화면은 정한 시간만 기다리고 돌아온다. 그 내용은 받아들인 것이다: 통로가 끝까지 맡고, 그동안 읽으면 그 내용이 나온다.
@@ -223,9 +231,10 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
     # 끝내기 전에 묻고, [다시 시도]는 가지고 있던 내용을 다시 써서 저장한 뒤 끝낸다
     $gate = New-WtTestGate
     try {
+        # 앞 검사에서 미뤄 둔 알림을 먼저 돌리고 비운다
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{ }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle)
         & $storage {
-            $script:testTold = [System.Collections.Generic.List[string]]::new()
-            function script:Show-WtMessage { param($Text, $Title, $Icon) $script:testTold.Add($Text) }
+            $script:testTold.Clear()
             $script:writeJob = { param($p, $json) [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.WaitOne(); throw [System.IO.IOException]::new('검사용 쓰기 실패') }
         }
         Set-WtSetting 'test.mode' 'late-fail'
@@ -248,6 +257,34 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
         Assert-WtTest '안정성: [다시 시도]는 가지고 있던 내용을 다시 써서 저장한 뒤 끝낸다' (
             $allowed -and (& $savedMode) -eq 'late-fail' -and -not @(Get-WtDataUnsaved).Count -and (Get-WtDataWriteStatus (Get-WtSettingsPath)).State -eq 'saved' -and $exitCounter.Count -eq $exits + 1)
     } finally {
+        & $storage { $script:writeJob = $script:testJob }
+        Remove-WtTestGate $gate
+    }
+    # 쓰기 시작 자체가 실패해도(실행 스레드를 못 만드는 등) 같은 길로 남는다: 다른 파일(설정)의 쓰기가 늦는 동안 차례를 기다린 저장이 시작에서 실패
+    # 시작 호출만 바꾼다 (표시가 있을 때만 실패하고, 아니면 원래 Start-WtWork를 부른다)
+    $gate = New-WtTestGate
+    try {
+        & $storage {
+            $script:writeJob = { param($p, $json) if ($p -like '*settings.json') { [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.WaitOne() }; Write-WtDataFile $p $json }
+            function script:Start-WtWork { if ([AppDomain]::CurrentDomain.GetData('WtTestStartFail')) { throw [System.InvalidOperationException]::new('검사용 시작 실패') }; Work\Start-WtWork @args }
+        }
+        Set-WtSetting 'test.mode' 'start-a'
+        Write-WtStore -Name 'start-fail' -Items @([ordered]@{ id = 'b1' })
+        [AppDomain]::CurrentDomain.SetData('WtTestStartFail', $true)
+        [void]$gate.Gate.Set()
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        while ((Test-WtDataWriting) -and $watch.ElapsedMilliseconds -lt 5000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+        [AppDomain]::CurrentDomain.SetData('WtTestStartFail', $null)
+        $bPath = Get-WtStorePath 'start-fail'
+        Assert-WtTest '안정성: 차례를 기다린 저장이 시작에서 실패해도 그 내용을 가지고 있다 (다시 읽어도 나오고 쓰지 못한 내용으로 남는다)' (
+            (Get-WtDataWriteStatus $bPath).State -eq 'failed' -and (Get-WtStoreItems 'start-fail')[0].id -eq 'b1' -and @(Get-WtDataUnsaved).Name -contains 'start-fail.json' -and
+            -not [System.IO.Path]::Exists($bPath) -and (& $savedMode) -eq 'start-a')
+        $exits = $exitCounter.Count
+        $allowed = & $shellModule { $script:exiting = $false; $script:frame = [pscustomobject]@{ Continue = $true }; $script:testAsked = @(); $script:testChoices.Enqueue('retry'); Stop-WtApp }
+        Assert-WtTest '안정성: 그 내용도 끝내기 전에 묻고, [다시 시도]로 써진 뒤 끝낸다' (
+            $allowed -and (& $shellModule { $script:testAsked -join ',' }) -eq 'exit' -and ([System.IO.File]::ReadAllText($bPath) -match '"b1"') -and -not @(Get-WtDataUnsaved).Count -and $exitCounter.Count -eq $exits + 1)
+    } finally {
+        [AppDomain]::CurrentDomain.SetData('WtTestStartFail', $null)
         & $storage { $script:writeJob = $script:testJob }
         Remove-WtTestGate $gate
     }
