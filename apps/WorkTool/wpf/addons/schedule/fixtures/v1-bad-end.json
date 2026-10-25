@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "saved": "2026-10-25T21:54:29",
+  "_fixture": "고정 시험 자료(가짜 값): schema 1의 읽지 못하는 끝 값 · null 항목 · 1단계에만 있던 칸. 더하기만 하고 고치지 않는다.",
+  "items": [
+    { "id": "b1", "title": "끝이 깨진 일정", "startDate": "2026-10-01", "endDate": "내일", "time": "09:00", "endTime": "25:00", "note": "", "alarm": null, "repeat": "", "tags": [], "lastAlarm": "", "updated": "", "pinned": true },
+    null,
+    { "id": "b2", "title": "보통 일정", "startDate": "2026-10-02", "endDate": "2026-10-02", "time": "", "endTime": "", "note": "", "alarm": 2147483648, "repeat": "", "tags": [], "lastAlarm": "", "updated": "" }
+  ]
+}

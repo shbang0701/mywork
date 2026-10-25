@@ -6,14 +6,19 @@
 #     앱이 찍는 시각    "2026-10-25T21:54:29+09:00"       created · updated · deleted · saved. 시간대 포함 (Get-WtStamp)
 # - 글을 만들고 읽는 것은 문화권(ko-KR · en-US …)과 상관없이 같다 (InvariantCulture, 그레고리력)
 # - 지운 기록은 deleted에 찍는 시각을 넣어 표시만 한다. 오래되면 내용을 비우고 { id, deleted }만 남긴다 (Compress-WtDeletedItems)
+# - 날짜는 1900-01-01 ~ 2199-12-31만 받는다(계산이 넘치지 않게). 숫자 칸은 정한 범위의 정수만 받는다(ConvertFrom-WtWhole)
 # - 예전(WinForms) CSV는 너그럽게 읽는다: Excel이 바꾼 2026/10/1 · 2026. 10. 1. · 9:30 · 오후 2:30 등 (ConvertFrom-WtLegacy*)
-# - 가져온 기록은 origin = { from, at, row }에 원본 줄을 통째로 남기고, 다시 가져올 때는 덮어쓰지 않고 합친다 (Merge-WtLegacyItems)
+# - 가져온 기록은 origin = { from, at, rev, row }에 원본 줄을 통째로 남기고, 다시 가져올 때는 덮어쓰지 않고 합친다 (Merge-WtLegacyItems)
+# - 사람이 고친 횟수는 rev(0부터, 고칠 때마다 +1, Set-WtItemEdited)로 센다. 「이 앱에서 고쳤는지」는 시각이 아니라 rev로 정한다
+# - id는 글 그대로 비교한다(대소문자를 가린다, StringComparer.Ordinal). s1과 S1은 다른 항목이다
 
 $ErrorActionPreference = 'Stop'
 
 $script:inv = [System.Globalization.CultureInfo]::InvariantCulture
 $script:ko = [System.Globalization.CultureInfo]::GetCultureInfo('ko-KR')
 $script:stampFormat = "yyyy-MM-dd'T'HH:mm:sszzz"
+$script:minYear = 1900
+$script:maxYear = 2199
 $script:legacyDates = [string[]]@('yyyy-M-d', 'yyyy/M/d', 'yyyy.M.d', 'yyyy. M. d', 'yyyyMMdd', 'M/d/yyyy')
 $script:legacyTimes = [string[]]@('H:mm', 'H:mm:ss', 'h:mm tt', 'h:mm:ss tt')
 $script:legacyTimesKo = [string[]]@('tt h:mm', 'tt h:mm:ss')
@@ -36,11 +41,35 @@ function ConvertFrom-WtStamp([string]$Text) {
     $null
 }
 
-# 날짜 글 "yyyy-MM-dd" → [datetime](그날 0시). 모양이 다르거나 없는 날이면 $null
+# 날짜 글 "yyyy-MM-dd" → [datetime](그날 0시). 모양이 다르거나, 없는 날이거나, 1900~2199년 밖이면 $null
 function ConvertFrom-WtDateText([string]$Text) {
     $d = [datetime]::MinValue
-    if ($Text -and [datetime]::TryParseExact($Text, 'yyyy-MM-dd', $script:inv, [System.Globalization.DateTimeStyles]::None, [ref]$d)) { return $d }
+    if ($Text -and [datetime]::TryParseExact($Text, 'yyyy-MM-dd', $script:inv, [System.Globalization.DateTimeStyles]::None, [ref]$d) -and
+        $d.Year -ge $script:minYear -and $d.Year -le $script:maxYear) { return $d }
     $null
+}
+
+<#
+숫자 칸 하나를 정수로 읽는다. 정수이고 $Min ~ $Max 안이면 [long], 아니면 $null (글 · 참거짓 · 소수 · 범위 밖 · 아주 큰 수 모두 $null).
+JSON 숫자는 크기에 따라 Int64 · Double · BigInteger로 들어오므로 모두 여기서 한 번에 본다. 범위는 형식마다 정하고 설계 문서에 적는다
+#>
+function ConvertFrom-WtWhole($Value, [long]$Min, [long]$Max) {
+    if ($null -eq $Value -or $Value -is [bool] -or $Value -is [string] -or $Value -is [char]) { return $null }
+    $d = $null
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal]) { $d = [decimal]$Value }
+    elseif ($Value -is [double]) { if ([double]::IsFinite($Value) -and [Math]::Abs($Value) -lt 1e15) { $d = [decimal]$Value } }
+    elseif ($Value -is [System.Numerics.BigInteger]) { if ($Value -ge [long]::MinValue -and $Value -le [long]::MaxValue) { $d = [decimal][long]$Value } }
+    if ($null -eq $d -or $d -ne [Math]::Floor($d) -or $d -lt $Min -or $d -gt $Max) { return $null }
+    [long]$d
+}
+
+# 숫자 칸 하나를 수로 읽는다(소수 됨). $Min ~ $Max 안의 유한한 수면 [double], 아니면 $null
+function ConvertFrom-WtNumber($Value, [double]$Min, [double]$Max) {
+    if ($null -eq $Value -or $Value -is [bool] -or $Value -is [string] -or $Value -is [char]) { return $null }
+    if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [decimal] -or $Value -is [double])) { return $null }
+    $v = [double]$Value
+    if (-not [double]::IsFinite($v) -or $v -lt $Min -or $v -gt $Max) { return $null }
+    $v
 }
 
 function ConvertTo-WtDateText([datetime]$Date) { $Date.ToString('yyyy-MM-dd', $script:inv) }
@@ -88,12 +117,13 @@ function ConvertFrom-WtLegacyStamp([string]$Text) {
 
 # ---- 항목 다루기 ------------------------------------------------------------------------------
 
-# 칸 하나의 값. 없으면 $null. $obj.count처럼 쓰면 칸이 없을 때 PowerShell이 붙인 Count(1)가 나오므로 이 함수로 읽는다
+# 칸 하나의 값. 없으면 $null. $obj.count처럼 쓰면 칸이 없을 때 PowerShell이 붙인 Count(1)가 나오므로 이 함수로 읽는다.
+# 목록 값은 펴지 않고 그대로 돌려준다(항목 하나짜리 목록 · 빈 목록도 목록으로)
 function Get-WtField($Object, [string]$Name) {
-    if ($null -eq $Object) { return $null }
-    if ($Object -is [System.Collections.IDictionary]) { if ($Object.Contains($Name)) { return $Object[$Name] } else { return $null } }
+    if ($null -eq $Object -or $Object -is [string] -or $Object -is [ValueType]) { return $null }
+    if ($Object -is [System.Collections.IDictionary]) { if ($Object.Contains($Name)) { return , $Object[$Name] } else { return $null } }
     $p = $Object.PSObject.Properties[$Name]
-    if ($p) { $p.Value } else { $null }
+    if ($p) { , $p.Value } else { $null }
 }
 
 # 칸 하나를 넣는다. 있으면 값만 바꾸고, 없으면 더한다 (읽은 객체를 그대로 두고 아는 칸만 고치기 위해)
@@ -111,22 +141,49 @@ function Copy-WtItem($Value) {
     $copy
 }
 
+# 저장 파일에서 읽은 객체(또는 해시 테이블)인지. null · 글 · 숫자 · 배열이 아니다
+function Test-WtRecordObject($Value) { $null -ne $Value -and $Value -isnot [string] -and $Value -isnot [ValueType] -and $Value -isnot [array] }
+
 # 지운 표시가 있는지. deleted가 null · '' · false가 아니면 지운 것이다
 function Test-WtDeleted($Item) {
-    if ($null -eq $Item -or $Item -is [string] -or $Item -is [ValueType]) { return $false }
-    $v = $Item.deleted
+    if (-not (Test-WtRecordObject $Item)) { return $false }
+    $v = Get-WtField $Item 'deleted'
     if ($null -eq $v -or ($v -is [bool] -and -not $v)) { return $false }
     "$v" -ne ''
 }
 
+# 사람이 고친 횟수 rev. 없으면 0, 0 이상의 정수가 아니면 -1(알 수 없음: 합칠 때 「고쳤음」으로 본다)
+function Get-WtItemRevision($Item) {
+    if (-not (Test-WtRecordObject $Item)) { return 0 }
+    $v = Get-WtField $Item 'rev'
+    if ($null -eq $v) { return 0 }
+    $w = ConvertFrom-WtWhole $v 0 2147483647
+    if ($null -eq $w) { -1 } else { [int]$w }
+}
+
+# 사람이 이 항목을 고쳤다고 적는다: rev + 1, updated = 지금. 편집 · 지우기 · 되살리기는 모두 이 함수를 거친다
+# (같은 초에 고쳐도 rev가 달라지므로, 다시 가져오기가 고친 내용을 덮지 않는다)
+function Set-WtItemEdited($Item, $At) {
+    $rev = Get-WtItemRevision $Item
+    Set-WtField $Item 'rev' ([Math]::Max(0, $rev) + 1)
+    Set-WtField $Item 'updated' $(if ($null -eq $At) { Get-WtStamp } else { [string]$At })
+}
+
+# 공통 틀이 아는 문제(어느 탭에나 같다). 없으면 ''. 지금은 예전 데이터 안에서 id가 겹쳐 따로 남긴 줄(origin.dupOf)
+function Get-WtRecordProblem($Item) {
+    if (-not (Test-WtRecordObject $Item)) { return '' }
+    $dup = Get-WtField (Get-WtField $Item 'origin') 'dupOf'
+    if ($null -ne $dup -and "$dup" -ne '') { return "예전 데이터에서 id가 앞 줄과 겹쳐 따로 남긴 줄입니다 (원래 id '$dup')" }
+    ''
+}
+
 # 지운 지 $Days일이 지난 항목은 내용을 비우고 { id, deleted }만 남긴다. id를 남겨야 다시 가져오기 · 합치기에서 되살아나지 않는다.
-# 지운 시각을 읽을 수 없으면 그대로 둔다. 나머지 항목은 그대로 돌려준다
+# 지운 시각을 읽을 수 없으면 그대로 둔다. 나머지 항목(null · 깨진 항목 포함)은 그대로 같은 자리에 돌려준다
 function Compress-WtDeletedItems([object[]]$Items, [int]$Days = 90, $Now) {
     $limit = $(if ($null -eq $Now) { [DateTimeOffset]::Now } else { [DateTimeOffset]$Now }).AddDays(-$Days)
     foreach ($i in $Items) {
-        if ($null -eq $i) { continue }
         if ((Test-WtDeleted $i) -and @($i.PSObject.Properties).Count -gt 2) {
-            $at = ConvertFrom-WtStamp ([string]$i.deleted)
+            $at = ConvertFrom-WtStamp ([string](Get-WtField $i 'deleted'))
             if ($at -and $at -lt $limit) { [pscustomobject][ordered]@{ id = $i.id; deleted = $i.deleted }; continue }
         }
         $i
@@ -146,46 +203,99 @@ function Get-WtRowKey($Row) {
     $list -join [char]0x1F
 }
 
+# 두 줄(CSV 줄)에서 값이 다른 칸 이름들. 한쪽에만 있는 칸도 다르다고 본다
+function Get-WtChangedColumns($Old, $New) {
+    $a = @{}; $b = @{}
+    foreach ($p in @($(if ($null -ne $Old) { $Old.PSObject.Properties }))) { $a[$p.Name] = [string]$p.Value }
+    foreach ($p in @($(if ($null -ne $New) { $New.PSObject.Properties }))) { $b[$p.Name] = [string]$p.Value }
+    $names = [System.Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($k in @($a.Keys) + @($b.Keys)) { [void]$names.Add($k) }
+    foreach ($k in $names) { if (-not $a.ContainsKey($k) -or -not $b.ContainsKey($k) -or $a[$k] -cne $b[$k]) { $k } }
+}
+
+<#
+칸 경로 하나("start.date" 처럼 점으로 잇는다)의 값을 $Source에서 $Target으로 옮긴다. 그 경로 밖의 칸은 건드리지 않는다.
+가는 길의 앞부분이 한쪽에서 null(없음)이면 그 앞부분을 통째로 맞춘다 (예: 예전 데이터에서 반복이 없어지면 repeat = null).
+$Source에 그 칸이 없고 $Target에도 없으면 아무것도 하지 않는다
+#>
+function Copy-WtPathValue($Target, $Source, [string]$Path) {
+    $parts = $Path.Split('.')
+    $t = $Target; $s = $Source
+    for ($i = 0; $i -lt $parts.Count - 1; $i++) {
+        $sv = Get-WtField $s $parts[$i]
+        $tv = Get-WtField $t $parts[$i]
+        if ($null -eq $sv -or -not (Test-WtRecordObject $tv)) {
+            if ($null -ne $sv -or $null -ne $tv) { Set-WtField $t $parts[$i] $sv }
+            return
+        }
+        $t = $tv; $s = $sv
+    }
+    $leaf = $parts[$parts.Count - 1]
+    $sv = Get-WtField $s $leaf
+    if ($null -eq $sv -and $null -eq (Get-WtField $t $leaf) -and -not ($t.PSObject.Properties[$leaf])) { return }
+    Set-WtField $t $leaf $sv
+}
+
 <#
 예전 앱에서 가져온 항목을 지금 항목에 합친다. 덮어쓰지 않는다.
-  $Items    지금 저장된 항목 (저장 파일에서 읽은 그대로)
-  $Incoming 예전 데이터를 지금 형식으로 바꾼 항목. 저마다 origin = { from = $From; at; row }가 있다
-규칙 (id로 짝짓는다)
+  $Items    지금 저장된 항목 (저장 파일에서 읽은 그대로. null · 깨진 항목도 같은 자리에 그대로 남는다)
+  $Incoming 예전 데이터를 지금 형식으로 바꾼 항목. 저마다 origin = { from = $From; at; rev; row }가 있다
+  $Owned    예전 데이터의 칸 하나가 정하는 항목 칸 경로들 @{ 'Title' = @('title'); 'Date' = @('start.date', …) } (탭이 정한다)
+id는 글 그대로(대소문자를 가려서) 짝짓는다. 규칙
   - 새 id → 더한다
   - 지금 쪽에서 지운 항목 → 되살리지 않는다
   - 예전 줄이 그대로 → 그대로 둔다
-  - 예전 줄이 바뀌었고 지금 쪽에서 고치지 않았다(updated = origin.at) → 새 값으로 바꾼다. 지금 항목에만 있는 칸은 옮겨 둔다
-  - 예전 줄이 바뀌었고 지금 쪽에서도 고쳤다 → 지금 값을 두고 Conflicts에 적는다
+  - 예전 줄이 바뀌었고 지금 쪽에서 고치지 않았다(rev = origin.rev) → 바뀐 예전 칸이 정하는 경로만 기존 객체에 옮긴다.
+    그 밖의 칸(이 앱 · 더 새 앱이 더한 칸, 중첩 칸 포함)은 그대로다. origin.row · origin.at · updated를 새 값으로
+  - 예전 줄이 바뀌었고 지금 쪽에서도 고쳤다(rev ≠ origin.rev) → 지금 값을 두고 Conflicts에 적는다
   - 지금 쪽에서 만든 항목(origin.from이 다름)과 id가 겹침 → 지금 값을 두고 Conflicts에 적는다
+  - 예전 데이터 안에서 id가 겹친 뒤 줄 → 버리지 않는다. id를 'dup-' + 줄 내용 해시로 바꾸고 origin.dupOf에 원래 id를 적어
+    따로 남긴다(탭이 「고칠 항목」으로 보여 준다, Get-WtRecordProblem). 내용까지 같은 줄은 하나만 남는다
   - 예전 데이터에서 없어진 항목 → 지우지 않고 Missing에 적기만 한다
 #>
-function Merge-WtLegacyItems([object[]]$Items, [object[]]$Incoming, [string]$From = 'winforms-csv') {
+function Merge-WtLegacyItems([object[]]$Items, [object[]]$Incoming, [hashtable]$Owned, [string]$From = 'winforms-csv') {
+    if ($null -eq $Owned) { throw 'Merge-WtLegacyItems: 예전 칸 → 항목 칸 지도(-Owned)가 필요합니다.' }
     $merged = [System.Collections.Generic.List[object]]::new()
-    $index = @{}
+    $index = [System.Collections.Generic.Dictionary[string, int]]::new([StringComparer]::Ordinal)
     foreach ($i in @($Items)) {
-        if ($null -eq $i) { continue }
         $merged.Add($i)
+        if (-not (Test-WtRecordObject $i)) { continue }
         $k = [string]$i.id
         if ($k -and -not $index.ContainsKey($k)) { $index[$k] = $merged.Count - 1 }
     }
-    $r = [ordered]@{ Added = 0; Updated = 0; Unchanged = 0; KeptDeleted = 0; Conflicts = [System.Collections.Generic.List[string]]::new(); Missing = [System.Collections.Generic.List[string]]::new() }
-    $seen = [System.Collections.Generic.HashSet[string]]::new()
+    $r = [ordered]@{ Added = 0; Updated = 0; Unchanged = 0; KeptDeleted = 0
+        Conflicts = [System.Collections.Generic.List[string]]::new(); Missing = [System.Collections.Generic.List[string]]::new(); Duplicates = [System.Collections.Generic.List[string]]::new() }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($n in @($Incoming)) {
         $id = [string]$n.id
-        if (-not $seen.Add($id)) { continue }   # 예전 데이터 안에서 id가 겹치면 앞의 것만
+        if (-not $seen.Add($id)) {
+            $hash = [System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes((Get-WtRowKey $n.origin.row)))
+            $dup = 'dup-' + [Convert]::ToHexString($hash).Substring(0, 12).ToLowerInvariant()
+            Set-WtField $n 'id' $dup
+            Set-WtField $n.origin 'dupOf' $id
+            $id = $dup
+            if (-not $seen.Add($id)) { continue }
+            $r.Duplicates.Add($id)
+        }
         if (-not $index.ContainsKey($id)) { $merged.Add($n); $index[$id] = $merged.Count - 1; $r.Added++; continue }
         $old = $merged[$index[$id]]
         if (Test-WtDeleted $old) { $r.KeptDeleted++; continue }
-        $o = $old.origin
-        if (-not $o -or [string]$o.from -ne $From) { $r.Conflicts.Add($id); continue }
-        if ((Get-WtRowKey $o.row) -ceq (Get-WtRowKey $n.origin.row)) { $r.Unchanged++; continue }
-        if ([string]$old.updated -cne [string]$o.at) { $r.Conflicts.Add($id); continue }
-        foreach ($p in @($old.PSObject.Properties)) { if (-not $n.PSObject.Properties[$p.Name]) { Set-WtField $n $p.Name $p.Value } }
-        $merged[$index[$id]] = $n
-        $r.Updated++
+        $o = Get-WtField $old 'origin'
+        if (-not (Test-WtRecordObject $o) -or [string](Get-WtField $o 'from') -ne $From) { $r.Conflicts.Add($id); continue }
+        $changed = @(Get-WtChangedColumns (Get-WtField $o 'row') $n.origin.row)
+        if (-not $changed.Count) { $r.Unchanged++; continue }
+        if ((Get-WtItemRevision $old) -ne (Get-WtItemRevision $o)) { $r.Conflicts.Add($id); continue }
+        $paths = [System.Collections.Generic.List[string]]::new()
+        foreach ($c in $changed) { foreach ($p in @($Owned[$c])) { if ($p -and -not $paths.Contains($p)) { $paths.Add($p) } } }
+        foreach ($p in $paths) { Copy-WtPathValue $old $n $p }
+        Set-WtField $o 'row' $n.origin.row
+        Set-WtField $o 'at' $n.origin.at
+        if ($paths.Count) { Set-WtField $old 'updated' $n.updated; $r.Updated++ } else { $r.Unchanged++ }
     }
     foreach ($i in @($Items)) {
-        if ($null -eq $i -or (Test-WtDeleted $i) -or -not $i.origin -or [string]$i.origin.from -ne $From) { continue }
+        if (-not (Test-WtRecordObject $i) -or (Test-WtDeleted $i)) { continue }
+        $o = Get-WtField $i 'origin'
+        if (-not (Test-WtRecordObject $o) -or [string](Get-WtField $o 'from') -ne $From) { continue }
         if (-not $seen.Contains([string]$i.id)) { $r.Missing.Add([string]$i.id) }
     }
     $r.Items = $merged.ToArray()
@@ -193,5 +303,6 @@ function Merge-WtLegacyItems([object[]]$Items, [object[]]$Incoming, [string]$Fro
 }
 
 Export-ModuleMember -Function Get-WtStamp, ConvertFrom-WtStamp, ConvertFrom-WtDateText, ConvertTo-WtDateText, ConvertFrom-WtTimeText,
-    ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, ConvertFrom-WtLegacyStamp,
-    Get-WtField, Set-WtField, Copy-WtItem, Test-WtDeleted, Compress-WtDeletedItems, Get-WtRowKey, Merge-WtLegacyItems
+    ConvertFrom-WtWhole, ConvertFrom-WtNumber, ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, ConvertFrom-WtLegacyStamp,
+    Test-WtRecordObject, Get-WtField, Set-WtField, Copy-WtItem, Test-WtDeleted, Get-WtItemRevision, Set-WtItemEdited, Get-WtRecordProblem,
+    Compress-WtDeletedItems, Get-WtRowKey, Get-WtChangedColumns, Copy-WtPathValue, Merge-WtLegacyItems

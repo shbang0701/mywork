@@ -21,30 +21,34 @@ function ConvertFrom-WtHolidayItem($Item) {
         Name = [string]$Item.name; Kind = [string]$Item.kind; Note = [string]$Item.note }
     if (Test-WtDeleted $Item) { $e.State = 'deleted'; return [pscustomobject]$e }
     $e.Date = ConvertFrom-WtDateText $e.DateText
+    if (-not (Test-WtRecordObject $Item)) { $e.State = 'broken'; $e.Problem = '항목 모양이 틀렸습니다'; return [pscustomobject]$e }
+    $common = Get-WtRecordProblem $Item
     if (-not $e.Id) { $e.State = 'broken'; $e.Problem = 'id가 없습니다' }
+    elseif ($common) { $e.State = 'broken'; $e.Problem = $common }
+    elseif ($script:holidayKinds -cnotcontains $e.Kind) { $e.State = 'readonly'; $e.Problem = "새 버전의 휴무 종류입니다: '$($e.Kind)'" }   # 모르는 값이 틀린 값보다 먼저
     elseif (-not $e.Date) { $e.State = 'broken'; $e.Problem = "날짜를 읽지 못했습니다: '$($e.DateText)'" }
-    elseif ($script:holidayKinds -cnotcontains $e.Kind) { $e.State = 'readonly'; $e.Problem = "새 버전의 휴무 종류입니다: '$($e.Kind)'" }
     [pscustomobject]$e
 }
 
 <#
 휴무일 저장소를 읽는다. 파일이 바뀌지 않았으면 앞서 읽은 것을 돌려준다.
-@{ Items = 저장된 항목 그대로(저장할 때 이것을 쓴다); Entries = 항목마다 ConvertFrom-WtHolidayItem; Error = 못 읽었으면 이유, 아니면 $null }
-못 읽어도 예외를 올리지 않는다(부르는 탭의 화면 · 계산이 멈추지 않게). 그때 Items는 비어 있으므로 저장하지 않는다
+@{ Store = 저장소 핸들(저장할 때 넘긴다); Items = 저장된 항목 그대로(null · 깨진 항목 포함, 저장할 때 이것을 고친다)
+   Entries = 항목마다 ConvertFrom-WtHolidayItem; Error = 못 읽었으면 이유, 아니면 $null }
+못 읽어도 예외를 올리지 않는다(부르는 탭의 화면 · 계산이 멈추지 않게). 그때 핸들은 저장을 거부한다
 #>
 function Get-WtHolidayData {
     $stamp = Get-WtStoreStamp 'holidays'
     if ($script:holidayCache -and $script:holidayCache.Stamp -ceq $stamp) { return $script:holidayCache }
-    $err = $null
-    try { $items = Get-WtStoreItems -Name 'holidays' -Schema $script:holidaySchema }   # , @()로 돌려주므로 @()로 감싸지 않고 받는다
-    catch { $items = @(); $err = $_.Exception.Message }
+    $store = Open-WtStore -Name 'holidays' -Schema $script:holidaySchema
+    $err = $store.Error
+    $items = $store.Items
     $entries = @(foreach ($i in $items) { ConvertFrom-WtHolidayItem $i })
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($e in $entries) {
         if (-not $e.Id) { continue }
         if (-not $seen.Add($e.Id) -and $e.State -ne 'deleted') { $e.State = 'broken'; $e.Problem = "id가 앞 항목과 겹칩니다: '$($e.Id)'" }
     }
-    $script:holidayCache = [pscustomobject]@{ Stamp = $stamp; Items = $items; Entries = $entries; Error = $err }
+    $script:holidayCache = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $items; Entries = $entries; Error = $err }
     $script:holidayCache
 }
 
@@ -60,9 +64,11 @@ function Get-WtHolidayDates([Nullable[datetime]]$From, [Nullable[datetime]]$To) 
     , $set
 }
 
-# 휴무일 항목을 저장한다 (2단계 화면이 쓴다). 지운 지 오래된 항목은 { id, deleted }만 남긴다
-function Save-WtHolidayItems([object[]]$Items) {
-    Write-WtStore -Name 'holidays' -Schema $script:holidaySchema -Items @(Compress-WtDeletedItems @($Items))
+# 휴무일 항목을 저장한다 (2단계 화면이 쓴다). 읽은 핸들(Get-WtHolidayData의 Store)과 그 Items를 고친 목록을 넘긴다.
+# 읽지 못한 파일 · 읽은 뒤 바뀐 파일에는 쓰지 않는다(Save-WtStore). 지운 지 오래된 항목은 { id, deleted }만 남긴다
+function Save-WtHolidayItems($Store, [object[]]$Items) {
+    Save-WtStore -Store $Store -Items @(Compress-WtDeletedItems @($Items))
+    $script:holidayCache = $null
 }
 
 Export-ModuleMember -Function ConvertFrom-WtHolidayItem, Get-WtHolidayData, Get-WtHolidayDates, Save-WtHolidayItems

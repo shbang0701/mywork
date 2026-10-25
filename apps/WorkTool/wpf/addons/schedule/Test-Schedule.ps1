@@ -10,6 +10,9 @@
       v1.json         1단계 WPF가 쓴 schema 1
       v2.json         schema 2 대표 예 (매월 31일 · 둘째 화요일 · 말일 · 2월 29일 · 격주 · 건너뛰기 · 한 회차 바꿈 · 자정 넘김 · 지운 항목)
       v2-future.json  더 새 앱이 쓴 schema 2 흉내 (모르는 맨 위 키 · 칸 · kind · freq · 요일 코드 · 알람 모양)
+      legacy-dup.csv  대소문자만 다른 id · 같은 id 둘째 줄 · 완전히 같은 줄 (2026-10-26 검토 반례)
+      v1-bad-end.json schema 1의 읽지 못하는 끝 값 · null 항목 · 1단계에만 있던 칸 · Int32보다 큰 알람
+      v2-edge.json    null 항목 · 범위를 넘는 정수(Int32 · Int64 · BigInteger) · 범위 밖 날짜 · 소수 알람 · rev
     기대 값(회차 목록 등)은 여기에 못 박아 둔다. 규칙을 바꿔 값이 바뀌면 이 파일을 일부러 고쳐야 한다.
 
 .EXAMPLE
@@ -70,12 +73,13 @@ try {
     $r2 = Import-WtLegacyData -Force
     $m = Get-WtScheduleLastImport
     Assert-WtTest '일정 합치기: 그대로인 CSV는 아무것도 바꾸지 않고, id 없는 줄도 같은 id' ($r2.Count -eq 0 -and $m.Unchanged -eq 8 -and (Get-WtTestById (Get-WtScheduleData).Entries).ContainsKey($noIdKey))
-    $items = @((Get-WtScheduleData).Items)
+    $data = Get-WtScheduleData
+    $items = @($data.Items)
     foreach ($i in $items) {
-        if ($i.id -eq 's1') { $i.title = '이 앱에서 고친 제목'; $i.updated = '2099-01-01T00:00:00+09:00' }
-        if ($i.id -eq 's4') { $i.deleted = '2099-01-01T00:00:00+09:00' }
+        if ($i.id -eq 's1') { $i.title = '이 앱에서 고친 제목'; Set-WtItemEdited $i }
+        if ($i.id -eq 's4') { $i.deleted = Get-WtStamp; Set-WtItemEdited $i }
     }
-    Save-WtScheduleItems $items
+    Save-WtScheduleItems $data.Store $items
     $csv = [System.IO.File]::ReadAllText((Join-Path $fixtures 'legacy.csv'))
     $csv = $csv.Replace('"s1","2026-10-01","09:30","주간 회의"', '"s1","2026-10-01","09:30","예전 앱에서 고친 제목"')
     $csv = $csv.Replace('"쉼표, 따옴표 ""확인"""', '"예전 앱에서 고친 메모"')
@@ -156,7 +160,7 @@ try {
         $occ[2].Title -eq '바뀐 제목') (Get-WtTestKeys $occ)
     $items = @($data.Items)
     $items[0].title = '이 앱에서 고친 제목'
-    Save-WtScheduleItems $items
+    Save-WtScheduleItems $data.Store $items
     $saved = Read-WtTestDoc
     $sameOthers = $true
     for ($i = 1; $i -lt $before.items.Count; $i++) { if ((Get-WtTestJson $before.items[$i]) -cne (Get-WtTestJson $saved.items[$i])) { $sameOthers = $false } }
@@ -209,6 +213,98 @@ try {
     } finally { $thread.CurrentCulture = $oldCulture }
     Assert-WtTest '일정: 문화권(en-US · ko-KR · th-TH 불기 · ar-SA 회교력)이 달라도 가져오기 · 회차가 같다' (@($results.Values | Sort-Object -Unique).Count -eq 1)
 
+
+    # ---- 2026-10-26 검토 반례 (고치기 전에는 모두 틀렸다) ----
+    # 1 · 2: 다시 가져오기는 바뀐 예전 칸이 정하는 경로만 옮기고(중첩 칸 · 앱 고유 칸 보존), 같은 초에 고친 것도 rev로 알아본다
+    $test = New-WtTestData 'schedule-merge'; $tests.Add($test)
+    [void][System.IO.Directory]::CreateDirectory($test.Legacy)
+    [System.IO.File]::Copy((Join-Path $fixtures 'legacy.csv'), (Join-Path $test.Legacy 'schedule.csv'))
+    [void](Import-WtLegacyData)
+    $doc = Read-WtTestDoc
+    foreach ($i in $doc.items) {
+        if ($i.id -eq 's2') { $i.start | Add-Member -NotePropertyName zone -NotePropertyValue 'Asia/Seoul'; $i.origin | Add-Member -NotePropertyName line -NotePropertyValue 3
+            $i | Add-Member -NotePropertyName color -NotePropertyValue 'blue'; $i.repeat | Add-Member -NotePropertyName byHour -NotePropertyValue @(9) }
+    }
+    [System.IO.File]::WriteAllText((Get-WtStorePath 'schedule'), (ConvertTo-Json $doc -Depth 20), [System.Text.UTF8Encoding]::new($false))
+    $data = Get-WtScheduleData
+    $items = @($data.Items)
+    $s1 = @($items | Where-Object { $_ -and $_.id -ceq 's1' })[0]
+    $s1.title = '같은 초에 고친 제목'; Set-WtItemEdited $s1 $s1.origin.at   # 가져온 시각과 같은 초
+    Save-WtScheduleItems $data.Store $items
+    $csv = [System.IO.File]::ReadAllText((Join-Path $fixtures 'legacy.csv'))
+    $csv = $csv.Replace('"쉼표, 따옴표 ""확인"""', '"예전 앱에서 고친 메모"').Replace('"09:30","주간 회의"', '"09:30","예전 앱에서 고친 회의"')
+    Write-WtTestLegacyCsv $test 'schedule' $csv
+    [void](Import-WtLegacyData -Force)
+    $m = Get-WtScheduleLastImport
+    $s2 = @((Read-WtTestDoc).items | Where-Object { $_ -and $_.id -ceq 's2' })[0]
+    $s1 = @((Read-WtTestDoc).items | Where-Object { $_ -and $_.id -ceq 's1' })[0]
+    Assert-WtTest '일정 합치기: 예전 앱에서 바뀐 칸(Note)만 옮기고, 중첩 칸 · 앱 고유 칸(start.zone · origin.line · color · repeat.byHour)은 그대로' (
+        $s2.note -eq '예전 앱에서 고친 메모' -and $s2.start.zone -eq 'Asia/Seoul' -and $s2.origin.line -eq 3 -and $s2.color -eq 'blue' -and ($s2.repeat.byHour -join ',') -eq '9' -and
+        $s2.start.time -eq '09:30' -and $s2.origin.row.Note -eq '예전 앱에서 고친 메모' -and $s2.rev -eq 0)
+    Assert-WtTest '일정 합치기: 가져온 같은 초에 고쳐도 rev로 「이 앱에서 고침」을 알아보고 덮지 않는다' ($s1.title -eq '같은 초에 고친 제목' -and $s1.rev -eq 1 -and ($m.Conflicts -join ',') -eq 's1')
+    # 3: id는 대소문자를 가려 비교하고, 같은 id의 둘째 줄은 버리지 않고 고칠 항목으로 남긴다 (legacy-dup.csv)
+    $test = New-WtTestData 'schedule-dup'; $tests.Add($test)
+    [void][System.IO.Directory]::CreateDirectory($test.Legacy)
+    [System.IO.File]::Copy((Join-Path $fixtures 'legacy-dup.csv'), (Join-Path $test.Legacy 'schedule.csv'))
+    $r = Import-WtLegacyData
+    $data = Get-WtScheduleData
+    $dup = @($data.Entries | Where-Object { $_.Id -like 'dup-*' })
+    Assert-WtTest '일정 id: s1 · S1은 다른 항목, 같은 id 둘째 줄은 고칠 항목(원래 id 적음), 완전히 같은 줄은 하나' ($r.Count -eq 4 -and @($data.Entries).Count -eq 4 -and
+        @($data.Entries | Where-Object { $_.Id -ceq 's1' -and $_.Title -eq '소문자 s1' }).Count -eq 1 -and @($data.Entries | Where-Object { $_.Id -ceq 'S1' -and $_.State -eq 'ok' }).Count -eq 1 -and
+        $dup.Count -eq 1 -and $dup[0].State -eq 'broken' -and $dup[0].Problem -like "*원래 id 's1'*" -and $dup[0].Item.origin.dupOf -ceq 's1') "($($r.Count) · $(@($data.Entries | ForEach-Object { "$($_.Id)=$($_.State)" }) -join ','))"
+    [void](Import-WtLegacyData -Force)
+    $m = Get-WtScheduleLastImport
+    Assert-WtTest '일정 id: 다시 가져와도 겹친 줄을 또 만들지 않는다' ($m.Added -eq 0 -and $m.Unchanged -eq 4 -and @((Get-WtScheduleData).Entries).Count -eq 4) "(더함 $($m.Added) · 그대로 $($m.Unchanged))"
+    # 4 · 6: schema 1의 읽지 못한 끝 값은 원래 글 그대로 고칠 항목, 이전 전 항목 전체는 origin.prev, null 항목은 같은 자리에 (v1-bad-end.json)
+    $test = New-WtTestData 'schedule-v1-bad'; $tests.Add($test)
+    Copy-WtTestFixture 'v1-bad-end.json'
+    $data = Get-WtScheduleData
+    $doc = Read-WtTestDoc
+    $b1 = @($data.Entries)[0]
+    Assert-WtTest '일정 이전: 못 읽는 끝 값은 원래 글로 남아 고칠 항목, 이전 전 항목(1단계에만 있던 칸 포함)은 origin.prev' (
+        $b1.State -eq 'broken' -and $doc.items[0].end.date -eq '내일' -and $doc.items[0].end.time -eq '25:00' -and $doc.items[0].origin.prev.endDate -eq '내일' -and
+        $doc.items[0].origin.prev.endTime -eq '25:00' -and $doc.items[0].pinned -eq $true -and $doc.items[0].origin.prev.pinned -eq $true)
+    Assert-WtTest '일정 이전: null 항목은 같은 자리에 남고 고칠 항목, Int32보다 큰 알람은 그 항목만 고칠 항목' (@($doc.items).Count -eq 3 -and $null -eq $doc.items[1] -and
+        @($data.Entries)[1].State -eq 'broken' -and @($data.Entries)[2].State -eq 'broken' -and $doc.items[2].origin.prev.alarm -eq 2147483648) "$(@($data.Entries | ForEach-Object State) -join ',')"
+    # 6 · 7: null 항목과 범위를 넘는 숫자 · 날짜는 그 항목만 고칠 항목이고, 저장해도 같은 자리 · 같은 값으로 남는다 (v2-edge.json)
+    $test = New-WtTestData 'schedule-edge'; $tests.Add($test)
+    Copy-WtTestFixture 'v2-edge.json'
+    $before = [System.IO.File]::ReadAllText((Get-WtStorePath 'schedule')) | ConvertFrom-Json -Depth 20 -DateKind String
+    $data = Get-WtScheduleData
+    $states = (@($data.Entries) | ForEach-Object { $_.State }) -join ','
+    Assert-WtTest '일정 경계 값: Int32 · Int64 · BigInteger를 넘는 수, 소수, 1년 넘는 알람, 1900년 앞 날짜는 그 항목만 고칠 항목 (예외 없음)' (
+        -not $data.Error -and $states -eq 'ok,broken,broken,broken,broken,broken,broken,broken' -and ($data.Entries[0].Alarms -join ',') -eq '527040') $states
+    $items = @($data.Items)
+    $items[0].title = '고친 제목'; Set-WtItemEdited $items[0]
+    Save-WtScheduleItems $data.Store $items
+    $saved = Read-WtTestDoc
+    $same = $true
+    for ($i = 1; $i -lt $before.items.Count; $i++) { if ((Get-WtTestJson $before.items[$i]) -cne (Get-WtTestJson $saved.items[$i])) { $same = $false } }
+    Assert-WtTest '일정 경계 값: 한 항목을 고쳐 저장해도 null · 깨진 항목이 같은 자리에 같은 값, rev는 1 오른다' ($same -and @($saved.items).Count -eq 8 -and $null -eq $saved.items[1] -and
+        $saved.items[0].rev -eq 4 -and $saved.items[0].title -eq '고친 제목')
+    # 5 · 6: 빈 파일은 「없음」이 아니라 깨진 파일. 읽기를 거부한 파일 · 읽은 뒤 바뀐 파일에는 저장하지 않는다
+    $test = New-WtTestData 'schedule-refuse'; $tests.Add($test)
+    foreach ($text in '', '   ', '{ "schema": 3, "items": [] }', '{ "schema": 2, "items": { "id": "x" } }') {
+        [System.IO.File]::WriteAllText((Get-WtStorePath 'schedule'), $text, [System.Text.UTF8Encoding]::new($false))
+        $data = Get-WtScheduleData
+        $saveError = $null; try { Save-WtScheduleItems $data.Store @() } catch { $saveError = $_.Exception.Message }
+        $writeError = $null; try { Write-WtStore -Name 'schedule' -Schema 2 -Items @() } catch { $writeError = $_.Exception.Message }
+        Assert-WtTest "일정 저장 거부: '$text' → 읽기 오류, 핸들 저장 · 낮은 단계 저장 모두 거부, 파일 그대로" ($data.Error -and $data.Store.State -eq 'error' -and $saveError -and $writeError -and
+            [System.IO.File]::ReadAllText((Get-WtStorePath 'schedule')) -ceq $text) "$($data.Error) / $saveError / $writeError"
+    }
+    Copy-WtTestFixture 'v2.json'
+    $data = Get-WtScheduleData
+    $stale = $data.Store
+    Copy-WtTestFixture 'v2-future.json'
+    $null = Get-WtScheduleData
+    $staleError = $null; try { Save-WtScheduleItems $stale @($data.Items) } catch { $staleError = $_.Exception.Message }
+    Assert-WtTest '일정 저장 거부: 읽은 뒤 파일이 바뀌어 다시 읽었으면 옛 핸들로는 저장하지 않는다' ($staleError -like '*다시 읽은 뒤*' -and (Read-WtTestDoc).sync.device -eq 'PC-02') $staleError
+    $test = New-WtTestData 'schedule-new'; $tests.Add($test)
+    $data = Get-WtScheduleData
+    $wasMissing = $data.Store.State -eq 'missing'
+    Save-WtScheduleItems $data.Store @()
+    Assert-WtTest '일정 저장: 파일이 없으면(없음) 핸들로 새로 만든다' ($wasMissing -and (Read-WtTestDoc).schema -eq 2 -and $data.Store.State -eq 'ok')
+
     # ---- 읽을 수 없는 파일: 화면은 열리고 파일은 그대로 ----
     $test = New-WtTestData 'schedule-bad'; $tests.Add($test)
     $bad = [ordered]@{ '더 새 schema' = '{ "schema": 3, "items": [] }'; '깨진 JSON' = '{ "schema": 2, "items": [ { "id": '; 'schema 없음' = '{ "items": [] }' }
@@ -235,9 +331,10 @@ try {
         $texts = @(Get-WtTestTexts $view)
         Assert-WtTest '일정 화면: 매일 반복 · 고칠 항목 · 새 버전 항목을 보여 준다' ($texts -contains '매일 점검' -and @($texts | Where-Object { $_ -like '고칠 항목*' }).Count -eq 1 -and
             @($texts | Where-Object { $_ -like '새 버전에서 만든 항목*' }).Count -eq 1 -and $texts -contains '날짜가 깨진 줄')
-        $items = @((Get-WtScheduleData).Items)
-        foreach ($i in $items) { if ($i.id -eq 's4') { $i.title = '바뀐 매일 점검' } }
-        Save-WtScheduleItems $items
+        $data = Get-WtScheduleData
+        $items = @($data.Items)
+        foreach ($i in $items) { if ($i.id -eq 's4') { $i.title = '바뀐 매일 점검'; Set-WtItemEdited $i } }
+        Save-WtScheduleItems $data.Store $items
         & $module { Update-WtScheduleView }
         Assert-WtTest '일정 화면: 저장이 바뀌면 다시 들어올 때 반영한다' ((Get-WtTestTexts $view) -contains '바뀐 매일 점검')
         & $module { $script:testFirst = $script:body.Children[0]; $script:viewKey = '어제'; Update-WtScheduleView }

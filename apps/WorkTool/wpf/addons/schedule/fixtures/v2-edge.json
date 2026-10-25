@@ -1,0 +1,22 @@
+{
+  "schema": 2,
+  "saved": "2026-10-26T09:00:00+09:00",
+  "_fixture": "고정 시험 자료(가짜 값): 경계 값. null 항목, 범위를 넘는 정수(Int32 · Int64 · BigInteger), 범위 밖 날짜, 사람이 고친 횟수(rev). 더하기만 하고 고치지 않는다.",
+  "items": [
+    { "id": "e1", "kind": "event", "title": "보통 일정", "note": "", "start": { "date": "2026-10-01", "time": "09:00" }, "end": null, "repeat": null, "alarms": [ { "before": 527040 } ], "tags": [], "rev": 3,
+      "created": "2026-10-01T09:00:00+09:00", "updated": "2026-10-02T09:00:00+09:00", "deleted": null, "origin": null },
+    null,
+    { "id": "e2", "kind": "event", "title": "알람이 Int32보다 큼", "note": "", "start": { "date": "2026-10-01", "time": "09:00" }, "end": null, "repeat": null, "alarms": [ { "before": 2147483648 } ], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "e3", "kind": "event", "title": "간격이 너무 큼", "note": "", "start": { "date": "2026-10-01", "time": null }, "end": null, "repeat": { "freq": "daily", "interval": 9223372036854775807 }, "alarms": [], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "e4", "kind": "event", "title": "횟수가 Int64보다 큼", "note": "", "start": { "date": "2026-10-01", "time": null }, "end": null, "repeat": { "freq": "daily", "count": 99999999999999999999 }, "alarms": [], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "e5", "kind": "event", "title": "1900년 앞", "note": "", "start": { "date": "1850-01-01", "time": null }, "end": null, "repeat": null, "alarms": [], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "e6", "kind": "event", "title": "알람 소수", "note": "", "start": { "date": "2026-10-01", "time": "09:00" }, "end": null, "repeat": null, "alarms": [ { "before": 10.5 } ], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "e7", "kind": "event", "title": "알람 1년 넘음", "note": "", "start": { "date": "2026-10-01", "time": "09:00" }, "end": null, "repeat": null, "alarms": [ { "before": 527041 } ], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null }
+  ]
+}

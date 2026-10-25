@@ -11,6 +11,7 @@
       v1.json         1단계 WPF가 쓴 schema 1
       v2.json         schema 2 대표 예 (퇴근 · 밤샘 근무 · 원격 · 현장 출동 · 하루 넘는 업무외 · 휴가 종류 · 사람이 정한 일수 · 달 넘김)
       v2-future.json  더 새 앱이 쓴 schema 2 흉내 (모르는 맨 위 키 · 칸 · kind · leave.type · overtime.how)
+      v2-edge.json    null 항목 · 31일 넘는 기록 · 범위 밖 휴가 일수(BigInteger · 음수) · 확정 일수 0.5 · 2199년 뒤 날짜 · rev (2026-10-26 검토 반례)
     휴무일은 tests\fixtures\holidays.json(코어 고정 시험 자료)을 쓴다: 10/3 · 10/9 공휴일, 10/8 개인 휴무, 11/20 회사 휴무.
     월 합계 기대 값은 여기에 못 박아 둔다. 규칙(att-2)을 바꿔 값이 바뀌면 이 파일을 일부러 고쳐야 한다.
 
@@ -77,12 +78,15 @@ try {
     # ---- 다시 가져오기: 덮어쓰지 않고 합친다 ----
     $r2 = Import-WtLegacyData -Force
     Assert-WtTest '근태 합치기: 그대로인 CSV는 아무것도 바꾸지 않는다' ($r2.Count -eq 0 -and (Get-WtAttendanceLastImport).Unchanged -eq 13)
-    $items = @((Get-WtAttendanceData).Items)
+    $data = Get-WtAttendanceData
+    $items = @($data.Items)
     foreach ($i in $items) {
-        if ($i.id -eq 't1') { Set-WtField $i 'end' ([pscustomobject]@{ date = '2026-10-21'; time = '18:10' }); $i.updated = '2099-01-01T00:00:00+09:00' }
-        if ($i.id -eq 't2') { $i.deleted = '2099-01-01T00:00:00+09:00' }
+        # 가져온 같은 초에 고쳐도 rev로 「이 앱에서 고침」을 알아본다
+        if ($i.id -eq 't1') { Set-WtField $i 'end' ([pscustomobject]@{ date = '2026-10-21'; time = '18:10' }); Set-WtItemEdited $i $i.origin.at }
+        if ($i.id -eq 't2') { $i.deleted = Get-WtStamp; Set-WtItemEdited $i }
+        if ($i.id -eq 't3') { $i | Add-Member -NotePropertyName approved -NotePropertyValue '모르는 칸'; $i.start | Add-Member -NotePropertyName zone -NotePropertyValue 'Asia/Seoul' }
     }
-    Save-WtAttendanceItems $items
+    Save-WtAttendanceItems $data.Store $items
     $csv = [System.IO.File]::ReadAllText((Join-Path $fixtures 'legacy.csv'))
     $csv = $csv.Replace('"t1","출근","2026-10-21","2026-10-21","08:47"', '"t1","출근","2026-10-21","2026-10-21","08:40"')
     $csv = $csv.Replace('"t3","업무외시간 근무","2026-10-20","2026-10-20","19:00","21:30"', '"t3","업무외시간 근무","2026-10-20","2026-10-20","19:00","22:00"')
@@ -93,6 +97,8 @@ try {
     Assert-WtTest '근태 합치기: 예전 앱에서만 바뀐 기록은 새 값, 이 앱에서 고친 기록(퇴근)은 그대로 · 충돌로, 지운 기록은 되살리지 않는다' (
         $r3.Count -eq 1 -and $after.t3.Minutes -eq 180 -and $after.t1.HasEnd -and $after.t1.Start -eq (& $d '2026-10-21').AddMinutes(527) -and ($m.Conflicts -join ',') -eq 't1' -and
         $after.t2.State -eq 'deleted' -and $m.KeptDeleted -eq 1) "($($r3.Count) · 충돌 $($m.Conflicts -join ','))"
+    Assert-WtTest '근태 합치기: 바뀐 예전 칸(EndTime)이 정하는 경로(end.time · end.date)만 옮기고, 모르는 칸 · 중첩 칸(start.zone)은 그대로' (
+        $after.t3.Item.approved -eq '모르는 칸' -and $after.t3.Item.start.zone -eq 'Asia/Seoul' -and $after.t3.Item.end.time -eq '22:00' -and $after.t3.Item.rev -eq 0 -and $after.t3.Note -eq '패치')
 
     # ---- 1단계 WPF 파일 (v1.json) → schema 2 ----
     $test = New-WtTestData 'attendance-v1'; $tests.Add($test)
@@ -138,14 +144,36 @@ try {
     $text = Format-WtTestSummary (Get-WtAttendanceSummary (& $d '2026-11-01') $data.Entries ([System.Collections.Generic.HashSet[string]]::new()))
     Assert-WtTest '근태 새 버전: 읽기 전용 기록은 합계에서 빠진다' ($text -eq 'work 1/540/0 · over 0/0/0 · trip 2/1 · leave 0 · skip 5') $text
     $items = @($data.Items)
-    $items[0].note = '이 앱에서 고친 메모'
-    Save-WtAttendanceItems $items
+    $items[0].note = '이 앱에서 고친 메모'; Set-WtItemEdited $items[0]
+    Save-WtAttendanceItems $data.Store $items
     $saved = Read-WtTestDoc
     $sameOthers = $true
     for ($i = 1; $i -lt $before.items.Count; $i++) { if ((Get-WtTestJson $before.items[$i]) -cne (Get-WtTestJson $saved.items[$i])) { $sameOthers = $false } }
     Assert-WtTest '근태 새 버전: 한 기록을 고쳐 저장해도 모르는 맨 위 키 · 칸 · 기록이 그대로' (
         (Get-WtTestJson $saved.contract) -ceq (Get-WtTestJson $before.contract) -and $sameOthers -and $saved.items[0].note -eq '이 앱에서 고친 메모' -and
         (Get-WtTestJson $saved.items[0].breaks) -ceq (Get-WtTestJson $before.items[0].breaks) -and $saved.items[0].geo.site -eq '본사' -and $saved.items[0].start.zone -eq 'Asia/Seoul')
+
+    # ---- 경계 값 (v2-edge.json, 2026-10-26 검토 반례) ----
+    $test = New-WtTestData 'attendance-edge'; $tests.Add($test)
+    Copy-WtTestFixture 'v2-edge.json'
+    $before = [System.IO.File]::ReadAllText((Get-WtStorePath 'attendance')) | ConvertFrom-Json -Depth 20 -DateKind String
+    $data = Get-WtAttendanceData
+    $states = (@($data.Entries) | ForEach-Object { $_.State }) -join ','
+    Assert-WtTest '근태 경계 값: null 항목 · 31일 넘는 기록 · 범위 밖 휴가 일수 · 2199년 뒤 날짜는 그 항목만 고칠 항목 (예외 없음)' (
+        -not $data.Error -and $states -eq 'ok,broken,broken,broken,broken,ok,broken') $states
+    $sum = Get-WtAttendanceSummary (& $d '2026-11-01') $data.Entries ([System.Collections.Generic.HashSet[string]]::new())
+    Assert-WtTest '근태 att-2: 휴가 일수는 확정(days 숫자)과 잠정(규칙으로 셈)을 나눠 돌려준다' ($sum.LeaveDays -eq 0.5 -and $sum.LeaveFixed -eq 0.5 -and $sum.LeaveEstimated -eq 0 -and $sum.Skipped -eq 5)
+    $items = @($data.Items)
+    $items[0].note = '고친 메모'; Set-WtItemEdited $items[0]
+    Save-WtAttendanceItems $data.Store $items
+    $saved = Read-WtTestDoc
+    $same = $true
+    for ($i = 1; $i -lt $before.items.Count; $i++) { if ((Get-WtTestJson $before.items[$i]) -cne (Get-WtTestJson $saved.items[$i])) { $same = $false } }
+    Assert-WtTest '근태 경계 값: 한 기록을 고쳐 저장해도 null · 깨진 기록이 같은 자리에 같은 값, rev는 1 오른다' ($same -and @($saved.items).Count -eq 7 -and $null -eq $saved.items[1] -and $saved.items[0].rev -eq 3)
+    [System.IO.File]::WriteAllText((Get-WtStorePath 'attendance'), '', [System.Text.UTF8Encoding]::new($false))
+    $data = Get-WtAttendanceData
+    $saveError = $null; try { Save-WtAttendanceItems $data.Store @() } catch { $saveError = $_.Exception.Message }
+    Assert-WtTest '근태 저장 거부: 빈 파일은 깨진 파일로 알리고 저장하지 않는다' ($data.Error -like '*비어 있습니다*' -and $saveError -and [System.IO.File]::ReadAllText((Get-WtStorePath 'attendance')) -eq '')
 
     # ---- 규칙 하나씩 ----
     $base = '"id": "x", "place": "", "note": "", "tags": []'
@@ -196,10 +224,12 @@ try {
             $month = $script:month; $changed = -not [object]::ReferenceEquals($script:testFirst, $script:body.Children[0])
             Update-WtAttendanceView; $changed -and $script:month -eq $month
         })
-        $items = @((Get-WtAttendanceData).Items)
+        $data = Get-WtAttendanceData
+        $items = @($data.Items)
         $items[0].note = '외부에서 바꾼 기록'
         $items[0].start.date = ([datetime]::Today.AddMonths(-1)).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
-        Save-WtAttendanceItems $items
+        Set-WtItemEdited $items[0]
+        Save-WtAttendanceItems $data.Store $items
         & $module { Update-WtAttendanceView }
         $texts = @(Get-WtTestTexts $view)
         Assert-WtTest '근태 화면: 저장이 바뀌면 다시 들어올 때 반영하고, 고칠 항목을 보여 준다' ($texts -contains '외부에서 바꾼 기록' -and @($texts | Where-Object { $_ -like '고칠 항목*' }).Count -eq 1)

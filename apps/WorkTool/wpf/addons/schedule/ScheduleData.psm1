@@ -15,8 +15,12 @@
 #              주는 월요일에 시작한다(격주를 셀 때). 회차 하나는 "<id>@<원래 날짜>"로 가리킨다
 #   alarms   [ { before: 분 } ]. 시작 몇 분 전(하루 종일은 그날 0시 기준). before가 없는 알람(더 새 앱의 모양)은 울리지 않는다
 #   tags     [ 글 ]
+#   rev      사람이 고친 횟수(0부터, 고칠 때마다 +1, core\Records.psm1 Set-WtItemEdited). 다시 가져오기가 「이 앱에서 고쳤는지」를 이것으로 본다
 #   created · updated · deleted   앱이 찍는 시각. deleted가 있으면 지운 항목(목록에서 숨김, 90일 뒤 { id, deleted }만 남김)
-#   origin   null 또는 { from: "winforms-csv", at, row: 예전 CSV 줄 그대로, via: "schema1"(1단계 WPF 파일에서 올렸을 때) }
+#   origin   null 또는 { from: "winforms-csv", at, rev, row: 예전 CSV 줄 그대로, via: "schema1" · prev: 올리기 전 항목(1단계 WPF 파일에서 올렸을 때),
+#            dupOf: 예전 데이터 안에서 id가 겹쳐 따로 남긴 줄의 원래 id }
+#   숫자 범위: before 0~527040 · interval 1~999 · count 1~9999 (밖이면 그 항목만 고칠 항목). 날짜는 1900~2199년
+# 저장은 저장소 핸들로만 한다(Get-WtScheduleData의 Store → Save-WtScheduleItems). 읽지 못한 파일 · 읽은 뒤 바뀐 파일에는 쓰지 않는다
 # 읽기 규칙: 모르는 칸 · 맨 위 키는 그대로 둔다. 모르는 kind · freq · 요일 코드가 든 항목은 읽기 전용(계산 · 알람에서 뺌),
 #   날짜를 못 읽는 항목은 「고칠 항목」. 두 경우 모두 저장할 때 그대로 쓰고, 나머지 항목은 평소대로 쓴다.
 # 울린 알람 · 다시 알림 같은 앱 상태는 이 파일에 두지 않는다 (2단계: 따로 상태 파일. 잃어도 데이터는 멀쩡하다)
@@ -30,45 +34,56 @@ $script:dayCodes = @('sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat')   # [DayOf
 $script:inv = [System.Globalization.CultureInfo]::InvariantCulture
 $script:cache = $null
 $script:lastImport = $null
+# 숫자 칸의 범위 (형식 계약. 밖이면 그 항목만 고칠 항목). 해석은 core\Records.psm1의 ConvertFrom-WtWhole 하나로 한다
+$script:limits = @{ before = @(0, 527040); interval = @(1, 999); count = @(1, 9999) }   # before: 366일(분)까지
+<#
+예전 schedule.csv의 칸 하나가 정하는 항목 칸 (다시 가져올 때 이 경로만 기존 항목에 옮긴다. 나머지 칸은 건드리지 않는다).
+Date는 매주 반복의 요일도 정한다. LastAlarm · Updated는 데이터로 옮기지 않으므로 경로가 없다(origin.row에만 남는다)
+#>
+$script:csvOwned = @{
+    Date = @('start.date', 'repeat.days'); Time = @('start.time'); Title = @('title'); Note = @('note')
+    Alarm = @('alarms'); Repeat = @('repeat.freq', 'repeat.interval', 'repeat.days')
+}
 
 # ---- 읽기 · 쓰기 ------------------------------------------------------------------------------
 
-# 저장된 항목 그대로 (schema 1 파일이면 2로 올려 읽는다). 못 읽으면 예외
-function Get-WtScheduleItems {
-    Get-WtStoreItems -Name 'schedule' -Schema $script:schema -Migrate { param($doc, $from) Update-WtScheduleSchema $doc $from }
+# 저장소 핸들 (core\Storage.psm1 Open-WtStore). schema 1 파일이면 2로 올려 읽는다. 읽지 못하면 State = error
+function Open-WtScheduleStore {
+    Open-WtStore -Name 'schedule' -Schema $script:schema -Migrate { param($doc, $from) Update-WtScheduleSchema $doc $from }
 }
 
-# 항목을 저장한다. 읽은 항목 객체를 그대로 넘긴다(모르는 칸이 남게). 지운 지 오래된 항목은 { id, deleted }만 남긴다
-function Save-WtScheduleItems([object[]]$Items) {
-    Write-WtStore -Name 'schedule' -Schema $script:schema -Items @(Compress-WtDeletedItems @($Items))
+<#
+항목을 저장한다. 읽은 핸들(Get-WtScheduleData의 Store)과, 그 핸들의 Items를 고친 목록을 넘긴다(모르는 칸 · null · 깨진 항목이 그대로 남게).
+읽지 못한 파일 · 읽은 뒤 바뀐 파일에는 쓰지 않고 예외를 올린다(Save-WtStore). 지운 지 오래된 항목은 { id, deleted }만 남긴다.
+저장한 뒤에는 Get-WtScheduleData로 다시 받는다
+#>
+function Save-WtScheduleItems($Store, [object[]]$Items) {
+    Save-WtStore -Store $Store -Items @(Compress-WtDeletedItems @($Items))
+    $script:cache = $null
 }
 
 <#
 화면 · 홈 카드가 같이 쓰는 읽은 결과. 파일이 바뀌지 않았으면 다시 읽지 않는다. 못 읽어도 예외를 올리지 않는다(화면이 오류를 보여 준다).
-@{ Items = 저장된 그대로(저장할 때 이것을 쓴다. Error가 있으면 비어 있으므로 저장하지 않는다)
-   Entries = 항목마다 ConvertFrom-WtScheduleItem; Error = 못 읽은 이유 | $null }
+@{ Store = 저장소 핸들(저장할 때 넘긴다); Items = 저장된 그대로(null · 깨진 항목 포함, 저장할 때 이것을 고친다)
+   Entries = 항목마다 ConvertFrom-WtScheduleItem (Items와 같은 순서); Error = 못 읽은 이유 | $null }
 #>
 function Get-WtScheduleData {
     $stamp = Get-WtStoreStamp 'schedule'
     if ($script:cache -and $script:cache.Stamp -ceq $stamp) { return $script:cache }
-    $err = $null
-    $items = @()
-    try { $items = Get-WtScheduleItems } catch { $err = $_.Exception.Message }   # , @()로 돌려주므로 @()로 감싸지 않고 받는다
+    $store = Open-WtScheduleStore
+    $err = $store.Error
+    $items = $store.Items
     $entries = @(foreach ($i in $items) { ConvertFrom-WtScheduleItem $i })
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($e in $entries) {
         if (-not $e.Id) { continue }
         if (-not $seen.Add($e.Id) -and $e.State -ne 'deleted') { $e.State = 'broken'; $e.Problem = "id가 앞 항목과 겹칩니다: '$($e.Id)'" }
     }
-    $script:cache = [pscustomobject]@{ Stamp = $stamp; Items = $items; Entries = $entries; Error = $err }
+    $script:cache = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $items; Entries = $entries; Error = $err }
     $script:cache
 }
 
 # ---- 항목 하나 읽기 ---------------------------------------------------------------------------
-
-function Test-WtSchWhole($Value) {
-    $Value -is [long] -or $Value -is [int] -or ($Value -is [double] -and [Math]::Floor($Value) -eq $Value)
-}
 
 function Test-WtSchObject($Value) { $null -ne $Value -and $Value -isnot [string] -and $Value -isnot [ValueType] -and $Value -isnot [array] }
 
@@ -121,8 +136,9 @@ function Read-WtSchAlarms($Alarms) {
         if (-not (Test-WtSchObject $a)) { return @{ List = @(); Problem = "알람 모양이 틀렸습니다: '$a'" } }
         $b = $a.PSObject.Properties['before']
         if (-not $b) { continue }
-        if (-not (Test-WtSchWhole $b.Value) -or $b.Value -lt 0) { return @{ List = @(); Problem = "알람을 읽지 못했습니다: '$($b.Value)'" } }
-        $list.Add([int]$b.Value)
+        $m = ConvertFrom-WtWhole $b.Value $script:limits.before[0] $script:limits.before[1]
+        if ($null -eq $m) { return @{ List = @(); Problem = "알람을 읽지 못했습니다(0~$($script:limits.before[1])분 정수): '$($b.Value)'" } }
+        $list.Add([int]$m)
     }
     @{ List = $list.ToArray(); Problem = '' }
 }
@@ -134,9 +150,11 @@ function Read-WtSchRepeat($Repeat) {
     if ($script:freqs -cnotcontains $freq) { return @{ State = 'readonly'; Problem = "새 버전의 반복입니다: '$freq'" } }
     $rule = @{ Freq = $freq; Interval = 1; Days = [System.Collections.Generic.List[System.DayOfWeek]]::new(); MonthDay = $null; Nth = $null
         Until = $null; Count = $null; Skip = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal); Changes = @{}; RawChanges = $null }
-    if ($null -ne $Repeat.interval) {
-        if (-not (Test-WtSchWhole $Repeat.interval) -or $Repeat.interval -lt 1) { return @{ State = 'broken'; Problem = "반복 간격을 읽지 못했습니다: '$($Repeat.interval)'" } }
-        $rule.Interval = [int]$Repeat.interval
+    $raw = Get-WtField $Repeat 'interval'
+    if ($null -ne $raw) {
+        $v = ConvertFrom-WtWhole $raw $script:limits.interval[0] $script:limits.interval[1]
+        if ($null -eq $v) { return @{ State = 'broken'; Problem = "반복 간격을 읽지 못했습니다(1~$($script:limits.interval[1]) 정수): '$raw'" } }
+        $rule.Interval = [int]$v
     }
     if ($null -ne $Repeat.days) {
         foreach ($c in @($Repeat.days)) {
@@ -145,15 +163,17 @@ function Read-WtSchRepeat($Repeat) {
             if (-not $rule.Days.Contains([System.DayOfWeek]$i)) { $rule.Days.Add([System.DayOfWeek]$i) }
         }
     }
-    if ($null -ne $Repeat.monthDay) {
-        $v = $Repeat.monthDay
-        if ($freq -ne 'monthly' -or -not (Test-WtSchWhole $v) -or -not (($v -ge 1 -and $v -le 31) -or $v -eq -1)) { return @{ State = 'broken'; Problem = "날짜 반복(monthDay)을 읽지 못했습니다: '$v'" } }
+    $raw = Get-WtField $Repeat 'monthDay'
+    if ($null -ne $raw) {
+        $v = ConvertFrom-WtWhole $raw -1 31
+        if ($freq -ne 'monthly' -or $null -eq $v -or $v -eq 0) { return @{ State = 'broken'; Problem = "날짜 반복(monthDay)을 읽지 못했습니다: '$raw'" } }
         $rule.MonthDay = [int]$v
     }
-    if ($null -ne $Repeat.nth) {
-        $v = $Repeat.nth
-        if ($freq -ne 'monthly' -or -not (Test-WtSchWhole $v) -or -not (($v -ge 1 -and $v -le 5) -or $v -eq -1) -or -not $rule.Days.Count -or $null -ne $rule.MonthDay) {
-            return @{ State = 'broken'; Problem = "몇째 요일 반복(nth)을 읽지 못했습니다: '$v'" }
+    $raw = Get-WtField $Repeat 'nth'
+    if ($null -ne $raw) {
+        $v = ConvertFrom-WtWhole $raw -1 5
+        if ($freq -ne 'monthly' -or $null -eq $v -or $v -eq 0 -or -not $rule.Days.Count -or $null -ne $rule.MonthDay) {
+            return @{ State = 'broken'; Problem = "몇째 요일 반복(nth)을 읽지 못했습니다: '$raw'" }
         }
         $rule.Nth = [int]$v
     }
@@ -164,9 +184,10 @@ function Read-WtSchRepeat($Repeat) {
     # count는 칸이 없으면 PowerShell이 붙인 Count(1)가 나오므로 Get-WtField로 읽는다
     $count = Get-WtField $Repeat 'count'
     if ($null -ne $count) {
-        if (-not (Test-WtSchWhole $count) -or $count -lt 1) { return @{ State = 'broken'; Problem = "반복 횟수를 읽지 못했습니다: '$count'" } }
+        $v = ConvertFrom-WtWhole $count $script:limits.count[0] $script:limits.count[1]
+        if ($null -eq $v) { return @{ State = 'broken'; Problem = "반복 횟수를 읽지 못했습니다(1~$($script:limits.count[1]) 정수): '$count'" } }
         if ($null -ne $rule.Until) { return @{ State = 'broken'; Problem = '반복 끝나는 날과 횟수가 둘 다 있습니다' } }
-        $rule.Count = [int]$count
+        $rule.Count = [int]$v
     }
     foreach ($k in @($Repeat.skip)) {
         if ($null -eq $k) { continue }
@@ -239,6 +260,8 @@ function ConvertFrom-WtScheduleItem($Item) {
         if ($r.State -eq 'ok') { $e.Repeat = $r.Rule }
     }
     if (-not $e.Id -and -not $problem) { $problem = 'id가 없습니다' }
+    $common = Get-WtRecordProblem $Item
+    if ($common -and -not $problem) { $problem = $common }
     $al = Read-WtSchAlarms $Item.alarms
     if ($al.Problem -and -not $problem) { $problem = $al.Problem }
     $e.Alarms = $al.List
@@ -489,15 +512,25 @@ function ConvertFrom-WtScheduleRow($Row, [string]$At) {
     [pscustomobject][ordered]@{
         id = $id; kind = 'event'; title = [string]$Row.Title; note = [string]$Row.Note
         start = [ordered]@{ date = $(if ($date) { $date } else { $rawDate }); time = $time }
-        end = $null; repeat = $repeat; alarms = $alarms.ToArray(); tags = @()
+        end = $null; repeat = $repeat; alarms = $alarms.ToArray(); tags = @(); rev = 0
         created = $null; updated = $At; deleted = $null
-        origin = [ordered]@{ from = 'winforms-csv'; at = $At; row = $Row }
+        origin = [ordered]@{ from = 'winforms-csv'; at = $At; rev = 0; row = $Row }
     }
+}
+
+# 예전 값 하나: 비면 $null, 읽으면 정한 모양, 못 읽으면 원래 글 그대로 (그러면 그 항목은 「고칠 항목」이 되고 원문이 남는다)
+function ConvertFrom-WtSchLegacyValue([string]$Text, [ValidateSet('date', 'time')][string]$What) {
+    $raw = $Text.Trim()
+    if (-not $raw) { return $null }
+    $v = if ($What -eq 'date') { ConvertFrom-WtLegacyDate $raw } else { ConvertFrom-WtLegacyTime $raw }
+    if ($v) { $v } else { $raw }
 }
 
 <#
 schema 1(1단계 WPF) → 2. 1단계 WPF는 예전 CSV를 칸 이름만 바꿔 옮긴 것이라, 예전 CSV 줄로 되돌린 뒤 같은 길(ConvertFrom-WtScheduleRow)로 바꾼다.
-그래서 이전한 뒤 예전 CSV를 다시 가져와도 같은 줄은 「그대로」로 합쳐진다. 1단계에만 있던 칸(기간 · 끝 시각 · 태그)과 모르는 칸은 옮긴다
+그래서 이전한 뒤 예전 CSV를 다시 가져와도 같은 줄은 「그대로」로 합쳐진다.
+1단계에만 있던 칸(기간 · 끝 시각 · 태그)은 옮기고, 못 읽는 끝 날짜 · 시각은 원래 글 그대로 두어 「고칠 항목」으로 남긴다.
+옮기기 전 항목 전체(1단계에만 있던 칸 포함)는 origin.prev에 그대로 남긴다. 모르는 칸도 항목에 옮긴다. null · 모양이 틀린 항목도 같은 자리에 둔다
 #>
 function Update-WtScheduleSchema($Doc, [int]$From) {
     if ($From -ne 1) { throw "일정 schema $From에서 올리는 방법이 없습니다." }
@@ -505,7 +538,7 @@ function Update-WtScheduleSchema($Doc, [int]$From) {
     $known = @('id', 'title', 'startDate', 'endDate', 'time', 'endTime', 'note', 'alarm', 'repeat', 'tags', 'lastAlarm', 'updated')
     $list = [System.Collections.Generic.List[object]]::new()
     foreach ($old in @($Doc.items)) {
-        if (-not (Test-WtSchObject $old)) { if ($null -ne $old) { $list.Add($old) }; continue }   # 모양이 틀린 항목도 버리지 않는다
+        if (-not (Test-WtSchObject $old)) { $list.Add($old); continue }
         $row = [pscustomobject][ordered]@{
             Id = [string]$old.id; Date = [string]$old.startDate; Time = [string]$old.time; Title = [string]$old.title; Note = [string]$old.note
             Alarm = $(if ($null -eq $old.alarm) { '' } else { [string]$old.alarm }); Repeat = [string]$old.repeat
@@ -513,10 +546,11 @@ function Update-WtScheduleSchema($Doc, [int]$From) {
         }
         $new = ConvertFrom-WtScheduleRow $row $at
         $new.origin['via'] = 'schema1'
-        $endDate = ConvertFrom-WtLegacyDate ([string]$old.endDate)
-        $endTime = ConvertFrom-WtLegacyTime ([string]$old.endTime)
-        if (($endDate -and $endDate -ne $new.start.date) -or $endTime) {
-            $new.end = [ordered]@{ date = $(if ($endDate) { $endDate } else { $new.start.date }); time = $endTime }
+        $new.origin['prev'] = Copy-WtItem $old
+        $endDate = ConvertFrom-WtSchLegacyValue ([string]$old.endDate) 'date'
+        $endTime = ConvertFrom-WtSchLegacyValue ([string]$old.endTime) 'time'
+        if (($null -ne $endDate -and $endDate -ne $new.start.date) -or $null -ne $endTime) {
+            $new.end = [ordered]@{ date = $(if ($null -ne $endDate) { $endDate } else { $new.start.date }); time = $endTime }
         }
         $tags = @(foreach ($t in @($old.tags)) { if ($null -ne $t -and "$t" -ne '') { [string]$t } })
         if ($tags.Count) { $new.tags = $tags }
@@ -530,26 +564,28 @@ function Update-WtScheduleSchema($Doc, [int]$From) {
 }
 
 <#
-예전 WinForms schedule.csv를 가져온다. 덮어쓰지 않고 합친다(core\Records.psm1 Merge-WtLegacyItems):
-새 줄은 더하고, 이 앱에서 고치거나 지운 항목은 그대로 두며, 예전 앱에서만 바뀐 줄은 새 값으로 바꾼다. 가져온 개수(더함 + 바꿈)를 돌려준다.
-지금 파일을 읽지 못하면(더 새 버전 · 깨짐) 가져오지 않고 예외를 올린다 — 못 읽은 파일을 덮어쓰지 않게
+예전 WinForms schedule.csv를 가져온다. 덮어쓰지 않고 합친다(core\Records.psm1 Merge-WtLegacyItems, 예전 칸 → 항목 칸 지도 $script:csvOwned):
+새 줄은 더하고, 이 앱에서 고치거나(rev) 지운 항목은 그대로 두며, 예전 앱에서만 바뀐 줄은 바뀐 칸이 정하는 경로만 기존 항목에 옮긴다.
+가져온 개수(더함 + 바꿈)를 돌려준다. 지금 파일을 읽지 못하면(더 새 버전 · 깨짐) 가져오지 않고 예외를 올린다 — 못 읽은 파일을 덮어쓰지 않게
 #>
 function Import-WtScheduleLegacy([string]$Folder) {
     $csv = Read-WtLegacyCsv $Folder 'schedule'
     if ($null -eq $csv) { return $null }
+    $store = Open-WtScheduleStore
+    if ($store.State -eq 'error') { throw $store.Error }
     $at = Get-WtStamp
     $incoming = @(Copy-WtItem @(foreach ($r in $csv.Rows) { ConvertFrom-WtScheduleRow $r $at }))
-    $old = Get-WtScheduleItems
-    $m = Merge-WtLegacyItems -Items $old -Incoming $incoming
+    $m = Merge-WtLegacyItems -Items $store.Items -Incoming $incoming -Owned $script:csvOwned
     $legacy = [ordered]@{ file = $csv.File; sha256 = $csv.Sha256; encoding = $csv.Encoding; rows = $csv.Rows.Count; at = $at }
-    Write-WtStore -Name 'schedule' -Schema $script:schema -Items @(Compress-WtDeletedItems @($m.Items)) -Extra @{ importedFrom = $Folder; legacy = $legacy }
+    Save-WtStore -Store $store -Items @(Compress-WtDeletedItems @($m.Items)) -Extra @{ importedFrom = $Folder; legacy = $legacy }
+    $script:cache = $null
     $script:lastImport = $m
     $m.Added + $m.Updated
 }
 
-# 마지막 가져오기의 합친 결과 (Added · Updated · Unchanged · KeptDeleted · Conflicts · Missing)
+# 마지막 가져오기의 합친 결과 (Added · Updated · Unchanged · KeptDeleted · Conflicts · Missing · Duplicates)
 function Get-WtScheduleLastImport { $script:lastImport }
 
-Export-ModuleMember -Function Get-WtScheduleItems, Save-WtScheduleItems, Get-WtScheduleData, ConvertFrom-WtScheduleItem,
+Export-ModuleMember -Function Open-WtScheduleStore, Save-WtScheduleItems, Get-WtScheduleData, ConvertFrom-WtScheduleItem,
     Get-WtRepeatDates, Get-WtScheduleOccurrences, Get-WtScheduleDays, ConvertFrom-WtScheduleRow, Update-WtScheduleSchema,
     Import-WtScheduleLegacy, Get-WtScheduleLastImport

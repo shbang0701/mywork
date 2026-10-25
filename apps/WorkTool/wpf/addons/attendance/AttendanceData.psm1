@@ -14,7 +14,8 @@
 #   leave    { type, days }   kind = leave일 때
 #            type annual 연차 · half 반차 · half-am 오전 반차 · half-pm 오후 반차 · sick 병가 · family 경조사 · comp 대체 휴무 · other 기타
 #            days null = 규칙대로 센다(아래), 숫자 = 사람이 정한 차감 일수(회사가 정한 사실이라 저장한다)
-#   created · updated · deleted · origin   일정과 같다 (core\Records.psm1)
+#   rev · created · updated · deleted · origin   일정과 같다 (core\Records.psm1, ScheduleData.psm1 맨 위)
+#   범위: 출근 · 업무외 기록 하나는 31일까지, leave.days는 0~366 (밖이면 그 항목만 고칠 항목). 저장은 저장소 핸들로만 한다(Save-WtAttendanceItems)
 # 하루 근무 시간 · 월 합계 같은 계산 값은 저장하지 않는다. 계산 규칙은 이 파일의 Get-WtAttendanceSummary 하나에 모으고 이름(att-2)을 붙인다.
 # 읽기 규칙: 모르는 칸 · 맨 위 키는 그대로 둔다. 모르는 kind · leave.type · overtime.how가 든 항목은 읽기 전용(계산에서 뺌),
 #   날짜 · 시각을 못 읽는 항목은 「고칠 항목」. 두 경우 모두 저장할 때 그대로 쓴다.
@@ -32,34 +33,49 @@ $script:leaveMap = @{ '연차' = 'annual'; '오전 반차' = 'half-am'; '오후 
 $script:inv = [System.Globalization.CultureInfo]::InvariantCulture
 $script:cache = $null
 $script:lastImport = $null
+# 숫자 칸 · 길이의 범위 (형식 계약. 밖이면 그 항목만 고칠 항목). 해석은 core\Records.psm1의 ConvertFrom-WtWhole · ConvertFrom-WtNumber 하나로 한다
+$script:maxSpanDays = 31            # 출근 · 업무외 기록 하나의 길이 (31일까지)
+$script:maxLeaveDays = 366          # 사람이 정한 휴가 일수
+<#
+예전 attendance.csv의 칸 하나가 정하는 항목 칸 (다시 가져올 때 이 경로만 기존 항목에 옮긴다. 나머지 칸은 건드리지 않는다).
+업무외 끝 날짜는 시작 날짜 · 시각에 따라 정해지므로 StartDate · StartTime도 end.date를 정한다. 종류(Type)가 바뀌면 종류별 칸을 통째로 다시 맞춘다
+#>
+$script:csvOwned = @{
+    Type = @('kind', 'start.time', 'end', 'overtime', 'leave', 'note', 'place')
+    StartDate = @('start.date', 'end.date'); StartTime = @('start.time', 'end.date'); EndDate = @('end.date'); EndTime = @('end.time', 'end.date')
+    Place = @('place'); Detail = @('note', 'leave.type')
+}
 
 # 월 요약 규칙의 고를 수 있는 값 (설정 화면은 2단계)
 Register-WtSettingDefault 'attendance.tripDays' 'all'   # 출장 일수: all = 걸친 날 모두 · workdays = 주말 · 휴무일 빼고
 
 # ---- 읽기 · 쓰기 ------------------------------------------------------------------------------
 
-function Get-WtAttendanceItems {
-    Get-WtStoreItems -Name 'attendance' -Schema $script:schema -Migrate { param($doc, $from) Update-WtAttendanceSchema $doc $from }
+# 저장소 핸들 (core\Storage.psm1 Open-WtStore). schema 1 파일이면 2로 올려 읽는다. 읽지 못하면 State = error
+function Open-WtAttendanceStore {
+    Open-WtStore -Name 'attendance' -Schema $script:schema -Migrate { param($doc, $from) Update-WtAttendanceSchema $doc $from }
 }
 
-function Save-WtAttendanceItems([object[]]$Items) {
-    Write-WtStore -Name 'attendance' -Schema $script:schema -Items @(Compress-WtDeletedItems @($Items))
+# 항목을 저장한다. 읽은 핸들(Get-WtAttendanceData의 Store)과 그 핸들의 Items를 고친 목록을 넘긴다 (Save-WtScheduleItems와 같은 약속)
+function Save-WtAttendanceItems($Store, [object[]]$Items) {
+    Save-WtStore -Store $Store -Items @(Compress-WtDeletedItems @($Items))
+    $script:cache = $null
 }
 
-# 화면 · 홈 카드가 같이 쓰는 읽은 결과 @{ Stamp; Items; Entries; Error }. 못 읽어도 예외를 올리지 않는다 (ScheduleData.psm1과 같은 약속)
+# 화면 · 홈 카드가 같이 쓰는 읽은 결과 @{ Stamp; Store; Items; Entries; Error }. 못 읽어도 예외를 올리지 않는다 (ScheduleData.psm1과 같은 약속)
 function Get-WtAttendanceData {
     $stamp = Get-WtStoreStamp 'attendance'
     if ($script:cache -and $script:cache.Stamp -ceq $stamp) { return $script:cache }
-    $err = $null
-    $items = @()
-    try { $items = Get-WtAttendanceItems } catch { $err = $_.Exception.Message }   # , @()로 돌려주므로 @()로 감싸지 않고 받는다
+    $store = Open-WtAttendanceStore
+    $err = $store.Error
+    $items = $store.Items
     $entries = @(foreach ($i in $items) { ConvertFrom-WtAttendanceItem $i })
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($e in $entries) {
         if (-not $e.Id) { continue }
         if (-not $seen.Add($e.Id) -and $e.State -ne 'deleted') { $e.State = 'broken'; $e.Problem = "id가 앞 항목과 겹칩니다: '$($e.Id)'" }
     }
-    $script:cache = [pscustomobject]@{ Stamp = $stamp; Items = $items; Entries = $entries; Error = $err }
+    $script:cache = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $items; Entries = $entries; Error = $err }
     $script:cache
 }
 
@@ -106,6 +122,7 @@ function ConvertFrom-WtAttendanceItem($Item) {
                 $e.HasEnd = $true; $e.EndDate = $f.Date
                 $e.End = if ($e.HasTime) { $f.Date + $f.Time } else { $f.Date }
                 if ($e.End -lt $e.Start) { $problem = '끝이 시작보다 이릅니다' }
+                elseif ($e.Kind -in 'work', 'overtime' -and ($e.End - $e.Start).TotalDays -gt $script:maxSpanDays) { $problem = "기록 하나가 $($script:maxSpanDays)일을 넘습니다" }
                 elseif ($e.HasTime) { $e.Minutes = [int]($e.End - $e.Start).TotalMinutes }
             }
         }
@@ -131,14 +148,17 @@ function ConvertFrom-WtAttendanceItem($Item) {
         else {
             if ($script:leaveTypes -cnotcontains [string]$l.type) { $e.State = 'readonly'; $e.Problem = "새 버전의 휴가 종류입니다: '$($l.type)'"; return [pscustomobject]$e }
             $e.LeaveType = [string]$l.type
-            $days = $l.days
+            $days = Get-WtField $l 'days'
             if ($null -ne $days) {
-                if (($days -isnot [long] -and $days -isnot [int] -and $days -isnot [double]) -or $days -lt 0) { if (-not $problem) { $problem = "휴가 일수를 읽지 못했습니다: '$days'" } }
-                else { $e.LeaveDays = [double]$days }
+                $v = ConvertFrom-WtNumber $days 0 $script:maxLeaveDays
+                if ($null -eq $v) { if (-not $problem) { $problem = "휴가 일수를 읽지 못했습니다(0~$($script:maxLeaveDays)): '$days'" } }
+                else { $e.LeaveDays = $v }
             }
         }
     }
     if (-not $e.Id -and -not $problem) { $problem = 'id가 없습니다' }
+    $common = Get-WtRecordProblem $Item
+    if ($common -and -not $problem) { $problem = $common }
     if ($problem) { $e.State = 'broken'; $e.Problem = $problem }
     [pscustomobject]$e
 }
@@ -167,6 +187,7 @@ function Get-WtLeaveDays($Entry, [datetime]$First, [datetime]$Last, $DayOff) {
   업무외 시작한 날이 그 달인 기록. OverMinutes 분 합계 · OverCount 건수 · OverOpen 끝 시각 없는 건수(분에 넣지 않음)
   출장   그 달에 걸친 기록. TripCount 건수 · TripDays 일수($TripDays: all = 걸친 날 모두, workdays = 근무일만)
   휴가   LeaveDays: Get-WtLeaveDays 합계 (근무일 = 토 · 일 · 휴무일이 아닌 날)
+         = LeaveFixed(사람이 정한 days, 확정) + LeaveEstimated(days가 null이라 지금 규칙 · 휴무일로 센 잠정 값)
   Skipped 계산에서 뺀 항목 수(읽기 전용 · 고칠 항목). other(기타)는 셈에 넣지 않는다
 $DayOff: 휴무일 날짜 모음(yyyy-MM-dd). 주지 않으면 core\Calendar.psm1의 휴무일을 쓴다
 #>
@@ -176,7 +197,7 @@ function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, 
     if ($null -eq $DayOff) { $DayOff = Get-WtHolidayDates $first $last }
     if (-not $TripDays) { $TripDays = [string](Get-WtSetting 'attendance.tripDays') }
     $r = [ordered]@{ Rule = $script:rule; Month = $first; WorkDays = 0; WorkMinutes = 0; WorkOpen = 0; OverMinutes = 0; OverCount = 0; OverOpen = 0
-        TripCount = 0; TripDays = 0; LeaveDays = 0.0; Skipped = 0 }
+        TripCount = 0; TripDays = 0; LeaveDays = 0.0; LeaveFixed = 0.0; LeaveEstimated = 0.0; Skipped = 0 }
     $workDates = [System.Collections.Generic.HashSet[datetime]]::new()
     foreach ($e in @($Entries)) {
         if ($null -eq $e -or $e.State -eq 'deleted') { continue }
@@ -201,7 +222,9 @@ function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, 
             }
             'leave' {
                 if ($e.EndDate -lt $first -or $e.StartDate -gt $last) { break }
-                $r.LeaveDays += Get-WtLeaveDays $e $first $last $DayOff
+                $n = Get-WtLeaveDays $e $first $last $DayOff
+                $r.LeaveDays += $n
+                if ($null -ne $e.LeaveDays) { $r.LeaveFixed += $n } else { $r.LeaveEstimated += $n }
             }
         }
     }
@@ -238,10 +261,11 @@ function ConvertFrom-WtAttendanceRow($Row, [string]$At) {
     $detail = [string]$Row.Detail
     $start = ConvertFrom-WtAttPoint ([string]$Row.StartDate) ([string]$Row.StartTime)
     $endDateText = if (([string]$Row.EndDate).Trim()) { [string]$Row.EndDate } else { [string]$Row.StartDate }
-    $item = [ordered]@{ id = $id; kind = $kind; start = $start; end = $null; place = [string]$Row.Place; note = $detail; tags = @() }
+    $item = [ordered]@{ id = $id; kind = $kind; start = $start; end = $null; place = [string]$Row.Place; note = $detail; tags = @(); rev = 0 }
     switch ($kind) {
-        'work' { }   # 예전 앱에는 퇴근 시각이 없다
-        'overtime' {
+        { $_ -in 'work', 'overtime' } {
+            # 끝 날짜는 StartDate(예전 앱의 출근 · 업무외 EndDate는 늘 StartDate와 같다). EndTime ≤ StartTime이면 다음 날로 한 번만 추측한다.
+            # 예전 앱의 출근에는 퇴근 시각이 없어서 보통 end = null이다(EndTime이 있으면 버리지 않고 퇴근으로 쓴다)
             if (([string]$Row.EndTime).Trim()) {
                 $end = ConvertFrom-WtAttPoint ([string]$Row.StartDate) ([string]$Row.EndTime)
                 $a = ConvertFrom-WtTimeText ([string]$start.time)
@@ -250,7 +274,7 @@ function ConvertFrom-WtAttendanceRow($Row, [string]$At) {
                 if ($null -ne $a -and $null -ne $b -and $sd -and $b -le $a) { $end.date = ConvertTo-WtDateText $sd.AddDays(1) }
                 $item.end = $end
             }
-            $item.overtime = [ordered]@{ how = $null; ref = '' }
+            if ($kind -eq 'overtime') { $item.overtime = [ordered]@{ how = $null; ref = '' } }
         }
         'leave' {
             $lt = $script:leaveMap[$detail.Trim()]
@@ -270,13 +294,13 @@ function ConvertFrom-WtAttendanceRow($Row, [string]$At) {
         }
     }
     $item.created = $null; $item.updated = $At; $item.deleted = $null
-    $item.origin = [ordered]@{ from = 'winforms-csv'; at = $At; row = $Row }
+    $item.origin = [ordered]@{ from = 'winforms-csv'; at = $At; rev = 0; row = $Row }
     [pscustomobject]$item
 }
 
 <#
 schema 1(1단계 WPF) → 2. 1단계 WPF는 예전 CSV를 칸 이름만 바꿔 옮긴 것이라, 예전 CSV 줄로 되돌린 뒤 같은 길(ConvertFrom-WtAttendanceRow)로 바꾼다.
-모르는 칸은 옮긴다
+못 읽는 날짜 · 시각은 원래 글 그대로 「고칠 항목」이 된다. 옮기기 전 항목 전체는 origin.prev에 남기고, 모르는 칸도 옮긴다. null · 모양이 틀린 항목도 같은 자리에 둔다
 #>
 function Update-WtAttendanceSchema($Doc, [int]$From) {
     if ($From -ne 1) { throw "근태 schema $From에서 올리는 방법이 없습니다." }
@@ -284,13 +308,14 @@ function Update-WtAttendanceSchema($Doc, [int]$From) {
     $known = @('id', 'type', 'startDate', 'endDate', 'startTime', 'endTime', 'place', 'detail', 'updated')
     $list = [System.Collections.Generic.List[object]]::new()
     foreach ($old in @($Doc.items)) {
-        if (-not (Test-WtAttObject $old)) { if ($null -ne $old) { $list.Add($old) }; continue }
+        if (-not (Test-WtAttObject $old)) { $list.Add($old); continue }
         $row = [pscustomobject][ordered]@{
             Id = [string]$old.id; Type = [string]$old.type; StartDate = [string]$old.startDate; EndDate = [string]$old.endDate
             StartTime = [string]$old.startTime; EndTime = [string]$old.endTime; Place = [string]$old.place; Detail = [string]$old.detail; Updated = [string]$old.updated
         }
         $new = ConvertFrom-WtAttendanceRow $row $at
         $new.origin['via'] = 'schema1'
+        $new.origin['prev'] = Copy-WtItem $old
         foreach ($p in @($old.PSObject.Properties)) {
             if ($known -notcontains $p.Name -and -not $new.PSObject.Properties[$p.Name]) { Set-WtField $new $p.Name $p.Value }
         }
@@ -304,17 +329,19 @@ function Update-WtAttendanceSchema($Doc, [int]$From) {
 function Import-WtAttendanceLegacy([string]$Folder) {
     $csv = Read-WtLegacyCsv $Folder 'attendance'
     if ($null -eq $csv) { return $null }
+    $store = Open-WtAttendanceStore
+    if ($store.State -eq 'error') { throw $store.Error }
     $at = Get-WtStamp
     $incoming = @(Copy-WtItem @(foreach ($r in $csv.Rows) { ConvertFrom-WtAttendanceRow $r $at }))
-    $old = Get-WtAttendanceItems
-    $m = Merge-WtLegacyItems -Items $old -Incoming $incoming
+    $m = Merge-WtLegacyItems -Items $store.Items -Incoming $incoming -Owned $script:csvOwned
     $legacy = [ordered]@{ file = $csv.File; sha256 = $csv.Sha256; encoding = $csv.Encoding; rows = $csv.Rows.Count; at = $at }
-    Write-WtStore -Name 'attendance' -Schema $script:schema -Items @(Compress-WtDeletedItems @($m.Items)) -Extra @{ importedFrom = $Folder; legacy = $legacy }
+    Save-WtStore -Store $store -Items @(Compress-WtDeletedItems @($m.Items)) -Extra @{ importedFrom = $Folder; legacy = $legacy }
+    $script:cache = $null
     $script:lastImport = $m
     $m.Added + $m.Updated
 }
 
 function Get-WtAttendanceLastImport { $script:lastImport }
 
-Export-ModuleMember -Function Get-WtAttendanceItems, Save-WtAttendanceItems, Get-WtAttendanceData, ConvertFrom-WtAttendanceItem,
+Export-ModuleMember -Function Open-WtAttendanceStore, Save-WtAttendanceItems, Get-WtAttendanceData, ConvertFrom-WtAttendanceItem,
     Get-WtLeaveDays, Get-WtAttendanceSummary, ConvertFrom-WtAttendanceRow, Update-WtAttendanceSchema, Import-WtAttendanceLegacy, Get-WtAttendanceLastImport
