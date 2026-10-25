@@ -347,20 +347,74 @@ pie
         Register-WtAddon -Id 'test-warm-full' -Title '미리1' -Order 70 -WarmUp Full -NewView { $global:warmCalls.FullNew++; New-WtText '미리 만든 화면' } -Refresh { param($v) $global:warmCalls.FullRefresh++ }
         Register-WtAddon -Id 'test-warm-view' -Title '미리2' -Order 71 -WarmUp View -NewView { $global:warmCalls.ViewNew++; New-WtText '틀만' } -Refresh { param($v) $global:warmCalls.ViewRefresh++ }
         Register-WtAddon -Id 'test-warm-none' -Title '미리3' -Order 72 -NewView { $global:warmCalls.NoneNew++; New-WtText '안 함' }
+        $warmOff = & (Get-Module Shell) {
+            $script:warmEnabled = $false; $script:warmStarted = $false; $script:warmQueue = $null
+            Start-WtWarmUp
+            -not $script:warmStarted -and $null -eq $script:warmQueue
+        }
+        Assert-Wt '미리 만들기: 기본 실행은 예약하지 않는다' $warmOff
         $warm = & (Get-Module Shell) {
             $script:ui = @{ WarmHost = [System.Windows.Controls.ContentControl]::new() }
             $script:ui.WarmHost.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $script:ui.WarmHost.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
             $script:views = @{}; $script:current = 'test-a'
+            $script:warmEnabled = $true; $script:warmStarted = $false; $script:exiting = $false
             $run = { Start-WtWarmUp; $script:warmTimer.Stop(); $n = 0; while ((Invoke-WtWarmUpStep) -and $n -lt 30) { $n++ } }
             & $run
             $first = @{ Views = @($script:views.Keys | Sort-Object); HostEmpty = $null -eq $script:ui.WarmHost.Content }
+            $queue = $script:warmQueue
             & $run
+            $first.Once = [object]::ReferenceEquals($queue, $script:warmQueue)
             $first
         }
         Assert-Wt '미리 만들기: WarmUp을 준 탭만 만들고(Full은 새로 고침까지), 설정 · 도움말도 만든다' (
             ($warm.Views -join ',') -eq '_help,_settings,test-warm-full,test-warm-view' -and $warm.HostEmpty -and
             $global:warmCalls.FullNew -eq 1 -and $global:warmCalls.FullRefresh -eq 1 -and $global:warmCalls.ViewNew -eq 1 -and $global:warmCalls.ViewRefresh -eq 0 -and $global:warmCalls.NoneNew -eq 0) (
             "($($warm.Views -join ',') · $(($global:warmCalls.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' '))")
+        Assert-Wt '미리 만들기: 같은 세션에서 다시 예약하지 않는다' $warm.Once
+        $warmGates = & (Get-Module Shell) {
+            $oldWindow = $script:window
+            $oldSelecting = $script:selecting
+            try {
+                $script:selecting = $false
+                $script:window = [pscustomobject]@{ IsVisible = $true; IsEnabled = $true; IsActive = $false; WindowState = [System.Windows.WindowState]::Normal }
+                $idle = Test-WtCanWarmUp
+                $script:window.IsActive = $true; $active = Test-WtCanWarmUp
+                $script:window.IsActive = $false; $script:window.IsEnabled = $false; $disabled = Test-WtCanWarmUp
+                $script:window.IsEnabled = $true
+                [System.Windows.Interop.ComponentDispatcher]::PushModal()
+                try { $modal = Test-WtCanWarmUp } finally { [System.Windows.Interop.ComponentDispatcher]::PopModal() }
+                $script:window.IsEnabled = $true; $script:window.WindowState = [System.Windows.WindowState]::Minimized; $minimized = Test-WtCanWarmUp
+                $script:window.WindowState = [System.Windows.WindowState]::Normal; $script:window.IsVisible = $false; $hidden = Test-WtCanWarmUp
+                $script:window.IsVisible = $true; $script:exiting = $true; $exiting = Test-WtCanWarmUp
+                $idle -and -not $active -and -not $disabled -and -not $modal -and -not $minimized -and -not $hidden -and -not $exiting
+            } finally {
+                $script:window = $oldWindow; $script:selecting = $oldSelecting
+                $script:exiting = $false; $script:warmEnabled = $false
+            }
+        }
+        Assert-Wt '미리 만들기: 활성·모달·최소화·숨김·종료 상태에서는 대기한다' $warmGates
+        Register-WtAddon -Id 'test-warm-failure' -Title '미리 실패' -WarmUp Full -NewView { New-WtText '실패할 화면' } -Refresh { throw '가짜 갱신 실패' }
+        $warmFailure = & (Get-Module Shell) {
+            $script:warmEnabled = $true
+            try {
+                $script:warmQueue = [System.Collections.Generic.Queue[string]]::new([string[]]@('test-warm-failure'))
+                [void](Invoke-WtWarmUpStep)
+                -not $script:views.ContainsKey('test-warm-failure') -and $null -eq $script:ui.WarmHost.Content
+            } finally { $script:warmEnabled = $false; $script:warmQueue = $null }
+        }
+        Assert-Wt '미리 만들기: 갱신 실패 화면은 캐시에 남기지 않는다' $warmFailure
+        $opaqueSetting = Get-WtSetting 'ui.opacity'
+        $opaqueSession = & (Get-Module Shell) {
+            $oldWindow = $script:window
+            $oldForceOpaque = $script:forceOpaque
+            try {
+                $script:window = [System.Windows.Window]::new()
+                $script:forceOpaque = $true
+                Set-WtOpacity 65
+                $script:window.Opacity -eq 1.0
+            } finally { $script:window = $oldWindow; $script:forceOpaque = $oldForceOpaque }
+        }
+        Assert-Wt '불투명 진단: 세션 투명도만 고정하고 저장 설정은 유지한다' ($opaqueSession -and (Get-WtSetting 'ui.opacity') -eq $opaqueSetting)
 
         # 공통 모양: 스크롤 막대는 화살표 없이 손잡이만 두고, 가로 · 세로 막대가 만나는 모서리에 회색 칸이 없다. 막대를 누르면 한 화면씩 움직인다
         $box = [System.Windows.Controls.Border]::new()

@@ -39,9 +39,19 @@ if ($env:DOTNET_TieredCompilation -ne '0') {
     exit $childExit
 }
 
+$previousRenderMode = $null
+$renderModeChanged = $false
 try {
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+
+# 진단용 세션 선택. 사용자 설정과 레지스트리는 바꾸지 않는다.
+# 반드시 첫 창을 만들기 전에 적용한다. 기본 실행은 기존 렌더링 경로를 유지한다.
+if ($env:WORKTOOL_SOFTWARE_RENDER -eq '1') {
+    $previousRenderMode = [System.Windows.Media.RenderOptions]::ProcessRenderMode
+    [System.Windows.Media.RenderOptions]::ProcessRenderMode = [System.Windows.Interop.RenderMode]::SoftwareOnly
+    $renderModeChanged = $true
+}
 
 #region 모듈 불러오기 (묶음 파일에서는 이 구역이 모듈 소스로 바뀐다)
 $coreModules = 'Storage', 'Settings', 'Theme', 'Ui', 'Highlight', 'Markdown', 'Mermaid', 'Addons', 'Pages', 'Shell'
@@ -62,5 +72,9 @@ foreach ($file in (Get-ChildItem (Join-Path $PSScriptRoot 'addons') -Filter '*.p
             Add-Type -AssemblyName System.Windows.Forms
             [void][System.Windows.Forms.MessageBox]::Show($msg, 'WorkTool 시작 오류', 'OK', 'Error')
         } catch { }
+    }
+} finally {
+    if ($renderModeChanged) {
+        [System.Windows.Media.RenderOptions]::ProcessRenderMode = $previousRenderMode
     }
 }
