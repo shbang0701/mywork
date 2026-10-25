@@ -128,11 +128,15 @@ function ConvertTo-WtMarkdownModel([AllowEmptyString()][string]$Text) {
 #>
 function Get-WtMarkdownUnits([AllowEmptyString()][string]$Text, [int]$LineOffset = 0) {
     $src = ([string]$Text).Replace("`r`n", "`n").Replace("`r", "`n")
+    # 글 일부(가운데)를 나눌 때는 앞에 빈 줄을 하나 붙인다. 맨 앞 ---를 머리말(속성)로 읽지 않게
+    $pad = 0
+    if ($LineOffset -gt 0) { $src = "`n" + $src; $pad = 1 }
     $lines = $src -split "`n"
     $starts = [int[]]::new($lines.Count)
     $pos = 0
     for ($i = 0; $i -lt $lines.Count; $i++) { $starts[$i] = $pos; $pos += $lines[$i].Length + 1 }
     $doc = [Markdig.Markdown]::Parse($src, (Get-WtMarkdownPipeline))
+    $LineOffset -= $pad
     $ctx = @{ Src = $src; Headings = [System.Collections.Generic.List[object]]::new(); Starts = $starts; Lines = $lines; Offset = $LineOffset }
     $units = [System.Collections.Generic.List[object]]::new()
     foreach ($b in $doc) { Add-WtMdUnitsOf $units $b $ctx 0 }
@@ -148,6 +152,14 @@ function Get-WtMarkdownUnits([AllowEmptyString()][string]$Text, [int]$LineOffset
         $units.Add((New-WtMdUnit 'raw' $s $l $null $ctx))
     }
     $sorted = @($units | Sort-Object { $_.Start })
+    # 겹치는 단위는 앞 단위를 뒤 단위 시작에서 자른다 (예: 바로 아래 표가 붙은 문단 — Markdig이 문단 범위를 표까지 잡는다)
+    for ($i = 0; $i + 1 -lt $sorted.Count; $i++) {
+        $u = $sorted[$i]; $n = $sorted[$i + 1]
+        if ($u.End -gt $n.Start -and $n.Start -gt $u.Start) {
+            $u.End = $n.Start
+            $u.Text = ($lines[$u.Start..($u.End - 1)]) -join "`n"
+        }
+    }
     # 목록 항목의 아래 여백: 다음 단위가 이어지는 목록 항목이 아니면 목록 끝
     for ($i = 0; $i -lt $sorted.Count; $i++) {
         $u = $sorted[$i]
@@ -156,6 +168,8 @@ function Get-WtMarkdownUnits([AllowEmptyString()][string]$Text, [int]$LineOffset
         $u.Last = -not ($next -and $next.Kind -eq 'list-item' -and $next.ListId -eq $u.ListId)
     }
     if ($LineOffset) { foreach ($u in $sorted) { $u.Start += $LineOffset; $u.End += $LineOffset } }
+    # Base = 나눌 때의 첫 줄. 모델의 줄 번호(Line)는 이 기준이라, 단위가 나중에 아래로 밀려도 Start - Base로 옮겨 쓴다
+    foreach ($u in $sorted) { $u.Base = $u.Start }
     , $sorted
 }
 
@@ -189,6 +203,8 @@ function Get-WtMdUnitModel($Unit) {
     } else {
         $Unit.Block = ConvertFrom-WtMdBlock $Unit.Md $ctx
     }
+    # 모델을 만들었으면 글 전체 · 구문 트리를 놓아준다 (그린 Section이 단위를 오래 붙잡는다)
+    $Unit.Md = $null; $Unit.Ctx = $null; $Unit.Own = $null; $Unit.List = $null
     $Unit.Block
 }
 
@@ -198,7 +214,12 @@ function Get-WtMdBlockLines($B, $Ctx) {
     $endChar = [Math]::Max($B.Span.Start, $B.Span.End)
     $i = [array]::BinarySearch($Ctx.Starts, [int]$endChar)
     if ($i -lt 0) { $i = (-bnot $i) - 1 }
-    @($start, [Math]::Max($start + 1, $i + 1))
+    $end = [Math]::Max($start + 1, $i + 1)
+    # 닫히지 않은 코드 블록은 Span이 여는 줄에서 끝난다. 내용 줄의 마지막 줄까지 넓힌다
+    if ($B -is [Markdig.Syntax.LeafBlock] -and $B.Lines.Count -gt 0) {
+        $end = [Math]::Max($end, [int]$B.Lines.Lines[$B.Lines.Count - 1].Line + 1)
+    }
+    @($start, [Math]::Min($end, $Ctx.Lines.Count))
 }
 
 function Add-WtMdUnitsOf($Units, $B, $Ctx, [int]$Depth, [int]$ListId = 0) {
@@ -1007,6 +1028,8 @@ function Test-WtMdFolderLike([string]$Path) {
 #>
 function Start-WtMdPathCheck([string]$Path, [string]$Target) {
     $key = $Path.ToLowerInvariant()
+    # 시간이 지난 뒤에 끝난 확인은 여기서 치운다 (타이머는 기다리는 확인이 없으면 멈춰 있다)
+    foreach ($job in @($script:pathJobs.ToArray())) { if ($job.TimedOut -and $job.Task.IsCompleted) { [void]$script:pathJobs.Remove($job) } }
     $same = @($script:pathJobs | Where-Object { $_.Key -eq $key })
     if (@($same | Where-Object { -not $_.TimedOut }).Count) { return }
     # 앞서 시간이 지난 확인이 아직 답을 기다리면, 또 기다리지 않고 바로 알린다
@@ -1040,7 +1063,8 @@ function Complete-WtMdPathChecks {
         }
     }
     Update-WtMdPathCursor
-    if (-not $script:pathJobs.Count -and $script:pathTimer) { $script:pathTimer.Stop() }
+    # 기다리는 확인이 없으면 멈춘다. 시간이 지난 확인이 끝내 답하지 않아도 타이머가 계속 돌지 않게
+    if (-not @($script:pathJobs | Where-Object { -not $_.TimedOut }).Count -and $script:pathTimer) { $script:pathTimer.Stop() }
     # 알림 창이 떠 있는 동안에도 타이머가 돌 수 있으므로, 목록을 다 정리한 뒤에 연다
     foreach ($job in $done) {
         try { Invoke-WtMdPathResult $job } catch { Show-WtError $_ '링크 열기' }
