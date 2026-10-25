@@ -929,6 +929,142 @@ $script:stylesXaml = @'
   <Style x:Key="Memo.List" TargetType="ListBox" BasedOn="{StaticResource List}">
     <Setter Property="ItemTemplate" Value="{StaticResource Memo.Item}"/>
   </Style>
+
+  <!-- 메모 칸(pane): 맨 위 탭 줄이 카드 가장자리에 붙도록 안쪽 여백 없는 카드 -->
+  <Style x:Key="Memo.Pane" TargetType="Border" BasedOn="{StaticResource Card}">
+    <Setter Property="Padding" Value="0"/>
+  </Style>
+  <Style x:Key="Memo.TabBar" TargetType="Border">
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
+    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+    <Setter Property="Padding" Value="8,4,8,0"/>
+  </Style>
+  <!-- 메모 탭 하나. 선택 표시는 바탕 + 아래 가운데 막대(3 × 16). 막대 색은 BorderBrush로 받는다
+       Memo.Tab: 선택 안 됨 · Memo.Tab.Current: 포커스가 있는 칸의 지금 탭 · Memo.Tab.Selected: 다른 칸의 지금 탭(덜 강조) -->
+  <Style x:Key="Memo.Tab" TargetType="Button">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderBrush" Value="Transparent"/>
+    <Setter Property="MinHeight" Value="40"/>
+    <Setter Property="Padding" Value="12,0,4,0"/>
+    <Setter Property="Margin" Value="0,0,4,0"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Grid>
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="Transparent" BorderThickness="1"
+                    CornerRadius="8,8,0,0" Padding="{TemplateBinding Padding}">
+              <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/>
+            </Border>
+            <Border Width="16" Height="3" CornerRadius="1" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                    Background="{TemplateBinding BorderBrush}"/>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource B.Text}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Hover}"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Memo.Tab.Selected" TargetType="Button" BasedOn="{StaticResource Memo.Tab}">
+    <Setter Property="Background" Value="{DynamicResource B.Chip}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.InputBorder}"/>
+  </Style>
+  <Style x:Key="Memo.Tab.Current" TargetType="Button" BasedOn="{StaticResource Memo.Tab}">
+    <Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Memo.TabText" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
+    <Setter Property="TextWrapping" Value="NoWrap"/>
+    <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    <Setter Property="MaxWidth" Value="160"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+  </Style>
+  <!-- 탭의 닫기(X). 탭 바탕(마우스 올림 · 선택)과 겹치지 않게 마우스 올림은 테두리 색 -->
+  <Style x:Key="Memo.TabClose" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
+    <Setter Property="Width" Value="24"/>
+    <Setter Property="Height" Value="24"/>
+    <Setter Property="Margin" Value="4,0,0,0"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Border}"/>
+        <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+  <!-- 두 칸 사이 경계: 폭 16(칸 사이 간격)을 끌어 폭을 바꾼다. 마우스를 올리거나 끌 때만 가운데 선이 보인다 -->
+  <Style x:Key="Memo.Splitter" TargetType="GridSplitter">
+    <Setter Property="Width" Value="16"/>
+    <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    <Setter Property="VerticalAlignment" Value="Stretch"/>
+    <Setter Property="ResizeDirection" Value="Columns"/>
+    <Setter Property="ResizeBehavior" Value="PreviousAndNext"/>
+    <Setter Property="Cursor" Value="SizeWE"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="GridSplitter">
+          <Grid Background="Transparent">
+            <Border x:Name="Line" Width="2" CornerRadius="1" Margin="0,16" Background="Transparent"/>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Line" Property="Background" Value="{DynamicResource B.InputBorder}"/>
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Line" Property="Background" Value="{DynamicResource B.Text}"/>
+            </Trigger>
+            <Trigger Property="IsDragging" Value="True">
+              <Setter TargetName="Line" Property="Background" Value="{DynamicResource B.Accent}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <!-- 빠른 이동(Ctrl+O): 메모 화면 위 가운데에 겹쳐 뜨는 검색 상자 + 결과 목록. 그림자는 Overlay.Shadow를 뒤에 깐다 -->
+  <Style x:Key="Memo.QuickHost" TargetType="Grid">
+    <Setter Property="Width" Value="560"/>
+    <Setter Property="HorizontalAlignment" Value="Center"/>
+    <Setter Property="VerticalAlignment" Value="Top"/>
+    <Setter Property="Margin" Value="0,24,0,0"/>
+  </Style>
+  <Style x:Key="Memo.QuickPanel" TargetType="Border" BasedOn="{StaticResource Card}">
+    <Setter Property="Padding" Value="12"/>
+  </Style>
+  <DataTemplate x:Key="Memo.QuickItem">
+    <StackPanel>
+      <TextBlock Text="{Binding Title}" Style="{DynamicResource T.Strong}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+      <TextBlock x:Name="Sub" Text="{Binding Sub}" Style="{DynamicResource T.Sub}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+    </StackPanel>
+    <DataTemplate.Triggers>
+      <DataTrigger Binding="{Binding Sub}" Value="">
+        <Setter TargetName="Sub" Property="Visibility" Value="Collapsed"/>
+      </DataTrigger>
+    </DataTemplate.Triggers>
+  </DataTemplate>
+  <Style x:Key="Memo.QuickList" TargetType="ListBox" BasedOn="{StaticResource List}">
+    <Setter Property="ItemTemplate" Value="{StaticResource Memo.QuickItem}"/>
+    <Setter Property="MaxHeight" Value="400"/>
+    <Setter Property="Margin" Value="0,8,0,0"/>
+  </Style>
   <Style x:Key="Doc.Row" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
     <Setter Property="Padding" Value="12,6"/>
     <Setter Property="Tag" Value="{Binding}"/>
@@ -1365,6 +1501,15 @@ $script:stylesXaml = @'
     <Setter Property="FontSize" Value="{DynamicResource F.Small}"/>
     <Setter Property="TextDecorations" Value="{x:Null}"/>
   </Style>
+  <Style x:Key="Md.TaskLink" TargetType="Hyperlink">
+    <Setter Property="TextDecorations" Value="{x:Null}"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Hover}"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
   <Style x:Key="Md.Hr" TargetType="BlockUIContainer">
     <Setter Property="Margin" Value="0,8,0,20"/>
   </Style>
@@ -1415,6 +1560,94 @@ $script:stylesXaml = @'
     <Setter Property="FontSize" Value="{DynamicResource F.Small}"/>
     <Setter Property="LineHeight" Value="Auto"/>
     <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
+  </Style>
+  <!-- 그리면 보이지 않는 줄(링크 정의 · 주석)을 편집 화면에서 원문 그대로 흐리게 -->
+  <Style x:Key="Md.Raw" TargetType="Paragraph">
+    <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
+    <Setter Property="Margin" Value="0,0,0,12"/>
+  </Style>
+
+  <!-- 메모 실시간 편집: 고치는 블록 자리에 들어가는 원문 입력칸(섬). 그린 글과 같은 글꼴 · 줄 높이 -->
+  <Style x:Key="Memo.Island" TargetType="TextBox">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="Margin" Value="0"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource B.Text}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.BodyLine}"/>
+    <Setter Property="TextBlock.LineStackingStrategy" Value="BlockLineHeight"/>
+    <Setter Property="TextWrapping" Value="Wrap"/>
+    <Setter Property="AcceptsReturn" Value="True"/>
+    <Setter Property="AcceptsTab" Value="True"/>
+    <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="HorizontalAlignment" Value="Stretch"/>
+  </Style>
+  <Style x:Key="Memo.IslandH1" TargetType="TextBox" BasedOn="{StaticResource Memo.Island}">
+    <Setter Property="FontSize" Value="{DynamicResource F.MdH1}"/>
+    <Setter Property="FontWeight" Value="Bold"/>
+    <Setter Property="TextBlock.LineHeight" Value="Auto"/>
+  </Style>
+  <Style x:Key="Memo.IslandH2" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH1}">
+    <Setter Property="FontSize" Value="{DynamicResource F.MdH2}"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+  </Style>
+  <Style x:Key="Memo.IslandH3" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH2}">
+    <Setter Property="FontSize" Value="{DynamicResource F.MdH3}"/>
+  </Style>
+  <Style x:Key="Memo.IslandH4" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH2}">
+    <Setter Property="FontSize" Value="{DynamicResource F.H2}"/>
+  </Style>
+  <Style x:Key="Memo.IslandH5" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH4}">
+    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+  </Style>
+  <Style x:Key="Memo.IslandH6" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH5}">
+    <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
+  </Style>
+  <Style x:Key="Memo.IslandCode" TargetType="TextBox" BasedOn="{StaticResource Memo.Island}">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Code}"/>
+    <Setter Property="TextBlock.LineHeight" Value="Auto"/>
+    <Setter Property="Background" Value="{DynamicResource B.Code.Bg}"/>
+    <Setter Property="Padding" Value="12,8"/>
+  </Style>
+  <!-- 섬을 담는 블록: 그린 문단과 같은 아래 여백 -->
+  <Style x:Key="Memo.IslandBox" TargetType="BlockUIContainer">
+    <Setter Property="Margin" Value="0,0,0,12"/>
+  </Style>
+  <!-- [[ 자동 완성 팝업: 떠 있는 패널(모서리 8 · 테두리). 항목은 포커스를 받지 않는다(입력칸에 커서를 둔 채 고름) -->
+  <Style x:Key="Memo.Suggest" TargetType="Border">
+    <Setter Property="Background" Value="{DynamicResource B.Card}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="8"/>
+    <Setter Property="Padding" Value="4"/>
+    <Setter Property="MinWidth" Value="240"/>
+    <Setter Property="MaxWidth" Value="400"/>
+  </Style>
+  <Style x:Key="Memo.SuggestRow" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
+    <Setter Property="Padding" Value="8,6"/>
+    <Setter Property="Margin" Value="0"/>
+    <Setter Property="Focusable" Value="False"/>
+  </Style>
+  <DataTemplate x:Key="Memo.SuggestItem">
+    <TextBlock Text="{Binding}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+  </DataTemplate>
+  <Style x:Key="Memo.SuggestList" TargetType="ListBox" BasedOn="{StaticResource List}">
+    <Setter Property="ItemContainerStyle" Value="{StaticResource Memo.SuggestRow}"/>
+    <Setter Property="ItemTemplate" Value="{StaticResource Memo.SuggestItem}"/>
+    <Setter Property="MaxHeight" Value="240"/>
+  </Style>
+  <!-- 편집기 위 찾기 · 바꾸기 막대 -->
+  <Style x:Key="Memo.FindBar" TargetType="Border">
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
+    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+    <Setter Property="Padding" Value="0,0,0,8"/>
+    <Setter Property="Margin" Value="0,0,0,12"/>
   </Style>
 
   <Style x:Key="Task.Check" TargetType="CheckBox">
@@ -2132,6 +2365,7 @@ New-Module -Name 'WorkTool.Markdown' -ScriptBlock {
 # 화면마다 다른 것은 매개변수 · 등록으로 받는다
 # - 링크 · [[위키 링크]] · #태그를 눌렀을 때: New-WtMarkdownView -OnLink { param($link) ...; $true }
 #   $link = @{ Kind = 'url' | 'file' | 'wiki' | 'tag'; Target; Text }. $true를 돌려주면 처리한 것, 아니면 기본 동작(Invoke-WtMarkdownLink).
+# - 할 일 체크 표시를 눌렀을 때: New-WtMarkdownView -OnTask { param($line) ... } ($line = 그 항목의 원문 줄 번호, 1부터)
 # - 상대 경로(그림 · 파일 링크)의 기준 폴더: -BaseDir (메모처럼 파일이 아닌 글은 비워 둔다)
 # - 코드 블록을 언어별로 따로 그리기: Register-WtMarkdownCodeRenderer (예: Mermaid.psm1이 mermaid를 등록)
 # - 콜아웃 종류 더하기: Register-WtMarkdownCallout
@@ -2150,6 +2384,19 @@ $script:openable = @('.md', '.txt', '.log', '.csv', '.tsv', '.json', '.xml', '.y
     '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg',
     '.xlsx', '.xls', '.xlsm', '.docx', '.doc', '.pptx', '.ppt', '.vsdx', '.vsd', '.htm', '.html', '.zip')
 $script:imageExt = @('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.ico', '.webp')
+
+# 파일 링크를 열기 전 경로 확인 (있는지 · 폴더인지). 화면 밖(.NET 작업)에서 하고 타이머로 결과를 받는다
+$script:pathJobs = [System.Collections.Generic.List[object]]::new()
+$script:pathTimer = $null
+$script:pathTimeoutMs = 5000   # 이 시간 안에 답이 없으면 기다리지 않고 알린다
+$script:pathMaxJobs = 8        # 답이 없는 확인이 이만큼 남아 있으면 새로 시작하지 않는다
+$script:pathCursor = $null     # 확인 중 커서를 바꾸기 전 값 (@{ Old })
+# 확인 작업 만들기: 경로 → 끝나면 파일 속성(없으면 -1)을 주는 Task. 검사가 느린 경로를 흉내 내려고 바꿔 끼운다
+$script:pathProbe = {
+    param($path)
+    $info = [System.IO.FileInfo]::new($path)
+    [System.Threading.Tasks.Task[System.IO.FileAttributes]]::Run([Func[System.IO.FileAttributes]]$info.get_Attributes)
+}
 
 # ---- 등록 -------------------------------------------------------------------------------------
 
@@ -2222,6 +2469,174 @@ function ConvertTo-WtMarkdownModel([AllowEmptyString()][string]$Text) {
     $ctx = @{ Src = $src; Headings = [System.Collections.Generic.List[object]]::new() }
     $blocks = ConvertFrom-WtMdBlocks $doc $ctx
     @{ Blocks = $blocks; Headings = $ctx.Headings.ToArray() }
+}
+
+<#
+블록 단위 (글을 고치면서 블록 하나씩 바꿔 그리는 화면용. 메모 편집기가 쓴다)
+  Get-WtMarkdownUnits $text [-LineOffset n] → 단위 배열. 단위 = @{ Start; End; Kind; Depth; Last; Text; ListId }
+    Start · End  원문 줄 번호(0부터, End는 들지 않음). 블록 사이의 빈 줄은 어느 단위에도 들지 않는다.
+                 -LineOffset을 주면 그만큼 더한다(글 일부만 다시 나눌 때)
+    Kind         heading · para · list-item · quote · callout · code · math · hr · html · table · props · raw
+                 raw = 그리면 보이지 않는 줄(링크 정의 · 주석 · 각주 정의 등). 원문을 흐리게 보여 준다
+    Depth        목록 항목의 깊이. 목록 항목은 항목 하나씩 단위가 되고, 안쪽 목록도 따로 단위가 된다
+    Last         목록 항목: 목록의 마지막 줄인지 (아래 여백)
+    Text         단위의 원문 (줄바꿈은 \n). 그린 것을 다시 쓸지 비교할 때 쓴다
+  그릴 모델은 나눌 때 만들지 않고 New-WtMarkdownUnitSection이 그릴 때 만든다 (긴 글을 빨리 나누려고).
+#>
+function Get-WtMarkdownUnits([AllowEmptyString()][string]$Text, [int]$LineOffset = 0) {
+    $src = ([string]$Text).Replace("`r`n", "`n").Replace("`r", "`n")
+    # 글 일부(가운데)를 나눌 때는 앞에 빈 줄을 하나 붙인다. 맨 앞 ---를 머리말(속성)로 읽지 않게
+    $pad = 0
+    if ($LineOffset -gt 0) { $src = "`n" + $src; $pad = 1 }
+    $lines = $src -split "`n"
+    $starts = [int[]]::new($lines.Count)
+    $pos = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) { $starts[$i] = $pos; $pos += $lines[$i].Length + 1 }
+    $doc = [Markdig.Markdown]::Parse($src, (Get-WtMarkdownPipeline))
+    $LineOffset -= $pad
+    $ctx = @{ Src = $src; Headings = [System.Collections.Generic.List[object]]::new(); Starts = $starts; Lines = $lines; Offset = $LineOffset }
+    $units = [System.Collections.Generic.List[object]]::new()
+    foreach ($b in $doc) { Add-WtMdUnitsOf $units $b $ctx 0 }
+
+    # 어느 단위에도 들지 않은 글 줄(링크 정의 · HTML 주석 등)은 raw 단위로 채운다. 그래야 모든 줄을 고칠 수 있다
+    $covered = [bool[]]::new($lines.Count)
+    foreach ($u in $units) { for ($l = $u.Start; $l -lt $u.End; $l++) { $covered[$l] = $true } }
+    $l = 0
+    while ($l -lt $lines.Count) {
+        if ($covered[$l] -or -not $lines[$l].Trim()) { $l++; continue }
+        $s = $l
+        while ($l -lt $lines.Count -and -not $covered[$l] -and $lines[$l].Trim()) { $l++ }
+        $units.Add((New-WtMdUnit 'raw' $s $l $null $ctx))
+    }
+    $sorted = @($units | Sort-Object { $_.Start })
+    # 겹치는 단위는 앞 단위를 뒤 단위 시작에서 자른다 (예: 바로 아래 표가 붙은 문단 — Markdig이 문단 범위를 표까지 잡는다)
+    for ($i = 0; $i + 1 -lt $sorted.Count; $i++) {
+        $u = $sorted[$i]; $n = $sorted[$i + 1]
+        if ($u.End -gt $n.Start -and $n.Start -gt $u.Start) {
+            $u.End = $n.Start
+            $u.Text = ($lines[$u.Start..($u.End - 1)]) -join "`n"
+        }
+    }
+    # 목록 항목의 아래 여백: 다음 단위가 이어지는 목록 항목이 아니면 목록 끝
+    for ($i = 0; $i -lt $sorted.Count; $i++) {
+        $u = $sorted[$i]
+        if ($u.Kind -ne 'list-item') { continue }
+        $next = if ($i + 1 -lt $sorted.Count) { $sorted[$i + 1] } else { $null }
+        $u.Last = -not ($next -and $next.Kind -eq 'list-item' -and $next.ListId -eq $u.ListId)
+    }
+    if ($LineOffset) { foreach ($u in $sorted) { $u.Start += $LineOffset; $u.End += $LineOffset } }
+    # Base = 나눌 때의 첫 줄. 모델의 줄 번호(Line)는 이 기준이라, 단위가 나중에 아래로 밀려도 Start - Base로 옮겨 쓴다
+    foreach ($u in $sorted) { $u.Base = $u.Start }
+    , $sorted
+}
+
+# 단위. Md = Markdig 블록(그릴 때 모델로 바꿈), Own = 목록 항목에서 안쪽 목록을 뺀 자식들
+function New-WtMdUnit([string]$Kind, [int]$Start, [int]$End, $Md, $Ctx, [int]$Depth = 0) {
+    $text = ($Ctx.Lines[$Start..($End - 1)]) -join "`n"
+    @{ Kind = $Kind; Start = $Start; End = $End; Md = $Md; Ctx = $Ctx; Depth = $Depth; Last = $true; Text = $text; ListId = 0; Block = $null }
+}
+
+# 단위의 그릴 모델 (처음 부를 때 만든다). 줄 번호(모델의 Line)는 나눈 글 기준에 LineOffset을 더한 것
+function Get-WtMdUnitModel($Unit) {
+    if ($Unit.Block -or $Unit.Kind -eq 'raw' -or -not $Unit.Md) { return $Unit.Block }
+    $ctx = $Unit.Ctx
+    if ($Unit.Kind -eq 'list-item') {
+        $li = $Unit.Md
+        $blocks = ConvertFrom-WtMdBlocks $Unit.Own $ctx
+        $task = $null
+        if ($blocks.Count -and $blocks[0].T -eq 'para' -and $blocks[0].Inl.Count -and $blocks[0].Inl[0].T -eq 'task') {
+            $task = [bool]$blocks[0].Inl[0].Checked
+            $rest = @($blocks[0].Inl | Select-Object -Skip 1)
+            if ($rest.Count -and $rest[0].T -eq 'text') { $rest[0].Text = $rest[0].Text.TrimStart() }
+            $blocks[0].Inl = $rest
+        }
+        $list = $Unit.List
+        $start = 1
+        if ($list.IsOrdered) {
+            if ($li.Order) { $start = [int]$li.Order } else { [void][int]::TryParse([string]$list.OrderedStart, [ref]$start) }
+        }
+        $line = $li.Line + 1 + [int]$ctx.Offset
+        $Unit.Block = @{ T = 'list'; Ordered = [bool]$list.IsOrdered; Start = $start; Loose = [bool]$list.IsLoose; Items = @(@{ Task = $task; Blocks = $blocks; Line = $line }); Line = $line }
+    } else {
+        $Unit.Block = ConvertFrom-WtMdBlock $Unit.Md $ctx
+    }
+    # 모델을 만들었으면 글 전체 · 구문 트리를 놓아준다 (그린 Section이 단위를 오래 붙잡는다)
+    $Unit.Md = $null; $Unit.Ctx = $null; $Unit.Own = $null; $Unit.List = $null
+    $Unit.Block
+}
+
+# Markdig 블록이 차지하는 줄 범위 (끝 줄 포함 안 함)
+function Get-WtMdBlockLines($B, $Ctx) {
+    $start = [Math]::Max(0, [int]$B.Line)
+    $endChar = [Math]::Max($B.Span.Start, $B.Span.End)
+    $i = [array]::BinarySearch($Ctx.Starts, [int]$endChar)
+    if ($i -lt 0) { $i = (-bnot $i) - 1 }
+    $end = [Math]::Max($start + 1, $i + 1)
+    # 닫히지 않은 코드 블록은 Span이 여는 줄에서 끝난다. 내용 줄의 마지막 줄까지 넓힌다
+    if ($B -is [Markdig.Syntax.LeafBlock] -and $B.Lines.Count -gt 0) {
+        $end = [Math]::Max($end, [int]$B.Lines.Lines[$B.Lines.Count - 1].Line + 1)
+    }
+    @($start, [Math]::Min($end, $Ctx.Lines.Count))
+}
+
+function Add-WtMdUnitsOf($Units, $B, $Ctx, [int]$Depth, [int]$ListId = 0) {
+    $type = $B.GetType().Name
+    if ($type -in 'LinkReferenceDefinitionGroup', 'FootnoteGroup', 'BlankLineBlock') { return }   # 원문 위치가 흩어져 있어 raw로 채운다
+    if ($B.Span.End -lt $B.Span.Start) { return }
+    $range = Get-WtMdBlockLines $B $Ctx
+    if ($type -eq 'ListBlock') {
+        $id = [int]$B.Span.Start + 1
+        if ($Depth -gt 0) { $id = $ListId }
+        foreach ($li in $B) { Add-WtMdListItemUnits $Units $B $li $Ctx $Depth $id }
+        return
+    }
+    # 종류는 Markdig 블록 종류와 원문만 보고 정한다 (모델은 그릴 때)
+    $text = ($Ctx.Lines[$range[0]..($range[1] - 1)]) -join "`n"
+    $kind = switch ($type) {
+        'HeadingBlock' { 'heading' }
+        'ParagraphBlock' {
+            # 보이는 글이 없는 문단(%%주석%%만 있는 줄 등)은 raw로 보여 준다
+            if (-not ($text -replace '%%[\s\S]*?%%', '').Trim()) { 'raw' } else { 'para' }
+        }
+        'QuoteBlock' { if ($text -match '^\s*>\s*\[![A-Za-z][\w-]*\]') { 'callout' } else { 'quote' } }
+        'FencedCodeBlock' { 'code' }
+        'CodeBlock' { 'code' }
+        'MathBlock' { 'math' }
+        'ThematicBreakBlock' { 'hr' }
+        'HtmlBlock' {
+            $plain = ($text -replace '<br\s*/?>', ' ' -replace '<[^>]+>', '').Trim()
+            if ($text.TrimStart().StartsWith('<!--') -or -not $plain) { 'raw' } else { 'html' }
+        }
+        'Table' { 'table' }
+        'YamlFrontMatterBlock' { 'props' }
+        default { 'raw' }
+    }
+    # $(if …) · $x = if …로 넘기면 Markdig 블록(자식 목록)이 펼쳐진다. 변수에 바로 넣는다
+    $md = $null
+    if ($kind -ne 'raw') { $md = $B }
+    $Units.Add((New-WtMdUnit $kind $range[0] $range[1] $md $Ctx $Depth))
+}
+
+# 목록 항목 하나 = 단위 하나. 안쪽 목록이 항목 끝에만 있으면 따로 나눠 Depth+1로, 아니면 항목 통째로
+function Add-WtMdListItemUnits($Units, $List, $Li, $Ctx, [int]$Depth, [int]$ListId) {
+    $children = @($Li)
+    $firstNested = -1
+    for ($i = 0; $i -lt $children.Count; $i++) { if ($children[$i].GetType().Name -eq 'ListBlock') { $firstNested = $i; break } }
+    $split = $firstNested -ge 1
+    if ($split) { for ($i = $firstNested; $i -lt $children.Count; $i++) { if ($children[$i].GetType().Name -ne 'ListBlock') { $split = $false } } }
+    $own = if ($split) { @($children[0..($firstNested - 1)]) } else { $children }
+    $range = Get-WtMdBlockLines $Li $Ctx
+    $end = if ($split) { (Get-WtMdBlockLines $children[$firstNested] $Ctx)[0] } else { $range[1] }
+    # 항목 안 빈 줄은 단위에 넣지 않는다 (뒤쪽 빈 줄 떼기)
+    while ($end - 1 -gt $range[0] -and -not $Ctx.Lines[$end - 1].Trim()) { $end-- }
+    $u = New-WtMdUnit 'list-item' $range[0] $end $Li $Ctx $Depth
+    $u.ListId = $ListId
+    $u.List = $List
+    $u.Own = $own
+    $Units.Add($u)
+    if ($split) {
+        for ($i = $firstNested; $i -lt $children.Count; $i++) { Add-WtMdUnitsOf $Units $children[$i] $Ctx ($Depth + 1) $ListId }
+    }
 }
 
 # Markdig는 PowerShell 7에 들어 있다 (ConvertFrom-Markdown이 쓰는 것). 처음 한 번 불러와서 쓸 확장만 켠다.
@@ -2487,7 +2902,7 @@ function Add-WtMdPlain($Out, [string]$Text) {
 
 function Get-WtMdLinkKind([string]$Url) {
     if ($Url.StartsWith('#')) { return 'anchor' }
-    if ($Url -match '^[A-Za-z]:[\\/]|^\\\\|^file:') { return 'file' }
+    if ($Url -match '^[A-Za-z]:[\\/]|^\\\\|^//|^file:') { return 'file' }   # //서버/공유: 메모 편집기가 UNC를 슬래시로 쓴다
     if ($Url -match '^[A-Za-z][A-Za-z0-9+.-]+:') { return 'url' }
     if ($Url -match '^www\.') { return 'url' }
     'file'
@@ -2577,18 +2992,19 @@ function Get-WtMarkdownSnippet([AllowEmptyString()][string]$Text, [int]$MaxLengt
 마크다운 보기 요소(읽기 전용 RichTextBox)를 만든다. 글은 Set-WtMarkdownText로 넣는다.
   -Scroll            스스로 스크롤한다 (남는 높이를 채우는 자리). 없으면 글 높이만큼 커진다 (바깥이 스크롤하는 자리)
   -OnLink            { param($link) ... $true } 링크 · 위키 링크 · 태그를 눌렀을 때. 이게 있으면 #태그도 누를 수 있게 그린다
+  -OnTask            { param($line) ... } 할 일 체크 표시를 눌렀을 때 (그 항목의 원문 줄 번호). 없으면 체크 표시는 누를 수 없다
   -BaseDir           상대 경로의 기준 폴더
   -StrictLineBreaks  줄바꿈 한 번은 이어 붙인다 (표준 마크다운). 없으면 Obsidian 기본값처럼 줄을 바꾼다
 #>
 function New-WtMarkdownView {
-    param([switch]$Scroll, [scriptblock]$OnLink, [string]$BaseDir = '', [switch]$StrictLineBreaks)
+    param([switch]$Scroll, [scriptblock]$OnLink, [scriptblock]$OnTask, [string]$BaseDir = '', [switch]$StrictLineBreaks)
     $v = [System.Windows.Controls.RichTextBox]::new()
     Set-WtMdStyle $v 'Md.View'
     $v.IsReadOnly = $true
     $v.IsDocumentEnabled = $true
     $v.VerticalScrollBarVisibility = if ($Scroll) { 'Auto' } else { 'Disabled' }
     $v.Tag = @{
-        Text = ''; BaseDir = $BaseDir; OnLink = $OnLink; Strict = [bool]$StrictLineBreaks
+        Text = ''; BaseDir = $BaseDir; OnLink = $OnLink; OnTask = $OnTask; Strict = [bool]$StrictLineBreaks
         Anchors = @{}; Remeasure = $false; Error = $null; ListDepth = 0
     }
     for ($i = $script:views.Count - 1; $i -ge 0; $i--) { if (-not $script:views[$i].IsAlive) { $script:views.RemoveAt($i) } }
@@ -2625,6 +3041,47 @@ function Set-WtMarkdownText {
         $doc.Blocks.Add($raw)
     }
     $View.Document = $doc
+}
+
+# 단위 하나를 Section 하나로 그린다 (Section.Tag = 단위). 보기의 상태(링크 처리 등)를 같이 쓴다.
+# 보기의 문서를 직접 꾸리는 화면(메모 편집기)이 Get-WtMarkdownUnits와 함께 쓴다.
+function New-WtMarkdownUnitSection {
+    param([Parameter(Mandatory)]$View, [Parameter(Mandatory)]$Unit)
+    $st = $View.Tag
+    $sec = [System.Windows.Documents.Section]::new()
+    $sec.Tag = $Unit
+    try {
+        $model = Get-WtMdUnitModel $Unit
+        if ($Unit.Kind -eq 'raw' -or -not $model) {
+            $p = New-WtMdPara 'Md.Raw'
+            $parts = $Unit.Text -split "`n"
+            for ($i = 0; $i -lt $parts.Count; $i++) {
+                if ($i) { $p.Inlines.Add([System.Windows.Documents.LineBreak]::new()) }
+                if ($parts[$i]) { $p.Inlines.Add((New-WtMdRun $parts[$i])) }
+            }
+            $sec.Blocks.Add($p)
+            return $sec
+        }
+        $st.ListDepth = [int]$Unit.Depth
+        try { Add-WtMdBlock $sec.Blocks $model $st } finally { $st.ListDepth = 0 }
+        if ($Unit.Kind -eq 'list-item') {
+            # 항목마다 따로 그린 목록을 이어 붙여 하나처럼 보이게: 들여쓰기 = 목록 안쪽 여백 × 깊이, 항목 사이 = 항목 아래 여백
+            $list = $sec.Blocks.FirstBlock
+            if ($list -is [System.Windows.Documents.List]) {
+                $li = $list.ListItems.FirstListItem
+                $gap = if ($li) { $li.Margin.Bottom } else { 0 }
+                $bottom = if ($Unit.Last) { $list.Margin.Bottom } else { $gap }
+                $list.Margin = [System.Windows.Thickness]::new($list.Padding.Left * $Unit.Depth, 0, 0, $bottom)
+                if ($li) { $li.Margin = [System.Windows.Thickness]::new(0) }
+            }
+        }
+    } catch {
+        $sec.Blocks.Clear()
+        $p = New-WtMdPara 'Md.Raw'
+        $p.Inlines.Add((New-WtMdRun $Unit.Text))
+        $sec.Blocks.Add($p)
+    }
+    $sec
 }
 
 # 모델의 제목 목록 (목차 등). @{ Level; Text; Line }
@@ -2771,8 +3228,16 @@ function New-WtMdInline($X, $St) {
         'link' {
             if ($X.Kind -eq 'anchor' -and $X.Target -match '^\^') { return New-WtMdSpan $X.Inl $St }   # 블록 참조는 아직 없음
             $h = New-WtMdHyperlink @{ Kind = $X.Kind; Target = $X.Target; Text = (Get-WtMdInlineText $X.Inl) } $St
+            $where = $X.Target
+            if ($X.Kind -eq 'file') {
+                # 로컬 파일 · 폴더: 앞에 아이콘, 툴팁은 Windows 모양 전체 경로. 폴더인지는 디스크를 보지 않고 이름으로 추측한다
+                $where = Resolve-WtMdPath $X.Target $St.BaseDir
+                if (-not $where) { $where = $X.Target.Replace('/', '\') }
+                $h.Inlines.Add((New-WtMdIconRun $(if (Test-WtMdFolderLike $where) { 0xE8B7 } else { 0xE8A5 })))
+                $h.Inlines.Add((New-WtMdRun ' '))
+            }
             Add-WtMdInlines $h.Inlines $X.Inl $St
-            $tip = if ($X.Title) { "$($X.Title)`n$($X.Target)" } else { $X.Target }
+            $tip = if ($X.Title) { "$($X.Title)`n$where" } else { $where }
             if ($X.Kind -eq 'wiki') { $tip = "문서: $($X.Target)" }
             $h.ToolTip = $tip
             return $h
@@ -2827,6 +3292,20 @@ function New-WtMdTaskBox([bool]$Checked) {
     $r
 }
 
+# 할 일 체크 표시를 누를 수 있게 감싼다 (-OnTask가 있을 때만). Run보다 밑줄 없는 Hyperlink가 RichTextBox 안에서 확실히 눌린다
+function New-WtMdTaskLink($Box, [int]$Line, $St) {
+    $h = [System.Windows.Documents.Hyperlink]::new($Box)
+    Set-WtMdStyle $h 'Md.TaskLink'
+    $h.ToolTip = '완료 표시 / 해제'
+    $h.Tag = @{ Line = $Line; State = $St }
+    $h.Add_Click({
+            param($s, $e)
+            # 둘째 값은 누른 요소. 문서를 블록 단위로 다시 쓰는 화면(메모 편집기)이 지금 줄 번호를 찾을 때 쓴다
+            try { [void](& $s.Tag.State.OnTask $s.Tag.Line $s) } catch { Show-WtError $_ '할 일 표시' }
+        })
+    $h
+}
+
 function New-WtMdHyperlink($Link, $St) {
     $h = [System.Windows.Documents.Hyperlink]::new()
     Set-WtMdStyle $h 'Md.Link'
@@ -2843,6 +3322,7 @@ function New-WtMdHyperlink($Link, $St) {
 그 밖에는 -OnLink를 먼저 부르고, 처리하지 않았으면 기본 동작:
   url  http · https · mailto만 기본 브라우저 · 메일 프로그램으로 연다
   file 폴더는 탐색기로, 문서 · 그림은 기본 프로그램으로 연다. 실행 파일 · 스크립트는 열지 않고 탐색기에서 그 파일을 보여 준다
+       있는지 · 폴더인지는 화면 밖에서 확인한다 (Start-WtMdPathCheck). 응답 없는 공유 폴더에서도 화면이 멈추지 않는다
   wiki 연결할 곳을 모른다고 알린다 (메모 · 문서 화면이 -OnLink로 처리한다)
 #>
 function Invoke-WtMarkdownLink($St, $Link) {
@@ -2852,7 +3332,8 @@ function Invoke-WtMarkdownLink($St, $Link) {
         return
     }
     if ($St.OnLink) {
-        $handled = & $St.OnLink $Link | Select-Object -Last 1
+        # 둘째 값은 보기의 상태(Tag). 보기를 여럿 둔 화면이 어느 보기에서 눌렸는지 알 때 쓴다
+        $handled = & $St.OnLink $Link $St | Select-Object -Last 1
         if ($handled -eq $true) { return }
     }
     switch ($Link.Kind) {
@@ -2862,10 +3343,8 @@ function Invoke-WtMarkdownLink($St, $Link) {
         }
         'file' {
             $path = Resolve-WtMdPath $Link.Target $St.BaseDir
-            if (-not $path -or -not (Test-Path -LiteralPath $path)) { Show-WtMessage "파일을 찾지 못했습니다.`n$($Link.Target)"; return }
-            if (Test-Path -LiteralPath $path -PathType Container) { Invoke-Item -LiteralPath $path; return }
-            if ($script:openable -contains [System.IO.Path]::GetExtension($path).ToLowerInvariant()) { Invoke-Item -LiteralPath $path; return }
-            Start-Process explorer.exe -ArgumentList "/select,`"$path`""
+            if (-not $path) { Show-WtMessage "파일을 찾지 못했습니다.`n$($Link.Target)"; return }
+            Start-WtMdPathCheck $path $Link.Target
         }
         'wiki' { Show-WtMessage "연결된 문서를 찾지 못했습니다: $($Link.Target)" }
     }
@@ -2877,13 +3356,105 @@ function Resolve-WtMdPath([string]$Target, [string]$BaseDir) {
     if ($t -match '^file:') {
         try { $t = ([uri]$t).LocalPath } catch { return $null }
     }
-    $t = $t -replace '#.*$', ''
+    # 상대 경로의 #제목은 문서 안 자리라서 뗀다. 드라이브 · UNC 경로의 #은 이름의 일부다(예: C:\C# 공부)
+    if ($t -notmatch '^([A-Za-z]:[\\/]|[\\/]{2})') { $t = $t -replace '#.*$', '' }
     if (-not $t) { return $null }
     try {
         if ([System.IO.Path]::IsPathRooted($t)) { return [System.IO.Path]::GetFullPath($t) }
         if ($BaseDir) { return [System.IO.Path]::GetFullPath((Join-Path $BaseDir $t)) }
     } catch { }
     $null
+}
+
+# 이름만 보고 폴더인지 추측한다 (그리는 중에 디스크 · 네트워크를 건드리지 않는다).
+# 끝이 \ · /, 드라이브 루트(C:), UNC 서버 · 공유 루트(\\서버\공유), 마지막 이름에 확장자가 없으면 폴더
+function Test-WtMdFolderLike([string]$Path) {
+    $p = $Path.Replace('/', '\')
+    if (-not $p) { return $false }
+    if ($p.EndsWith('\') -or $p -match '^[A-Za-z]:$' -or $p -match '^\\\\[^\\]+(\\[^\\]+)?$') { return $true }
+    -not [System.IO.Path]::GetExtension($p)
+}
+
+<#
+파일 링크의 경로(있는지 · 폴더인지)를 화면 밖에서 확인하고, 끝나면 Invoke-WtMdPathResult로 연다.
+응답 없는 공유 폴더 · 끊긴 네트워크 드라이브에서도 화면이 멈추지 않는다. 로컬 드라이브도 끊긴 네트워크 드라이브일 수 있어서 모두 이 길로 간다.
+- 실행 공간 대신 .NET 작업(Task)으로 확인한다. 실행 공간은 응답 없는 OS 호출 중이면 Close · Dispose를 해도 앱 프로세스가 끝나지 않는다.
+  작업은 PowerShell 없이 스레드 풀(백그라운드 스레드)에서 돌아서, 끝나지 않은 채 남아도 프로세스를 붙잡지 않는다.
+- 확인하는 동안 커서는 AppStarting(화살표 + 모래시계). 기다리는 동안에도 앱은 쓸 수 있다.
+- 같은 경로를 확인 중에 또 누르면 겹쳐 시작하지 않는다. $script:pathTimeoutMs 안에 답이 없으면 기다리지 않고 알린다.
+#>
+function Start-WtMdPathCheck([string]$Path, [string]$Target) {
+    $key = $Path.ToLowerInvariant()
+    # 시간이 지난 뒤에 끝난 확인은 여기서 치운다 (타이머는 기다리는 확인이 없으면 멈춰 있다)
+    foreach ($job in @($script:pathJobs.ToArray())) { if ($job.TimedOut -and $job.Task.IsCompleted) { [void]$script:pathJobs.Remove($job) } }
+    $same = @($script:pathJobs | Where-Object { $_.Key -eq $key })
+    if (@($same | Where-Object { -not $_.TimedOut }).Count) { return }
+    # 앞서 시간이 지난 확인이 아직 답을 기다리면, 또 기다리지 않고 바로 알린다
+    if ($same.Count) { Show-WtMessage (Get-WtMdPathTimeoutText $Path) 'WorkTool' 'Warning'; return }
+    if ($script:pathJobs.Count -ge $script:pathMaxJobs) {
+        Show-WtMessage "응답하지 않는 경로가 많아 지금은 열지 않습니다. 네트워크 연결을 확인하고 잠시 뒤 다시 누르세요.`n$Path" 'WorkTool' 'Warning'
+        return
+    }
+    try { $task = & $script:pathProbe $Path | Select-Object -Last 1 }
+    catch { Show-WtMessage "경로를 확인하지 못했습니다. 경로가 맞는지 확인하세요.`n$Path`n$($_.Exception.Message)" 'WorkTool' 'Warning'; return }
+    $script:pathJobs.Add(@{ Key = $key; Path = $Path; Target = $Target; Task = $task; Watch = [System.Diagnostics.Stopwatch]::StartNew(); TimedOut = $false })
+    Update-WtMdPathCursor
+    if (-not $script:pathTimer) { $script:pathTimer = New-WtPollTimer { Complete-WtMdPathChecks } }
+    $script:pathTimer.Start()
+}
+
+function Get-WtMdPathTimeoutText([string]$Path) {
+    "경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.`n$Path"
+}
+
+# 타이머가 부른다: 끝난 확인은 목록에서 빼고 열고, 시간이 지난 확인은 알린다 (작업은 끝날 때까지 목록에 남아 겹쳐 시작하지 않게 한다)
+function Complete-WtMdPathChecks {
+    $done = [System.Collections.Generic.List[object]]::new()
+    foreach ($job in @($script:pathJobs.ToArray())) {
+        if ($job.Task.IsCompleted) {
+            [void]$script:pathJobs.Remove($job)
+            if (-not $job.TimedOut) { $done.Add($job) }   # 시간이 지난 확인은 이미 알렸으므로 결과를 버린다
+        } elseif (-not $job.TimedOut -and $job.Watch.ElapsedMilliseconds -ge $script:pathTimeoutMs) {
+            $job.TimedOut = $true
+            $done.Add($job)
+        }
+    }
+    Update-WtMdPathCursor
+    # 기다리는 확인이 없으면 멈춘다. 시간이 지난 확인이 끝내 답하지 않아도 타이머가 계속 돌지 않게
+    if (-not @($script:pathJobs | Where-Object { -not $_.TimedOut }).Count -and $script:pathTimer) { $script:pathTimer.Stop() }
+    # 알림 창이 떠 있는 동안에도 타이머가 돌 수 있으므로, 목록을 다 정리한 뒤에 연다
+    foreach ($job in $done) {
+        try { Invoke-WtMdPathResult $job } catch { Show-WtError $_ '링크 열기' }
+    }
+}
+
+# 확인 결과대로 연다: 폴더 → 탐색기, 열 수 있는 종류 → 기본 프로그램, 그 밖 → 탐색기에서 선택, 없음 → 알림
+function Invoke-WtMdPathResult($Job) {
+    $path = $Job.Path
+    if ($Job.TimedOut) { Show-WtMessage (Get-WtMdPathTimeoutText $path) 'WorkTool' 'Warning'; return }
+    if ($Job.Task.IsFaulted -or $Job.Task.IsCanceled) {
+        $why = if ($Job.Task.Exception) { $Job.Task.Exception.GetBaseException().Message } else { '' }
+        Show-WtMessage "경로를 확인하지 못했습니다. 접근 권한과 경로를 확인하세요.`n$path`n$why" 'WorkTool' 'Warning'
+        return
+    }
+    $attr = [int]$Job.Task.Result
+    if ($attr -eq -1) { Show-WtMessage "파일을 찾지 못했습니다.`n$($Job.Target)"; return }
+    if ($attr -band [int][System.IO.FileAttributes]::Directory) { Invoke-Item -LiteralPath $path; return }
+    if ($script:openable -contains [System.IO.Path]::GetExtension($path).ToLowerInvariant()) { Invoke-Item -LiteralPath $path; return }
+    Start-Process explorer.exe -ArgumentList "/select,`"$path`""
+}
+
+# 확인 중이면 커서를 AppStarting으로, 기다리는 확인이 없으면 원래대로
+function Update-WtMdPathCursor {
+    $waiting = @($script:pathJobs | Where-Object { -not $_.TimedOut }).Count -gt 0
+    $busy = [System.Windows.Input.Cursors]::AppStarting
+    if ($waiting -and -not $script:pathCursor) {
+        $script:pathCursor = @{ Old = [System.Windows.Input.Mouse]::OverrideCursor }
+        [System.Windows.Input.Mouse]::OverrideCursor = $busy
+    } elseif (-not $waiting -and $script:pathCursor) {
+        if ([object]::ReferenceEquals([System.Windows.Input.Mouse]::OverrideCursor, $busy)) { [System.Windows.Input.Mouse]::OverrideCursor = $script:pathCursor.Old }
+        $script:pathCursor = $null
+    }
 }
 
 # 로컬 그림 파일이면 Image 요소, 아니면 $null (웹 주소의 그림은 내려받지 않는다)
@@ -2939,7 +3510,9 @@ function New-WtMdList($B, $St, [bool]$Nested) {
                     Set-WtResource $text 'Foreground' 'B.SubText'
                     $text.TextDecorations = [System.Windows.TextDecorations]::Strikethrough
                 }
-                $p.Inlines.Add((New-WtMdTaskBox $it.Task))
+                $box = New-WtMdTaskBox $it.Task
+                if ($St.OnTask) { $box = New-WtMdTaskLink $box $it.Line $St }
+                $p.Inlines.Add($box)
                 $p.Inlines.Add((New-WtMdRun '  '))
                 $p.Inlines.Add($text)
             } elseif ($hasTask -and -not $B.Ordered -and $p -is [System.Windows.Documents.Paragraph]) {
@@ -3160,7 +3733,8 @@ Register-WtSettingHandler {
 }
 
 Export-ModuleMember -Function Register-WtMarkdownCodeRenderer, Register-WtMarkdownCallout, ConvertTo-WtMarkdownModel,
-    Get-WtMarkdownSnippet, Get-WtMarkdownHeadings, New-WtMarkdownView, Set-WtMarkdownText, Invoke-WtMarkdownLink
+    Get-WtMarkdownSnippet, Get-WtMarkdownHeadings, New-WtMarkdownView, Set-WtMarkdownText, Invoke-WtMarkdownLink,
+    Get-WtMarkdownUnits, New-WtMarkdownUnitSection
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Markdown.psm1 끝 ----
 
@@ -5153,6 +5727,31 @@ function Update-WtCollapsed {
 
 function Switch-WtCollapsed { Set-WtSetting 'nav.collapsed' (-not [bool](Get-WtSetting 'nav.collapsed')) }
 
+<#
+창 단축키를 화면 안 요소가 대신 쓰게 넘긴다. 그 요소(또는 그 안)에 포커스가 있으면 셸은 그 키를 처리하지 않는다.
+  Register-WtKeyOwner $element 'Ctrl+B'     예: 메모 편집기는 Ctrl+B를 굵게로 쓴다. 다른 곳에서는 그대로 메뉴 접기
+요소가 사라지면 등록도 같이 사라진다(약한 참조).
+#>
+$script:keyOwners = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
+
+function Register-WtKeyOwner([Parameter(Mandatory)][System.Windows.DependencyObject]$Element, [Parameter(Mandatory)][string[]]$Keys) {
+    $script:keyOwners.AddOrUpdate($Element, [string[]]$Keys)
+}
+
+# $From: 찾기 시작할 요소 (기본은 키보드 포커스가 있는 요소)
+function Test-WtKeyOwned([string]$Key, $From = [System.Windows.Input.Keyboard]::FocusedElement) {
+    $el = $From
+    while ($el) {
+        $keys = $null
+        if ($script:keyOwners.TryGetValue($el, [ref]$keys) -and $keys -contains $Key) { return $true }
+        $parent = $null
+        if ($el -is [System.Windows.Media.Visual]) { $parent = [System.Windows.Media.VisualTreeHelper]::GetParent($el) }
+        if (-not $parent -and $el -is [System.Windows.DependencyObject]) { $parent = [System.Windows.LogicalTreeHelper]::GetParent($el) }
+        $el = $parent
+    }
+    $false
+}
+
 # ---- 창 크기 · 투명도 -------------------------------------------------------------------------
 
 function Set-WtOpacity([double]$Percent = -1) {
@@ -5502,7 +6101,7 @@ function Start-WtApp {
             try {
                 $ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
                 $key = if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }
-                if ($ctrl -and $key -eq 'B') { Switch-WtCollapsed; $e.Handled = $true; return }
+                if ($ctrl -and $key -eq 'B' -and -not (Test-WtKeyOwned 'Ctrl+B')) { Switch-WtCollapsed; $e.Handled = $true; return }
                 if ($key -eq 'F11') { Switch-WtFullScreen; $e.Handled = $true; return }
                 if ($key -eq 'Escape' -and $script:fullscreen) { Switch-WtFullScreen; $e.Handled = $true; return }
                 if ($key -eq 'F1') { Select-WtPage '_help'; $e.Handled = $true; return }
@@ -5566,7 +6165,8 @@ function Start-WtApp {
     }
 }
 
-Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Set-WtOpacity, Test-WtOpacityNeedsRestart,
+Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Register-WtKeyOwner, Test-WtKeyOwned,
+    Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Shell.psm1 끝 ----
@@ -7236,29 +7836,40 @@ Export-ModuleMember -Function @()
 # ---- addons\home\Home.psm1 끝 ----
 
 # ---- addons\memo\Memo.psm1 ----
-New-Module -Name 'WorkTool.addon.memo' -ScriptBlock {
-# 메모 탭: 목록 · 검색 · 편집 | 미리보기(마크다운) · 자동 저장 · 새 메모 · 삭제(실행 취소). 메모별 잠금은 다음에 옮긴다.
+New-Module -Name 'WorkTool.addon.memo.Memo' -ScriptBlock {
+# 메모 탭: 목록 · 검색 · 열어 둔 메모 탭 · 창 나누기(칸 2개) · 빠른 이동 · 자동 저장 · 새 메모 · 삭제(실행 취소). 메모별 잠금은 다음에 옮긴다.
 # 저장소 memo.json (schema 1). 항목:
 #   id, title, body, tags[], lock($null=잠기지 않음. 나중에 'dpapi' | 'password'), created, updated
 #   tags는 본문의 #태그를 저장할 때 모은 것이다.
-# 본문은 마크다운으로 보여 준다 (core/Markdown.psm1). [[메모 제목]]은 그 메모로, #태그는 그 태그 검색으로 간다.
-# 단축키(메모 화면 안): Ctrl+N 새 메모 · Ctrl+S 바로 저장 · Ctrl+E 편집 / 미리보기
+# 화면: 왼쪽 목록, 오른쪽 칸(pane) 1~2개. 칸마다 탭 줄 · 제목 · 편집기(MemoEditor.psm1). 탭 하나 = 메모 하나.
+#   목록 클릭은 지금 탭에서, Ctrl+클릭 · 가운데 클릭은 새 탭에서 연다. [[메모 제목]]은 그 메모로(없으면 만든다), #태그는 그 태그 검색으로 간다.
+# 설정: memo.mode (live 편집 · source 원문 · read 읽기. 예전 값 edit → live, preview → read)
+#       memo.tabs (열린 탭 · 칸 · 지금 탭 · 나눔 비율)
+# 단축키(메모 화면 안)는 맨 아래 Register-WtAddon -Shortcuts. 편집 단축키(Ctrl+B · I · K · F 등)는 편집기가 처리한다.
 
 $ErrorActionPreference = 'Stop'
 
 $script:schema = 1
 $script:items = @()
-$script:currentId = $null    # 오른쪽에 열려 있는 메모
-$script:dirty = $false       # 저장하지 않은 고친 내용이 있음
-$script:loading = $false     # 코드로 칸을 채우는 중 (고친 것으로 치지 않음)
+$script:panes = [System.Collections.Generic.List[hashtable]]::new()   # 칸. 칸 = @{ Tabs; Current; Dirty; Loading; Editor; 화면 요소 … }
+$script:active = 0           # 포커스가 있는 칸 번호
+$script:ratio = 0.5          # 두 칸일 때 왼쪽 칸 비율
+$script:closed = [System.Collections.Generic.List[hashtable]]::new()  # 닫은 탭 (Ctrl+Shift+T)
+$script:mode = 'live'        # live · source · read (모든 칸에 같이)
+$script:editMode = 'live'    # 읽기에서 Ctrl+E로 돌아갈 편집 모드
+$script:modeUpdating = $false
+$script:restored = $false    # 설정에 남은 탭을 불러왔는지
 $script:lastDeleted = $null  # 실행 취소용
 $script:ui = @{}
 $script:saveTimer = $null
 $script:undoTimer = $null
 $script:listUpdating = $false
+$script:listMenuId = ''
 $script:rowCache = @{}
+$script:quickOpen = $false
 
-Register-WtSettingDefault 'memo.mode' 'preview'   # 오른쪽 칸: preview(미리보기) | edit(편집)
+Register-WtSettingDefault 'memo.mode' 'live'
+Register-WtSettingDefault 'memo.tabs' $null
 
 # ---- 데이터 (WPF 없이) -------------------------------------------------------------------------
 
@@ -7323,6 +7934,20 @@ function Set-WtMemoContent($Memo, [string]$Title, [string]$Body, [datetime]$When
     $Memo
 }
 
+# 빠른 이동 결과. 띄어 쓴 낱말이 제목에 모두 들어 있으면 위에, 본문까지 합쳐야 들어 있으면 아래에 (각각 최근 고친 순)
+function Find-WtMemoQuick([object[]]$Items, [string]$Query, [int]$Limit = 50) {
+    $words = @($Query -split '\s+' | Where-Object { $_ })
+    $inTitle = [System.Collections.Generic.List[object]]::new()
+    $inBody = [System.Collections.Generic.List[object]]::new()
+    foreach ($m in $Items) {
+        $title = [string]$m.title
+        if (-not ($words | Where-Object { $title -notlike "*$_*" })) { $inTitle.Add($m); continue }
+        $text = "$title`n$($m.body)"
+        if (-not ($words | Where-Object { $text -notlike "*$_*" })) { $inBody.Add($m) }
+    }
+    @(@($inTitle) + @($inBody) | Select-Object -First $Limit)
+}
+
 # 예전 memo.csv → memo.json. 가져온 개수를 돌려준다.
 function Import-WtMemoLegacy([string]$Folder) {
     $rows = Import-WtLegacyCsv $Folder 'memo'
@@ -7342,88 +7967,74 @@ function Import-WtMemoLegacy([string]$Folder) {
     @($items).Count
 }
 
-# ---- 화면 -------------------------------------------------------------------------------------
+# 설정의 모드 값. 예전 값(edit · preview)도 읽는다
+function Get-WtMemoModeSetting {
+    switch ([string](Get-WtSetting 'memo.mode')) {
+        'source' { return 'source' }
+        'read' { return 'read' }
+        'preview' { return 'read' }
+    }
+    'live'
+}
+
+# ---- 화면: 칸 · 탭 상태 ------------------------------------------------------------------------
 
 function Get-WtMemoById([string]$Id) { $script:items | Where-Object { $_.id -eq $Id } | Select-Object -First 1 }
 
-function New-WtMemoListItem($Memo) {
-    $cached = $script:rowCache[$Memo.id]
-    if ($cached -and $cached.Day -eq [datetime]::Today -and $cached.Body -ceq $Memo.body -and $cached.Title -ceq $Memo.title -and $cached.Updated -eq $Memo.updated) { return $cached.Row }
-    $snippet = if ($cached -and $cached.Body -ceq $Memo.body) { $cached.Row.SnippetValue } else { $null }
-    $row = [pscustomobject]@{ Id = $Memo.id; Title = $Memo.title; Stamp = Format-WtMemoTime $Memo.updated; SnippetSource = [string]$Memo.body; SnippetValue = $snippet }
-    # 가상 목록에서 보이는 행이 값을 읽을 때만 요약한다. 지역 변수는 캡처하지 않고 행 자체에 둔다.
-    $row | Add-Member -MemberType ScriptProperty -Name Snippet -Value {
-        if ($null -eq $this.SnippetValue) { $this.SnippetValue = Get-WtMarkdownSnippet $this.SnippetSource }
-        $this.SnippetValue
+function Get-WtMemoModifiers { [System.Windows.Input.Keyboard]::Modifiers }
+
+function Get-WtMemoActivePane {
+    if (-not $script:panes.Count) { return $null }
+    $script:panes[[Math]::Max(0, [Math]::Min($script:active, $script:panes.Count - 1))]
+}
+
+function Get-WtMemoPaneOf($Ed) {
+    foreach ($p in $script:panes) { if ([object]::ReferenceEquals($p.Editor, $Ed)) { return $p } }
+    $null
+}
+
+function Get-WtMemoCurrentId {
+    $p = Get-WtMemoActivePane
+    if ($p -and $p.Current) { [string]$p.Current.Id } else { '' }
+}
+
+function Get-WtMemoTitle([string]$Id) {
+    $m = Get-WtMemoById $Id
+    if (-not $m) { return '(없는 메모)' }
+    if ([string]$m.title) { [string]$m.title } else { '제목 없음' }
+}
+
+function New-WtMemoTab([string]$Id) {
+    @{ Id = $Id; Back = [System.Collections.Generic.List[string]]::new(); Forward = [System.Collections.Generic.List[string]]::new(); State = $null; Button = $null; Text = $null; Style = $null }
+}
+
+# 칸의 지금 탭에 편집기 커서 · 스크롤을 기억해 둔다 (탭을 바꾸기 전)
+function Save-WtMemoPaneState($Pane) {
+    if ($Pane.Current -and (Get-WtMemoById $Pane.Current.Id)) { $Pane.Current.State = @(Get-WtMemoEditorState $Pane.Editor)[-1] }
+}
+
+# 열린 탭 · 칸 · 지금 탭 · 나눔 비율을 설정에 남긴다
+function Save-WtMemoTabs {
+    if (-not $script:restored) { return }
+    $value = [ordered]@{
+        panes  = @(foreach ($p in $script:panes) {
+                [ordered]@{ tabs = @(foreach ($t in $p.Tabs) { [string]$t.Id }); current = [int]$p.Tabs.IndexOf($p.Current) }
+            })
+        active = [int]$script:active
+        ratio  = [Math]::Round([double]$script:ratio, 3)
     }
-    $script:rowCache[$Memo.id] = @{ Body = $Memo.body; Title = $Memo.title; Updated = $Memo.updated; Day = [datetime]::Today; Row = $row }
-    $row
+    try { $null = Set-WtSetting 'memo.tabs' $value } catch { }   # 설정을 못 남겨도 메모 쓰기는 막지 않는다
 }
 
-# 오른쪽 칸에 메모 하나를 연다 (없으면 빈 화면 안내)
-function Show-WtMemo([string]$Id) {
-    if (-not (Save-WtMemoNow)) { return }
-    $m = if ($Id) { Get-WtMemoById $Id } else { $null }
-    $script:currentId = if ($m) { $m.id } else { $null }
-    $script:loading = $true
-    try {
-        if (-not $m) {
-            $script:ui.TitleText.Text = ''
-            $script:ui.TitleBox.Text = ''
-            $script:ui.Meta.Text = ''
-            $script:ui.BodyBox.Text = ''
-            $msg = if ($script:items.Count) { '왼쪽에서 메모를 고르세요.' } else { '메모가 없습니다. [새 메모]를 누르세요.' }
-            Set-WtMarkdownText $script:ui.MdView $msg
-        } else {
-            $script:ui.TitleText.Text = $m.title
-            $script:ui.TitleBox.Text = $m.title
-            $script:ui.Meta.Text = '만든 날 {0} · 고친 날 {1}' -f $m.created, $m.updated
-            $script:ui.BodyBox.Text = [string]$m.body
-            if ([string](Get-WtSetting 'memo.mode') -ne 'edit' -and ($script:ui.MdView.Tag.Text -cne [string]$m.body -or $script:ui.MdView.Tag.Error)) { Set-WtMarkdownText $script:ui.MdView ([string]$m.body) }
-        }
-    } finally { $script:loading = $false }
-    $script:ui.Editor.IsEnabled = [bool]$m
-    $script:ui.Delete.IsEnabled = [bool]$m
-    $script:ui.Delete.ToolTip = if ($m) { '이 메모 삭제' } else { '메모를 먼저 고르세요' }
-    $script:listUpdating = $true
-    try { $script:ui.List.SelectedItem = $script:ui.List.Items | Where-Object Id -eq $script:currentId | Select-Object -First 1 }
-    finally { $script:listUpdating = $false }
-    Set-WtMemoStatus $(if ($m) { 'saved' } else { '' })
-}
-
-# 편집 | 미리보기
-function Update-WtMemoMode {
-    $edit = [string](Get-WtSetting 'memo.mode') -eq 'edit'
-    if (-not $edit) {
-        if (-not (Save-WtMemoNow)) { return }
-        $m = Get-WtMemoById $script:currentId
-        if ($m) {
-            $script:ui.TitleText.Text = $m.title
-            if ($script:ui.MdView.Tag.Text -cne [string]$m.body -or $script:ui.MdView.Tag.Error) { Set-WtMarkdownText $script:ui.MdView ([string]$m.body) }
-        }
-    }
-    $script:ui.Editor.Visibility = if ($edit) { 'Visible' } else { 'Collapsed' }
-    $script:ui.Preview.Visibility = if ($edit) { 'Collapsed' } else { 'Visible' }
-    $script:ui.TitleBox.Visibility = $script:ui.Editor.Visibility
-    $script:ui.TitleText.Visibility = $script:ui.Preview.Visibility
-    foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ([string]$rb.Tag.Value -eq $(if ($edit) { 'edit' } else { 'preview' })) }
-}
-
-function Switch-WtMemoMode {
-    if (-not (Save-WtMemoNow)) { return }
-    Set-WtSetting 'memo.mode' $(if ([string](Get-WtSetting 'memo.mode') -eq 'edit') { 'preview' } else { 'edit' })
-    Update-WtMemoMode
-}
-
-# 저장 상태 표시: saved · dirty · error · ''(숨김)
-function Set-WtMemoStatus([string]$State, [string]$Detail = '') {
-    $s = $script:ui.Status
-    $stamp = if ($State -eq 'saved') { [string](Get-WtMemoById $script:currentId).updated } else { '' }
+# 저장 상태 표시 (칸마다): saved · dirty · error · ''(숨김)
+function Set-WtMemoStatus($Pane, [string]$State, [string]$Detail = '') {
+    $s = $Pane.Status
+    $m = if ($Pane.Current) { Get-WtMemoById $Pane.Current.Id } else { $null }
+    $stamp = if ($State -eq 'saved' -and $m) { [string]$m.updated } else { '' }
     $key = @($State, $Detail, $stamp) -join "`n"
     if ($s.Tag -ceq $key) { return }
     switch ($State) {
         'saved' {
-            $m = Get-WtMemoById $script:currentId
             $at = if ($m) { ([string]$m.updated -split ' ')[-1] -replace ':\d\d$', '' } else { '' }
             $s.Content = New-WtButtonContent "자동 저장됨 · $at" 0xE73E
             Set-WtResource $s 'Foreground' 'B.Success'
@@ -7444,68 +8055,663 @@ function Set-WtMemoStatus([string]$State, [string]$Detail = '') {
     $s.Tag = $key
 }
 
-# 고친 내용이 있으면 바로 저장한다. 저장 시각 · 목록도 고친다
-function Save-WtMemoNow {
-    if ($script:saveTimer) { $script:saveTimer.Stop() }
-    if (-not $script:dirty) { return $true }
-    $m = Get-WtMemoById $script:currentId
-    if (-not $m) { Set-WtMemoStatus 'error' '편집 중인 메모를 찾을 수 없습니다.'; return $false }
+# 칸에 지금 탭의 메모를 채운다 (없으면 빈 칸 안내). 고친 표시는 지운다: 부르기 전에 저장한다
+function Show-WtMemoPane($Pane) {
+    $m = if ($Pane.Current) { Get-WtMemoById $Pane.Current.Id } else { $null }
+    $Pane.Loading = $true
     try {
-        $candidate = $m.PSObject.Copy()
-        [void](Set-WtMemoContent $candidate $script:ui.TitleBox.Text $script:ui.BodyBox.Text)
-        $next = @(foreach ($item in $script:items) { if ($item.id -eq $m.id) { $candidate } else { $item } })
-        Save-WtMemoItems $next
-        $script:dirty = $false
-        $script:items = @(Get-WtMemoSorted $next)
-        $script:ui.Meta.Text = '만든 날 {0} · 고친 날 {1}' -f $candidate.created, $candidate.updated
-        Update-WtMemoList -KeepCurrent
-        Set-WtMemoStatus 'saved'
-        return $true
-    } catch {
-        Set-WtMemoStatus 'error' $_.Exception.Message
-        return $false
+        if ($m) {
+            $Pane.TitleText.Text = $m.title
+            $Pane.TitleBox.Text = $m.title
+            Set-WtMemoMeta $Pane $m
+            $null = Set-WtMemoEditorText $Pane.Editor ([string]$m.body)
+            $null = Set-WtMemoEditorState $Pane.Editor $Pane.Current.State
+        } else {
+            $Pane.TitleText.Text = ''
+            $Pane.TitleBox.Text = ''
+            Set-WtMemoMeta $Pane $null
+            $null = Set-WtMemoEditorText $Pane.Editor ''
+        }
+    } finally { $Pane.Loading = $false }
+    $Pane.Dirty = $false
+    $vis = if ($m) { 'Visible' } else { 'Collapsed' }
+    $Pane.Head.Visibility = $vis
+    $Pane.Editor.Root.Visibility = $vis
+    $Pane.Empty.Visibility = if ($m) { 'Collapsed' } else { 'Visible' }
+    $null = Set-WtMemoEditorEnabled $Pane.Editor ([bool]$m)
+    $Pane.Delete.IsEnabled = [bool]$m
+    $Pane.Delete.ToolTip = if ($m) { '이 메모 삭제' } else { '메모를 먼저 여세요' }
+    $Pane.EmptyText.Text = if ($script:items.Count) { '열린 메모가 없습니다. 목록에서 고르거나 새로 만드세요.' } else { '메모가 없습니다.' }
+    $Pane.EmptyQuick.IsEnabled = [bool]$script:items.Count
+    $Pane.EmptyQuick.ToolTip = if ($script:items.Count) { '빠른 이동 (Ctrl+O)' } else { '메모가 없습니다' }
+    Update-WtMemoPaneMode $Pane
+    Set-WtMemoStatus $Pane $(if ($m) { 'saved' } else { '' })
+}
+
+# 저장한 뒤 칸의 제목 · 날짜를 고치고, 다른 칸에서 저장해 글이 달라졌으면 다시 불러온다 (커서 · 스크롤 유지)
+function Update-WtMemoPaneContent($Pane) {
+    $m = Get-WtMemoById $Pane.Current.Id
+    if (-not $m) { return }
+    $Pane.Loading = $true
+    try {
+        $Pane.TitleText.Text = $m.title
+        if (-not $Pane.TitleBox.IsKeyboardFocused -and $Pane.TitleBox.Text -cne $m.title) { $Pane.TitleBox.Text = $m.title }
+        Set-WtMemoMeta $Pane $m
+        if ((Get-WtMemoEditorText $Pane.Editor) -cne [string]$m.body) {
+            $state = Get-WtMemoEditorState $Pane.Editor
+            $null = Set-WtMemoEditorText $Pane.Editor ([string]$m.body)
+            $null = Set-WtMemoEditorState $Pane.Editor $state
+        }
+    } finally { $Pane.Loading = $false }
+}
+
+# 만든 날 · 고친 날. 칸이 좁으면 …로 줄이고 마우스를 올리면 전체
+function Set-WtMemoMeta($Pane, $Memo) {
+    $text = if ($Memo) { '만든 날 {0} · 고친 날 {1}' -f $Memo.created, $Memo.updated } else { '' }
+    $Pane.Meta.Text = $text
+    $Pane.Meta.ToolTip = if ($text) { $text } else { $null }
+}
+
+function Update-WtMemoPaneMode($Pane) {
+    $null = Set-WtMemoEditorMode $Pane.Editor $script:mode
+    $read = $script:mode -eq 'read'
+    $Pane.TitleBox.Visibility = if ($read) { 'Collapsed' } else { 'Visible' }
+    $Pane.TitleText.Visibility = if ($read) { 'Visible' } else { 'Collapsed' }
+}
+
+# ---- 탭 줄 ------------------------------------------------------------------------------------
+
+function New-WtMemoTabButton($Pane, $Tab) {
+    $b = [System.Windows.Controls.Button]::new()
+    Set-WtStyle $b 'Memo.Tab'
+    $b.Tag = @{ Pane = $Pane; Tab = $Tab }
+    $row = [System.Windows.Controls.DockPanel]::new()
+    $x = [System.Windows.Controls.Button]::new()
+    Set-WtStyle $x 'Memo.TabClose'
+    $glyph = New-WtIcon 0xE711
+    Set-WtResource $glyph 'FontSize' 'F.Small'
+    $x.Content = $glyph
+    $x.ToolTip = '닫기 (Ctrl+W)'
+    $x.Tag = $b.Tag
+    $x.Add_Click({ param($s, $e) [void](Close-WtMemoTab $s.Tag.Pane $s.Tag.Tab); $e.Handled = $true })
+    [System.Windows.Controls.DockPanel]::SetDock($x, 'Right')
+    [void]$row.Children.Add($x)
+    $text = [System.Windows.Controls.TextBlock]::new()
+    Set-WtStyle $text 'Memo.TabText'
+    [void]$row.Children.Add($text)
+    $b.Content = $row
+    $b.Add_Click({ param($s, $e) [void](Select-WtMemoTab $s.Tag.Pane $s.Tag.Tab) })
+    # 가운데 클릭으로 닫기
+    $b.Add_PreviewMouseDown({
+            param($s, $e)
+            if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Middle) { [void](Close-WtMemoTab $s.Tag.Pane $s.Tag.Tab); $e.Handled = $true }
+        })
+    # 우클릭 메뉴: 닫기 · 다른 탭 닫기 · 오른쪽에 나눠 열기(나눴으면 다른 칸으로 옮기기)
+    $menu = New-WtContextMenu
+    $menu.Tag = $b.Tag
+    foreach ($spec in @(@('close', '닫기', 'Ctrl+W'), @('others', '다른 탭 닫기', ''), @('side', '오른쪽에 나눠 열기', 'Ctrl+\'))) {
+        $mi = [System.Windows.Controls.MenuItem]::new()
+        $mi.Header = $spec[1]
+        $mi.InputGestureText = $spec[2]
+        $mi.Tag = $spec[0]
+        [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($mi, $true)
+        $mi.Add_Click({ param($s, $e) Invoke-WtMemoTabMenu $s.Parent.Tag.Pane $s.Parent.Tag.Tab ([string]$s.Tag) })
+        [void]$menu.Items.Add($mi)
+    }
+    $b.ContextMenu = $menu
+    $b.Add_ContextMenuOpening({
+            param($s, $e)
+            $items = $s.ContextMenu.Items
+            $items[1].IsEnabled = $s.Tag.Pane.Tabs.Count -gt 1
+            $items[1].ToolTip = if ($items[1].IsEnabled) { $null } else { '다른 탭이 없습니다' }
+            $items[2].Header = if ($script:panes.Count -gt 1) { '다른 칸으로 옮기기' } else { '오른쪽에 나눠 열기' }
+            $items[2].InputGestureText = if ($script:panes.Count -gt 1) { '' } else { 'Ctrl+\' }
+        })
+    $Tab.Button = $b
+    $Tab.Text = $text
+    $Tab.Style = 'Memo.Tab'
+    $b
+}
+
+function Invoke-WtMemoTabMenu($Pane, $Tab, [string]$Action) {
+    switch ($Action) {
+        'close' { [void](Close-WtMemoTab $Pane $Tab) }
+        'others' {
+            if (-not (Select-WtMemoTab $Pane $Tab)) { return }
+            foreach ($t in @($Pane.Tabs)) { if (-not [object]::ReferenceEquals($t, $Tab)) { [void](Close-WtMemoTab $Pane $t) } }
+        }
+        'side' {
+            if ($script:panes.Count -gt 1) { [void](Move-WtMemoTab $Pane $Tab) }
+            else { [void](Open-WtMemo $Tab.Id 'side' $Pane) }
+        }
     }
 }
 
-function Set-WtMemoDirty {
-    if ($script:loading -or -not $script:currentId) { return }
-    $script:dirty = $true
-    Set-WtMemoStatus 'dirty'
+# 칸의 탭 줄을 탭 목록대로 다시 만든다 (탭을 열고 닫을 때)
+function Update-WtMemoTabStrip($Pane) {
+    $Pane.Strip.Children.Clear()
+    foreach ($t in $Pane.Tabs) { [void]$Pane.Strip.Children.Add((New-WtMemoTabButton $Pane $t)) }
+    Update-WtMemoTabTexts
+    Update-WtMemoTabStyles
+}
+
+function Update-WtMemoTabTexts {
+    foreach ($p in $script:panes) {
+        foreach ($t in $p.Tabs) {
+            if (-not $t.Text) { continue }
+            $title = Get-WtMemoTitle $t.Id
+            if ($t.Text.Text -cne $title) { $t.Text.Text = $title; $t.Button.ToolTip = $title }
+        }
+    }
+}
+
+# 선택된 탭 표시: 포커스가 있는 칸의 지금 탭만 강조색, 다른 칸의 지금 탭은 덜 강조
+function Update-WtMemoTabStyles {
+    for ($i = 0; $i -lt $script:panes.Count; $i++) {
+        $p = $script:panes[$i]
+        foreach ($t in $p.Tabs) {
+            if (-not $t.Button) { continue }
+            $style = if (-not [object]::ReferenceEquals($t, $p.Current)) { 'Memo.Tab' } elseif ($i -eq $script:active) { 'Memo.Tab.Current' } else { 'Memo.Tab.Selected' }
+            if ($t.Style -cne $style) { Set-WtStyle $t.Button $style; $t.Style = $style }
+        }
+        if ($p.Current -and $p.Current.Button) { $p.Current.Button.BringIntoView() }
+    }
+}
+
+# ---- 칸 만들기 · 나누기 -----------------------------------------------------------------------
+
+function New-WtMemoPane {
+    $pane = @{ Tabs = [System.Collections.Generic.List[hashtable]]::new(); Current = $null; Dirty = $false; Loading = $false }
+    $card = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $card 'Memo.Pane'
+    $card.Tag = $pane
+    $card.Add_PreviewMouseDown({ param($s, $e) Set-WtMemoActivePane $s.Tag })
+    $card.Add_GotKeyboardFocus({ param($s, $e) Set-WtMemoActivePane $s.Tag })
+    $dock = [System.Windows.Controls.DockPanel]::new()
+
+    # 탭 줄: 넘치면 가로로 스크롤(마우스 휠로도), 오른쪽 끝에 +
+    $bar = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $bar 'Memo.TabBar'
+    $barGrid = [System.Windows.Controls.Grid]::new()
+    $bc1 = [System.Windows.Controls.ColumnDefinition]::new()
+    $bc1.Width = [System.Windows.GridLength]::new(1, 'Star')
+    $bc2 = [System.Windows.Controls.ColumnDefinition]::new()
+    $bc2.Width = [System.Windows.GridLength]::Auto
+    $barGrid.ColumnDefinitions.Add($bc1)
+    $barGrid.ColumnDefinitions.Add($bc2)
+    $scroll = [System.Windows.Controls.ScrollViewer]::new()
+    $scroll.HorizontalScrollBarVisibility = 'Hidden'
+    $scroll.VerticalScrollBarVisibility = 'Disabled'
+    $scroll.Focusable = $false
+    $scroll.Add_PreviewMouseWheel({ param($s, $e) $s.ScrollToHorizontalOffset($s.HorizontalOffset - $e.Delta); $e.Handled = $true })
+    $strip = New-WtStack Horizontal
+    $scroll.Content = $strip
+    [void]$barGrid.Children.Add($scroll)
+    $add = New-WtButton '' -Kind Icon -Icon 0xE710 -ToolTip '새 메모 (Ctrl+N)'
+    $add.Tag = $pane
+    $add.Add_Click({ param($s, $e) Set-WtMemoActivePane $s.Tag; [void](Add-WtMemo -Edit) })
+    [System.Windows.Controls.Grid]::SetColumn($add, 1)
+    [void]$barGrid.Children.Add($add)
+    $bar.Child = $barGrid
+    [System.Windows.Controls.DockPanel]::SetDock($bar, 'Top')
+    [void]$dock.Children.Add($bar)
+
+    # 아래: 삭제 + 실행 취소 자리
+    $bottom = [System.Windows.Controls.DockPanel]::new()
+    $bottom.Margin = [System.Windows.Thickness]::new(20, 12, 20, 12)
+    $del = New-WtButton '삭제' -Kind Danger -Icon 0xE74D
+    $del.Tag = $pane
+    $del.Add_Click({ param($s, $e) Set-WtMemoActivePane $s.Tag; Remove-WtMemoCurrent $s.Tag })
+    [System.Windows.Controls.DockPanel]::SetDock($del, 'Left')
+    [void]$bottom.Children.Add($del)
+    $undoHost = [System.Windows.Controls.ContentControl]::new()
+    $undoHost.Focusable = $false
+    $undoHost.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
+    [void]$bottom.Children.Add($undoHost)
+    $sep = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $sep 'Divider'
+    $sep.Margin = [System.Windows.Thickness]::new(20, 0, 20, 0)
+    $bwrap = New-WtStack Vertical
+    [void]$bwrap.Children.Add($sep)
+    [void]$bwrap.Children.Add($bottom)
+    [System.Windows.Controls.DockPanel]::SetDock($bwrap, 'Bottom')
+    [void]$dock.Children.Add($bwrap)
+
+    # 머리: 제목(편집이면 입력칸, 읽기면 글자) · 만든 날/고친 날 · 저장 상태
+    $head = New-WtStack Vertical 4
+    $head.Margin = [System.Windows.Thickness]::new(20, 16, 20, 0)
+    $titleText = New-WtText '' 'T.H2'
+    Set-WtResource $titleText 'FontSize' 'F.Number'
+    $titleBox = [System.Windows.Controls.TextBox]::new()
+    Set-WtStyle $titleBox 'Input.Title'
+    $titleBox.ToolTip = '제목 (비우면 저장 시각)'
+    $titleBox.Tag = $pane
+    $titleBox.Add_TextChanged({ param($s, $e) Set-WtMemoDirty $s.Tag })
+    $titleBox.Add_LostKeyboardFocus({ [void](Save-WtMemoNow) })
+    $metaRow = [System.Windows.Controls.DockPanel]::new()
+    $status = [System.Windows.Controls.Label]::new()
+    Set-WtResource $status 'FontFamily' 'Font.UI'
+    Set-WtResource $status 'FontSize' 'F.Small'
+    $status.Padding = [System.Windows.Thickness]::new(0)
+    $status.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
+    $status.VerticalAlignment = 'Center'
+    [System.Windows.Controls.DockPanel]::SetDock($status, 'Right')
+    [void]$metaRow.Children.Add($status)
+    $meta = New-WtText '' 'T.Sub'
+    $meta.VerticalAlignment = 'Center'
+    $meta.TextWrapping = 'NoWrap'
+    $meta.TextTrimming = 'CharacterEllipsis'
+    [void]$metaRow.Children.Add($meta)
+    [void](Add-WtChild $head $titleText)
+    [void](Add-WtChild $head $titleBox)
+    [void](Add-WtChild $head $metaRow)
+    $line = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $line 'Divider'
+    $line.Margin = [System.Windows.Thickness]::new(0, 12, 0, 12)
+    [void]$head.Children.Add($line)
+    [System.Windows.Controls.DockPanel]::SetDock($head, 'Top')
+    [void]$dock.Children.Add($head)
+
+    # 본문: 편집기 + 탭이 없을 때 안내
+    $body = [System.Windows.Controls.Grid]::new()
+    $body.Margin = [System.Windows.Thickness]::new(20, 0, 20, 0)
+    $ed = New-WtMemoEditor -OnChanged { param($ed) $p = Get-WtMemoPaneOf $ed; if ($p) { Set-WtMemoDirty $p } } `
+        -OnLeave { param($ed) [void](Save-WtMemoNow) } `
+        -OnLink { param($ed, $link, $how) Invoke-WtMemoLink $ed $link $how } `
+        -OnTitles { param($ed, $prefix) Get-WtMemoTitles }
+    [void]$body.Children.Add($ed.Root)
+    $empty = New-WtStack Vertical 12
+    $empty.HorizontalAlignment = 'Center'
+    $empty.VerticalAlignment = 'Center'
+    $emptyText = New-WtText '' 'T.Sub'
+    $emptyText.HorizontalAlignment = 'Center'
+    [void](Add-WtChild $empty $emptyText)
+    $emptyButtons = New-WtStack Horizontal 8
+    $emptyButtons.HorizontalAlignment = 'Center'
+    $emptyAdd = New-WtButton '새 메모' -Icon 0xE710 -ToolTip '새 메모 (Ctrl+N)'
+    $emptyAdd.Tag = $pane
+    $emptyAdd.Add_Click({ param($s, $e) Set-WtMemoActivePane $s.Tag; [void](Add-WtMemo -Edit) })
+    $emptyQuick = New-WtButton '빠른 이동' -Icon 0xE721
+    $emptyQuick.Tag = $pane
+    $emptyQuick.Add_Click({ param($s, $e) Set-WtMemoActivePane $s.Tag; Open-WtMemoQuick })
+    [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($emptyQuick, $true)
+    [void](Add-WtChild $emptyButtons $emptyAdd)
+    [void](Add-WtChild $emptyButtons $emptyQuick)
+    [void](Add-WtChild $empty $emptyButtons)
+    [void]$body.Children.Add($empty)
+    [void]$dock.Children.Add($body)
+    $card.Child = $dock
+
+    $pane.Root = $card; $pane.Strip = $strip; $pane.Scroll = $scroll; $pane.Head = $head
+    $pane.TitleText = $titleText; $pane.TitleBox = $titleBox; $pane.Meta = $meta; $pane.Status = $status
+    $pane.Editor = $ed; $pane.Empty = $empty; $pane.EmptyText = $emptyText; $pane.EmptyQuick = $emptyQuick
+    $pane.Delete = $del; $pane.UndoHost = $undoHost
+    $pane
+}
+
+# 칸을 하나 더한다 (오른쪽). 더한 칸은 $script:panes의 마지막
+function Add-WtMemoPane {
+    $pane = @(New-WtMemoPane | Where-Object { $_ -is [hashtable] })[-1]
+    $script:panes.Add($pane)
+    [void]$script:ui.PaneGrid.Children.Add($pane.Root)
+    $null = Update-WtMemoSplit
+    $null = Show-WtMemoPane $pane
+}
+
+function Get-WtMemoLastPane { $script:panes[$script:panes.Count - 1] }
+
+# 칸을 뺀다 (탭이 없어진 칸). 실행 취소 막대가 거기 있었으면 남은 칸으로 옮긴다
+function Remove-WtMemoPaneAt([int]$Index) {
+    $pane = $script:panes[$Index]
+    $script:panes.RemoveAt($Index)
+    $script:ui.PaneGrid.Children.Remove($pane.Root)
+    if ($pane.UndoHost.Content) {
+        $bar = $pane.UndoHost.Content
+        $pane.UndoHost.Content = $null
+        $script:panes[0].UndoHost.Content = $bar
+    }
+    if ($script:active -ge $Index -and $script:active -gt 0) { $script:active-- }
+    Update-WtMemoSplit
+}
+
+# 두 칸 중 빈 칸을 정리한다: 둘째 칸이 비면 나눔을 풀고, 첫 칸이 비고 둘째 칸에 탭이 있으면 하나로 합친다
+function Update-WtMemoPaneLayout {
+    if ($script:panes.Count -lt 2) { return }
+    if (-not $script:panes[1].Tabs.Count) { Remove-WtMemoPaneAt 1 }
+    elseif (-not $script:panes[0].Tabs.Count) { Remove-WtMemoPaneAt 0 }
+}
+
+function Update-WtMemoSplit {
+    $u = $script:ui
+    $split = $script:panes.Count -gt 1
+    $r = [Math]::Max(0.2, [Math]::Min(0.8, [double]$script:ratio))
+    $u.PaneCol0.Width = [System.Windows.GridLength]::new($(if ($split) { $r } else { 1 }), 'Star')
+    $u.PaneCol1.Width = [System.Windows.GridLength]::new($(if ($split) { 16 } else { 0 }))
+    $u.PaneCol2.Width = if ($split) { [System.Windows.GridLength]::new(1 - $r, 'Star') } else { [System.Windows.GridLength]::new(0) }
+    $u.PaneCol0.MinWidth = if ($split) { 280 } else { 0 }
+    $u.PaneCol2.MinWidth = if ($split) { 280 } else { 0 }
+    $u.Splitter.Visibility = if ($split) { 'Visible' } else { 'Collapsed' }
+    for ($i = 0; $i -lt $script:panes.Count; $i++) { [System.Windows.Controls.Grid]::SetColumn($script:panes[$i].Root, $i * 2) }
+    Update-WtMemoTabStyles
+}
+
+function Set-WtMemoActivePane($Pane) {
+    $i = $script:panes.IndexOf($Pane)
+    if ($i -lt 0 -or $i -eq $script:active) { return }
+    $script:active = $i
+    Update-WtMemoTabStyles
+    Sync-WtMemoListSelection
+    Save-WtMemoTabs
+}
+
+# 다른 칸. 나누지 않았으면 -Create일 때 오른쪽 칸을 만든다
+function Get-WtMemoOtherPane($Pane, [switch]$Create) {
+    if ($script:panes.Count -lt 2) {
+        if (-not $Create) { return $null }
+        Add-WtMemoPane
+        return Get-WtMemoLastPane
+    }
+    if ([object]::ReferenceEquals($script:panes[0], $Pane)) { $script:panes[1] } else { $script:panes[0] }
+}
+
+# ---- 탭 열기 · 닫기 · 옮기기 ------------------------------------------------------------------
+
+# 메모를 연다. $How: here(지금 탭 · 그 칸에 이미 열려 있으면 그 탭) · tab(새 탭) · side(다른 칸, 나누지 않았으면 나눔)
+# -History: 링크 · 빠른 이동으로 갈 때만. 지금 탭의 뒤로 기록에 쌓는다 (목록 클릭은 쌓지 않음)
+function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History) {
+    if (-not (Get-WtMemoById $Id)) { return $false }
+    if (-not $Pane) { $Pane = Get-WtMemoActivePane }
+    if (-not (Save-WtMemoNow)) { return $false }
+    if ($How -eq 'side') { $Pane = Get-WtMemoOtherPane $Pane -Create }
+    $existing = $Pane.Tabs | Where-Object { $_.Id -eq $Id } | Select-Object -First 1
+    if ($existing) { return Select-WtMemoTab $Pane $existing }
+    Save-WtMemoPaneState $Pane
+    if ($How -eq 'here' -and $Pane.Current) {
+        $tab = $Pane.Current
+        if ($History) { $tab.Back.Add($tab.Id); $tab.Forward.Clear() }
+        $tab.Id = $Id
+        $tab.State = $null
+    } else {
+        $tab = New-WtMemoTab $Id
+        $at = if ($Pane.Current) { $Pane.Tabs.IndexOf($Pane.Current) + 1 } else { $Pane.Tabs.Count }
+        $Pane.Tabs.Insert($at, $tab)
+        $Pane.Current = $tab
+        Update-WtMemoTabStrip $Pane
+    }
+    $script:active = $script:panes.IndexOf($Pane)
+    Show-WtMemoPane $Pane
+    Update-WtMemoTabTexts
+    Update-WtMemoTabStyles
+    Sync-WtMemoListSelection
+    Save-WtMemoTabs
+    $true
+}
+
+function Select-WtMemoTab($Pane, $Tab) {
+    if ([object]::ReferenceEquals($Pane.Current, $Tab)) { Set-WtMemoActivePane $Pane; return $true }
+    if (-not (Save-WtMemoNow)) { return $false }
+    Save-WtMemoPaneState $Pane
+    $Pane.Current = $Tab
+    $script:active = $script:panes.IndexOf($Pane)
+    Show-WtMemoPane $Pane
+    Update-WtMemoTabStyles
+    Sync-WtMemoListSelection
+    Save-WtMemoTabs
+    $true
+}
+
+# 탭을 닫는다. 고친 내용이 있으면 먼저 저장하고, 못 하면 닫지 않는다
+function Close-WtMemoTab($Pane, $Tab, [switch]$NoHistory) {
+    $wasCurrent = [object]::ReferenceEquals($Pane.Current, $Tab)
+    if ($wasCurrent -and -not (Save-WtMemoNow)) { return $false }
+    $i = $Pane.Tabs.IndexOf($Tab)
+    if ($i -lt 0) { return $false }
+    if (-not $NoHistory) {
+        $script:closed.Add(@{ Id = $Tab.Id; Pane = $script:panes.IndexOf($Pane) })
+        while ($script:closed.Count -gt 20) { $script:closed.RemoveAt(0) }
+    }
+    $Pane.Tabs.RemoveAt($i)
+    if ($wasCurrent) {
+        $Pane.Current = if ($Pane.Tabs.Count) { $Pane.Tabs[[Math]::Min($i, $Pane.Tabs.Count - 1)] } else { $null }
+    }
+    Update-WtMemoTabStrip $Pane
+    Update-WtMemoPaneLayout
+    if ($wasCurrent -and $script:panes.Contains($Pane)) { Show-WtMemoPane $Pane }
+    Update-WtMemoTabStyles
+    Sync-WtMemoListSelection
+    Save-WtMemoTabs
+    $true
+}
+
+function Close-WtMemoCurrentTab {
+    $p = Get-WtMemoActivePane
+    if ($p -and $p.Current) { [void](Close-WtMemoTab $p $p.Current) }
+}
+
+# 닫은 탭 다시 열기 (지워진 메모는 건너뜀)
+function Restore-WtMemoClosedTab {
+    while ($script:closed.Count) {
+        $c = $script:closed[$script:closed.Count - 1]
+        $script:closed.RemoveAt($script:closed.Count - 1)
+        if (-not (Get-WtMemoById $c.Id)) { continue }
+        $pane = if ($c.Pane -lt $script:panes.Count) { $script:panes[$c.Pane] } else { Get-WtMemoActivePane }
+        [void](Open-WtMemo $c.Id 'tab' $pane)
+        return
+    }
+}
+
+# 탭을 다른 칸으로 옮긴다 (나눠 있을 때)
+function Move-WtMemoTab($Pane, $Tab) {
+    $other = Get-WtMemoOtherPane $Pane
+    if (-not $other) { return $false }
+    if ([object]::ReferenceEquals($Pane.Current, $Tab) -and -not (Save-WtMemoNow)) { return $false }
+    $memoId = $Tab.Id
+    $state = if ([object]::ReferenceEquals($Pane.Current, $Tab)) { Get-WtMemoEditorState $Pane.Editor } else { $Tab.State }
+    if (-not (Close-WtMemoTab $Pane $Tab -NoHistory)) { return $false }
+    # 닫으면서 칸이 합쳐졌을 수 있다
+    if (-not $script:panes.Contains($other)) { $other = $script:panes[0] }
+    $ok = Open-WtMemo $memoId 'tab' $other
+    if ($ok -and $other.Current -and $other.Current.Id -eq $memoId -and $state) { $null = Set-WtMemoEditorState $other.Editor $state }
+    $ok
+}
+
+# 칸의 지금 탭을 다음/이전 탭으로 (끝에서 처음으로 돈다)
+function Select-WtMemoNextTab([int]$Step) {
+    $p = Get-WtMemoActivePane
+    if (-not $p -or $p.Tabs.Count -lt 2) { return }
+    $i = $p.Tabs.IndexOf($p.Current)
+    $n = $p.Tabs.Count
+    [void](Select-WtMemoTab $p $p.Tabs[(($i + $Step) % $n + $n) % $n])
+}
+
+# Ctrl+\: 나누지 않았으면 지금 메모를 오른쪽 칸에 열고, 나눴으면 다른 칸으로 포커스
+function Split-WtMemoRight {
+    $p = Get-WtMemoActivePane
+    if (-not $p) { return }
+    if ($script:panes.Count -gt 1) {
+        $other = Get-WtMemoOtherPane $p
+        Set-WtMemoActivePane $other
+        if ($other.Current) { $null = Set-WtMemoEditorFocus $other.Editor }
+        return
+    }
+    if ($p.Current) { [void](Open-WtMemo $p.Current.Id 'side' $p) }
+}
+
+# 뒤로(-1) · 앞으로(1). 탭마다 기록이 따로 있다
+function Move-WtMemoHistory([int]$Step) {
+    $p = Get-WtMemoActivePane
+    if (-not $p -or -not $p.Current) { return }
+    $tab = $p.Current
+    # if 식으로 받으면 목록이 풀려 나오므로 그대로 대입한다
+    if ($Step -lt 0) { $from = $tab.Back; $to = $tab.Forward } else { $from = $tab.Forward; $to = $tab.Back }
+    while ($from.Count -and -not (Get-WtMemoById $from[$from.Count - 1])) { $from.RemoveAt($from.Count - 1) }
+    if (-not $from.Count) { return }
+    if (-not (Save-WtMemoNow)) { return }
+    Save-WtMemoPaneState $p
+    $target = $from[$from.Count - 1]
+    $from.RemoveAt($from.Count - 1)
+    $to.Add($tab.Id)
+    $tab.Id = $target
+    $tab.State = $null
+    Show-WtMemoPane $p
+    Update-WtMemoTabTexts
+    Sync-WtMemoListSelection
+    Save-WtMemoTabs
+}
+
+# 지운 메모의 탭을 모든 칸에서 닫는다 (저장은 이미 한 뒤). 지금 탭이 바뀐 칸만 다시 채운다
+function Close-WtMemoTabsFor([string]$Id) {
+    $changed = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($p in @($script:panes)) {
+        $hits = @($p.Tabs | Where-Object { $_.Id -eq $Id })
+        if (-not $hits.Count) { continue }
+        foreach ($t in $hits) {
+            $wasCurrent = [object]::ReferenceEquals($p.Current, $t)
+            $i = $p.Tabs.IndexOf($t)
+            $p.Tabs.RemoveAt($i)
+            if ($wasCurrent) {
+                $p.Dirty = $false
+                $p.Current = if ($p.Tabs.Count) { $p.Tabs[[Math]::Min($i, $p.Tabs.Count - 1)] } else { $null }
+                $changed.Add($p)
+            }
+        }
+        Update-WtMemoTabStrip $p
+    }
+    Update-WtMemoPaneLayout
+    foreach ($p in $changed) { if ($script:panes.Contains($p)) { Show-WtMemoPane $p } }
+    Update-WtMemoTabStyles
+}
+
+# 설정에 남은 탭을 불러온다. 지워진 메모 id는 뺀다. 남은 것이 없으면 최근 메모 하나를 연다
+function Restore-WtMemoTabs {
+    $present = @{}
+    foreach ($m in $script:items) { $present[[string]$m.id] = $true }
+    $v = Get-WtSetting 'memo.tabs'
+    $specs = @()
+    $activeIndex = 0
+    try {
+        if ($v) {
+            $specs = @(@($v.panes) | Where-Object { $_ } | Select-Object -First 2)
+            if ($null -ne $v.ratio) { $script:ratio = [Math]::Max(0.2, [Math]::Min(0.8, [double]$v.ratio)) }
+            if ($null -ne $v.active) { $activeIndex = [int]$v.active }
+        }
+    } catch { $specs = @() }
+    $built = 0
+    foreach ($spec in $specs) {
+        $ids = [System.Collections.Generic.List[string]]::new()
+        foreach ($x in @($spec.tabs)) { $s = [string]$x; if ($present.ContainsKey($s) -and -not $ids.Contains($s)) { $ids.Add($s) } }
+        if (-not $ids.Count) { continue }
+        if ($built -gt 0) { Add-WtMemoPane }
+        $pane = Get-WtMemoLastPane
+        foreach ($s in $ids) { $pane.Tabs.Add((New-WtMemoTab $s)) }
+        $cur = 0
+        try { $cur = [int]$spec.current } catch { $cur = 0 }
+        $pane.Current = $pane.Tabs[[Math]::Max(0, [Math]::Min($cur, $pane.Tabs.Count - 1))]
+        $built++
+    }
+    if (-not $built -and $script:items.Count) {
+        $t = New-WtMemoTab ([string]$script:items[0].id)
+        $script:panes[0].Tabs.Add($t)
+        $script:panes[0].Current = $t
+    }
+    $script:active = [Math]::Max(0, [Math]::Min($activeIndex, $script:panes.Count - 1))
+    foreach ($p in $script:panes) { Update-WtMemoTabStrip $p; Show-WtMemoPane $p }
+    Update-WtMemoSplit
+    $script:restored = $true
+    Save-WtMemoTabs
+}
+
+# ---- 저장 -------------------------------------------------------------------------------------
+
+# 고친 칸을 모두 바로 저장한다. 저장 시각 · 탭 제목 · 목록도 고친다. 실패하면 $false (고친 표시는 남긴다)
+function Save-WtMemoNow {
+    if ($script:saveTimer) { $script:saveTimer.Stop() }
+    $dirty = @($script:panes | Where-Object { $_.Dirty })
+    if (-not $dirty.Count) { return $true }
+    # 같은 메모를 두 칸에서 고쳤으면 포커스가 있는 칸의 글을 마지막에 써서 그 글이 남게 한다
+    $activePane = Get-WtMemoActivePane
+    $ordered = @($dirty | Where-Object { -not [object]::ReferenceEquals($_, $activePane) }) + @($dirty | Where-Object { [object]::ReferenceEquals($_, $activePane) })
+    $byId = [ordered]@{}
+    foreach ($p in $ordered) {
+        $m = if ($p.Current) { Get-WtMemoById $p.Current.Id } else { $null }
+        if (-not $m) { Set-WtMemoStatus $p 'error' '편집 중인 메모를 찾을 수 없습니다.'; return $false }
+        $candidate = if ($byId.Contains([string]$m.id)) { $byId[[string]$m.id] } else { $m.PSObject.Copy() }
+        [void](Set-WtMemoContent $candidate $p.TitleBox.Text (Get-WtMemoEditorText $p.Editor))
+        $byId[[string]$m.id] = $candidate
+    }
+    $next = @(foreach ($item in $script:items) { if ($byId.Contains([string]$item.id)) { $byId[[string]$item.id] } else { $item } })
+    try { Save-WtMemoItems $next }
+    catch {
+        $msg = $_.Exception.Message
+        foreach ($p in $dirty) { Set-WtMemoStatus $p 'error' $msg }
+        return $false
+    }
+    foreach ($p in $dirty) { $p.Dirty = $false }
+    $script:items = @(Get-WtMemoSorted $next)
+    $script:viewStamp = Get-WtMemoViewStamp
+    # 같은 메모를 연 다른 칸은 글을 다시 불러온다 (그 칸은 포커스가 없어 고치는 중이 아님)
+    foreach ($p in $script:panes) {
+        if (-not $p.Current -or -not $byId.Contains([string]$p.Current.Id)) { continue }
+        Update-WtMemoPaneContent $p
+        Set-WtMemoStatus $p 'saved'
+    }
+    Update-WtMemoTabTexts
+    Update-WtMemoList -KeepCurrent
+    $true
+}
+
+function Set-WtMemoDirty($Pane) {
+    if (-not $Pane -or $Pane.Loading -or -not $Pane.Current) { return }
+    $Pane.Dirty = $true
+    Set-WtMemoStatus $Pane 'dirty'
     $script:saveTimer.Stop()
     $script:saveTimer.Start()
 }
 
-function Add-WtMemo {
-    if (-not (Save-WtMemoNow)) { return }
+# ---- 메모 만들기 · 지우기 ---------------------------------------------------------------------
+
+# 새 메모를 만들어 연다. -Edit: 새 메모 버튼 · Ctrl+N (읽기 모드면 편집으로 바꾸고 제목칸으로)
+function Add-WtMemo([string]$Title = '', [string]$How = 'tab', $Pane, [switch]$History, [switch]$Edit) {
+    if (-not (Save-WtMemoNow)) { return $null }
     $m = New-WtMemo
+    if ($Title) { $m.title = $Title }
     $next = @($m) + @($script:items)
-    try { Save-WtMemoItems $next } catch { Show-WtError $_ '새 메모 저장'; return }
+    try { Save-WtMemoItems $next } catch { Show-WtError $_ '새 메모 저장'; return $null }
     $script:items = $next
-    if ($script:ui.Search.Text) { $script:ui.Search.Text = '' }
-    $script:currentId = $null
-    Update-WtMemoList
-    Select-WtMemoItem $m.id
-    if ([string](Get-WtSetting 'memo.mode') -ne 'edit') { Set-WtSetting 'memo.mode' 'edit'; Update-WtMemoMode }
-    [void]$script:ui.TitleBox.Focus()
+    $script:viewStamp = Get-WtMemoViewStamp
+    if ($script:ui.Search.Text) { $script:ui.Search.Text = '' } else { Update-WtMemoList }
+    [void](Open-WtMemo $m.id $How $Pane -History:$History)
+    if ($Edit) {
+        if ($script:mode -eq 'read') { Set-WtMemoMode $script:editMode }
+        $p = Get-WtMemoActivePane
+        if ($p) { [void]$p.TitleBox.Focus() }
+    }
+    $m
 }
 
-function Remove-WtMemoCurrent {
+function Remove-WtMemoCurrent($Pane) {
+    if (-not $Pane) { $Pane = Get-WtMemoActivePane }
     if (-not (Save-WtMemoNow)) { return }
-    $m = Get-WtMemoById $script:currentId
+    if (-not $Pane -or -not $Pane.Current) { return }
+    $m = Get-WtMemoById $Pane.Current.Id
     if (-not $m) { return }
-    $script:dirty = $false
-    $script:saveTimer.Stop()
     $index = [array]::IndexOf(@($script:items), $m)
     $next = @($script:items | Where-Object { $_.id -ne $m.id })
     try { Save-WtMemoItems $next } catch { Show-WtError $_ '메모 삭제'; return }
     $script:items = $next
+    $script:viewStamp = Get-WtMemoViewStamp
     $script:rowCache.Remove($m.id)
     $script:lastDeleted = @{ Memo = $m; Index = $index }
-    $script:currentId = $null
+    $paneIndex = $script:panes.IndexOf($Pane)
+    Close-WtMemoTabsFor $m.id
     Update-WtMemoList
-    # 되돌리기: 10초 동안 실행 취소 버튼
+    Save-WtMemoTabs
+    # 되돌리기: 10초 동안 실행 취소 버튼 (지운 칸 아래에, 그 칸이 없어졌으면 첫 칸 아래에)
+    $bar = $script:ui.UndoBar
+    if ($bar.Parent) { $bar.Parent.Content = $null }
+    $script:panes[[Math]::Max(0, [Math]::Min($paneIndex, $script:panes.Count - 1))].UndoHost.Content = $bar
     $script:ui.UndoText.Text = "'$($m.title)' 삭제함"
-    $script:ui.UndoBar.Visibility = 'Visible'
+    $bar.Visibility = 'Visible'
     $script:undoTimer.Stop()
     $script:undoTimer.Start()
 }
@@ -7520,20 +8726,54 @@ function Restore-WtMemoDeleted {
     $next = @(Get-WtMemoSorted $list.ToArray())
     try { Save-WtMemoItems $next } catch { Show-WtError $_ '삭제 실행 취소'; return }
     $script:items = $next
+    $script:viewStamp = Get-WtMemoViewStamp
     $script:lastDeleted = $null
     $script:ui.UndoBar.Visibility = 'Collapsed'
     Update-WtMemoList
-    Select-WtMemoItem $d.Memo.id
+    [void](Open-WtMemo $d.Memo.id 'tab')
 }
 
-# 본문의 링크를 눌렀을 때. [[제목]]은 제목이 같은 메모를 열고, #태그는 그 태그로 찾는다. 처리했으면 $true
-function Invoke-WtMemoLink($Link) {
+# ---- 모드 (편집 · 원문 · 읽기) ----------------------------------------------------------------
+
+function Set-WtMemoMode([string]$Mode) {
+    if ($script:modeUpdating) { return }
+    if ($Mode -notin 'live', 'source', 'read') { $Mode = 'live' }
+    if ($Mode -ne $script:mode -and -not (Save-WtMemoNow)) { Update-WtMemoModeButtons; return }
+    if ($Mode -ne 'read') { $script:editMode = $Mode }
+    $script:mode = $Mode
+    if ([string](Get-WtSetting 'memo.mode') -cne $Mode) { try { $null = Set-WtSetting 'memo.mode' $Mode } catch { } }
+    foreach ($p in $script:panes) { Update-WtMemoPaneMode $p }
+    Update-WtMemoModeButtons
+}
+
+function Update-WtMemoModeButtons {
+    $script:modeUpdating = $true
+    try { foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ([string]$rb.Tag.Value -eq $script:mode) } }
+    finally { $script:modeUpdating = $false }
+}
+
+# Ctrl+E: 편집(편집 · 원문) ↔ 읽기
+function Switch-WtMemoRead { Set-WtMemoMode $(if ($script:mode -eq 'read') { $script:editMode } else { 'read' }) }
+
+# Ctrl+/: 원문 ↔ 편집
+function Switch-WtMemoSource { Set-WtMemoMode $(if ($script:mode -eq 'source') { 'live' } else { 'source' }) }
+
+# ---- 링크 · 빠른 이동 --------------------------------------------------------------------------
+
+function Get-WtMemoTitles { @($script:items | ForEach-Object { [string]$_.title } | Where-Object { $_ }) }
+
+# 본문의 링크를 눌렀을 때. [[제목]]은 제목이 같은 메모를 열고(없으면 그 제목으로 만든다), #태그는 그 태그로 찾는다. 처리했으면 $true
+function Invoke-WtMemoLink($Ed, $Link, [string]$How = 'here') {
+    $pane = if ($Ed) { Get-WtMemoPaneOf $Ed } else { $null }
+    if (-not $pane) { $pane = Get-WtMemoActivePane }
+    if ($How -notin 'here', 'tab', 'side') { $How = 'here' }
     switch ($Link.Kind) {
         'wiki' {
             $name = ([string]$Link.Target -split '#')[0].Trim()
+            if (-not $name) { return $false }   # [[#제목]]: 같은 글 안 이동은 보기가 한다
             $m = $script:items | Where-Object { ([string]$_.title).Trim() -eq $name } | Select-Object -First 1
-            if (-not $m) { return $false }
-            Select-WtMemoItem $m.id
+            if ($m) { [void](Open-WtMemo $m.id $How $pane -History) }
+            else { [void](Add-WtMemo -Title $name -How $How -Pane $pane -History) }
             return $true
         }
         'tag' {
@@ -7544,7 +8784,86 @@ function Invoke-WtMemoLink($Link) {
     $false
 }
 
-# 목록에서 메모 하나를 고른다. 검색에 걸러져 안 보이면 검색을 비운다
+function Open-WtMemoQuick {
+    $q = $script:ui.Quick
+    $script:quickOpen = $true
+    $q.Host.Visibility = 'Visible'
+    if ($q.Box.Text) { $q.Box.Text = '' } else { Update-WtMemoQuickResults }
+    [void]$q.Box.Focus()
+}
+
+function Close-WtMemoQuick([switch]$Refocus) {
+    if (-not $script:quickOpen) { return }
+    $script:quickOpen = $false
+    $script:ui.Quick.Host.Visibility = 'Collapsed'
+    if ($Refocus) {
+        $p = Get-WtMemoActivePane
+        if ($p -and $p.Current) { $null = Set-WtMemoEditorFocus $p.Editor }
+    }
+}
+
+function Update-WtMemoQuickResults {
+    $q = $script:ui.Quick
+    $query = ([string]$q.Box.Text).Trim()
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($m in @(Find-WtMemoQuick $script:items $query)) {
+        $sub = Format-WtMemoTime ([string]$m.updated)
+        $snip = Get-WtMarkdownSnippet ([string]$m.body) 80
+        if ($snip) { $sub = "$sub · $snip" }
+        $rows.Add([pscustomobject]@{ Id = [string]$m.id; Title = (Get-WtMemoTitle $m.id); Sub = $sub; Create = $false })
+    }
+    $exact = $script:items | Where-Object { ([string]$_.title).Trim() -eq $query } | Select-Object -First 1
+    if ($query -and -not $exact) { $rows.Add([pscustomobject]@{ Id = ''; Title = "새 메모 만들기: $query"; Sub = ''; Create = $true; Query = $query }) }
+    $q.List.ItemsSource = $rows.ToArray()
+    if ($rows.Count) { $q.List.SelectedIndex = 0 }
+}
+
+function Move-WtMemoQuickSelection([int]$Step) {
+    $l = $script:ui.Quick.List
+    if (-not $l.Items.Count) { return }
+    $l.SelectedIndex = [Math]::Max(0, [Math]::Min($l.Items.Count - 1, $l.SelectedIndex + $Step))
+    $l.ScrollIntoView($l.SelectedItem)
+}
+
+# 빠른 이동에서 고른 것을 연다. Enter 지금 탭 · Ctrl+Enter 새 탭
+function Invoke-WtMemoQuickPick([switch]$NewTab) {
+    $row = $script:ui.Quick.List.SelectedItem
+    if (-not $row) { return }
+    $how = if ($NewTab) { 'tab' } else { 'here' }
+    Close-WtMemoQuick
+    if ($row.Create) { [void](Add-WtMemo -Title $row.Query -How $how -History) }
+    else { [void](Open-WtMemo $row.Id $how -History) }
+    $p = Get-WtMemoActivePane
+    if ($p -and $p.Current) { $null = Set-WtMemoEditorFocus $p.Editor }
+}
+
+# ---- 목록 -------------------------------------------------------------------------------------
+
+function New-WtMemoListItem($Memo) {
+    $cached = $script:rowCache[$Memo.id]
+    if ($cached -and $cached.Day -eq [datetime]::Today -and $cached.Body -ceq $Memo.body -and $cached.Title -ceq $Memo.title -and $cached.Updated -eq $Memo.updated) { return $cached.Row }
+    $snippet = if ($cached -and $cached.Body -ceq $Memo.body) { $cached.Row.SnippetValue } else { $null }
+    $row = [pscustomobject]@{ Id = $Memo.id; Title = $Memo.title; Stamp = Format-WtMemoTime $Memo.updated; SnippetSource = [string]$Memo.body; SnippetValue = $snippet }
+    # 가상 목록에서 보이는 행이 값을 읽을 때만 요약한다. 지역 변수는 캡처하지 않고 행 자체에 둔다.
+    $row | Add-Member -MemberType ScriptProperty -Name Snippet -Value {
+        if ($null -eq $this.SnippetValue) { $this.SnippetValue = Get-WtMarkdownSnippet $this.SnippetSource }
+        $this.SnippetValue
+    }
+    $script:rowCache[$Memo.id] = @{ Body = $Memo.body; Title = $Memo.title; Updated = $Memo.updated; Day = [datetime]::Today; Row = $row }
+    $row
+}
+
+# 목록 선택은 포커스가 있는 칸의 지금 탭 메모를 따라간다
+function Sync-WtMemoListSelection {
+    $list = $script:ui.List
+    if (-not $list) { return }
+    $keep = Get-WtMemoCurrentId
+    $script:listUpdating = $true
+    try { $list.SelectedItem = $list.Items | Where-Object { [string]$_.Id -eq $keep } | Select-Object -First 1 }
+    finally { $script:listUpdating = $false }
+}
+
+# 목록에서 메모 하나를 고른다(클릭과 같음: 지금 탭에서 연다). 검색에 걸러져 안 보이면 검색을 비운다
 function Select-WtMemoItem([string]$Id) {
     $list = $script:ui.List
     $li = $list.Items | Where-Object { [string]$_.Id -eq $Id } | Select-Object -First 1
@@ -7558,12 +8877,11 @@ function Select-WtMemoItem([string]$Id) {
     }
 }
 
-# 목록을 다시 그린다. 열려 있는 메모는 그대로 골라 두고 오른쪽 칸은 다시 채우지 않는다 (편집 중 글자 위치 유지)
+# 목록을 다시 그린다. 열린 메모는 다시 채우지 않는다 (편집 중 글자 위치 유지)
 function Update-WtMemoList([switch]$KeepCurrent) {
     if ($script:listUpdating) { return }
-    if (-not $KeepCurrent -and -not (Save-WtMemoNow)) { return }
     $list = $script:ui.List
-    $keep = $script:currentId
+    $keep = Get-WtMemoCurrentId
     # 저장한 뒤 다시 그릴 때는 열려 있는 메모가 검색어에서 빠져도 남긴다 (고치는 중에 사라지지 않게)
     $shown = @(Find-WtMemo $script:items $script:ui.Search.Text)
     if ($KeepCurrent -and $keep -and -not ($shown | Where-Object { $_.id -eq $keep })) {
@@ -7575,17 +8893,75 @@ function Update-WtMemoList([switch]$KeepCurrent) {
         $same = $list.Items.Count -eq $rows.Count
         for ($i = 0; $same -and $i -lt $rows.Count; $i++) { $same = [object]::ReferenceEquals($list.Items[$i], $rows[$i]) }
         if (-not $same) { $list.ItemsSource = $rows }
-        $list.SelectedItem = $list.Items | Where-Object Id -eq $keep | Select-Object -First 1
-        if (-not $list.SelectedItem -and $list.Items.Count) { $list.SelectedIndex = 0 }
     } finally { $script:listUpdating = $false }
-    $selectedId = if ($list.SelectedItem) { $list.SelectedItem.Id } else { '' }
-    if ($selectedId -ne $script:currentId) { Show-WtMemo $selectedId }
+    Sync-WtMemoListSelection
     $script:listQuery = [string]$script:ui.Search.Text
 }
+
+function Get-WtMemoViewStamp { @((Get-WtStoreStamp 'memo'), [datetime]::Today.Ticks) -join '|' }
+
+# ---- 단축키 -----------------------------------------------------------------------------------
+
+# 메모 화면의 단축키. 처리했으면 $true. 편집기 단축키(Ctrl+B · I · K · L · F, Alt+↑↓ 등)와 겹치지 않는다
+function Invoke-WtMemoKey([System.Windows.Input.Key]$Key, [System.Windows.Input.ModifierKeys]$Mods) {
+    $ctrl = ($Mods -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
+    $shift = ($Mods -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0
+    $alt = ($Mods -band [System.Windows.Input.ModifierKeys]::Alt) -ne 0
+    # 같은 값에 이름이 여럿인 키(Enter = Return, \ = Oem5 = OemPipe …)는 이름 하나로 맞춘다
+    $name = switch ([int]$Key) {
+        ([int][System.Windows.Input.Key]::Enter) { 'Enter' }
+        ([int][System.Windows.Input.Key]::Oem5) { 'Backslash' }          # \ (한국어 키보드의 ₩)
+        ([int][System.Windows.Input.Key]::OemBackslash) { 'Backslash' }
+        ([int][System.Windows.Input.Key]::Oem2) { 'Slash' }              # /
+        ([int][System.Windows.Input.Key]::Divide) { 'Slash' }
+        default { [string]$Key }
+    }
+    if ($script:quickOpen) {
+        switch ($name) {
+            'Escape' { Close-WtMemoQuick -Refocus; return $true }
+            'Up' { Move-WtMemoQuickSelection -1; return $true }
+            'Down' { Move-WtMemoQuickSelection 1; return $true }
+            'Enter' { Invoke-WtMemoQuickPick -NewTab:$ctrl; return $true }
+        }
+    }
+    if ($alt -and -not $ctrl -and -not $shift) {
+        if ($name -eq 'Left') { Move-WtMemoHistory -1; return $true }
+        if ($name -eq 'Right') { Move-WtMemoHistory 1; return $true }
+        return $false
+    }
+    if (-not $ctrl -or $alt) { return $false }
+    switch ($name) {
+        'N' { if ($shift) { return $false }; [void](Add-WtMemo -Edit); return $true }
+        'S' { [void](Save-WtMemoNow); return $true }
+        'W' { Close-WtMemoCurrentTab; return $true }
+        'Tab' { Select-WtMemoNextTab $(if ($shift) { -1 } else { 1 }); return $true }
+        'T' { if (-not $shift) { return $false }; Restore-WtMemoClosedTab; return $true }
+        'O' { if ($script:quickOpen) { Close-WtMemoQuick -Refocus } else { Open-WtMemoQuick }; return $true }
+        'F' {
+            if (-not $shift) { return $false }   # Ctrl+F는 편집기 찾기
+            Close-WtMemoQuick
+            [void]$script:ui.Search.Focus(); $script:ui.Search.SelectAll()
+            return $true
+        }
+        'E' { Switch-WtMemoRead; return $true }
+        'Backslash' { Split-WtMemoRight; return $true }
+        'Slash' { Switch-WtMemoSource; return $true }
+    }
+    $false
+}
+
+# ---- 화면 만들기 ------------------------------------------------------------------------------
 
 function New-WtMemoView {
     $script:viewStamp = $null
     $script:listQuery = $null
+    $script:restored = $false
+    $script:quickOpen = $false
+    $script:active = 0
+    $script:panes = [System.Collections.Generic.List[hashtable]]::new()
+    $script:closed = [System.Collections.Generic.List[hashtable]]::new()
+    $script:mode = Get-WtMemoModeSetting
+    if ($script:mode -ne 'read') { $script:editMode = $script:mode }
     $script:ui = @{}
     if (-not $script:saveTimer) {
         $script:saveTimer = [System.Windows.Threading.DispatcherTimer]::new()
@@ -7597,9 +8973,20 @@ function New-WtMemoView {
     }
 
     $page = New-WtPage -Fill
+    # 오른쪽 위: 모드(모든 칸에 같이) + 새 메모
+    $tools = New-WtStack Horizontal 12
+    $mode = New-WtSegmented @(@('live', '편집'), @('source', '원문'), @('read', '읽기')) $script:mode 'WtMemoMode' {
+        param($value)
+        Set-WtMemoMode $value
+    }
+    $modeTips = @{ live = '편집 (Ctrl+E)'; source = '원문 (Ctrl+/)'; read = '읽기 (Ctrl+E)' }
+    foreach ($rb in @($mode.Child.Children)) { $rb.ToolTip = $modeTips[[string]$rb.Tag.Value] }
+    $mode.VerticalAlignment = 'Center'
+    [void](Add-WtChild $tools $mode)
     $add = New-WtButton '새 메모' -Kind Primary -Icon 0xE710 -ToolTip '새 메모 (Ctrl+N)'
-    $add.Add_Click({ Add-WtMemo })
-    $header = New-WtPageHeader '메모' '' $add
+    $add.Add_Click({ [void](Add-WtMemo -Edit) })
+    [void](Add-WtChild $tools $add)
+    $header = New-WtPageHeader '메모' '' $tools
     [System.Windows.Controls.DockPanel]::SetDock($header, 'Top')
     [void]$page.Panel.Children.Add($header)
 
@@ -7618,150 +9005,167 @@ function New-WtMemoView {
     $ldock = [System.Windows.Controls.DockPanel]::new()
     $sb = New-WtSearchBox '검색 (제목 · 본문)'
     $search = $sb.Box
-    $search.ToolTip = '띄어 쓰면 낱말이 모두 들어간 메모만 (#태그도 찾음)'
+    $search.ToolTip = '띄어 쓰면 낱말이 모두 들어간 메모만 (#태그도 찾음) (Ctrl+Shift+F)'
     $search.Add_TextChanged({ Update-WtMemoList })
     $sb.Root.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
     [System.Windows.Controls.DockPanel]::SetDock($sb.Root, 'Top')
     [void]$ldock.Children.Add($sb.Root)
     $list = [System.Windows.Controls.ListBox]::new()
     Set-WtStyle $list 'Memo.List'
+    # 클릭 · 방향키: 지금 탭에서 연다
     $list.Add_SelectionChanged({
             param($s, $e)
             if ($script:listUpdating -or -not $s.SelectedItem) { return }
-            $id = [string]$s.SelectedItem.Id
-            if ($id -ne $script:currentId) {
-                if (Save-WtMemoNow) { Show-WtMemo $id }
-                else { $script:listUpdating = $true; try { Select-WtMemoItem $script:currentId } finally { $script:listUpdating = $false } }
+            $memoId = [string]$s.SelectedItem.Id
+            if ($memoId -eq (Get-WtMemoCurrentId)) { return }
+            if (@(Open-WtMemo $memoId 'here')[-1] -ne $true) { Sync-WtMemoListSelection }
+        })
+    # Ctrl+클릭 · 가운데 클릭: 새 탭. 우클릭: 메뉴 (선택은 바꾸지 않는다)
+    $list.Add_PreviewMouseDown({
+            param($s, $e)
+            $c = $null
+            try { $c = [System.Windows.Controls.ItemsControl]::ContainerFromElement($s, $e.OriginalSource) } catch { }
+            if (-not $c -or -not $c.DataContext) { return }
+            $memoId = [string]$c.DataContext.Id
+            $ctrlDown = ((Get-WtMemoModifiers) -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
+            if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Middle -or ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left -and $ctrlDown)) {
+                [void](Open-WtMemo $memoId 'tab')
+                $e.Handled = $true
+            } elseif ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Right) {
+                $script:listMenuId = $memoId
+                $e.Handled = $true
             }
+        })
+    $listMenu = New-WtContextMenu
+    foreach ($spec in @(@('tab', '새 탭에서 열기', 'Ctrl+클릭'), @('side', '오른쪽에 열기', ''))) {
+        $mi = [System.Windows.Controls.MenuItem]::new()
+        $mi.Header = $spec[1]
+        $mi.InputGestureText = $spec[2]
+        $mi.Tag = $spec[0]
+        $mi.Add_Click({ param($s, $e) if ($s.Parent.Tag) { [void](Open-WtMemo ([string]$s.Parent.Tag) ([string]$s.Tag)) } })
+        [void]$listMenu.Items.Add($mi)
+    }
+    $list.ContextMenu = $listMenu
+    $list.Add_ContextMenuOpening({
+            param($s, $e)
+            $memoId = if ($script:listMenuId) { $script:listMenuId } elseif ($s.SelectedItem) { [string]$s.SelectedItem.Id } else { '' }
+            $script:listMenuId = ''
+            if (-not $memoId) { $e.Handled = $true; return }
+            $s.ContextMenu.Tag = $memoId
         })
     [void]$ldock.Children.Add($list)
     $left.Child = $ldock
     [System.Windows.Controls.Grid]::SetColumn($left, 0)
     [void]$grid.Children.Add($left)
 
-    # 오른쪽: 편집 | 미리보기
-    $right = New-WtCard
-    $rdock = [System.Windows.Controls.DockPanel]::new()
+    # 오른쪽: 칸 1~2개 + 사이 경계
+    $paneGrid = [System.Windows.Controls.Grid]::new()
+    $pc0 = [System.Windows.Controls.ColumnDefinition]::new()
+    $pc1 = [System.Windows.Controls.ColumnDefinition]::new()
+    $pc2 = [System.Windows.Controls.ColumnDefinition]::new()
+    $paneGrid.ColumnDefinitions.Add($pc0)
+    $paneGrid.ColumnDefinitions.Add($pc1)
+    $paneGrid.ColumnDefinitions.Add($pc2)
+    $splitter = [System.Windows.Controls.GridSplitter]::new()
+    Set-WtStyle $splitter 'Memo.Splitter'
+    $splitter.ToolTip = '끌어서 두 칸의 폭을 바꿉니다'
+    $splitter.Add_DragCompleted({
+            $w0 = $script:ui.PaneCol0.ActualWidth; $w2 = $script:ui.PaneCol2.ActualWidth
+            if ($w0 + $w2 -gt 0) { $script:ratio = $w0 / ($w0 + $w2) }
+            Update-WtMemoSplit
+            Save-WtMemoTabs
+        })
+    [System.Windows.Controls.Grid]::SetColumn($splitter, 1)
+    [void]$paneGrid.Children.Add($splitter)
+    [System.Windows.Controls.Grid]::SetColumn($paneGrid, 1)
+    [void]$grid.Children.Add($paneGrid)
 
-    $top = [System.Windows.Controls.DockPanel]::new()
-    $top.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
-    $status = [System.Windows.Controls.Label]::new()
-    Set-WtResource $status 'FontFamily' 'Font.UI'
-    Set-WtResource $status 'FontSize' 'F.Small'
-    $status.Padding = [System.Windows.Thickness]::new(0)
-    $status.VerticalAlignment = 'Center'
-    [System.Windows.Controls.DockPanel]::SetDock($status, 'Right')
-    [void]$top.Children.Add($status)
-    $mode = New-WtSegmented @(@('edit', '편집'), @('preview', '미리보기')) ([string](Get-WtSetting 'memo.mode')) 'WtMemoMode' {
-        param($value)
-        if (-not (Save-WtMemoNow)) { Update-WtMemoMode; return }
-        Set-WtSetting 'memo.mode' $value
-        Update-WtMemoMode
-    }
-    $mode.ToolTip = '편집 / 미리보기 (Ctrl+E)'
-    [void]$top.Children.Add($mode)
-    [System.Windows.Controls.DockPanel]::SetDock($top, 'Top')
-    [void]$rdock.Children.Add($top)
-
-    $head = New-WtStack Vertical 4
-    $titleText = New-WtText '' 'T.H2'
-    Set-WtResource $titleText 'FontSize' 'F.Number'
-    $titleBox = [System.Windows.Controls.TextBox]::new()
-    Set-WtStyle $titleBox 'Input.Title'
-    $titleBox.ToolTip = '제목 (비우면 저장 시각)'
-    $titleBox.Add_TextChanged({ Set-WtMemoDirty })
-    $meta = New-WtText '' 'T.Sub'
-    [void](Add-WtChild $head $titleText)
-    [void](Add-WtChild $head $titleBox)
-    [void](Add-WtChild $head $meta)
-    $line = [System.Windows.Controls.Border]::new()
-    Set-WtStyle $line 'Divider'
-    $line.Margin = [System.Windows.Thickness]::new(0, 12, 0, 12)
-    [void]$head.Children.Add($line)
-    [System.Windows.Controls.DockPanel]::SetDock($head, 'Top')
-    [void]$rdock.Children.Add($head)
-
-    # 아래: 삭제 + 실행 취소 막대
-    $bottom = [System.Windows.Controls.DockPanel]::new()
-    $bottom.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)
-    $del = New-WtButton '삭제' -Kind Danger -Icon 0xE74D
-    $del.Add_Click({ Remove-WtMemoCurrent })
-    [System.Windows.Controls.DockPanel]::SetDock($del, 'Left')
-    [void]$bottom.Children.Add($del)
+    # 실행 취소 막대: 지운 칸 아래에 붙인다
     $undoBar = New-WtStack Horizontal 8
     $undoBar.Visibility = 'Collapsed'
-    $undoBar.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
     $undoText = New-WtText '' 'T.Sub'
     $undoText.VerticalAlignment = 'Center'
     $undo = New-WtButton '실행 취소' -Kind Link -Icon 0xE7A7 -ToolTip '삭제 되돌리기'
     $undo.Add_Click({ Restore-WtMemoDeleted })
     [void](Add-WtChild $undoBar $undoText)
     [void](Add-WtChild $undoBar $undo)
-    [void]$bottom.Children.Add($undoBar)
-    $sep = [System.Windows.Controls.Border]::new()
-    Set-WtStyle $sep 'Divider'
-    $bwrap = New-WtStack Vertical
-    [void]$bwrap.Children.Add($sep)
-    [void]$bwrap.Children.Add($bottom)
-    [System.Windows.Controls.DockPanel]::SetDock($bwrap, 'Bottom')
-    [void]$rdock.Children.Add($bwrap)
 
-    $body = [System.Windows.Controls.Grid]::new()
-    $mdView = New-WtMarkdownView -Scroll -OnLink { param($link) Invoke-WtMemoLink $link }
-    $bodyBox = [System.Windows.Controls.TextBox]::new()
-    Set-WtStyle $bodyBox 'Editor'
-    $bodyBox.ToolTip = $null
-    $bodyBox.Add_TextChanged({ Set-WtMemoDirty })
-    $bodyBox.Add_LostKeyboardFocus({ [void](Save-WtMemoNow) })
-    $titleBox.Add_LostKeyboardFocus({ [void](Save-WtMemoNow) })
-    [void]$body.Children.Add($mdView)
-    [void]$body.Children.Add($bodyBox)
-    [void]$rdock.Children.Add($body)
-    $right.Child = $rdock
-    [System.Windows.Controls.Grid]::SetColumn($right, 1)
-    [void]$grid.Children.Add($right)
+    # 빠른 이동 (Ctrl+O): 화면 위에 겹쳐 뜬다
+    $qHost = [System.Windows.Controls.Grid]::new()
+    Set-WtStyle $qHost 'Memo.QuickHost'
+    $qHost.Visibility = 'Collapsed'
+    [System.Windows.Controls.Grid]::SetColumnSpan($qHost, 2)
+    [System.Windows.Controls.Panel]::SetZIndex($qHost, 1)
+    $qShadow = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $qShadow 'Overlay.Shadow'
+    $qPanel = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $qPanel 'Memo.QuickPanel'
+    $qDock = [System.Windows.Controls.DockPanel]::new()
+    $qsb = New-WtSearchBox '메모 이름으로 이동'
+    $qsb.Box.ToolTip = 'Enter 열기 · Ctrl+Enter 새 탭 · Esc 닫기'
+    $qsb.Box.Add_TextChanged({ Update-WtMemoQuickResults })
+    [System.Windows.Controls.DockPanel]::SetDock($qsb.Root, 'Top')
+    [void]$qDock.Children.Add($qsb.Root)
+    $qList = [System.Windows.Controls.ListBox]::new()
+    Set-WtStyle $qList 'Memo.QuickList'
+    $qList.Focusable = $false
+    $qList.Add_PreviewMouseLeftButtonUp({
+            param($s, $e)
+            $c = $null
+            try { $c = [System.Windows.Controls.ItemsControl]::ContainerFromElement($s, $e.OriginalSource) } catch { }
+            if (-not $c) { return }
+            $s.SelectedItem = $c.DataContext
+            Invoke-WtMemoQuickPick -NewTab:(((Get-WtMemoModifiers) -band [System.Windows.Input.ModifierKeys]::Control) -ne 0)
+            $e.Handled = $true
+        })
+    [void]$qDock.Children.Add($qList)
+    $qPanel.Child = $qDock
+    [void]$qHost.Children.Add($qShadow)
+    [void]$qHost.Children.Add($qPanel)
+    $qHost.Add_IsKeyboardFocusWithinChanged({ param($s, $e) if (-not $e.NewValue -and $script:quickOpen) { Close-WtMemoQuick } })
+    [void]$grid.Children.Add($qHost)
     [void]$page.Panel.Children.Add($grid)
 
+    # 빠른 이동 밖을 누르면 닫는다
+    $page.Root.Add_PreviewMouseDown({ if ($script:quickOpen -and -not $script:ui.Quick.Host.IsMouseOver) { Close-WtMemoQuick } })
     # 메모 화면 안 단축키
     $page.Root.Add_PreviewKeyDown({
             param($s, $e)
-            $ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
-            if (-not $ctrl) { return }
-            switch ($e.Key) {
-                'N' { Add-WtMemo; $e.Handled = $true }
-                'S' { [void](Save-WtMemoNow); $e.Handled = $true }
-                'E' { Switch-WtMemoMode; $e.Handled = $true }
-            }
+            $key = if ($e.Key -eq [System.Windows.Input.Key]::System) { $e.SystemKey } else { $e.Key }
+            $r = Invoke-WtMemoKey $key (Get-WtMemoModifiers)
+            if (@($r)[-1] -eq $true) { $e.Handled = $true }
         })
 
     $script:ui = @{
-        Search = $search; List = $list; Status = $status; TitleText = $titleText; TitleBox = $titleBox; Meta = $meta
-        MdView = $mdView; BodyBox = $bodyBox; Editor = $bodyBox; Preview = $mdView; Delete = $del
-        UndoBar = $undoBar; UndoText = $undoText
+        Search = $search; List = $list; PaneGrid = $paneGrid; PaneCol0 = $pc0; PaneCol1 = $pc1; PaneCol2 = $pc2; Splitter = $splitter
+        UndoBar = $undoBar; UndoText = $undoText; Add = $add
         ModeButtons = @($mode.Child.Children)
+        Quick = @{ Host = $qHost; Box = $qsb.Box; List = $qList }
     }
-    Update-WtMemoMode
+    [void](Add-WtMemoPane)
     $page.Root
 }
 
 function Update-WtMemoView {
     if (-not (Save-WtMemoNow)) { return }
-    $stamp = @((Get-WtStoreStamp 'memo'), [datetime]::Today.Ticks) -join '|'
-    if ($script:viewStamp -ceq $stamp -and $script:listQuery -ceq [string]$script:ui.Search.Text) {
-        # 원래 재진입처럼 첫 항목을 다시 고른다. 바뀌지 않은 전체 행을 다시 순회하지 않는다.
-        $script:currentId = $null
-        $id = if ($script:ui.List.Items.Count) { [string]$script:ui.List.Items[0].Id } else { '' }
-        Show-WtMemo $id
-        return
-    }
+    $stamp = Get-WtMemoViewStamp
     if ($script:viewStamp -cne $stamp) {
         $script:items = @(Get-WtMemoSorted (Get-WtMemoItems))
         $present = @{}
         foreach ($item in $script:items) { $present[$item.id] = $true }
-        foreach ($id in @($script:rowCache.Keys)) { if (-not $present.ContainsKey($id)) { $script:rowCache.Remove($id) } }
+        foreach ($k in @($script:rowCache.Keys)) { if (-not $present.ContainsKey($k)) { $script:rowCache.Remove($k) } }
         $script:viewStamp = $stamp
+        if ($script:restored) {
+            # 밖에서 바뀌었다 (예전 데이터 다시 가져오기 등): 없어진 메모의 탭을 닫고 열린 칸을 다시 채운다
+            foreach ($p in @($script:panes)) {
+                foreach ($t in @($p.Tabs)) { if (-not $present.ContainsKey([string]$t.Id)) { Close-WtMemoTabsFor $t.Id } }
+            }
+            foreach ($p in $script:panes) { Save-WtMemoPaneState $p; Show-WtMemoPane $p }
+            Update-WtMemoTabTexts
+            Save-WtMemoTabs
+        }
     }
-    $script:currentId = $null
+    if (-not $script:restored) { Restore-WtMemoTabs }
     Update-WtMemoList
 }
 
@@ -7872,14 +9276,2578 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Order 40 -WarmUp Full 
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
     -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
     -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; if ($script:saveTimer) { $script:saveTimer.Stop() }; if ($script:undoTimer) { $script:undoTimer.Stop() } } `
-    -Help '메모는 쓰고 고칠 수 있습니다.' `
-    -Shortcuts @(@('Ctrl + N', '새 메모'), @('Ctrl + S', '바로 저장 (보통은 자동 저장)'), @('Ctrl + E', '편집 / 미리보기')) `
+    -Help '메모는 쓰고 고칠 수 있습니다. 여러 메모를 탭으로 열어 두고, 오른쪽에 나눠 두 칸으로 볼 수 있습니다.' `
+    -Shortcuts @(
+        @('Ctrl + N', '새 메모 (새 탭)'), @('Ctrl + S', '바로 저장 (보통은 자동 저장)'), @('Ctrl + O', '빠른 이동 (메모 이름으로 찾아 열기)'),
+        @('Ctrl + W', '탭 닫기'), @('Ctrl + Shift + T', '닫은 탭 다시 열기'), @('Ctrl + Tab / Ctrl + Shift + Tab', '다음 / 이전 탭'),
+        @('Ctrl + \', '오른쪽에 나눠 열기 (나눴으면 다른 칸으로)'), @('Alt + ← / Alt + →', '뒤로 / 앞으로 (링크 · 빠른 이동으로 간 메모)'),
+        @('Ctrl + E', '편집 / 읽기'), @('Ctrl + /', '편집 / 원문'), @('Ctrl + Shift + F', '목록 검색칸으로'),
+        @('Ctrl + 클릭 · 가운데 클릭', '목록 · 링크를 새 탭에서 열기'),
+        @('Ctrl + B / Ctrl + I', '굵게 / 기울임 (다시 누르면 풀기)'), @('Ctrl + K', '링크 만들기'), @('Alt + Shift + 5', '취소선'),
+        @('` (글을 고르고)', '코드로 감싸기 (여러 줄이면 코드 블록)'), @('```', '줄 맨 앞에 치면 닫는 ``` 를 자동으로'),
+        @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)'), @('Enter', '목록 · 할 일 이어 쓰기 (빈 항목에서 Enter = 목록 끝)'),
+        @('Tab / Shift + Tab', '목록 들여쓰기 / 내어쓰기'), @('Ctrl + L', '할 일 체크박스 넣기 · 완료 / 해제'),
+        @('Alt + ↑ / Alt + ↓', '줄 옮기기'), @('Ctrl + F / Ctrl + H / F3', '찾기 / 바꾸기 / 다음 찾기'),
+        @('Ctrl + Z / Ctrl + Y', '실행 취소 / 다시 실행'), @('Ctrl + Shift + V', '바꾸지 않고 붙여넣기'),
+        @('붙여넣기', '글을 고르고 URL을 붙이면 링크, 파일 경로는 경로 링크로'), @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크')) `
     -HelpCard { New-WtMemoMarkdownHelpCard }
 
 Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Find-WtMemo, Format-WtMemoTime, Import-WtMemoLegacy,
     New-WtMemo, Get-WtMemoTags, Set-WtMemoContent, Save-WtMemoItems
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\memo\Memo.psm1 끝 ----
+
+# ---- addons\memo\MemoEditor.psm1 ----
+New-Module -Name 'WorkTool.addon.memo.MemoEditor' -ScriptBlock {
+# 메모 편집기. 메모 화면의 칸(pane)마다 하나씩 만든다. 화면 배치 · 탭 · 저장은 Memo.psm1이 하고, 여기는 본문 한 칸만 맡는다.
+#
+# 모드
+#   live    Obsidian처럼 그린 글 위에서 바로 고친다. 고치는 블록만 원문으로 보인다(섬)
+#   source  원문(마크다운 그대로)
+#   read    읽기 전용으로 그린 글
+#
+# 쓰는 법 (Memo.psm1)
+#   $ed = New-WtMemoEditor -OnChanged { param($ed) ... } -OnLeave { param($ed) ... } `
+#           -OnLink { param($ed, $link, $how) ...; $true } -OnTitles { param($ed, $prefix) ... }
+#   $ed.Root를 화면에 넣는다
+#   Set-WtMemoEditorText $ed $text      불러오기 (OnChanged를 부르지 않는다. 실행 취소 기록을 비운다)
+#   Get-WtMemoEditorText $ed            지금 글 전체
+#   Set-WtMemoEditorMode $ed 'live'     모드 바꾸기 (글은 그대로)
+#   Set-WtMemoEditorEnabled $ed $false  메모가 없을 때
+#   Set-WtMemoEditorFocus $ed [-End]    포커스 (커서는 마지막 자리, -End면 글 끝)
+#   Get-WtMemoEditorState $ed / Set-WtMemoEditorState $ed $state   탭을 오갈 때 커서 · 스크롤 기억
+#
+# 알림
+#   OnChanged  사용자가 글을 고쳤을 때
+#   OnLeave    편집기 밖으로 포커스가 나갈 때 (저장)
+#   OnLink     링크 · [[위키 링크]] · #태그를 눌렀을 때. $how = 'here' | 'tab'(Ctrl) | 'side'(Ctrl+Alt). 처리했으면 $true
+#   OnTitles   [[ 자동 완성 후보. 메모 제목 문자열 배열을 돌려준다
+#
+# 실시간(live) 모드의 짜임
+#   - 글은 줄 목록($ed.Lines)으로 들고, Get-WtMarkdownUnits로 블록(단위)을 나눠 단위마다 Section 하나로 그린다.
+#   - 커서가 있는 단위만 BlockUIContainer 안의 TextBox(섬)로 바꿔 원문을 고친다. 한글 입력 · 선택 · 붙여넣기는 TextBox 그대로다.
+#   - 섬 밖으로 나가면(↑↓←→ · 클릭) 고친 줄을 되돌려 넣고 바뀐 단위만 다시 그린다(그린 Section은 원문이 같으면 다시 쓴다).
+#   - 실행 취소는 편집기가 따로 든다(글 전체 + 커서 자리). 섬을 옮겨 다녀도 이어진다.
+#
+# 이벤트 처리기는 나중에 불리므로 보낸 요소($s)의 Tag(= $ed, 보기는 Tag.Editor)와 $script: 변수만 쓴다.
+
+$ErrorActionPreference = 'Stop'
+
+$script:editors = [System.Collections.Generic.List[System.WeakReference]]::new()
+$script:undoPause = [TimeSpan]::FromMilliseconds(1200)   # 이만큼 쉬었다 치면 실행 취소 단위를 새로 나눈다
+$script:undoLimit = 200
+
+# ---- 만들기 -----------------------------------------------------------------------------------
+
+function New-WtMemoEditor {
+    param([scriptblock]$OnChanged, [scriptblock]$OnLeave, [scriptblock]$OnLink, [scriptblock]$OnTitles)
+    $ed = @{
+        Mode = 'live'; Lines = [System.Collections.Generic.List[string]]::new(); NewLine = "`r`n"
+        Enabled = $true; Loading = $false; Busy = 0
+        OnChanged = $OnChanged; OnLeave = $OnLeave; OnLink = $OnLink; OnTitles = $OnTitles
+        Units = [System.Collections.Generic.List[object]]::new(); Sections = [System.Collections.Generic.List[object]]::new()
+        Rendered = 0; RenderTimer = $null; NextListId = 1; Cache = [System.Collections.Generic.Dictionary[string, object]]::new()
+        Island = $null; Caret = @{ Line = 0; Col = 0 }; Drag = $null
+        Undo = [System.Collections.Generic.List[object]]::new(); Redo = [System.Collections.Generic.List[object]]::new()
+        LastEdit = [datetime]::MinValue; IslandPrev = ''; ReadText = $null
+    }
+    $ed.Lines.Add('')
+    # 편집기 = 위 찾기 막대(숨김) + 본문(원문 칸 · 실시간 보기 · 읽기 보기 중 하나만 보임)
+    $root = [System.Windows.Controls.DockPanel]::new()
+    $root.Tag = $ed
+    $ed.Root = $root
+    $root.Add_PreviewKeyDown({ param($s, $e) Invoke-WtMemoEditorKey $s $e })
+    $find = New-WtMemoFindBar $ed
+    [System.Windows.Controls.DockPanel]::SetDock($find, 'Top')
+    [void]$root.Children.Add($find)
+    $body = [System.Windows.Controls.Grid]::new()
+    [void]$root.Children.Add($body)
+    $ed.Body = $body
+
+    # 원문 모드 칸
+    $box = [System.Windows.Controls.TextBox]::new()
+    Set-WtStyle $box 'Editor'
+    $box.Tag = $ed
+    $box.IsInactiveSelectionHighlightEnabled = $true   # 찾기 칸에 포커스가 있어도 찾은 곳이 보이게
+    $box.Add_TextChanged({
+            param($s, $e)
+            $ed = $s.Tag
+            if ($ed.Loading) { return }
+            Invoke-WtMemoEditorChanged $ed
+        })
+    Add-WtMemoBoxHandlers $box
+    [void]$body.Children.Add($box)
+    $ed.Source = $box
+
+    # 실시간 모드 보기 (단위별로 그린 문서 + 섬)
+    $live = New-WtMarkdownView -Scroll -OnLink { param($link, $st) Invoke-WtMemoEditorLink $link $st } -OnTask { param($line, $el) Invoke-WtMemoTaskClick $line $el }
+    $live.Tag.Editor = $ed
+    # 문서에서 블록을 빼고 넣을 때 RichTextBox가 실행 취소용으로 뺀 요소를 XAML로 저장하려 한다.
+    # 섬(Tag에 편집기 상태)을 저장하다 끝없이 파고들어 멈추므로 끈다. 실행 취소는 편집기가 따로 든다
+    $live.IsUndoEnabled = $false
+    $live.Add_PreviewMouseLeftButtonDown({ param($s, $e) Invoke-WtMemoLiveMouseDown $s $e })
+    $live.Add_PreviewMouseMove({ param($s, $e) Invoke-WtMemoLiveMouseMove $s $e })
+    $live.Add_PreviewMouseLeftButtonUp({ param($s, $e) Invoke-WtMemoLiveMouseUp $s $e })
+    $live.Add_PreviewKeyDown({ param($s, $e) Invoke-WtMemoLiveKey $s $e })
+    $live.Cursor = [System.Windows.Input.Cursors]::IBeam
+    [void]$body.Children.Add($live)
+    $ed.Live = $live
+    Set-WtMarkdownText $live ''
+
+    # 읽기 모드 보기 (문서 전체를 한 번에 그림)
+    $view = New-WtMarkdownView -Scroll -OnLink { param($link, $st) Invoke-WtMemoEditorLink $link $st } -OnTask { param($line, $el) Invoke-WtMemoTaskClick $line $el }
+    $view.Tag.Editor = $ed
+    $view.IsInactiveSelectionHighlightEnabled = $true
+    [void]$body.Children.Add($view)
+    $ed.View = $view
+
+    # 섬: 실시간 모드에서 고치는 단위 자리에 들어가는 원문 입력칸 (하나를 옮겨 가며 쓴다)
+    $island = [System.Windows.Controls.TextBox]::new()
+    Set-WtStyle $island 'Memo.Island'
+    $island.Tag = $ed
+    $island.IsUndoEnabled = $false
+    $island.IsInactiveSelectionHighlightEnabled = $true
+    # IsReadOnly는 부모에서 물려받는 속성이다. 섬은 읽기 전용 RichTextBox 안에 들어가므로 직접 끈다
+    $island.IsReadOnly = $false
+    $island.Add_TextChanged({
+            param($s, $e)
+            $ed = $s.Tag
+            if ($ed.Loading -or -not $ed.Island) { return }
+            Add-WtMemoTypingUndo $ed
+            $ed.IslandPrev = $s.Text
+            Invoke-WtMemoEditorChanged $ed
+        })
+    Add-WtMemoBoxHandlers $island -Island
+    $island.Add_PreviewMouseWheel({ param($s, $e) Invoke-WtMemoIslandWheel $s $e })
+    $ed.IslandBox = $island
+    # 자동 완성 팝업은 미리 붙여 둔다 (막 붙인 팝업은 그려지기 전까지 열기가 미뤄진다)
+    [void](Get-WtMemoSuggestUi $ed)
+
+    $root.Add_LostKeyboardFocus({
+            param($s, $e)
+            $ed = $s.Tag
+            # 편집기 안에서 포커스가 옮겨 다닐 때 · 섬을 옮기는 중에는 부르지 않는다
+            if ($ed.Busy -or $s.IsKeyboardFocusWithin) { return }
+            if ($ed.Island) { Close-WtMemoIsland $ed }
+            if ($ed.OnLeave) { & $ed.OnLeave $ed }
+        })
+    # 글을 고치는 칸(원문 · 섬)에서는 Ctrl+B가 굵게다. 읽기 모드 등 나머지 자리에서는 셸의 메뉴 접기 그대로
+    Register-WtKeyOwner $box 'Ctrl+B'
+    Register-WtKeyOwner $island 'Ctrl+B'
+    for ($i = $script:editors.Count - 1; $i -ge 0; $i--) { if (-not $script:editors[$i].IsAlive) { $script:editors.RemoveAt($i) } }
+    $script:editors.Add([System.WeakReference]::new($ed))
+    Update-WtMemoEditorMode $ed
+    $ed
+}
+
+# 원문 칸 · 섬 공통: 편집 단축키 · 글자 입력 · 붙여넣기 · 끌어 놓기 · [[ 자동 완성.
+# 키는 자동 완성 → (섬이면) 섬 이동 → 편집 명령 차례로 받는다
+function Add-WtMemoBoxHandlers($Box, [switch]$Island) {
+    $Box.Add_PreviewKeyDown({ param($s, $e) Invoke-WtMemoSuggestKey $s $e })
+    if ($Island) { $Box.Add_PreviewKeyDown({ param($s, $e) Invoke-WtMemoIslandKey $s $e }) }
+    $Box.Add_PreviewKeyDown({ param($s, $e) Invoke-WtMemoBoxKey $s $e })
+    $Box.Add_TextChanged({ param($s, $e) if (-not $s.Tag.Loading) { Update-WtMemoSuggest $s } })
+    $Box.Add_SelectionChanged({ param($s, $e) if ($s.Tag.Suggest -and $s.Tag.Suggest.Popup.IsOpen) { Update-WtMemoSuggest $s } })
+    $Box.Add_LostKeyboardFocus({ param($s, $e) Hide-WtMemoSuggest $s.Tag })
+    $Box.Add_PreviewTextInput({ param($s, $e) Invoke-WtMemoBoxText $s $e })
+    [System.Windows.DataObject]::AddPastingHandler($Box, [System.Windows.DataObjectPastingEventHandler] { param($s, $e) Invoke-WtMemoBoxPaste $s $e })
+    $Box.AllowDrop = $true
+    $Box.Add_PreviewDragOver({ param($s, $e) Invoke-WtMemoBoxDragOver $s $e })
+    $Box.Add_PreviewDrop({ param($s, $e) Invoke-WtMemoBoxDrop $s $e })
+}
+
+function Invoke-WtMemoEditorChanged($Ed) {
+    if ($Ed.OnChanged) { & $Ed.OnChanged $Ed }
+}
+
+# 마크다운 보기의 링크 처리기. 보기 상태(Tag)의 Editor가 그 편집기다
+function Invoke-WtMemoEditorLink($Link, $St) {
+    $ed = if ($St -is [hashtable] -and $St.Editor) { $St.Editor } else { Find-WtMemoEditorFrom ([System.Windows.Input.Mouse]::DirectlyOver) }
+    if (-not $ed -or -not $ed.OnLink) { return $false }
+    $mods = [System.Windows.Input.Keyboard]::Modifiers
+    $how = if (($mods -band 'Control') -and ($mods -band 'Alt')) { 'side' } elseif ($mods -band 'Control') { 'tab' } else { 'here' }
+    $r = & $ed.OnLink $ed $Link $how | Select-Object -Last 1
+    $r -eq $true
+}
+
+# 할 일 체크 표시를 눌렀을 때: 그 줄의 [ ] ↔ [x]. 실시간 모드는 그려 둔 Section을 다시 쓰므로
+# 그릴 때의 줄 번호($Line)를 단위가 옮겨 간 만큼(Start - Base) 옮겨 쓴다
+function Invoke-WtMemoTaskClick([int]$Line, $El) {
+    $ed = Find-WtMemoEditorFrom $El
+    if (-not $ed -or -not $ed.Enabled) { return }
+    $target = $Line - 1
+    if ($ed.Mode -eq 'live') {
+        $sec = $El
+        while ($sec -and -not ($sec -is [System.Windows.Documents.Section] -and $sec.Tag -is [hashtable] -and $sec.Tag.ContainsKey('Kind'))) {
+            $sec = [System.Windows.LogicalTreeHelper]::GetParent($sec)
+        }
+        if ($sec) {
+            $u = $sec.Tag
+            $target = $u.Start + ($Line - 1 - $u.Base)
+            $isl = $ed.Island
+            if ($isl -and $u.Start -ge $isl.End) { $target += @($ed.IslandBox.Text -split "\r?\n").Count - ($isl.End - $isl.Start) }
+        }
+    }
+    $ed.Busy++
+    try {
+        if ($ed.Island) { Close-WtMemoIsland $ed }
+        if ($target -lt 0 -or $target -ge $ed.Lines.Count) { return }
+        $text = $ed.Lines[$target]
+        $m = [regex]::Match($text, '^(\s*(?:>\s*)*(?:[-*+]|\d{1,9}[.)])\s+\[)([ xX])\]')
+        if (-not $m.Success) { return }
+        $mark = if ($m.Groups[2].Value -eq ' ') { 'x' } else { ' ' }
+        $next = $text.Substring(0, $m.Groups[2].Index) + $mark + $text.Substring($m.Groups[2].Index + 1)
+        if ($ed.Mode -eq 'live') {
+            Push-WtMemoUndo $ed
+            # 섬을 거쳐 바꾸면 그 둘레만 다시 그린다
+            $range = Get-WtMemoUnitRange $ed $target $target
+            Open-WtMemoIsland $ed $range[0] $range[1] $target 0
+            $box = $ed.IslandBox
+            $i = Get-WtMemoIslandIndex $ed $target $m.Groups[2].Index
+            $box.Select($i, 1)
+            $box.SelectedText = $mark
+            Close-WtMemoIsland $ed
+            $ed.LastEdit = [datetime]::MinValue   # 다음에 치는 글은 따로 되돌리게
+            [void]$ed.Live.Focus()
+        } else {
+            # 읽기 보기는 문서를 통째로 다시 그리므로 스크롤 자리를 지킨다
+            $sv = Get-WtMemoScroller $ed.View
+            $y = if ($sv) { $sv.VerticalOffset } else { 0 }
+            $ed.Lines[$target] = $next
+            $ed.ReadText = $null
+            Update-WtMemoRead $ed
+            if ($sv) { $ed.View.UpdateLayout(); $sv.ScrollToVerticalOffset($y) }
+            Invoke-WtMemoEditorChanged $ed
+        }
+    } finally { $ed.Busy-- }
+}
+
+function Find-WtMemoEditorFrom($El) {
+    while ($El) {
+        if ($El -is [System.Windows.FrameworkElement] -and $El.Tag -is [hashtable]) {
+            if ($El.Tag.ContainsKey('Editor') -and $El.Tag.Editor) { return $El.Tag.Editor }
+            if ($El.Tag.ContainsKey('IslandBox')) { return $El.Tag }
+        }
+        $El = Get-WtMemoParent $El
+    }
+    $null
+}
+
+function Get-WtMemoParent($El) {
+    if ($El -is [System.Windows.Media.Visual] -or $El -is [System.Windows.Media.Media3D.Visual3D]) {
+        $p = [System.Windows.Media.VisualTreeHelper]::GetParent($El)
+        if ($p) { return $p }
+    }
+    if ($El -is [System.Windows.DependencyObject]) { return [System.Windows.LogicalTreeHelper]::GetParent($El) }
+    $null
+}
+
+# ---- 글 · 모드 ---------------------------------------------------------------------------------
+
+function Set-WtMemoEditorText($Ed, [AllowEmptyString()][string]$Text) {
+    $Text = [string]$Text
+    # 고치던 칸에 포커스가 있었으면(탭을 바꾸는 단축키 등) 불러온 뒤에도 편집기 안에 둔다
+    $hadFocus = $Ed.Root.IsKeyboardFocusWithin -and -not $Ed.Find.Bar.IsKeyboardFocusWithin
+    $Ed.Loading = $true
+    $Ed.Busy++
+    try {
+        Hide-WtMemoSuggest $Ed
+        $Ed.NewLine = if ($Text.Contains("`r`n")) { "`r`n" } elseif ($Text.Contains("`n") -or $Text.Contains("`r")) { "`n" } else { "`r`n" }
+        Set-WtMemoLines $Ed $Text
+        $Ed.Undo.Clear()
+        $Ed.Redo.Clear()
+        $Ed.LastEdit = [datetime]::MinValue   # 불러온 뒤 처음 치는 글은 새 실행 취소 단위
+        $Ed.LeftLiveText = $null
+        if ($Ed.Island) { $Ed.Island.Holder.Child = $null }
+        $Ed.Island = $null
+        $Ed.Caret = @{ Line = 0; Col = 0 }
+        $Ed.ReadText = $null
+        $Ed.Cache.Clear()   # 다른 메모의 그린 블록을 붙잡고 있지 않게
+        switch ($Ed.Mode) {
+            'source' { $Ed.Source.Text = $Text; $Ed.Source.CaretIndex = 0; $Ed.Source.ScrollToHome() }
+            'live' { Update-WtMemoLive $Ed; Get-WtMemoScroller $Ed.Live | ForEach-Object { $_.ScrollToHome() } }
+            'read' { Update-WtMemoRead $Ed }
+        }
+        if ($hadFocus) {
+            # 실시간은 보기에 포커스를 두고, 다음 키 입력 때 커서 자리에 섬을 연다 (Set-WtMemoEditorState가 커서를 옮길 수 있게)
+            switch ($Ed.Mode) { 'source' { [void]$Ed.Source.Focus() } 'live' { [void]$Ed.Live.Focus() } 'read' { [void]$Ed.View.Focus() } }
+        }
+    } finally { $Ed.Loading = $false; $Ed.Busy-- }
+}
+
+# 줄 나누기는 마크다운 블록 나누기(Get-WtMarkdownUnits)와 같은 규칙: \r\n · \r · \n 모두 줄바꿈
+function Set-WtMemoLines($Ed, [string]$Text) {
+    $Ed.Lines.Clear()
+    foreach ($l in ($Text -split "\r\n|\r|\n")) { $Ed.Lines.Add($l) }
+}
+
+function Get-WtMemoEditorText($Ed) {
+    # 원문 칸은 Enter가 \r\n을 넣으므로 \n 글이면 줄바꿈이 섞인다. 글의 줄바꿈으로 맞춘다
+    if ($Ed.Mode -eq 'source') { return [regex]::Replace([string]$Ed.Source.Text, "\r\n|\r|\n", $Ed.NewLine) }
+    if ($Ed.Island) {
+        $isl = $Ed.Island
+        $mid = @($Ed.IslandBox.Text -split "\r?\n")
+        $before = if ($isl.Start -gt 0) { @($Ed.Lines.GetRange(0, $isl.Start)) } else { @() }
+        $after = if ($isl.End -lt $Ed.Lines.Count) { @($Ed.Lines.GetRange($isl.End, $Ed.Lines.Count - $isl.End)) } else { @() }
+        return (@($before) + @($mid) + @($after)) -join $Ed.NewLine
+    }
+    @($Ed.Lines) -join $Ed.NewLine
+}
+
+function Set-WtMemoEditorMode($Ed, [ValidateSet('live', 'source', 'read')][string]$Mode) {
+    if ($Ed.Mode -eq $Mode) { return }
+    $text = Get-WtMemoEditorText $Ed
+    $hadFocus = $Ed.Root.IsKeyboardFocusWithin
+    $Ed.Busy++
+    try {
+        if ($Ed.Island) { Close-WtMemoIsland $Ed -NoRender }
+        # 실시간을 떠날 때의 글. 원문 · 읽기에서 고치고 돌아오면 이 글을 실행 취소 기록에 넣는다(그 고친 것만 되돌리게)
+        $norm = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+        if ($Ed.Mode -eq 'live') { $Ed.LeftLiveText = $norm }
+        elseif ($Mode -eq 'live' -and $null -ne $Ed.LeftLiveText -and $Ed.LeftLiveText -cne $norm) {
+            Add-WtMemoUndoEntry $Ed @{ Text = $Ed.LeftLiveText; Line = $Ed.Caret.Line; Col = $Ed.Caret.Col }
+            $Ed.LastEdit = [datetime]::MinValue
+        }
+        $Ed.Mode = $Mode
+        $Ed.Loading = $true
+        try {
+            Set-WtMemoLines $Ed $text
+            if ($Mode -eq 'source') { $Ed.Source.Text = $text }
+        } finally { $Ed.Loading = $false }
+        Update-WtMemoEditorMode $Ed
+    } finally { $Ed.Busy-- }
+    if ($hadFocus) { Set-WtMemoEditorFocus $Ed }
+}
+
+function Update-WtMemoEditorMode($Ed) {
+    switch ($Ed.Mode) {
+        'live' { Update-WtMemoLive $Ed }
+        'read' { Update-WtMemoRead $Ed }
+    }
+    $Ed.Source.Visibility = if ($Ed.Mode -eq 'source') { 'Visible' } else { 'Collapsed' }
+    $Ed.Live.Visibility = if ($Ed.Mode -eq 'live') { 'Visible' } else { 'Collapsed' }
+    $Ed.View.Visibility = if ($Ed.Mode -eq 'read') { 'Visible' } else { 'Collapsed' }
+}
+
+function Update-WtMemoRead($Ed) {
+    $text = @($Ed.Lines) -join "`n"
+    if ($Ed.ReadText -ceq $text -and -not $Ed.View.Tag.Error) { return }
+    Set-WtMarkdownText $Ed.View $text
+    $Ed.ReadText = $text
+}
+
+function Set-WtMemoEditorEnabled($Ed, [bool]$Enabled) {
+    $Ed.Enabled = $Enabled
+    $Ed.Root.IsEnabled = $Enabled
+}
+
+function Set-WtMemoEditorFocus($Ed, [switch]$End) {
+    switch ($Ed.Mode) {
+        'read' { [void]$Ed.View.Focus() }
+        'source' {
+            if ($End) { $Ed.Source.CaretIndex = $Ed.Source.Text.Length }
+            [void]$Ed.Source.Focus()
+        }
+        'live' {
+            if ($End) {
+                if ($Ed.Island) { $Ed.Busy++; try { Close-WtMemoIsland $Ed } finally { $Ed.Busy-- } }
+                $last = $Ed.Lines.Count - 1
+                $Ed.Caret = @{ Line = $last; Col = $Ed.Lines[$last].Length }
+            }
+            if ($Ed.Island) { [void]$Ed.IslandBox.Focus(); return }
+            Open-WtMemoIslandAt $Ed $Ed.Caret.Line $Ed.Caret.Col
+        }
+    }
+}
+
+# 상태 = @{ Line; Col; Scroll } (커서 줄 · 칸은 0부터, 모드와 상관없이 같은 뜻)
+function Get-WtMemoEditorState($Ed) {
+    $sv = Get-WtMemoScroller $(if ($Ed.Mode -eq 'live') { $Ed.Live } elseif ($Ed.Mode -eq 'read') { $Ed.View } else { $Ed.Source })
+    if ($Ed.Mode -eq 'live' -and $Ed.Island) { $Ed.Caret = Get-WtMemoIslandCaret $Ed }
+    if ($Ed.Mode -eq 'source') {
+        $b = $Ed.Source
+        $parts = @($b.Text.Substring(0, $b.CaretIndex) -split "\r?\n")
+        $Ed.Caret = @{ Line = $parts.Count - 1; Col = $parts[$parts.Count - 1].Length }
+    }
+    @{ Line = $Ed.Caret.Line; Col = $Ed.Caret.Col; Scroll = $(if ($sv) { $sv.VerticalOffset } else { 0 }) }
+}
+
+function Set-WtMemoEditorState($Ed, $State) {
+    if (-not $State) { return }
+    if ($null -ne $State.Line) {
+        $lines = if ($Ed.Mode -eq 'source') { @($Ed.Source.Text -split "\r?\n") } else { @($Ed.Lines) }
+        $line = [Math]::Max(0, [Math]::Min([int]$State.Line, $lines.Count - 1))
+        $Ed.Caret = @{ Line = $line; Col = [Math]::Max(0, [Math]::Min([int]$State.Col, $lines[$line].Length)) }
+        if ($Ed.Mode -eq 'source') {
+            $nl = if ($Ed.Source.Text.Contains("`r`n")) { 2 } else { 1 }
+            $idx = 0
+            for ($i = 0; $i -lt $line; $i++) { $idx += $lines[$i].Length + $nl }
+            $Ed.Source.CaretIndex = $idx + $Ed.Caret.Col
+        }
+    }
+    $target = if ($Ed.Mode -eq 'live') { $Ed.Live } elseif ($Ed.Mode -eq 'read') { $Ed.View } else { $Ed.Source }
+    $scroll = [double]$State.Scroll
+    if ($Ed.Mode -eq 'live') {
+        # 긴 글은 나눠 그리는 중일 수 있다. 커서 단위까지, 그리고 스크롤할 높이가 생길 때까지 먼저 그린다
+        Complete-WtMemoRender $Ed (Find-WtMemoUnitIndex $Ed $Ed.Caret.Line)
+        $sv = Get-WtMemoScroller $target
+        $target.UpdateLayout()
+        while ($sv -and $Ed.Rendered -lt $Ed.Units.Count -and $sv.ExtentHeight -lt $scroll + $sv.ViewportHeight) {
+            Complete-WtMemoRender $Ed ($Ed.Rendered + 20)
+            $target.UpdateLayout()
+        }
+        # 포커스가 보기에 있으면(탭을 바꾸며 불러옴) 커서 자리에 섬을 다시 연다
+        if ($Ed.Live.IsKeyboardFocused -and -not $Ed.Island) { Open-WtMemoIslandAt $Ed $Ed.Caret.Line $Ed.Caret.Col }
+    } else {
+        $target.UpdateLayout()
+    }
+    $sv = Get-WtMemoScroller $target
+    if ($sv) { $sv.ScrollToVerticalOffset($scroll) }
+}
+
+# 텍스트 상자 · 보기 안쪽의 ScrollViewer
+function Get-WtMemoScroller($El) {
+    if (-not $El) { return $null }
+    $El.ApplyTemplate() | Out-Null
+    $queue = [System.Collections.Generic.Queue[object]]::new()
+    $queue.Enqueue($El)
+    while ($queue.Count) {
+        $x = $queue.Dequeue()
+        if ($x -is [System.Windows.Controls.ScrollViewer]) { return $x }
+        $n = [System.Windows.Media.VisualTreeHelper]::GetChildrenCount($x)
+        for ($i = 0; $i -lt $n; $i++) { $queue.Enqueue([System.Windows.Media.VisualTreeHelper]::GetChild($x, $i)) }
+    }
+    $null
+}
+
+# ---- 실시간: 그리기 ----------------------------------------------------------------------------
+
+# 문서의 약속: Blocks = Sections[0 .. Rendered-1] 차례. 단, 섬이 열려 있으면 섬이 덮은 단위(First..Last) 자리에 섬 하나.
+# 긴 글은 앞쪽만 바로 그리고 나머지는 입력을 막지 않게 조금씩 뒤에 붙인다(Rendered가 Units.Count까지 자람).
+$script:firstPaint = [TimeSpan]::FromMilliseconds(60)   # 처음에 바로 그릴 시간
+$script:renderSlice = [TimeSpan]::FromMilliseconds(16)  # 뒤에 붙일 때 한 번에 쓸 시간
+
+# 줄 목록 전체를 단위로 다시 나눠 문서를 새로 꾸린다 (불러오기 · 실행 취소 · 울타리가 어긋났을 때)
+function Update-WtMemoLive($Ed) {
+    $text = @($Ed.Lines) -join "`n"
+    $units = Get-WtMarkdownUnits $text
+    Set-WtMemoListIds $Ed $units 0 ($units.Count - 1)
+    $Ed.Live.Document.Blocks.Clear()
+    $Ed.Units = [System.Collections.Generic.List[object]]::new()
+    foreach ($u in $units) { $Ed.Units.Add($u) }
+    $Ed.Sections = [System.Collections.Generic.List[object]]::new()
+    foreach ($u in $units) { $Ed.Sections.Add($null) }
+    $Ed.Rendered = 0
+    if ($Ed.Cache.Count -gt 4 * [Math]::Max(64, $units.Count)) { $Ed.Cache.Clear() }
+    $deadline = [datetime]::UtcNow + $script:firstPaint
+    while ($Ed.Rendered -lt $units.Count -and [datetime]::UtcNow -lt $deadline) { Add-WtMemoNextSection $Ed }
+    Start-WtMemoRenderTimer $Ed
+}
+
+# 목록 번호(ListId)를 새로 매긴다: 차례로 이어진 목록 항목 단위는 같은 목록. 마지막 항목만 아래 여백(Last).
+# From..To를 매기고, To 뒤에도 같은 목록이 이어지면 그 끝까지 번호를 잇는다
+function Set-WtMemoListIds($Ed, $Units, [int]$From, [int]$To) {
+    $id = 0
+    if ($From -gt 0 -and $Units[$From - 1].Kind -eq 'list-item') { $id = $Units[$From - 1].ListId }
+    $i = $From
+    while ($i -lt $Units.Count -and ($i -le $To -or ($id -and $Units[$i].Kind -eq 'list-item' -and $Units[$i].ListId -ne $id))) {
+        $u = $Units[$i]
+        if ($u.Kind -ne 'list-item') { $id = 0 }
+        else {
+            if (-not $id) { $id = $Ed.NextListId; $Ed.NextListId++ }
+            $u.ListId = $id
+            $u.Last = -not ($i + 1 -lt $Units.Count -and $Units[$i + 1].Kind -eq 'list-item')
+        }
+        $i++
+    }
+}
+
+# 단위 하나의 Section. 원문 · 깊이 · 여백이 같은 Section이 쉬고 있으면 다시 쓴다
+function Get-WtMemoUnitSection($Ed, $Unit) {
+    $key = '{0}|{1}|{2}|{3}' -f $Unit.Kind, $Unit.Depth, $Unit.Last, $Unit.Text
+    $sec = $null
+    if ($Ed.Cache.TryGetValue($key, [ref]$sec) -and -not $sec.Parent) { $sec.Tag = $Unit; return $sec }
+    $sec = New-WtMarkdownUnitSection $Ed.Live $Unit
+    $Ed.Cache[$key] = $sec
+    # 다이어그램 크기를 다시 재는 것은 편집기가 직접 한다 (보기 공통 처리기가 문서를 통째로 바꾸지 않게)
+    $Ed.Live.Tag.Remeasure = $false
+    $sec
+}
+
+# 아직 안 그린 다음 단위를 문서 끝에 붙인다
+function Add-WtMemoNextSection($Ed) {
+    $i = $Ed.Rendered
+    $sec = Get-WtMemoUnitSection $Ed $Ed.Units[$i]
+    $Ed.Sections[$i] = $sec
+    $Ed.Live.Document.Blocks.Add($sec)
+    $Ed.Rendered = $i + 1
+}
+
+# 단위 번호 Index까지는 바로 그린다 (그 자리로 섬을 열 때)
+function Complete-WtMemoRender($Ed, [int]$Index) {
+    $Index = [Math]::Min($Index, $Ed.Units.Count - 1)
+    while ($Ed.Rendered -le $Index) { Add-WtMemoNextSection $Ed }
+}
+
+function Start-WtMemoRenderTimer($Ed) {
+    if ($Ed.Rendered -ge $Ed.Units.Count) { return }
+    if (-not $Ed.RenderTimer) {
+        $t = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::Background)
+        $t.Interval = [TimeSpan]::Zero
+        $t.Tag = $Ed
+        $t.Add_Tick({
+                param($s, $e)
+                $ed = $s.Tag
+                try {
+                    $deadline = [datetime]::UtcNow + $script:renderSlice
+                    while ($ed.Rendered -lt $ed.Units.Count -and [datetime]::UtcNow -lt $deadline) { Add-WtMemoNextSection $ed }
+                } catch { $s.Stop(); Show-WtError $_ '메모 그리기'; return }
+                if ($ed.Rendered -ge $ed.Units.Count) { $s.Stop() }
+            })
+        $Ed.RenderTimer = $t
+    }
+    $Ed.RenderTimer.Start()
+}
+
+# 줄 번호가 든 단위 번호. 없으면 바로 앞 단위(들어갈 자리), 맨 앞이면 -1.
+# 단위는 Start 차례이고 겹치지 않으므로 둘로 나눠 찾는다 (긴 글에서 키마다 훑지 않게)
+function Find-WtMemoUnitIndex($Ed, [int]$Line) {
+    Get-WtMemoUnitBefore $Ed ($Line + 1) -Start
+}
+
+# Start(-Start) 또는 End가 Line 이하인 마지막 단위 번호. 없으면 -1
+function Get-WtMemoUnitBefore($Ed, [int]$Line, [switch]$Start) {
+    $units = $Ed.Units
+    $lo = 0; $hi = $units.Count - 1; $ans = -1
+    while ($lo -le $hi) {
+        $mid = [int][Math]::Floor(($lo + $hi) / 2)
+        $v = if ($Start) { $units[$mid].Start } else { $units[$mid].End }
+        if ($v -le $Line - $(if ($Start) { 1 } else { 0 })) { $ans = $mid; $lo = $mid + 1 } else { $hi = $mid - 1 }
+    }
+    $ans
+}
+
+# Start가 Line 이상인 첫 단위 번호. 없으면 Units.Count
+function Get-WtMemoUnitAfter($Ed, [int]$Line) {
+    $units = $Ed.Units
+    $lo = 0; $hi = $units.Count - 1; $ans = $units.Count
+    while ($lo -le $hi) {
+        $mid = [int][Math]::Floor(($lo + $hi) / 2)
+        if ($units[$mid].Start -ge $Line) { $ans = $mid; $hi = $mid - 1 } else { $lo = $mid + 1 }
+    }
+    $ans
+}
+
+# ---- 실시간: 섬 --------------------------------------------------------------------------------
+
+# 줄 · 칸 자리에 섬을 연다. 그 줄이 든 단위 전체(빈 줄이면 앞 단위)를 섬으로 바꾼다
+function Open-WtMemoIslandAt($Ed, [int]$Line, [int]$Col, [int]$ToLine = -1, [int]$ToCol = -1) {
+    # 줄 번호는 섬을 닫은 뒤 기준이다. 먼저 닫아야 단위 목록이 맞는다
+    if ($Ed.Island) {
+        $Ed.Busy++
+        try { Close-WtMemoIsland $Ed } finally { $Ed.Busy-- }
+    }
+    $Line = [Math]::Max(0, [Math]::Min($Line, $Ed.Lines.Count - 1))
+    $from = $Line; $to = $Line
+    if ($ToLine -ge 0) { $from = [Math]::Min($Line, $ToLine); $to = [Math]::Max($Line, $ToLine) }
+    $range = Get-WtMemoUnitRange $Ed $from $to
+    Open-WtMemoIsland $Ed $range[0] $range[1] $Line $Col $ToLine $ToCol
+}
+
+# [from, to] 줄을 덮는 단위들의 줄 범위 [Start, End)
+function Get-WtMemoUnitRange($Ed, [int]$From, [int]$To) {
+    $units = $Ed.Units
+    if (-not $units.Count) { return @(0, $Ed.Lines.Count) }
+    $a = Find-WtMemoUnitIndex $Ed $From
+    $b = Find-WtMemoUnitIndex $Ed $To
+    if ($a -lt 0) { $a = 0 }
+    if ($b -lt 0) { $b = 0 }
+    $start = [Math]::Min($units[$a].Start, $From)
+    $end = [Math]::Max($units[$b].End, $To + 1)
+    # 빈 줄에 섰으면 앞 단위에 붙인다 (빈 줄만 따로 섬이 되지 않게)
+    @($start, [Math]::Min($end, $Ed.Lines.Count))
+}
+
+function Open-WtMemoIsland($Ed, [int]$Start, [int]$End, [int]$Line, [int]$Col, [int]$ToLine = -1, [int]$ToCol = -1) {
+    if ($Ed.Island) { Close-WtMemoIsland $Ed }
+    $Ed.Busy++
+    try {
+        $doc = $Ed.Live.Document
+        $units = $Ed.Units
+        # 섬이 덮는 단위(First..Last)의 Section을 빼고 그 자리에 섬을 넣는다. 덮는 단위가 없으면 Last = First - 1
+        $first = (Get-WtMemoUnitBefore $Ed $Start) + 1          # End가 Start 이하인 단위 다음
+        $last = (Get-WtMemoUnitAfter $Ed $End) - 1              # Start가 End 이상인 단위 앞
+        # 단위 일부만 덮으면 나머지 줄이 화면에서 사라지므로 덮는 단위 전체로 넓힌다
+        if ($last -ge $first) {
+            $Start = [Math]::Min($Start, $units[$first].Start)
+            $End = [Math]::Max($End, $units[$last].End)
+        }
+        Complete-WtMemoRender $Ed ($last + 1)
+        $covered = [System.Collections.Generic.List[object]]::new()
+        for ($i = $first; $i -le $last; $i++) {
+            $covered.Add($units[$i])
+            [void]$doc.Blocks.Remove($Ed.Sections[$i])
+        }
+        $box = $Ed.IslandBox
+        $holder = [System.Windows.Documents.BlockUIContainer]::new()
+        Set-WtStyle $holder 'Memo.IslandBox'
+        Set-WtStyle $box (Get-WtMemoIslandStyle $covered)
+        if ($box.Parent) { $box.Parent.Child = $null }
+        $holder.Child = $box
+        if ($last + 1 -lt $Ed.Rendered) { $doc.Blocks.InsertBefore($Ed.Sections[$last + 1], $holder) } else { $doc.Blocks.Add($holder) }
+
+        $Ed.Loading = $true
+        try { $box.Text = (@($Ed.Lines.GetRange($Start, $End - $Start)) -join "`r`n") } finally { $Ed.Loading = $false }
+        $Ed.IslandPrev = $box.Text
+        $Ed.Island = @{ Start = $Start; End = $End; Holder = $holder; Original = $box.Text; First = $first; Last = $last }
+        $caret = Get-WtMemoIslandIndex $Ed $Line $Col
+        if ($ToLine -ge 0) {
+            $to = Get-WtMemoIslandIndex $Ed $ToLine $ToCol
+            # 거꾸로 고르기는 줄 이동 명령을 쓰므로 배치가 끝나 있어야 한다 (앞 → 뒤는 배치 없이 고른다)
+            if ($to -lt $caret) { $Ed.Live.UpdateLayout() }
+            Select-WtMemoIslandRange $box $caret $to
+        } else {
+            $box.Select($caret, 0)
+        }
+        [void]$box.Focus()
+        # 커서를 화면 안으로: 배치가 끝난 뒤에 한다 (여기서 배치를 강제하면 블록을 옮길 때마다 느리다)
+        $script:caretPending = $Ed
+        [void]$box.Dispatcher.BeginInvoke([System.Action] { if ($script:caretPending) { Show-WtMemoIslandCaret $script:caretPending; $script:caretPending = $null } }, [System.Windows.Threading.DispatcherPriority]::Loaded)
+    } finally { $Ed.Busy-- }
+}
+
+# 선택을 anchor → active 방향으로 (이어서 Shift+화살표를 누르면 active 쪽이 움직이게).
+# TextBox.Select는 늘 앞 → 뒤 방향이라, 거꾸로 고를 때는 anchor에 커서를 두고 선택 명령으로 넓힌다
+function Select-WtMemoIslandRange($Box, [int]$Anchor, [int]$Active) {
+    if ($Active -ge $Anchor) { $Box.Select($Anchor, $Active - $Anchor); return }
+    $Box.Select($Anchor, 0)
+    $cmds = [System.Windows.Documents.EditingCommands]
+    for ($n = 0; $n -lt 100000 -and $Box.SelectionStart -gt $Active; $n++) {
+        $was = $Box.SelectionStart
+        $cmds::SelectUpByLine.Execute($null, $Box)
+        if ($Box.SelectionStart -eq $was) { break }
+    }
+    for ($n = 0; $n -lt 100000 -and $Box.SelectionStart -gt $Active; $n++) {
+        $was = $Box.SelectionStart
+        $cmds::SelectLeftByCharacter.Execute($null, $Box)
+        if ($Box.SelectionStart -eq $was) { break }
+    }
+    for ($n = 0; $n -lt 100000 -and $Box.SelectionStart -lt $Active -and $Box.SelectionLength; $n++) {
+        $was = $Box.SelectionStart
+        $cmds::SelectRightByCharacter.Execute($null, $Box)
+        if ($Box.SelectionStart -eq $was) { break }
+    }
+}
+
+# 섬 글꼴: 제목 하나면 그 단계 크기, 코드 블록 하나면 코드 글꼴, 그 밖에는 본문
+function Get-WtMemoIslandStyle($Units) {
+    if (@($Units).Count -eq 1) {
+        $u = @($Units)[0]
+        if ($u.Kind -eq 'heading') {
+            $level = if ($u.Text -match '^\s{0,3}(#{1,6})(\s|$)') { $Matches[1].Length } elseif ($u.Text -match '\n\s*=+\s*$') { 1 } else { 2 }
+            return "Memo.IslandH$level"
+        }
+        if ($u.Kind -eq 'code') { return 'Memo.IslandCode' }
+    }
+    'Memo.Island'
+}
+
+# 줄 · 칸 → 섬 글자 위치 (섬 글은 \r\n)
+function Get-WtMemoIslandIndex($Ed, [int]$Line, [int]$Col) {
+    $isl = $Ed.Island
+    $lines = @($Ed.IslandBox.Text -split "\r?\n")
+    $rel = [Math]::Max(0, [Math]::Min($Line - $isl.Start, $lines.Count - 1))
+    $idx = 0
+    for ($i = 0; $i -lt $rel; $i++) { $idx += $lines[$i].Length + 2 }
+    $idx + [Math]::Max(0, [Math]::Min($Col, $lines[$rel].Length))
+}
+
+# 섬 글자 위치 → 줄 · 칸 (글 전체 기준)
+function Get-WtMemoIslandCaret($Ed, [int]$Index = -1) {
+    $box = $Ed.IslandBox
+    if ($Index -lt 0) { $Index = $box.CaretIndex }
+    $before = $box.Text.Substring(0, [Math]::Min($Index, $box.Text.Length))
+    $parts = @($before -split "\r?\n")
+    @{ Line = $Ed.Island.Start + $parts.Count - 1; Col = $parts[-1].Length }
+}
+
+# 섬을 닫는다: 안 고쳤으면 그려 둔 Section을 그 자리에 돌려놓고, 고쳤으면 줄을 되돌려 넣고 그 둘레만 다시 나눠 그린다
+function Close-WtMemoIsland($Ed, [switch]$NoRender) {
+    $isl = $Ed.Island
+    if (-not $isl) { return }
+    $box = $Ed.IslandBox
+    $Ed.Caret = Get-WtMemoIslandCaret $Ed
+    $Ed.Busy++
+    try {
+        $text = $box.Text
+        $doc = $Ed.Live.Document
+        $Ed.Island = $null
+        # 섬 다음 블록을 기억해 두고 섬을 뺀다 (그 앞에 다시 넣는다)
+        $after = $isl.Holder.NextBlock
+        [void]$doc.Blocks.Remove($isl.Holder)
+        $isl.Holder.Child = $null
+        if ($text -ceq $isl.Original) {
+            if ($NoRender) { return }
+            for ($i = $isl.First; $i -le $isl.Last; $i++) {
+                if ($after) { $doc.Blocks.InsertBefore($after, $Ed.Sections[$i]) } else { $doc.Blocks.Add($Ed.Sections[$i]) }
+            }
+            return
+        }
+        $new = @($text -split "\r?\n")
+        $oldCount = $isl.End - $isl.Start
+        $Ed.Lines.RemoveRange($isl.Start, $oldCount)
+        $Ed.Lines.InsertRange($isl.Start, [string[]]$new)
+        if ($NoRender) { return }
+        Update-WtMemoRegion $Ed $isl $new.Count $after
+    } finally { $Ed.Busy-- }
+}
+
+function Get-WtMemoWideMarks([string]$Text) {
+    '{0}|{1}|{2}' -f ([regex]::Matches($Text, '<!--').Count), ([regex]::Matches($Text, '-->').Count), ([regex]::Matches($Text, '(?m)^\s*\$\$').Count)
+}
+
+# 고친 섬 둘레만 다시 나눈다. 같이 다시 나누는 이웃(문맥에 따라 모양이 바뀔 수 있어서):
+#   빈 줄 없이 붙은 단위, 같은 목록(ListId)의 항목, 들여 쓴 줄로 시작하는 쪽의 앞 단위
+# 코드 울타리 줄이 하나라도 바뀌면(짝 · 길이 · 글자) 아래 전체가 달라질 수 있으므로 전체를 다시 나눈다
+function Update-WtMemoRegion($Ed, $Isl, [int]$NewCount, $After) {
+    $units = $Ed.Units
+    $delta = $NewCount - ($Isl.End - $Isl.Start)
+    $islText = @($Ed.Lines.GetRange($Isl.Start, $NewCount))
+    $oldText = $Isl.Original -split "\r?\n"
+    $fence = '^\s{0,3}(```|~~~)'
+    $fenceOld = @($oldText | Where-Object { $_ -match $fence } | ForEach-Object { $_.Trim() }) -join "`n"
+    $fenceNew = @($islText | Where-Object { $_ -match $fence } | ForEach-Object { $_.Trim() }) -join "`n"
+    # 아래 글 전체의 뜻을 바꿀 수 있는 것: HTML 주석 열고 닫기(<!-- -->), 수식 블록($$)
+    $wideOld = Get-WtMemoWideMarks ($oldText -join "`n")
+    $wideNew = Get-WtMemoWideMarks ($islText -join "`n")
+    if ($fenceOld -cne $fenceNew -or $wideOld -cne $wideNew -or -not $units.Count) {
+        # 섬 다음 블록부터 끝까지 이미 문서에 있으니 전체를 새로 꾸린다
+        Update-WtMemoLive $Ed
+        return
+    }
+    $a = $Isl.First; $b = $Isl.Last
+    $rs = $Isl.Start; $re = $Isl.Start + $NewCount
+    $listy = '^\s*([-*+]|\d{1,9}[.)])(\s|$)'
+    $hasList = @($islText | Where-Object { $_ -match $listy }).Count -gt 0
+    for ($i = $a; $i -le $b; $i++) { if ($units[$i].Kind -eq 'list-item') { $hasList = $true } }
+    do {
+        $grew = $false
+        if ($a -gt 0) {
+            $p = $units[$a - 1]
+            $cur = if ($a -le $b) { $units[$a] } else { $null }
+            $sameList = $p.Kind -eq 'list-item' -and $hasList -and (-not $cur -or ($cur.Kind -eq 'list-item' -and $cur.ListId -eq $p.ListId))
+            # 영역 첫 글 줄이 들여 써 있으면 앞 단위에 따라 뜻이 바뀐다(목록 이어 쓰기 · 코드)
+            $firstText = $null
+            for ($l = $rs; $l -lt $re; $l++) { if ($Ed.Lines[$l].Trim()) { $firstText = $Ed.Lines[$l]; break } }
+            $indented = $firstText -and $firstText -match '^\s'
+            # 목록 표지로 시작하면(빈 항목 '1. ' 등) 앞 글에 따라 목록 · 문단이 갈리므로 앞 단위를 하나 같이 본다
+            $listStart = $firstText -and $firstText -match $listy -and $p.Kind -ne 'list-item'
+            if ($p.End -eq $rs -or $sameList -or $indented -or $listStart) {
+                $a--; $rs = $p.Start; $grew = $true
+                if ($p.Kind -eq 'list-item') { $hasList = $true }
+            }
+        }
+        if ($b + 1 -lt $units.Count) {
+            $n = $units[$b + 1]
+            $cur = if ($a -le $b) { $units[$b] } else { $null }
+            $sameList = $n.Kind -eq 'list-item' -and $hasList -and (-not $cur -or ($cur.Kind -eq 'list-item' -and $cur.ListId -eq $n.ListId))
+            $nStart = $n.Start + $delta
+            $indented = $Ed.Lines[$nStart] -match '^\s'
+            if ($nStart -eq $re -or $sameList -or $indented) {
+                Complete-WtMemoRender $Ed ($b + 1)
+                $b++; $re = $n.End + $delta; $grew = $true
+                if ($n.Kind -eq 'list-item') { $hasList = $true }
+            }
+        }
+    } while ($grew)
+    $rs = [Math]::Min($rs, $Isl.Start)
+    $re = [Math]::Max($re, $Isl.Start + $NewCount)
+
+    $doc = $Ed.Live.Document
+    # 다시 나눌 단위의 Section 빼기 (섬이 덮었던 First..Last는 이미 빠져 있음)
+    for ($i = $a; $i -le $b; $i++) {
+        if ($i -ge $Isl.First -and $i -le $Isl.Last) { continue }
+        $sec = $Ed.Sections[$i]
+        if ($sec -and $sec.Parent) {
+            if ($After -eq $sec) { $After = $sec.NextBlock }
+            [void]$doc.Blocks.Remove($sec)
+        }
+    }
+    for ($i = $b + 1; $i -lt $units.Count; $i++) { $units[$i].Start += $delta; $units[$i].End += $delta }
+    $region = @($Ed.Lines.GetRange($rs, $re - $rs)) -join "`n"
+    $fresh = Get-WtMarkdownUnits $region -LineOffset $rs   # 배열 하나로 돌려준다 (@()로 다시 감싸지 않는다)
+    if ($null -eq $fresh) { $fresh = @() }
+    $removed = $b - $a + 1
+    $wasRendered = $b -lt $Ed.Rendered
+    $units.RemoveRange($a, $removed)
+    $Ed.Sections.RemoveRange($a, $removed)
+    $units.InsertRange($a, [object[]]$fresh)
+    $Ed.Sections.InsertRange($a, [object[]]::new($fresh.Count))
+    if ($wasRendered) { $Ed.Rendered += $fresh.Count - $removed } else { $Ed.Rendered = [Math]::Min($Ed.Rendered, $a) }
+    # 목록 번호 · 마지막 표시를 앞뒤 하나씩 넓혀 다시 매긴다. 이웃의 여백이 바뀌면 다시 그린다
+    $from = [Math]::Max(0, $a - 1); $to = [Math]::Min($units.Count - 1, $a + $fresh.Count)
+    $before = @(for ($i = $from; $i -le $to; $i++) { $units[$i].Last })
+    Set-WtMemoListIds $Ed $units $from $to
+    if ($wasRendered) {
+        for ($k = 0; $k -lt $fresh.Count; $k++) {
+            $sec = Get-WtMemoUnitSection $Ed $fresh[$k]
+            $Ed.Sections[$a + $k] = $sec
+            if ($After) { $doc.Blocks.InsertBefore($After, $sec) } else { $doc.Blocks.Add($sec) }
+        }
+        foreach ($i in @($from, $to)) {
+            if ($i -ge $a -and $i -lt $a + $fresh.Count) { continue }
+            if ($i -ge $Ed.Rendered -or $units[$i].Last -eq $before[$i - $from]) { continue }
+            $old = $Ed.Sections[$i]
+            $sec = Get-WtMemoUnitSection $Ed $units[$i]
+            $doc.Blocks.InsertBefore($old, $sec)
+            [void]$doc.Blocks.Remove($old)
+            $Ed.Sections[$i] = $sec
+        }
+    }
+    Start-WtMemoRenderTimer $Ed
+}
+
+function Show-WtMemoIslandCaret($Ed) {
+    $box = $Ed.IslandBox
+    try {
+        $r = $box.GetRectFromCharacterIndex($box.CaretIndex)
+        if (-not $r.IsEmpty) { $box.BringIntoView([System.Windows.Rect]::new($r.X, $r.Y - 8, [Math]::Max(1, $r.Width), $r.Height + 16)) }
+    } catch { }
+}
+
+# 섬 안의 휠: TextBox가 휠을 삼키므로 바깥 보기를 직접 굴린다
+function Invoke-WtMemoIslandWheel($S, $E) {
+    $ed = $S.Tag
+    $sv = Get-WtMemoScroller $ed.Live
+    if (-not $sv) { return }
+    $E.Handled = $true
+    $sv.ScrollToVerticalOffset($sv.VerticalOffset - $E.Delta / 120 * 48)
+}
+
+# [Start, End) 줄 범위의 앞(Up) · 뒤(Down) 단위. 없으면 $null
+function Get-WtMemoNeighbor($Ed, [int]$Start, [int]$End, [string]$Dir) {
+    if ($Dir -eq 'Up') {
+        $i = Get-WtMemoUnitBefore $Ed $Start
+        if ($i -ge 0) { return $Ed.Units[$i] }
+        return $null
+    }
+    $i = Get-WtMemoUnitAfter $Ed $End
+    if ($i -lt $Ed.Units.Count) { return $Ed.Units[$i] }
+    $null
+}
+
+# 섬 위아래 단위로 옮긴다. Up이면 앞 단위의 마지막 줄, 아니면 다음 단위의 첫 줄. 칸은 지금 칸을 지킨다
+function Move-WtMemoIsland($Ed, [ValidateSet('Up', 'Down', 'Left', 'Right', 'Home', 'End')][string]$Dir, [switch]$Extend) {
+    $box = $Ed.IslandBox
+    $isl = $Ed.Island
+    $caret = Get-WtMemoIslandCaret $Ed
+    $islLines = @($box.Text -split "\r?\n").Count
+    $start = $isl.Start
+    $end = $start + $islLines
+    if ($Extend) {
+        # 선택을 넓힌다: 섬을 옆 단위까지 키우고, 고정된 끝(anchor)에서 옆 단위의 같은 칸까지 고른다
+        $selStart = $box.SelectionStart
+        $selEnd = $selStart + $box.SelectionLength
+        $anchor = Get-WtMemoIslandCaret $Ed $(if ($Dir -eq 'Up') { $selEnd } else { $selStart })
+        $active = Get-WtMemoIslandCaret $Ed $(if ($Dir -eq 'Up') { $selStart } else { $selEnd })
+        $Ed.Busy++
+        try { Close-WtMemoIsland $Ed } finally { $Ed.Busy-- }
+        $side = Get-WtMemoNeighbor $Ed $start $end $Dir
+        if (-not $side) {
+            # 더 갈 단위가 없으면 글 처음 · 끝까지
+            $toLine = if ($Dir -eq 'Up') { $start } else { $end - 1 }
+            $toCol = if ($Dir -eq 'Up') { 0 } else { $Ed.Lines[$toLine].Length }
+            Open-WtMemoIsland $Ed $start $end $anchor.Line $anchor.Col $toLine $toCol
+            return $true
+        }
+        $toLine = if ($Dir -eq 'Up') { $side.End - 1 } else { $side.Start }
+        $range = Get-WtMemoUnitRange $Ed ([Math]::Min($start, $side.Start)) ([Math]::Max($end - 1, $side.End - 1))
+        Open-WtMemoIsland $Ed $range[0] $range[1] $anchor.Line $anchor.Col $toLine $active.Col
+        return $true
+    }
+    $Ed.Busy++
+    try { Close-WtMemoIsland $Ed } finally { $Ed.Busy-- }
+    $units = $Ed.Units
+    if (-not $units.Count) { Open-WtMemoIslandAt $Ed 0 0; return $true }
+    switch ($Dir) {
+        'Up' {
+            $prev = Get-WtMemoNeighbor $Ed $start $end 'Up'
+            if (-not $prev) { Open-WtMemoIslandAt $Ed $start 0; return $true }
+            Open-WtMemoIsland $Ed $prev.Start $prev.End ($prev.End - 1) $caret.Col
+        }
+        'Down' {
+            $next = Get-WtMemoNeighbor $Ed $start $end 'Down'
+            if (-not $next) { $l = $end - 1; Open-WtMemoIslandAt $Ed $l $Ed.Lines[$l].Length; return $true }
+            Open-WtMemoIsland $Ed $next.Start $next.End $next.Start $caret.Col
+        }
+        'Left' {
+            $prev = Get-WtMemoNeighbor $Ed $start $end 'Up'
+            if (-not $prev) { Open-WtMemoIslandAt $Ed $start 0; return $true }
+            Open-WtMemoIsland $Ed $prev.Start $prev.End ($prev.End - 1) $Ed.Lines[$prev.End - 1].Length
+        }
+        'Right' {
+            $next = Get-WtMemoNeighbor $Ed $start $end 'Down'
+            if (-not $next) { $l = $end - 1; Open-WtMemoIslandAt $Ed $l $Ed.Lines[$l].Length; return $true }
+            Open-WtMemoIsland $Ed $next.Start $next.End $next.Start 0
+        }
+        'Home' { $u = $units[0]; Open-WtMemoIsland $Ed $u.Start $u.End $u.Start 0 }
+        'End' { $u = $units[$units.Count - 1]; Complete-WtMemoRender $Ed ($units.Count - 1); Open-WtMemoIsland $Ed $u.Start $u.End ($u.End - 1) $Ed.Lines[$u.End - 1].Length }
+    }
+    $true
+}
+
+# 섬을 앞(또는 뒤) 단위까지 넓히고 커서는 그대로 둔다 (지우기로 블록을 이을 때)
+function Join-WtMemoIsland($Ed, [switch]$Next) {
+    $isl = $Ed.Island
+    $box = $Ed.IslandBox
+    $caret = Get-WtMemoIslandCaret $Ed
+    $islEnd = $isl.Start + @($box.Text -split "\r?\n").Count
+    $Ed.Busy++
+    try { Close-WtMemoIsland $Ed } finally { $Ed.Busy-- }
+    if ($Next) {
+        $n = Get-WtMemoNeighbor $Ed $isl.Start $islEnd 'Down'
+        $endLine = if ($n) { $n.End } else { $Ed.Lines.Count }
+        $range = Get-WtMemoUnitRange $Ed $caret.Line ([Math]::Max($caret.Line, $endLine - 1))
+    } else {
+        $p = Get-WtMemoNeighbor $Ed $caret.Line $caret.Line 'Up'
+        $from = if ($p) { $p.Start } else { 0 }
+        $range = Get-WtMemoUnitRange $Ed $from $caret.Line
+    }
+    Open-WtMemoIsland $Ed $range[0] $range[1] $caret.Line $caret.Col
+}
+
+# ---- 실시간: 키 -------------------------------------------------------------------------------
+
+# 글자 위치가 든 화면 줄(줄바꿈 포함 · 접힌 줄 기준). 섬을 막 열어 배치 전이면 -1이 나오므로 그때만 배치를 맞춘다
+function Get-WtMemoBoxLine($Box, [int]$Index) {
+    $l = $Box.GetLineIndexFromCharacterIndex($Index)
+    if ($l -lt 0 -or $Box.LineCount -lt 0) { $Box.UpdateLayout(); $l = $Box.GetLineIndexFromCharacterIndex($Index) }
+    $l
+}
+
+function Invoke-WtMemoIslandKey($S, $E) {
+    $ed = $S.Tag
+    if (-not $ed.Island -or $E.Handled) { return }
+    $key = Get-WtMemoKey $E
+    $mods = [System.Windows.Input.Keyboard]::Modifiers
+    $ctrl = ($mods -band 'Control') -ne 0
+    $shift = ($mods -band 'Shift') -ne 0
+    $alt = ($mods -band 'Alt') -ne 0
+    $box = $S
+    $len = $box.Text.Length
+    $caret = $box.CaretIndex
+    $noSel = $box.SelectionLength -eq 0
+    try {
+        # 한글 조합 중에 누른 ↑↓: 입력기가 글자를 확정한 뒤에, 커서가 그대로면(블록 끝이면) 옆 블록으로 간다
+        if ($E.Key -eq 'ImeProcessed') {
+            if ($key -in 'Up', 'Down' -and -not $ctrl -and -not $alt -and -not $shift) { Add-WtMemoImePending $box $(if ($key -eq 'Up') { 'up' } else { 'down' }) }
+            return
+        }
+        switch ($key) {
+            'Up' {
+                if ($alt -or $ctrl) { return }
+                $first = (Get-WtMemoBoxLine $box $caret) -le 0
+                if ($first) { $E.Handled = Move-WtMemoIsland $ed Up -Extend:$shift }
+            }
+            'Down' {
+                if ($alt -or $ctrl) { return }
+                $at = Get-WtMemoBoxLine $box ($caret + $(if ($shift) { $box.SelectionLength } else { 0 }))
+                $last = $at -ge $box.LineCount - 1
+                if ($last) { $E.Handled = Move-WtMemoIsland $ed Down -Extend:$shift }
+            }
+            'Left' { if (-not $shift -and -not $ctrl -and $noSel -and $caret -eq 0) { $E.Handled = Move-WtMemoIsland $ed Left } }
+            'Right' { if (-not $shift -and -not $ctrl -and $noSel -and $caret -eq $len) { $E.Handled = Move-WtMemoIsland $ed Right } }
+            'Home' { if ($ctrl -and -not $shift) { $E.Handled = Move-WtMemoIsland $ed Home } }
+            'End' { if ($ctrl -and -not $shift) { $E.Handled = Move-WtMemoIsland $ed End } }
+            # Key.PageUp · PageDown은 Prior · Next와 같은 값이라 글자로는 Prior · Next로 나온다
+            { $_ -in 'Prior', 'PageUp' } { $E.Handled = Move-WtMemoIslandPage $ed -1 }
+            { $_ -in 'Next', 'PageDown' } { $E.Handled = Move-WtMemoIslandPage $ed 1 }
+            'Back' {
+                if ($noSel -and $caret -eq 0 -and -not $ctrl -and $ed.Island.Start -gt 0) {
+                    Push-WtMemoUndo $ed
+                    Join-WtMemoIsland $ed
+                    # 이은 자리에서 지우기를 한 번 한다
+                    $b = $ed.IslandBox
+                    $i = $b.CaretIndex
+                    if ($i -gt 0) {
+                        $cut = if ($i -ge 2 -and $b.Text.Substring($i - 2, 2) -eq "`r`n") { 2 } else { 1 }
+                        $b.Select($i - $cut, $cut)
+                        $b.SelectedText = ''
+                        $b.Select($i - $cut, 0)
+                    }
+                    $E.Handled = $true
+                }
+            }
+            'Delete' {
+                # 섬 뒤에 줄이 남아 있을 때만 잇는다 (섬을 닫기 전 번호끼리 비교)
+                if ($noSel -and $caret -eq $len -and -not $ctrl -and $ed.Island.End -lt $ed.Lines.Count) {
+                    Push-WtMemoUndo $ed
+                    Join-WtMemoIsland $ed -Next
+                    $b = $ed.IslandBox
+                    $i = $b.CaretIndex
+                    if ($i -lt $b.Text.Length) {
+                        $cut = if ($b.Text.Length - $i -ge 2 -and $b.Text.Substring($i, 2) -eq "`r`n") { 2 } else { 1 }
+                        $b.Select($i, $cut)
+                        $b.SelectedText = ''
+                        $b.Select($i, 0)
+                    }
+                    $E.Handled = $true
+                }
+            }
+            'A' {
+                if ($ctrl -and -not $shift -and -not $alt) {
+                    # 모두 선택: 섬을 글 전체로 넓힌다
+                    $ed.Busy++
+                    try { Close-WtMemoIsland $ed } finally { $ed.Busy-- }
+                    $last = $ed.Lines.Count - 1
+                    Open-WtMemoIsland $ed 0 $ed.Lines.Count 0 0 $last $ed.Lines[$last].Length
+                    $E.Handled = $true
+                }
+            }
+            'Z' { if ($ctrl -and -not $alt) { if ($shift) { Invoke-WtMemoRedo $ed } else { Invoke-WtMemoUndo $ed }; $E.Handled = $true } }
+            'Y' { if ($ctrl -and -not $alt -and -not $shift) { Invoke-WtMemoRedo $ed; $E.Handled = $true } }
+        }
+    } catch { Show-WtError $_ '메모 편집' }
+}
+
+# PageUp/PageDown: 바깥 보기를 한 화면 굴리고 그 자리 단위로 섬을 옮긴다
+function Move-WtMemoIslandPage($Ed, [int]$Dir) {
+    $sv = Get-WtMemoScroller $Ed.Live
+    if (-not $sv) { return $false }
+    $box = $Ed.IslandBox
+    # 섬을 연 뒤 미뤄 둔 '커서를 화면 안으로'가 아직이면 먼저 한다 (스크롤 자리가 커서 기준이어야 한 화면씩 간다)
+    if ($script:caretPending) {
+        $Ed.Live.UpdateLayout()
+        Show-WtMemoIslandCaret $script:caretPending
+        $script:caretPending = $null
+        $Ed.Live.UpdateLayout()
+    }
+    $r = $box.GetRectFromCharacterIndex($box.CaretIndex)
+    $pt = $box.TranslatePoint([System.Windows.Point]::new($r.X, $r.Y + $r.Height / 2), $Ed.Live)
+    # 아래로 갈 때 아직 안 그린 단위가 있으면 한 화면 넘게 먼저 그린다
+    if ($Dir -gt 0) {
+        $Ed.Live.UpdateLayout()
+        while ($Ed.Rendered -lt $Ed.Units.Count -and $sv.ExtentHeight -lt $sv.VerticalOffset + 2 * $sv.ViewportHeight) {
+            Complete-WtMemoRender $Ed ($Ed.Rendered + 20)
+            $Ed.Live.UpdateLayout()
+        }
+    }
+    $was = $sv.VerticalOffset
+    $sv.ScrollToVerticalOffset($was + $Dir * $sv.ViewportHeight)
+    $Ed.Live.UpdateLayout()
+    # 한 화면만큼 다 못 갔으면(글 처음 · 끝에 닿음) 처음 · 끝 단위로 간다
+    $edge = [Math]::Abs($sv.VerticalOffset - $was) -lt $sv.ViewportHeight - 1
+    $Ed.Busy++
+    try { Close-WtMemoIsland $Ed } finally { $Ed.Busy-- }
+    if ($edge -and $Ed.Units.Count) {
+        if ($Dir -gt 0) {
+            Complete-WtMemoRender $Ed ($Ed.Units.Count - 1)
+            $u = $Ed.Units[$Ed.Units.Count - 1]
+            Open-WtMemoIsland $Ed $u.Start $u.End ($u.End - 1) $Ed.Lines[$u.End - 1].Length
+        } else {
+            $u = $Ed.Units[0]
+            Open-WtMemoIsland $Ed $u.Start $u.End $u.Start 0
+        }
+        return $true
+    }
+    $Ed.Live.UpdateLayout()
+    $hit = Find-WtMemoLiveHit $Ed $pt
+    if ($hit) { Open-WtMemoIslandAt $Ed $hit.Line $hit.Col }
+    else { Open-WtMemoIslandAt $Ed $Ed.Caret.Line $Ed.Caret.Col }
+    $true
+}
+
+# ---- 실시간: 마우스 ---------------------------------------------------------------------------
+
+# 보기 좌표 → 원문 줄 · 칸. 그린 글자를 원문과 차례로 맞춰 본다 (기호 · 아이콘은 건너뜀)
+function Find-WtMemoLiveHit($Ed, [System.Windows.Point]$Point) {
+    $view = $Ed.Live
+    $tp = $view.GetPositionFromPoint($Point, $true)
+    if (-not $tp) { return $null }
+    $sec = $tp.Parent
+    while ($sec -and -not ($sec -is [System.Windows.Documents.Section] -and $sec.Tag -is [hashtable] -and $sec.Tag.ContainsKey('Kind'))) {
+        $sec = [System.Windows.LogicalTreeHelper]::GetParent($sec)
+    }
+    if (-not $sec) { return $null }
+    $u = $sec.Tag
+    $rendered = ''
+    try { $rendered = Get-WtMemoRenderedPrefix $sec.ContentStart $tp } catch { }
+    $offset = Get-WtMemoSourceOffset $rendered $u.Text
+    $parts = @($u.Text.Substring(0, $offset) -split "`n")
+    $line = $u.Start + $parts.Count - 1
+    # 섬에서 줄 수가 바뀌었으면 섬 아래 단위의 줄 번호를 그만큼 옮긴다 (섬을 닫기 전 번호라서)
+    $isl = $Ed.Island
+    if ($isl -and $u.Start -ge $isl.End) { $line += @($Ed.IslandBox.Text -split "\r?\n").Count - ($isl.End - $isl.Start) }
+    @{ Line = $line; Col = $parts[-1].Length; Unit = $u }
+}
+
+# 그린 글의 [Start, End) 글자. TextRange.Text는 표 칸에 걸치면 칸 · 행 전체로 넓혀 버려서 직접 따라가며 모은다.
+# 문단 · 줄바꿈 · 칸 경계는 공백 문자로 둔다 (원문과 맞출 때 건너뛴다)
+function Get-WtMemoRenderedPrefix($Start, $End) {
+    $sb = [System.Text.StringBuilder]::new()
+    $tp = $Start
+    $guard = 0
+    while ($tp -and $tp.CompareTo($End) -lt 0 -and $guard -lt 100000) {
+        $guard++
+        $ctx = $tp.GetPointerContext('Forward')
+        if ($ctx -eq 'Text') {
+            $run = $tp.GetTextInRun('Forward')
+            $left = $tp.GetOffsetToPosition($End)
+            if ($left -lt $run.Length) { [void]$sb.Append($run.Substring(0, [Math]::Max(0, $left))); break }
+            [void]$sb.Append($run)
+            $tp = $tp.GetPositionAtOffset($run.Length)
+            continue
+        }
+        if ($ctx -eq 'ElementEnd' -or $ctx -eq 'EmbeddedElement') { [void]$sb.Append("`n") }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
+    $sb.ToString()
+}
+
+function Get-WtMemoSourceOffset([string]$Rendered, [string]$Source) {
+    $j = 0
+    foreach ($c in $Rendered.ToCharArray()) {
+        if ([char]::IsWhiteSpace($c) -or ([int]$c -ge 0xE000 -and [int]$c -le 0xF8FF)) { continue }
+        $k = $Source.IndexOf($c, $j)
+        if ($k -lt 0 -or $k - $j -gt 400) { continue }
+        $j = $k + 1
+    }
+    # 그린 글이 공백 · 줄바꿈으로 끝났으면(낱말 사이 · 표 칸 · 다음 줄) 원문의 공백 · 표 칸 기호를 건너 다음 글자 앞에 둔다
+    if ($Rendered.Length -and [char]::IsWhiteSpace($Rendered[$Rendered.Length - 1])) {
+        while ($j -lt $Source.Length -and $Source[$j] -in ' ', "`t", '|', "`n") { $j++ }
+    }
+    # 줄 맨 앞이면 제목 · 목록 · 할 일 · 인용 기호 뒤(글자 앞)에 둔다
+    if ($j -lt $Source.Length -and ($j -eq 0 -or $Source[$j - 1] -eq "`n")) {
+        $m = [regex]::Match($Source.Substring($j), '^\s*(?:>\s?)*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d{1,9}[.)]\s+(?:\[[ xX]\]\s+)?)?')
+        $j += $m.Length
+    }
+    $j
+}
+
+function Test-WtMemoClickThrough($El, $Stop) {
+    while ($El -and $El -ne $Stop) {
+        if ($El -is [System.Windows.Controls.Primitives.ButtonBase] -or $El -is [System.Windows.Documents.Hyperlink] -or
+            $El -is [System.Windows.Controls.Primitives.ScrollBar] -or $El -is [System.Windows.Controls.TextBox]) { return $true }
+        $El = Get-WtMemoParent $El
+    }
+    $false
+}
+
+function Invoke-WtMemoLiveMouseDown($S, $E) {
+    $ed = $S.Tag.Editor
+    if (-not $ed -or $ed.Mode -ne 'live' -or -not $ed.Enabled) { return }
+    if (Test-WtMemoClickThrough $E.OriginalSource $S) { return }
+    try {
+        $pt = $E.GetPosition($S)
+        $hit = Find-WtMemoLiveHit $ed $pt
+        $shift = ([System.Windows.Input.Keyboard]::Modifiers -band 'Shift') -ne 0
+        if ($shift -and $ed.Island) {
+            $anchor = Get-WtMemoIslandCaret $ed $ed.IslandBox.SelectionStart
+            if ($hit) { Open-WtMemoIslandAt $ed $anchor.Line $anchor.Col $hit.Line $hit.Col }
+            $E.Handled = $true
+            return
+        }
+        if (-not $hit) {
+            # 글 아래 빈 곳: 끝으로
+            $last = $ed.Lines.Count - 1
+            $hit = @{ Line = $last; Col = $ed.Lines[$last].Length }
+        }
+        Open-WtMemoIslandAt $ed $hit.Line $hit.Col
+        $ed.Drag = @{ Line = $hit.Line; Col = $hit.Col }
+        [void]$S.CaptureMouse()
+        $E.Handled = $true
+    } catch { Show-WtError $_ '메모 편집' }
+}
+
+# 보기 자체에 포커스가 있을 때(섬 없음, 탭을 바꾼 직후 등) 키를 누르면 커서 자리에 섬을 연다.
+# 글자 키는 섬이 포커스를 받은 뒤 입력되므로 그대로 들어간다. 이동 키는 섬만 열고 끝낸다
+function Invoke-WtMemoLiveKey($S, $E) {
+    $ed = $S.Tag.Editor
+    if (-not $ed -or $ed.Island -or $ed.Mode -ne 'live' -or -not $ed.Enabled -or $E.Handled) { return }
+    if (-not $S.IsKeyboardFocused) { return }   # 섬 · 단추 등 안쪽 요소의 키는 그쪽이 처리한다
+    $mods = [System.Windows.Input.Keyboard]::Modifiers
+    if ($mods -band ([System.Windows.Input.ModifierKeys]::Control -bor [System.Windows.Input.ModifierKeys]::Alt)) { return }
+    $key = Get-WtMemoKey $E
+    $skip = 'LeftShift', 'RightShift', 'LeftCtrl', 'RightCtrl', 'LeftAlt', 'RightAlt', 'LWin', 'RWin', 'Escape', 'Tab', 'Apps', 'CapsLock', 'HangulMode', 'HanjaMode'
+    if ($key -in $skip -or ($key -ge [System.Windows.Input.Key]::F1 -and $key -le [System.Windows.Input.Key]::F24)) { return }
+    try {
+        Open-WtMemoIslandAt $ed $ed.Caret.Line $ed.Caret.Col
+        if ($key -in 'Up', 'Down', 'Left', 'Right', 'Home', 'End', 'PageUp', 'PageDown') { $E.Handled = $true }
+    } catch { Show-WtError $_ '메모 편집' }
+}
+
+function Invoke-WtMemoLiveMouseMove($S, $E) {
+    $ed = $S.Tag.Editor
+    if (-not $ed -or -not $ed.Drag -or $E.LeftButton -ne 'Pressed' -or -not $ed.Island) { return }
+    $box = $ed.IslandBox
+    $p = $E.GetPosition($box)
+    $anchor = $ed.Drag
+    if ($p.Y -ge 0 -and $p.Y -le $box.ActualHeight) {
+        $i = $box.GetCharacterIndexFromPoint($p, $true)
+        if ($i -ge 0) {
+            $a = Get-WtMemoIslandIndex $ed $anchor.Line $anchor.Col
+            Select-WtMemoIslandRange $box $a $i
+        }
+        return
+    }
+    # 섬 밖으로 끌면 그 단위까지 섬을 넓힌다
+    $hit = Find-WtMemoLiveHit $ed ($E.GetPosition($S))
+    if ($hit) { Open-WtMemoIslandAt $ed $anchor.Line $anchor.Col $hit.Line $hit.Col }
+}
+
+function Invoke-WtMemoLiveMouseUp($S, $E) {
+    $ed = $S.Tag.Editor
+    if (-not $ed -or -not $ed.Drag) { return }
+    $ed.Drag = $null
+    $S.ReleaseMouseCapture()
+    if ($ed.Island) { [void]$ed.IslandBox.Focus() }
+}
+
+# ---- 실행 취소 (실시간 모드) ------------------------------------------------------------------
+
+# $IslandText: 섬 글을 이것으로 보고 찍는다(고치기 전 글). 없으면 지금 글. [string]으로 받으면 $null이 ''가 되므로 형을 두지 않는다
+function Get-WtMemoSnapshot($Ed, $IslandText = $null) {
+    $caret = if ($Ed.Island) { Get-WtMemoIslandCaret $Ed } else { $Ed.Caret }
+    $text = if ($Ed.Island -and $null -ne $IslandText) {
+        $isl = $Ed.Island
+        $before = if ($isl.Start -gt 0) { @($Ed.Lines.GetRange(0, $isl.Start)) } else { @() }
+        $after = if ($isl.End -lt $Ed.Lines.Count) { @($Ed.Lines.GetRange($isl.End, $Ed.Lines.Count - $isl.End)) } else { @() }
+        (@($before) + @($IslandText -split "\r?\n") + @($after)) -join "`n"
+    } else { (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n") }
+    @{ Text = $text; Line = $caret.Line; Col = $caret.Col }
+}
+
+# 명령(굵게 · 붙여넣기 · 블록 잇기 …) 전에 지금 상태를 남긴다
+function Push-WtMemoUndo($Ed) {
+    if ($Ed.Mode -ne 'live') { return }
+    Add-WtMemoUndoEntry $Ed (Get-WtMemoSnapshot $Ed)
+    $Ed.LastEdit = [datetime]::MinValue
+}
+
+# 글자를 칠 때: 쉬었다 다시 치기 시작하면 고치기 전 상태를 남긴다
+function Add-WtMemoTypingUndo($Ed) {
+    $now = [datetime]::UtcNow
+    if ($now - $Ed.LastEdit -gt $script:undoPause) { Add-WtMemoUndoEntry $Ed (Get-WtMemoSnapshot $Ed $Ed.IslandPrev) }
+    $Ed.LastEdit = $now
+}
+
+function Add-WtMemoUndoEntry($Ed, $Snap) {
+    if ($Ed.Undo.Count -and $Ed.Undo[$Ed.Undo.Count - 1].Text -ceq $Snap.Text) { return }
+    $Ed.Undo.Add($Snap)
+    if ($Ed.Undo.Count -gt $script:undoLimit) { $Ed.Undo.RemoveAt(0) }
+    $Ed.Redo.Clear()
+}
+
+function Invoke-WtMemoUndo($Ed) { Restore-WtMemoSnapshot $Ed $Ed.Undo $Ed.Redo }
+function Invoke-WtMemoRedo($Ed) { Restore-WtMemoSnapshot $Ed $Ed.Redo $Ed.Undo }
+
+function Restore-WtMemoSnapshot($Ed, $From, $To) {
+    $current = Get-WtMemoSnapshot $Ed
+    $snap = $null
+    while ($From.Count) {
+        $snap = $From[$From.Count - 1]
+        $From.RemoveAt($From.Count - 1)
+        if ($snap.Text -cne $current.Text) { break }
+        $snap = $null
+    }
+    if (-not $snap) { return }
+    $To.Add($current)
+    $Ed.Busy++
+    try {
+        $Ed.Island = $null
+        $Ed.Loading = $true
+        try { Set-WtMemoLines $Ed $snap.Text } finally { $Ed.Loading = $false }
+        Update-WtMemoLive $Ed
+    } finally { $Ed.Busy-- }
+    $Ed.LastEdit = [datetime]::MinValue
+    Open-WtMemoIslandAt $Ed $snap.Line $snap.Col
+    Invoke-WtMemoEditorChanged $Ed
+}
+
+# ---- 원문 칸 · 섬 공통: 편집 명령 ----------------------------------------------------------------
+
+function Get-WtMemoBoxState($Box) { @{ Text = $Box.Text; Start = $Box.SelectionStart; Length = $Box.SelectionLength } }
+
+# MemoText.psm1의 편집 하나를 상자에 넣는다. 실행 취소 한 단위가 되게 한 번에 바꾼다
+function Invoke-WtMemoBoxEdit($Box, $Edit) {
+    if (-not $Edit) { return $false }
+    $ed = $Box.Tag
+    if ($Box -eq $ed.IslandBox) { Push-WtMemoUndo $ed }
+    $Box.Select($Edit.Start, $Edit.Length)
+    $Box.SelectedText = [string]$Edit.Insert
+    $Box.Select([int]$Edit.SelStart, [int]$Edit.SelLength)
+    if ($Box -eq $ed.IslandBox) { $ed.LastEdit = [datetime]::MinValue }
+    $true
+}
+
+# 누른 키. Alt 조합은 SystemKey, 한글 조합 중이면(ImeProcessed) 입력기가 받은 원래 키
+function Get-WtMemoKey($E) {
+    if ($E.Key -eq 'System') { return $E.SystemKey }
+    if ($E.Key -eq 'ImeProcessed') { return $E.ImeProcessedKey }
+    $E.Key
+}
+
+# 커서 줄이 내용 없는 들여 쓴 목록 항목인지 (예: '  - ')
+function Test-WtMemoEmptyItem($State) {
+    if ($State.Length) { return $false }
+    $t = $State.Text
+    $i = $State.Start
+    $ls = if ($i -gt 0) { $t.LastIndexOf("`n", $i - 1) + 1 } else { 0 }
+    $le = $t.IndexOf("`n", $i)
+    if ($le -lt 0) { $le = $t.Length }
+    $line = $t.Substring($ls, $le - $ls).TrimEnd("`r")
+    $line -match '^\s+([-*+]|\d{1,9}[.)])\s*(\[[ xX]\]\s*)?$'
+}
+
+# 한글 조합 중에 누른 키는 입력기가 먼저 처리한다. 확정이 끝난 뒤(Background)에 할 일을 남긴다
+$script:imePending = $null
+function Add-WtMemoImePending($Box, [string]$Kind, $Extra = $null) {
+    $script:imePending = @{ Box = $Box; Kind = $Kind; Text = $Box.Text; Caret = $Box.CaretIndex; Extra = $Extra }
+    [void]$Box.Dispatcher.BeginInvoke([System.Action] { Complete-WtMemoImePending }, [System.Windows.Threading.DispatcherPriority]::Background)
+}
+
+function Complete-WtMemoImePending {
+    $p = $script:imePending
+    $script:imePending = $null
+    if (-not $p) { return }
+    $box = $p.Box
+    $ed = $box.Tag
+    try {
+        switch ($p.Kind) {
+            'enter' {
+                # 입력기가 줄을 바꿨으면(커서 앞이 새 줄바꿈) 그 줄바꿈을 되돌리고 목록 이어 쓰기를 한다. 안 바꿨으면 그대로 둔다
+                $i = $box.CaretIndex
+                if ($box.SelectionLength -or $i -lt 2 -or $box.Text.Length -le $p.Text.Length -or $box.Text.Substring($i - 2, 2) -ne "`r`n") { return }
+                $state = @{ Text = $box.Text.Remove($i - 2, 2); Start = $i - 2; Length = 0 }
+                $edit = Get-WtMemoEnterEdit $state
+                if (-not $edit) { return }
+                $box.Select($i - 2, 2)
+                $box.SelectedText = ''
+                $box.Select($i - 2, 0)
+                [void](Invoke-WtMemoBoxEdit $box $edit)
+            }
+            { $_ -in 'up', 'down' } {
+                # 커서가 그대로 블록 끝에 있으면 옆 블록으로
+                if (-not $ed.Island -or $box -ne $ed.IslandBox -or $box.CaretIndex -ne $p.Caret) { return }
+                $line = Get-WtMemoBoxLine $box $box.CaretIndex
+                if ($p.Kind -eq 'up' -and $line -le 0) { [void](Move-WtMemoIsland $ed Up) }
+                if ($p.Kind -eq 'down' -and $line -ge $box.LineCount - 1) { [void](Move-WtMemoIsland $ed Down) }
+            }
+            'suggest' {
+                # 입력기가 넣은 줄바꿈 · 탭을 빼고 고른 제목으로 완성
+                $i = $box.CaretIndex
+                $cut = 0
+                if ($i -ge 2 -and $box.Text.Substring($i - 2, 2) -eq "`r`n") { $cut = 2 } elseif ($i -ge 1 -and $box.Text[$i - 1] -eq "`t") { $cut = 1 }
+                if ($cut -and $box.Text.Length -gt $p.Text.Length) { $box.Select($i - $cut, $cut); $box.SelectedText = ''; $box.Select($i - $cut, 0) }
+                Complete-WtMemoSuggest $ed ([string]$p.Extra) -Target $box
+            }
+        }
+    } catch { Show-WtError $_ '메모 편집' }
+}
+
+function Invoke-WtMemoBoxKey($S, $E) {
+    if ($E.Handled) { return }
+    $ed = $S.Tag
+    $key = Get-WtMemoKey $E
+    $mods = [System.Windows.Input.Keyboard]::Modifiers
+    $ctrl = ($mods -band 'Control') -ne 0
+    $shift = ($mods -band 'Shift') -ne 0
+    $alt = ($mods -band 'Alt') -ne 0
+    $edit = $null
+    $handled = $false
+    try {
+        # 한글 조합 중 Enter: 입력기가 글자를 확정하고 줄을 바꾼 뒤에 목록 이어 쓰기를 한다 (조합 중에는 글을 건드리지 않는다)
+        if ($E.Key -eq 'ImeProcessed') {
+            if ($key -eq 'Return' -and -not $ctrl -and -not $alt -and -not $shift) { Add-WtMemoImePending $S 'enter' }
+            return
+        }
+        $st = Get-WtMemoBoxState $S
+        if ($ctrl -and -not $alt) {
+            switch ($key) {
+                'B' { if (-not $shift) { $edit = Get-WtMemoWrapEdit $st '**'; $handled = $true } }
+                'I' { if (-not $shift) { $edit = Get-WtMemoWrapEdit $st '*'; $handled = $true } }
+                'K' { if (-not $shift) { $edit = Get-WtMemoLinkEdit $st; $handled = $true } }
+                'L' { if (-not $shift) { $edit = Get-WtMemoTaskEdit $st; $handled = $true } }
+                'Oem3' { if ($shift) { $edit = Get-WtMemoWrapEdit $st '`'; $handled = $true } }
+                'V' { if ($shift) { Invoke-WtMemoPlainPaste $S; $handled = $true } }
+            }
+        } elseif ($alt -and -not $ctrl) {
+            switch ($key) {
+                'Up' { if (-not $shift) { $S = Expand-WtMemoIslandFor $S 'Up'; $edit = Get-WtMemoMoveLinesEdit (Get-WtMemoBoxState $S) -Up; $handled = $true } }
+                'Down' { if (-not $shift) { $S = Expand-WtMemoIslandFor $S 'Down'; $edit = Get-WtMemoMoveLinesEdit (Get-WtMemoBoxState $S); $handled = $true } }
+                'D5' { if ($shift) { $edit = Get-WtMemoWrapEdit $st '~~'; $handled = $true } }
+            }
+        } elseif (-not $ctrl -and -not $alt) {
+            switch ($key) {
+                'Return' {
+                    if (-not $shift) {
+                        # 빈 안쪽 항목에서 Enter(내어쓰기)는 부모 표지를 봐야 하므로 섬을 목록 전체로 넓힌다
+                        if (Test-WtMemoEmptyItem $st) { $S = Expand-WtMemoIslandFor $S 'List'; $st = Get-WtMemoBoxState $S }
+                        $edit = Get-WtMemoEnterEdit $st
+                        $handled = [bool]$edit
+                    }
+                }
+                'Tab' {
+                    $S = Expand-WtMemoIslandFor $S 'List'
+                    $edit = Get-WtMemoIndentEdit (Get-WtMemoBoxState $S) -Outdent:$shift
+                    $handled = [bool]$edit -or $shift
+                }
+            }
+        }
+        if ($handled) {
+            $E.Handled = $true
+            [void](Invoke-WtMemoBoxEdit $S $edit)
+        }
+    } catch { Show-WtError $_ '메모 편집' }
+}
+
+# 실시간 모드에서 목록 들여쓰기 · 줄 옮기기는 옆 줄이 필요하다. 섬을 그 목록(또는 옆 단위)까지 넓히고 섬 상자를 돌려준다
+function Expand-WtMemoIslandFor($Box, [string]$For) {
+    $ed = $Box.Tag
+    if ($Box -ne $ed.IslandBox -or -not $ed.Island) { return $Box }
+    $isl = $ed.Island
+    $hasList = @($ed.Units | Where-Object { $_.Kind -eq 'list-item' -and $_.Start -lt $isl.End -and $_.End -gt $isl.Start }).Count
+    if ($For -eq 'List' -and -not $hasList) { return $Box }
+    $sel = Get-WtMemoIslandCaret $ed $Box.SelectionStart
+    $selEnd = Get-WtMemoIslandCaret $ed ($Box.SelectionStart + $Box.SelectionLength)
+    $islEnd = $isl.Start + @($Box.Text -split "\r?\n").Count
+    $ed.Busy++
+    try { Close-WtMemoIsland $ed } finally { $ed.Busy-- }
+    $units = $ed.Units
+    $from = $isl.Start; $to = $islEnd - 1
+    switch ($For) {
+        'Up' { $p = @($units | Where-Object { $_.End -le $isl.Start }) | Select-Object -Last 1; if ($p) { $from = $p.Start } }
+        'Down' { $n = @($units | Where-Object { $_.Start -ge $islEnd }) | Select-Object -First 1; if ($n) { $to = $n.End - 1 } }
+        'List' {
+            $mine = @($units | Where-Object { $_.Start -lt $islEnd -and $_.End -gt $isl.Start -and $_.Kind -eq 'list-item' })
+            if ($mine.Count) {
+                $id = $mine[0].ListId
+                $same = @($units | Where-Object { $_.Kind -eq 'list-item' -and $_.ListId -eq $id })
+                $from = [Math]::Min($from, ($same | Measure-Object -Property Start -Minimum).Minimum)
+                $to = [Math]::Max($to, ($same | Measure-Object -Property End -Maximum).Maximum - 1)
+            }
+        }
+    }
+    $range = Get-WtMemoUnitRange $ed $from $to
+    Open-WtMemoIsland $ed $range[0] $range[1] $sel.Line $sel.Col $selEnd.Line $selEnd.Col
+    $ed.IslandBox
+}
+
+function Invoke-WtMemoBoxText($S, $E) {
+    if ($E.Handled -or -not $E.Text) { return }
+    try {
+        $edit = Get-WtMemoTypeEdit (Get-WtMemoBoxState $S) $E.Text
+        if ($edit) {
+            $E.Handled = $true
+            [void](Invoke-WtMemoBoxEdit $S $edit)
+        }
+    } catch { Show-WtError $_ '메모 편집' }
+}
+
+function Invoke-WtMemoBoxPaste($S, $E) {
+    try {
+        if (-not $E.DataObject.GetDataPresent([System.Windows.DataFormats]::UnicodeText)) { return }
+        $clip = [string]$E.DataObject.GetData([System.Windows.DataFormats]::UnicodeText)
+        $edit = Get-WtMemoPasteEdit (Get-WtMemoBoxState $S) $clip
+        if ($edit) {
+            $E.CancelCommand()
+            [void](Invoke-WtMemoBoxEdit $S $edit)
+        }
+    } catch { Show-WtError $_ '붙여넣기' }
+}
+
+# Ctrl+Shift+V: 바꾸지 않고 글 그대로 붙여넣기
+function Invoke-WtMemoPlainPaste($Box) {
+    $clip = $null
+    try { $clip = [System.Windows.Clipboard]::GetText() } catch { return }
+    if (-not $clip) { return }
+    $start = $Box.SelectionStart
+    [void](Invoke-WtMemoBoxEdit $Box @{ Start = $start; Length = $Box.SelectionLength; Insert = $clip; SelStart = $start + $clip.Length; SelLength = 0 })
+}
+
+function Invoke-WtMemoBoxDragOver($S, $E) {
+    if ($E.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+        $E.Effects = [System.Windows.DragDropEffects]::Link
+        $E.Handled = $true
+    }
+}
+
+# 탐색기에서 끌어 놓은 파일 · 폴더 → 링크
+function Invoke-WtMemoBoxDrop($S, $E) {
+    if (-not $E.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) { return }
+    try {
+        $paths = @($E.Data.GetData([System.Windows.DataFormats]::FileDrop))
+        $i = $S.GetCharacterIndexFromPoint($E.GetPosition($S), $true)
+        if ($i -ge 0) { $S.Select($i, 0) }
+        $edit = Get-WtMemoDropEdit (Get-WtMemoBoxState $S) ([string[]]$paths)
+        [void](Invoke-WtMemoBoxEdit $S $edit)
+        $E.Handled = $true
+        [void]$S.Focus()
+    } catch { Show-WtError $_ '끌어 놓기' }
+}
+
+# ---- [[ 자동 완성 ------------------------------------------------------------------------------
+
+$script:suggestMax = 30
+
+# 커서 앞이 같은 줄의 닫히지 않은 [[ 이면 @{ Start = 찾는 글 시작; Query; Closed = 커서 뒤가 ]] }
+function Get-WtMemoSuggestContext($Box) {
+    if ($Box.SelectionLength) { return $null }
+    $text = $Box.Text
+    $i = $Box.CaretIndex
+    $ls = if ($i -gt 0) { $text.LastIndexOf("`n", $i - 1) + 1 } else { 0 }
+    $m = [regex]::Match($text.Substring($ls, $i - $ls), '\[\[([^\[\]\|#\r\n]*)$')
+    if (-not $m.Success) { return $null }
+    @{ Start = $ls + $m.Groups[1].Index; Query = $m.Groups[1].Value; Closed = $text.Substring($i).StartsWith(']]') }
+}
+
+function Update-WtMemoSuggest($Box) {
+    $ed = $Box.Tag
+    if (-not $ed.OnTitles -or $ed.Mode -eq 'read') { return }
+    $ctx = Get-WtMemoSuggestContext $Box
+    if (-not $ctx) { Hide-WtMemoSuggest $ed; return }
+    $titles = @(& $ed.OnTitles $ed $ctx.Query | Where-Object { $_ })
+    $q = $ctx.Query.Trim()
+    $words = @($q -split '\s+' | Where-Object { $_ })
+    $cmp = [StringComparison]::OrdinalIgnoreCase
+    $hits = @($titles | Where-Object { $t = [string]$_; -not @($words | Where-Object { $t.IndexOf($_, $cmp) -lt 0 }).Count })
+    # 앞이 맞는 제목을 먼저
+    $hits = @(@($hits | Where-Object { ([string]$_).StartsWith($q, $cmp) }) + @($hits | Where-Object { -not ([string]$_).StartsWith($q, $cmp) })) |
+        Select-Object -First $script:suggestMax
+    if (-not @($hits).Count) { Hide-WtMemoSuggest $ed; return }
+    $s = Get-WtMemoSuggestUi $ed
+    $s.Box = $Box
+    $s.List.ItemsSource = @($hits)
+    $s.List.SelectedIndex = 0
+    $r = $Box.GetRectFromCharacterIndex($ctx.Start)
+    $s.Popup.PlacementTarget = $Box
+    $s.Popup.HorizontalOffset = if ($r.IsEmpty) { 0 } else { $r.X }
+    $s.Popup.VerticalOffset = if ($r.IsEmpty) { $Box.ActualHeight } else { $r.Bottom + 4 }
+    $s.Popup.IsOpen = $true
+}
+
+function Hide-WtMemoSuggest($Ed) {
+    if ($Ed.Suggest -and $Ed.Suggest.Popup.IsOpen) { $Ed.Suggest.Popup.IsOpen = $false }
+}
+
+# 자동 완성 팝업. 포커스는 입력칸에 두고(목록은 포커스를 받지 않음) ↑↓ · Enter · Tab · Esc는 입력칸이 받아 넘긴다
+function Get-WtMemoSuggestUi($Ed) {
+    if ($Ed.Suggest) { return $Ed.Suggest }
+    $pop = [System.Windows.Controls.Primitives.Popup]::new()
+    $pop.StaysOpen = $true
+    $pop.Placement = 'Relative'
+    $border = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $border 'Memo.Suggest'
+    $list = [System.Windows.Controls.ListBox]::new()
+    Set-WtStyle $list 'Memo.SuggestList'
+    $list.Focusable = $false
+    $list.Tag = $Ed
+    $list.Add_PreviewMouseLeftButtonUp({
+            param($s, $e)
+            $item = [System.Windows.Controls.ItemsControl]::ContainerFromElement($s, $e.OriginalSource)
+            if (-not $item) { return }
+            $e.Handled = $true
+            try { Complete-WtMemoSuggest $s.Tag ([string]$item.DataContext) } catch { Show-WtError $_ '메모 링크' }
+        })
+    $border.Child = $list
+    $pop.Child = $border
+    # 팝업도 편집기 안에 두어야 테마 리소스(색 · 글꼴)를 찾는다
+    [void]$Ed.Body.Children.Add($pop)
+    $Ed.Suggest = @{ Popup = $pop; List = $list; Box = $null }
+    $Ed.Suggest
+}
+
+function Complete-WtMemoSuggest($Ed, [string]$Title, $Target = $null) {
+    $s = $Ed.Suggest
+    $box = if ($Target) { $Target } else { $s.Box }
+    Hide-WtMemoSuggest $Ed
+    if (-not $box -or -not $Title) { return }
+    $ctx = Get-WtMemoSuggestContext $box
+    if (-not $ctx) { return }
+    $caret = $box.CaretIndex
+    $insert = if ($ctx.Closed) { $Title } else { "$Title]]" }
+    [void](Invoke-WtMemoBoxEdit $box @{ Start = $ctx.Start; Length = $caret - $ctx.Start; Insert = $insert; SelStart = $ctx.Start + $Title.Length + 2; SelLength = 0 })
+    [void]$box.Focus()
+}
+
+function Invoke-WtMemoSuggestKey($S, $E) {
+    $ed = $S.Tag
+    $sg = $ed.Suggest   # $s로 쓰면 매개변수 $S(입력칸)와 같은 변수가 된다
+    if (-not $sg -or -not $sg.Popup.IsOpen -or $sg.Box -ne $S) { return }
+    $list = $sg.List
+    $n = $list.Items.Count
+    # 한글 조합 중 Enter · Tab: 입력기가 글자를 확정한 뒤에 고른 제목으로 완성한다
+    if ($E.Key -eq 'ImeProcessed') {
+        if ((Get-WtMemoKey $E) -in 'Return', 'Tab' -and $list.SelectedItem) { Add-WtMemoImePending $S 'suggest' ([string]$list.SelectedItem) }
+        return
+    }
+    switch ($E.Key) {
+        'Down' { $list.SelectedIndex = ($list.SelectedIndex + 1) % $n; $list.ScrollIntoView($list.SelectedItem); $E.Handled = $true }
+        'Up' { $list.SelectedIndex = ($list.SelectedIndex - 1 + $n) % $n; $list.ScrollIntoView($list.SelectedItem); $E.Handled = $true }
+        { $_ -in 'Return', 'Tab' } {
+            $E.Handled = $true
+            try { Complete-WtMemoSuggest $ed ([string]$list.SelectedItem) } catch { Show-WtError $_ '메모 링크' }
+        }
+        'Escape' { Hide-WtMemoSuggest $ed; $E.Handled = $true }
+    }
+}
+
+# ---- 찾기 · 바꾸기 ----------------------------------------------------------------------------
+
+function New-WtMemoFindBar($Ed) {
+    $bar = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $bar 'Memo.FindBar'
+    $bar.Visibility = 'Collapsed'
+    $rows = New-WtStack Vertical 8
+
+    $top = [System.Windows.Controls.DockPanel]::new()
+    $close = New-WtButton '' -Kind Icon -Icon 0xE711 -ToolTip '닫기 (Esc)'
+    $close.Tag = $Ed
+    $close.Add_Click({ param($s, $e) Close-WtMemoFind $s.Tag })
+    $next = New-WtButton '' -Kind Icon -Icon 0xE74B -ToolTip '다음 찾기 (Enter · F3)'
+    $next.Tag = $Ed
+    $next.Add_Click({ param($s, $e) Invoke-WtMemoFind $s.Tag })
+    $prev = New-WtButton '' -Kind Icon -Icon 0xE74A -ToolTip '이전 찾기 (Shift+Enter · Shift+F3)'
+    $prev.Tag = $Ed
+    $prev.Add_Click({ param($s, $e) Invoke-WtMemoFind $s.Tag -Back })
+    $count = New-WtText '' 'T.Sub'
+    $count.VerticalAlignment = 'Center'
+    $count.Margin = [System.Windows.Thickness]::new(8, 0, 8, 0)
+    foreach ($c in $close, $next, $prev, $count) { [System.Windows.Controls.DockPanel]::SetDock($c, 'Right'); [void]$top.Children.Add($c) }
+    $sb = New-WtSearchBox '찾기'
+    $sb.Box.Tag = $Ed
+    $sb.Box.Add_TextChanged({ param($s, $e) Invoke-WtMemoFind $s.Tag -Here })
+    $sb.Box.Add_PreviewKeyDown({
+            param($s, $e)
+            if ($e.Key -ne 'Return') { return }
+            $e.Handled = $true
+            $back = ([System.Windows.Input.Keyboard]::Modifiers -band 'Shift') -ne 0
+            Invoke-WtMemoFind $s.Tag -Back:$back
+        })
+    [void]$top.Children.Add($sb.Root)
+    [void](Add-WtChild $rows $top)
+
+    $low = [System.Windows.Controls.DockPanel]::new()
+    $all = New-WtButton '모두 바꾸기' -ToolTip '찾은 것을 모두 바꿉니다'
+    $all.Tag = $Ed
+    $all.Add_Click({ param($s, $e) Invoke-WtMemoReplace $s.Tag -All })
+    $one = New-WtButton '바꾸기' -ToolTip '고른 곳을 바꾸고 다음을 찾습니다 (Enter)'
+    $one.Tag = $Ed
+    $one.Add_Click({ param($s, $e) Invoke-WtMemoReplace $s.Tag })
+    $one.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
+    $all.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
+    foreach ($c in $all, $one) { [System.Windows.Controls.DockPanel]::SetDock($c, 'Right'); [void]$low.Children.Add($c) }
+    $rep = [System.Windows.Controls.TextBox]::new()
+    Set-WtStyle $rep 'Input'
+    $rep.ToolTip = '바꿀 글'
+    $rep.Tag = $Ed
+    $rep.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; Invoke-WtMemoReplace $s.Tag } })
+    [void]$low.Children.Add($rep)
+    [void](Add-WtChild $rows $low)
+    $bar.Child = $rows
+    $Ed.Find = @{ Bar = $bar; Query = $sb.Box; Count = $count; ReplaceRow = $low; Replace = $rep; ReadIndex = -1 }
+    $bar
+}
+
+function Open-WtMemoFind($Ed, [switch]$Replace) {
+    $f = $Ed.Find
+    $sel = Get-WtMemoSelectedText $Ed
+    $f.Bar.Visibility = 'Visible'
+    $f.ReplaceRow.Visibility = if ($Replace -and $Ed.Mode -ne 'read') { 'Visible' } else { 'Collapsed' }
+    if ($sel -and -not $sel.Contains("`n")) { $f.Query.Text = $sel }
+    else { Update-WtMemoFindCount $Ed }
+    [void]$f.Query.Focus()
+    $f.Query.SelectAll()
+}
+
+function Close-WtMemoFind($Ed) {
+    $Ed.Find.Bar.Visibility = 'Collapsed'
+    Set-WtMemoEditorFocus $Ed
+}
+
+function Get-WtMemoSelectedText($Ed) {
+    switch ($Ed.Mode) {
+        'source' { return $Ed.Source.SelectedText }
+        'live' { if ($Ed.Island) { return $Ed.IslandBox.SelectedText } }
+        'read' { return $Ed.View.Selection.Text }
+    }
+    ''
+}
+
+# 글 전체(줄바꿈 \n)에서 찾은 자리들
+function Get-WtMemoMatches([string]$Text, [string]$Query) {
+    $out = [System.Collections.Generic.List[int]]::new()
+    if (-not $Query) { return , $out }
+    $i = 0
+    while (($i = $Text.IndexOf($Query, $i, [StringComparison]::OrdinalIgnoreCase)) -ge 0) { $out.Add($i); $i += [Math]::Max(1, $Query.Length) }
+    , $out
+}
+
+# 줄바꿈 \n 글의 위치 ↔ 줄 · 칸
+function Get-WtMemoLineCol([string]$Text, [int]$Offset) {
+    $before = $Text.Substring(0, [Math]::Min($Offset, $Text.Length))
+    $parts = @($before -split "`n")
+    @{ Line = $parts.Count - 1; Col = $parts[$parts.Count - 1].Length }
+}
+
+function Get-WtMemoOffset([string]$Text, [int]$Line, [int]$Col) {
+    $off = 0
+    $lines = $Text -split "`n"
+    for ($i = 0; $i -lt [Math]::Min($Line, $lines.Count); $i++) { $off += $lines[$i].Length + 1 }
+    $off + $Col
+}
+
+# 지금 고른 곳(또는 커서)의 시작 · 끝 위치 (줄바꿈 \n 글 기준)
+function Get-WtMemoSelectionOffsets($Ed, [string]$Text) {
+    switch ($Ed.Mode) {
+        'source' {
+            $b = $Ed.Source
+            $cr = { param($i) $i - ($b.Text.Substring(0, $i).Split("`r").Count - 1) }
+            return @((& $cr $b.SelectionStart), (& $cr ($b.SelectionStart + $b.SelectionLength)))
+        }
+        'live' {
+            if ($Ed.Island) {
+                $box = $Ed.IslandBox
+                $a = Get-WtMemoIslandCaret $Ed $box.SelectionStart
+                $z = Get-WtMemoIslandCaret $Ed ($box.SelectionStart + $box.SelectionLength)
+                return @((Get-WtMemoOffset $Text $a.Line $a.Col), (Get-WtMemoOffset $Text $z.Line $z.Col))
+            }
+            $o = Get-WtMemoOffset $Text $Ed.Caret.Line $Ed.Caret.Col
+            return @($o, $o)
+        }
+    }
+    @(0, 0)
+}
+
+function Select-WtMemoTextRange($Ed, [string]$Text, [int]$Offset, [int]$Length) {
+    switch ($Ed.Mode) {
+        'source' {
+            $b = $Ed.Source
+            $crlf = $b.Text.Contains("`r`n")
+            $toBox = { param($o) if ($crlf) { $o + ($Text.Substring(0, $o).Split("`n").Count - 1) } else { $o } }
+            $s = & $toBox $Offset
+            $e = & $toBox ($Offset + $Length)
+            $b.Select($s, $e - $s)
+            $b.ScrollToLine([Math]::Max(0, $b.GetLineIndexFromCharacterIndex($s)))
+        }
+        'live' {
+            $a = Get-WtMemoLineCol $Text $Offset
+            $z = Get-WtMemoLineCol $Text ($Offset + $Length)
+            Open-WtMemoIslandAt $Ed $a.Line $a.Col $z.Line $z.Col
+        }
+    }
+}
+
+function Update-WtMemoFindCount($Ed, [int]$Current = -1, [int]$Total = -1) {
+    $f = $Ed.Find
+    if (-not $f.Query.Text) { $f.Count.Text = ''; return }
+    if ($Total -lt 0) {
+        $Total = if ($Ed.Mode -eq 'read') { @(Get-WtMemoReadMatches $Ed $f.Query.Text).Count } else { (Get-WtMemoMatches ((Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")) $f.Query.Text).Count }
+    }
+    $f.Count.Text = if (-not $Total) { '없음' } elseif ($Current -ge 0) { "$($Current + 1)/$Total" } else { "${Total}개" }
+}
+
+# 다음(-Back이면 이전) 찾기. -Here: 고른 곳 시작부터 다시 찾기(찾는 글을 칠 때)
+function Invoke-WtMemoFind($Ed, [switch]$Back, [switch]$Here) {
+    $f = $Ed.Find
+    $q = $f.Query.Text
+    if (-not $q) { Update-WtMemoFindCount $Ed; return }
+    # 실시간 보기에서 찾는 글을 치는 중에는 개수만 센다. 찾은 곳으로 가려면 섬에 포커스를 줬다 돌려받아야 해서
+    # 한글 조합이 끊긴다. 이동은 Enter · F3에서
+    if ($Here -and $Ed.Mode -eq 'live') { Update-WtMemoFindCount $Ed; return }
+    $focusFind = $f.Query.IsKeyboardFocusWithin -or $f.Bar.IsKeyboardFocusWithin
+    try {
+        if ($Ed.Mode -eq 'read') { Invoke-WtMemoFindRead $Ed $q -Back:$Back -Here:$Here; return }
+        $text = (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")
+        $hits = Get-WtMemoMatches $text $q
+        if (-not $hits.Count) { Update-WtMemoFindCount $Ed -1 0; return }
+        $sel = Get-WtMemoSelectionOffsets $Ed $text
+        $k = -1
+        if ($Back) {
+            for ($i = $hits.Count - 1; $i -ge 0; $i--) { if ($hits[$i] -lt $sel[0]) { $k = $i; break } }
+            if ($k -lt 0) { $k = $hits.Count - 1 }
+        } else {
+            $from = if ($Here) { $sel[0] } else { $sel[1] }
+            for ($i = 0; $i -lt $hits.Count; $i++) { if ($hits[$i] -ge $from) { $k = $i; break } }
+            if ($k -lt 0) { $k = 0 }
+        }
+        Select-WtMemoTextRange $Ed $text $hits[$k] $q.Length
+        Update-WtMemoFindCount $Ed $k $hits.Count
+    } finally {
+        if ($focusFind) { [void]$f.Query.Focus() }
+    }
+}
+
+# 읽기 모드: 그린 글(Run)에서 찾는다. 여러 Run에 걸친 글은 찾지 않는다
+function Get-WtMemoReadMatches($Ed, [string]$Query) {
+    $out = [System.Collections.Generic.List[object]]::new()
+    $tp = $Ed.View.Document.ContentStart
+    while ($tp) {
+        if ($tp.GetPointerContext('Forward') -eq 'Text') {
+            $run = $tp.GetTextInRun('Forward')
+            $i = 0
+            while (($i = $run.IndexOf($Query, $i, [StringComparison]::OrdinalIgnoreCase)) -ge 0) {
+                $out.Add(@{ Start = $tp.GetPositionAtOffset($i); End = $tp.GetPositionAtOffset($i + $Query.Length) })
+                $i += [Math]::Max(1, $Query.Length)
+            }
+        }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
+    , $out
+}
+
+function Invoke-WtMemoFindRead($Ed, [string]$Query, [switch]$Back, [switch]$Here) {
+    $f = $Ed.Find
+    $hits = Get-WtMemoReadMatches $Ed $Query
+    if (-not $hits.Count) { $f.ReadIndex = -1; Update-WtMemoFindCount $Ed -1 0; return }
+    $k = if ($Here) { [Math]::Max(0, $f.ReadIndex) } elseif ($Back) { $f.ReadIndex - 1 } else { $f.ReadIndex + 1 }
+    if ($k -lt 0) { $k = $hits.Count - 1 }
+    if ($k -ge $hits.Count) { $k = 0 }
+    $f.ReadIndex = $k
+    $Ed.View.Selection.Select($hits[$k].Start, $hits[$k].End)
+    $p = $hits[$k].Start.Parent
+    if ($p -is [System.Windows.FrameworkContentElement]) { $p.BringIntoView() }
+    Update-WtMemoFindCount $Ed $k $hits.Count
+}
+
+# 바꾸기: 고른 곳이 찾는 글이면 바꾸고 다음을 찾는다. -All: 모두 바꾸기
+function Invoke-WtMemoReplace($Ed, [switch]$All) {
+    $f = $Ed.Find
+    $q = $f.Query.Text
+    if (-not $q -or $Ed.Mode -eq 'read') { return }
+    $rep = [string]$f.Replace.Text
+    try {
+        if ($All) {
+            $text = (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")
+            $n = (Get-WtMemoMatches $text $q).Count
+            if (-not $n) { Update-WtMemoFindCount $Ed -1 0; return }
+            $new = [regex]::Replace($text, [regex]::Escape($q), $rep.Replace('$', '$$'), 'IgnoreCase')
+            if ($Ed.Mode -eq 'source') {
+                $b = $Ed.Source
+                if ($b.Text.Contains("`r`n")) { $new = $new.Replace("`n", "`r`n") }
+                $b.SelectAll()
+                $b.SelectedText = $new
+                $b.Select(0, 0)
+            } else {
+                Push-WtMemoUndo $Ed
+                $Ed.Busy++
+                try {
+                    if ($Ed.Island) { Close-WtMemoIsland $Ed -NoRender }
+                    $Ed.Loading = $true
+                    try { Set-WtMemoLines $Ed $new } finally { $Ed.Loading = $false }
+                    Update-WtMemoLive $Ed
+                } finally { $Ed.Busy-- }
+                Invoke-WtMemoEditorChanged $Ed
+            }
+            $f.Count.Text = "${n}개 바꿈"
+            return
+        }
+        $box = if ($Ed.Mode -eq 'source') { $Ed.Source } elseif ($Ed.Island) { $Ed.IslandBox } else { $null }
+        if ($box -and $box.SelectionLength -and [string]::Equals($box.SelectedText, $q, [StringComparison]::OrdinalIgnoreCase)) {
+            $start = $box.SelectionStart
+            [void](Invoke-WtMemoBoxEdit $box @{ Start = $start; Length = $box.SelectionLength; Insert = $rep; SelStart = $start + $rep.Length; SelLength = 0 })
+        }
+        Invoke-WtMemoFind $Ed
+    } catch { Show-WtError $_ '바꾸기' }
+}
+
+# 편집기 전체 단축키: 찾기 · 바꾸기
+function Invoke-WtMemoEditorKey($S, $E) {
+    if ($E.Handled) { return }
+    $ed = $S.Tag
+    $key = if ($E.Key -eq 'System') { $E.SystemKey } else { $E.Key }
+    $mods = [System.Windows.Input.Keyboard]::Modifiers
+    $ctrl = ($mods -band 'Control') -ne 0
+    $shift = ($mods -band 'Shift') -ne 0
+    $alt = ($mods -band 'Alt') -ne 0
+    try {
+        if ($ctrl -and -not $alt -and -not $shift -and $key -eq 'F') { Open-WtMemoFind $ed; $E.Handled = $true; return }
+        if ($ctrl -and -not $alt -and -not $shift -and $key -eq 'H') { Open-WtMemoFind $ed -Replace; $E.Handled = $true; return }
+        if ($key -eq 'F3' -and -not $ctrl -and -not $alt) {
+            if ($ed.Find.Query.Text) { Invoke-WtMemoFind $ed -Back:$shift } else { Open-WtMemoFind $ed }
+            $E.Handled = $true
+            return
+        }
+        if ($key -eq 'Escape' -and $ed.Find.Bar.Visibility -eq 'Visible' -and -not ($ed.Suggest -and $ed.Suggest.Popup.IsOpen)) {
+            Close-WtMemoFind $ed
+            $E.Handled = $true
+        }
+    } catch { Show-WtError $_ '찾기' }
+}
+
+# 글자 크기를 바꾸면 그려 둔 Section(다이어그램 크기 등)을 버리고 다시 그린다
+Register-WtSettingHandler {
+    param($key, $value)
+    if ($key -ne 'ui.fontScale') { return }
+    foreach ($w in @($script:editors)) {
+        $ed = $w.Target
+        if (-not $ed -or $ed.Mode -ne 'live') { continue }
+        $ed.Cache.Clear()
+        # 섬이 열려 있으면 닫고 전체를 다시 그린 뒤 같은 자리에 다시 연다 (안 고친 섬을 닫으면 예전 Section을 돌려놓기 때문)
+        $caret = $null
+        if ($ed.Island) {
+            $caret = if ($ed.IslandBox.IsKeyboardFocused) { Get-WtMemoIslandCaret $ed } else { $null }
+            $ed.Busy++
+            try { Close-WtMemoIsland $ed -NoRender } finally { $ed.Busy-- }
+        }
+        Update-WtMemoLive $ed
+        if ($caret) { Open-WtMemoIslandAt $ed $caret.Line $caret.Col }
+    }
+}
+
+Export-ModuleMember -Function New-WtMemoEditor, Set-WtMemoEditorText, Get-WtMemoEditorText, Set-WtMemoEditorMode,
+    Set-WtMemoEditorEnabled, Set-WtMemoEditorFocus, Get-WtMemoEditorState, Set-WtMemoEditorState
+} | Import-Module -Force -DisableNameChecking
+# ---- addons\memo\MemoEditor.psm1 끝 ----
+
+# ---- addons\memo\MemoText.psm1 ----
+New-Module -Name 'WorkTool.addon.memo.MemoText' -ScriptBlock {
+# 메모 편집 명령: 키 하나로 마크다운 글을 고치는 순수 함수 (WPF 없음). 편집기(TextBox)가 부른다.
+# 입력 $s = @{ Text; Start; Length } = 글 전체 · 선택(문자 위치). 줄바꿈은 `r`n · `n 모두 받는다.
+#   새로 넣는 줄바꿈은 글에서 쓰는 것을 따른다(`r`n이 있으면 `r`n, `n만 있으면 `n, 없으면 `r`n).
+# 출력: 할 일이 없으면 $null(편집기 기본 동작). 고치면 편집 하나
+#   @{ Start; Length; Insert; SelStart; SelLength } = 원래 글 [Start, Start+Length)를 Insert로 바꾸고, 바뀐 글 기준으로 선택.
+#   여러 곳을 고쳐도 그것들을 덮는 범위 하나로 돌려준다(실행 취소 한 단위). Insert가 ''이고 Length가 0이면 커서만 옮긴다.
+#   Suggest = 'wiki'가 있으면 [[ ]] 안이므로 메모 제목 자동 완성을 연다.
+# 단축키: Ctrl+B 굵게 · Ctrl+I 기울임 · Alt+Shift+5 취소선 · Ctrl+Shift+` 코드 (Get-WtMemoWrapEdit)
+#         글자 입력 ` [ ] (Get-WtMemoTypeEdit) · Enter (Get-WtMemoEnterEdit) · Tab / Shift+Tab (Get-WtMemoIndentEdit)
+#         Ctrl+L 할 일 (Get-WtMemoTaskEdit) · Ctrl+K 링크 (Get-WtMemoLinkEdit) · Alt+↑/↓ 줄 옮기기 (Get-WtMemoMoveLinesEdit)
+#         붙여넣기 (Get-WtMemoPasteEdit) · 탐색기에서 끌어 놓기 (Get-WtMemoDropEdit)
+
+$ErrorActionPreference = 'Stop'
+
+# 목록 줄: 인용 접두어 · 들여쓰기 · 표지 · 표지 뒤 공백 · 체크박스 · 내용
+$script:mtList = [regex]'^((?:[ \t]*>[ \t]?)*)([ \t]*)([-*+]|\d{1,9}[.)])([ \t]+)(\[[ xX]\](?:[ \t]+|$))?(.*)$'
+$script:mtQuote = [regex]'^((?:[ \t]*>[ \t]?)+)(.*)$'
+$script:mtLead = [regex]'^((?:[ \t]*>[ \t]?)*)([ \t]*)'
+# 줄의 내용 앞부분(감싸기에서 건너뜀): 인용 · 들여쓰기 · 제목 # · 목록 표지 · 체크박스
+$script:mtContent = [regex]'^(?:[ \t]*>[ \t]?)*[ \t]*(?:#{1,6}(?:[ \t]+|$)|(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\](?:[ \t]+|$))?)?'
+$script:mtFence = [regex]'(?m)^[ \t]{0,3}(?:```|~~~)'
+$script:mtUrl = [regex]'^(?:(?:https?|mailto|file):\S+|www\.\S+)$'
+$script:mtPath = [regex]'^(?:[A-Za-z]:\\|[A-Za-z]:$|\\\\[^\\]+\\[^\\]+)'
+
+# ---- 공통 -------------------------------------------------------------------------------------
+
+function Get-WtMemoTextNewline([string]$Text) {
+    if ($Text.Contains("`r`n")) { return "`r`n" }
+    if ($Text.Contains("`n")) { return "`n" }
+    "`r`n"
+}
+
+# 위치가 든 줄: Start · End(줄바꿈 앞) · Next(다음 줄 시작, 없으면 -1) · Text
+function Get-WtMemoTextLine([string]$Text, [int]$Pos) {
+    $start = if ($Pos -le 0) { 0 } else { $Text.LastIndexOf([char]10, $Pos - 1) + 1 }
+    $nx = $Text.IndexOf([char]10, $Pos)
+    if ($nx -lt 0) { $end = $Text.Length; $next = -1 }
+    else {
+        $end = $nx; $next = $nx + 1
+        if ($end -gt $start -and $Text[$end - 1] -eq [char]13) { $end-- }
+    }
+    @{ Start = $start; End = $end; Next = $next; Text = $Text.Substring($start, $end - $start) }
+}
+
+function Get-WtMemoTextPrevLine([string]$Text, $Line) {
+    if ($Line.Start -le 0) { return $null }
+    Get-WtMemoTextLine $Text ($Line.Start - 1)
+}
+
+function Get-WtMemoTextNextLine([string]$Text, $Line) {
+    if ($Line.Next -lt 0) { return $null }
+    Get-WtMemoTextLine $Text $Line.Next
+}
+
+# 선택이 걸친 줄들. 여러 줄 선택의 끝이 다음 줄 0칸이면 그 줄은 뺀다
+function Get-WtMemoTextSelLines([string]$Text, [int]$Start, [int]$Length) {
+    $end = $Start + $Length
+    $lines = [System.Collections.Generic.List[object]]::new()
+    $line = Get-WtMemoTextLine $Text $Start
+    $lines.Add($line)
+    # 다음 줄들은 함수 호출 없이 읽는다 (긴 글 전체 선택도 빠르게)
+    while ($line.End -lt $end -and $line.Next -ge 0) {
+        $s = $line.Next
+        $nx = $Text.IndexOf([char]10, $s)
+        if ($nx -lt 0) { $e = $Text.Length; $next = -1 }
+        else { $e = $nx; $next = $nx + 1; if ($e -gt $s -and $Text[$e - 1] -eq [char]13) { $e-- } }
+        $line = @{ Start = $s; End = $e; Next = $next; Text = $Text.Substring($s, $e - $s) }
+        $lines.Add($line)
+    }
+    if ($Length -gt 0 -and $lines.Count -gt 1 -and $end -eq $lines[$lines.Count - 1].Start) { $lines.RemoveAt($lines.Count - 1) }
+    , $lines.ToArray()
+}
+
+# 들여쓰기 너비 (탭은 4칸 단위)
+function Get-WtMemoTextWidth([string]$Ws) {
+    $w = 0
+    foreach ($c in $Ws.ToCharArray()) { if ($c -eq "`t") { $w += 4 - ($w % 4) } else { $w++ } }
+    $w
+}
+
+# 줄 하나를 읽는다: 목록이면 표지 · 내용 시작, 아니면 인용 · 들여쓰기 · 빈 줄 여부
+function Get-WtMemoTextLineInfo([string]$Text) {
+    $m = $script:mtList.Match($Text)
+    if ($m.Success) {
+        $sp = $m.Groups[4].Value
+        $spW = if ($sp.Length -gt 4) { 1 } else { $sp.Length }   # 공백 5칸 이상이면 내용은 표지+1칸 (CommonMark)
+        return @{
+            List = $true; Blank = $false; Q = $m.Groups[1].Value; Ind = $m.Groups[2].Value; W = (Get-WtMemoTextWidth $m.Groups[2].Value)
+            Mk = $m.Groups[3].Value; Sp = $sp; Cb = $m.Groups[5].Value; Body = $m.Groups[6].Value; MW = $m.Groups[3].Value.Length + $spW
+        }
+    }
+    $m = $script:mtLead.Match($Text)
+    @{
+        List = $false; Q = $m.Groups[1].Value; Ind = $m.Groups[2].Value; W = (Get-WtMemoTextWidth $m.Groups[2].Value)
+        Blank = ($Text.Substring($m.Length).Trim() -eq '')
+    }
+}
+
+# 줄이 닫히지 않은 코드 울타리 안인가 (위쪽 울타리 줄 수가 홀수, 이 줄은 울타리가 아님)
+function Test-WtMemoTextInFence([string]$Text, $Line) {
+    if ($script:mtFence.Match($Line.Text).Success) { return $false }
+    ($script:mtFence.Matches($Text.Substring(0, $Line.Start)).Count % 2) -eq 1
+}
+
+function New-WtMemoTextResult([int]$Start, [int]$Length, [string]$Insert, [int]$SelStart, [int]$SelLength = 0) {
+    @{ Start = $Start; Length = $Length; Insert = $Insert; SelStart = $SelStart; SelLength = $SelLength }
+}
+
+# 고칠 곳 여러 개(@{ Pos; Del; Ins }, 겹치지 않음)의 위치 옮김. $Right면 같은 자리에 넣은 글 뒤로
+function Get-WtMemoTextMapPos([object[]]$Ops, [int]$P, [bool]$Right) {
+    $shift = 0
+    foreach ($op in $Ops) {
+        if ($P -lt $op.Pos) { break }
+        $end = $op.Pos + $op.Del
+        if ($P -lt $end -or ($P -eq $op.Pos -and $op.Del -eq 0)) {
+            return $op.Pos + $shift + $(if ($Right) { $op.Ins.Length } else { 0 })
+        }
+        $shift += $op.Ins.Length - $op.Del
+    }
+    $P + $shift
+}
+
+# 고칠 곳 여러 개 → 그것들을 덮는 편집 하나. 선택 시작은 넣은 글 뒤로, 끝은 앞으로 옮긴다(접힌 선택은 둘 다 뒤로)
+function New-WtMemoTextOpsEdit([string]$Text, [object[]]$Ops, [int]$SelA, [int]$SelB) {
+    $Ops = @($Ops | Where-Object { $_ } | Sort-Object { $_.Pos })
+    if (-not $Ops.Count) { return $null }
+    $first = $Ops[0].Pos; $last = $Ops[-1].Pos + $Ops[-1].Del
+    $sb = [System.Text.StringBuilder]::new()
+    $at = $first
+    foreach ($op in $Ops) {
+        [void]$sb.Append($Text.Substring($at, $op.Pos - $at)).Append($op.Ins)   # Append(string, int, int)는 긴 글에서 느리다
+        $at = $op.Pos + $op.Del
+    }
+    $a = Get-WtMemoTextMapPos $Ops $SelA $true
+    $b = if ($SelB -eq $SelA) { $a } else { Get-WtMemoTextMapPos $Ops $SelB $false }
+    if ($b -lt $a) { $b = $a }
+    New-WtMemoTextResult $first ($last - $first) $sb.ToString() $a ($b - $a)
+}
+
+function New-WtMemoTextOp([int]$Pos, [int]$Del, [string]$Ins = '') { @{ Pos = $Pos; Del = $Del; Ins = $Ins } }
+
+function Get-WtMemoTextRunAfter([string]$Text, [int]$I, [char]$C, [int]$Stop = -1) {
+    if ($Stop -lt 0) { $Stop = $Text.Length }
+    $n = 0
+    while ($I + $n -lt $Stop -and $Text[$I + $n] -eq $C) { $n++ }
+    $n
+}
+
+function Get-WtMemoTextRunBefore([string]$Text, [int]$I, [char]$C, [int]$Stop = 0) {
+    $n = 0
+    while ($I - $n - 1 -ge $Stop -and $Text[$I - $n - 1] -eq $C) { $n++ }
+    $n
+}
+
+# 같은 글자 n개가 이 표지인가. * 하나는 1 · 3(***), ** 는 2 · 3 으로 굵게 · 기울임을 가른다
+function Test-WtMemoTextRun([string]$Marker, [int]$Run) {
+    if ($Run -le 0) { return $false }
+    if ($Marker -eq '*' -or $Marker -eq '_') { return $Run -eq 1 -or $Run -eq 3 }
+    if ($Marker -eq '**' -or $Marker -eq '__') { return $Run -eq 2 -or $Run -eq 3 }
+    $Run -eq $Marker.Length
+}
+
+function Test-WtMemoTextWordChar([char]$C) {
+    if ([char]::IsLetterOrDigit($C) -or $C -eq '_') { return $true }
+    $cat = [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($C)
+    $cat -eq 'NonSpacingMark' -or $cat -eq 'SpacingCombiningMark'
+}
+
+# 인라인 코드 표지: 글에 `가 있으면 더 긴 백틱 + 공백 (CommonMark)
+function Get-WtMemoTextCodeFence([string]$Core) {
+    if (-not $Core.Contains('`')) { return @('`', '`') }
+    $max = 0
+    foreach ($m in [regex]::Matches($Core, '`+')) { if ($m.Length -gt $max) { $max = $m.Length } }
+    $f = '`' * ($max + 1)
+    @("$f ", " $f")
+}
+
+# 글 [A, B)가 표지로 감싸져 있는가. 표지는 안쪽(글 처음 · 끝)이나 바로 바깥에 있을 수 있다
+# 돌려주는 것: @{ Wrapped; Ops(벗기기); InA; InB(벗긴 뒤 안쪽 글 범위, 원래 글 기준) }
+function Get-WtMemoTextWrapState([string]$Text, [int]$A, [int]$B, [string]$Marker) {
+    $len = $B - $A
+    if ($Marker -eq '`') { return Get-WtMemoTextCodeState $Text $A $B }
+    $m = $Marker.Length; $c = $Marker[0]
+    if ($Text[$A] -ne $c -and ($A -eq 0 -or $Text[$A - 1] -ne $c)) { return @{ Wrapped = $false } }   # 빠른 길: 왼쪽에 표지 글자가 없음
+    $inL =Get-WtMemoTextRunAfter $Text $A $c $B
+    $inR = Get-WtMemoTextRunBefore $Text $B $c $A
+    $left = $null; $right = $null
+    if ((Test-WtMemoTextRun $Marker $inL) -and $inL -lt $len) { $left = @{ Pos = $A; In = $true } }
+    elseif (Test-WtMemoTextRun $Marker (Get-WtMemoTextRunBefore $Text $A $c)) { $left = @{ Pos = $A - $m; In = $false } }
+    if ((Test-WtMemoTextRun $Marker $inR) -and $inR -lt $len) { $right = @{ Pos = $B - $m; In = $true } }
+    elseif (Test-WtMemoTextRun $Marker (Get-WtMemoTextRunAfter $Text $B $c)) { $right = @{ Pos = $B; In = $false } }
+    if (-not $left -or -not $right -or ($left.In -and $right.In -and $len -le 2 * $m)) { return @{ Wrapped = $false } }
+    @{
+        Wrapped = $true
+        Ops = @((New-WtMemoTextOp $left.Pos $m), (New-WtMemoTextOp $right.Pos $m))
+        InA = $(if ($left.In) { $A + $m } else { $A }); InB = $(if ($right.In) { $B - $m } else { $B })
+    }
+}
+
+# 인라인 코드: 양쪽 백틱 개수가 같아야 한다. 바깥 공백 패딩은 백틱 2개 이상일 때만 본다(`a` b `c`의 b를 코드로 오해하지 않게)
+function Get-WtMemoTextCodeState([string]$Text, [int]$A, [int]$B) {
+    $len = $B - $A
+    $inL = Get-WtMemoTextRunAfter $Text $A '`' $B
+    $inR = Get-WtMemoTextRunBefore $Text $B '`' $A
+    $left = $null; $right = $null
+    if ($inL -gt 0 -and $inL -lt $len) { $left = @{ N = $inL; In = $true; Pad = ($A + $inL -lt $B -and $Text[$A + $inL] -eq ' ') } }
+    else {
+        $n = Get-WtMemoTextRunBefore $Text $A '`'
+        if ($n -gt 0) { $left = @{ N = $n; In = $false; Pad = $false } }
+        elseif ($A -ge 1 -and $Text[$A - 1] -eq ' ') {
+            $n = Get-WtMemoTextRunBefore $Text ($A - 1) '`'
+            if ($n -ge 2) { $left = @{ N = $n; In = $false; Pad = $true } }
+        }
+    }
+    if ($inR -gt 0 -and $inR -lt $len) { $right = @{ N = $inR; In = $true; Pad = ($B - $inR - 1 -ge $A -and $Text[$B - $inR - 1] -eq ' ') } }
+    else {
+        $n = Get-WtMemoTextRunAfter $Text $B '`'
+        if ($n -gt 0) { $right = @{ N = $n; In = $false; Pad = $false } }
+        elseif ($B -lt $Text.Length -and $Text[$B] -eq ' ') {
+            $n = Get-WtMemoTextRunAfter $Text ($B + 1) '`'
+            if ($n -ge 2) { $right = @{ N = $n; In = $false; Pad = $true } }
+        }
+    }
+    if (-not $left -or -not $right -or $left.N -ne $right.N -or ($left.In -and $right.In -and $len -le $inL + $inR)) { return @{ Wrapped = $false } }
+    $pad = [int]($left.Pad -and $right.Pad)
+    $n = $left.N
+    if ($left.In) { $lOp = New-WtMemoTextOp $A ($n + $pad); $inA = $A + $n + $pad }
+    elseif ($left.Pad) { $lOp = New-WtMemoTextOp ($A - 1 - $n) ($n + $pad); $inA = $A }
+    else { $lOp = New-WtMemoTextOp ($A - $n) $n; $inA = $A }
+    if ($right.In) { $rOp = New-WtMemoTextOp ($B - $n - $pad) ($n + $pad); $inB = $B - $n - $pad }
+    elseif ($right.Pad) { $rOp = New-WtMemoTextOp ($B + 1 - $pad) ($n + $pad); $inB = $B }
+    else { $rOp = New-WtMemoTextOp $B $n; $inB = $B }
+    @{ Wrapped = $true; Ops = @($lOp, $rOp); InA = $inA; InB = $inB }
+}
+
+# 감싸기 고칠 곳: [A, B) 앞뒤에 표지를 넣는다
+function Get-WtMemoTextWrapOps([string]$Text, [int]$A, [int]$B, [string]$Marker) {
+    $pair = if ($Marker -eq '`') { Get-WtMemoTextCodeFence $Text.Substring($A, $B - $A) } else { @($Marker, $Marker) }
+    @((New-WtMemoTextOp $A 0 $pair[0]), (New-WtMemoTextOp $B 0 $pair[1]))
+}
+
+# 선택을 줄마다 내용 부분으로 나눈다(앞 공백 · 목록 표지 · 인용 · 제목 # 뒤, 앞뒤 공백 뺌). 빈 조각은 뺀다
+function Get-WtMemoTextSegments([string]$Text, [int]$Start, [int]$Length) {
+    $end = $Start + $Length
+    foreach ($line in (Get-WtMemoTextSelLines $Text $Start $Length)) {
+        $a = [Math]::Max($line.Start, $Start); $b = [Math]::Min($line.End, $end)
+        $a = [Math]::Max($a, $line.Start + $script:mtContent.Match($line.Text).Length)
+        while ($a -lt $b -and ($Text[$a] -eq ' ' -or $Text[$a] -eq "`t")) { $a++ }
+        while ($b -gt $a -and ($Text[$b - 1] -eq ' ' -or $Text[$b - 1] -eq "`t")) { $b-- }
+        if ($a -lt $b) { @{ A = $a; B = $b } }
+    }
+}
+
+# ---- 감싸기 (굵게 · 기울임 · 취소선 · 코드) -----------------------------------------------------
+
+# Ctrl+B(**) · Ctrl+I(*) · Alt+Shift+5(~~) · Ctrl+Shift+`(`) 켜기/끄기
+function Get-WtMemoWrapEdit($s, [string]$Marker) {
+    $t = [string]$s.Text; $pos = [int]$s.Start; $n = [int]$s.Length
+    if (-not $Marker) { return $null }
+    if ($n -gt 0) {
+        $segs = @(Get-WtMemoTextSegments $t $pos $n)
+        if (-not $segs.Count) { return $null }
+        $states = @(foreach ($g in $segs) { Get-WtMemoTextWrapState $t $g.A $g.B $Marker })
+        $all = -not @($states | Where-Object { -not $_.Wrapped }).Count
+        $ops = [System.Collections.Generic.List[object]]::new()
+        $inA = $segs[0].A; $inB = $segs[-1].B
+        for ($i = 0; $i -lt $segs.Count; $i++) {
+            if ($all) {
+                $ops.AddRange([object[]]$states[$i].Ops)
+                if ($i -eq 0) { $inA = $states[$i].InA }
+                if ($i -eq $segs.Count - 1) { $inB = $states[$i].InB }
+            } elseif (-not $states[$i].Wrapped) {
+                $ops.AddRange([object[]](Get-WtMemoTextWrapOps $t $segs[$i].A $segs[$i].B $Marker))
+            }
+        }
+        return New-WtMemoTextOpsEdit $t $ops.ToArray() $inA $inB
+    }
+
+    # 선택 없음 1) 빈 짝 사이면 짝을 지운다
+    $c = $Marker[0]
+    $before = Get-WtMemoTextRunBefore $t $pos $c; $after = Get-WtMemoTextRunAfter $t $pos $c
+    if ($Marker -eq '`') {
+        if ($before -gt 0 -and $before -eq $after) { return New-WtMemoTextResult ($pos - $before) (2 * $before) '' ($pos - $before) }
+    } elseif ((Test-WtMemoTextRun $Marker $before) -and (Test-WtMemoTextRun $Marker $after)) {
+        $m = $Marker.Length
+        return New-WtMemoTextResult ($pos - $m) (2 * $m) '' ($pos - $m)
+    }
+    # 2) 낱말 안 · 끝이면 낱말을 감싸거나 벗긴다
+    if ($pos -gt 0 -and (Test-WtMemoTextWordChar $t[$pos - 1])) {
+        $wa = $pos; $wb = $pos
+        while ($wa -gt 0 -and (Test-WtMemoTextWordChar $t[$wa - 1])) { $wa-- }
+        while ($wb -lt $t.Length -and (Test-WtMemoTextWordChar $t[$wb])) { $wb++ }
+        $state = Get-WtMemoTextWrapState $t $wa $wb $Marker
+        $ops = if ($state.Wrapped) { $state.Ops } else { Get-WtMemoTextWrapOps $t $wa $wb $Marker }
+        $e = New-WtMemoTextOpsEdit $t $ops $pos $pos
+        $e.SelStart = Get-WtMemoTextMapPos @($ops) $pos ($pos -lt $wb)   # 낱말 끝 커서는 닫는 표지 앞(안쪽)에
+        return $e
+    }
+    # 3) 짝을 넣고 커서를 가운데에
+    New-WtMemoTextResult $pos 0 ($Marker + $Marker) ($pos + $Marker.Length)
+}
+
+# ---- 글자 입력 ( ` [ ] ) ------------------------------------------------------------------------
+
+# 글자를 넣기 전에 부른다(PreviewTextInput). 해당 없으면 $null
+function Get-WtMemoTypeEdit($s, [string]$Char) {
+    $t = [string]$s.Text; $pos = [int]$s.Start; $n = [int]$s.Length
+    switch -CaseSensitive ($Char) {
+        '`' {
+            if ($n -gt 0) {
+                $sel = $t.Substring($pos, $n)
+                if (-not $sel.Contains("`n")) {
+                    # 한 줄: 인라인 코드로 감싼다 (앞뒤 공백은 밖에)
+                    $a = $pos; $b = $pos + $n
+                    while ($a -lt $b -and $t[$a] -eq ' ') { $a++ }
+                    while ($b -gt $a -and $t[$b - 1] -eq ' ') { $b-- }
+                    if ($a -ge $b) { return $null }
+                    return New-WtMemoTextOpsEdit $t (Get-WtMemoTextWrapOps $t $a $b '`') $a $b
+                }
+                # 여러 줄: 줄 단위로 넓혀 코드 블록으로
+                $lines = Get-WtMemoTextSelLines $t $pos $n
+                $first = $lines[0]; $last = $lines[-1]
+                $body = $t.Substring($first.Start, $last.End - $first.Start)
+                $nl = Get-WtMemoTextNewline $t
+                $max = 2
+                foreach ($m in [regex]::Matches($body, '(?m)^[ \t]*(`{3,})')) { if ($m.Groups[1].Length -gt $max) { $max = $m.Groups[1].Length } }
+                $fence = '`' * ($max + 1)
+                $ind = $null
+                foreach ($l in $lines) {
+                    if (-not $l.Text.Trim()) { continue }
+                    $w = $script:mtLead.Match($l.Text).Groups[2].Value
+                    $q = $script:mtLead.Match($l.Text).Groups[1].Value
+                    $lead = $q + $w
+                    if ($null -eq $ind) { $ind = $lead } else {
+                        $k = 0
+                        while ($k -lt $ind.Length -and $k -lt $lead.Length -and $ind[$k] -eq $lead[$k]) { $k++ }
+                        $ind = $ind.Substring(0, $k)
+                    }
+                }
+                if ($null -eq $ind) { $ind = '' }
+                $open = "$ind$fence$nl"
+                return New-WtMemoTextResult $first.Start $body.Length "$open$body$nl$ind$fence" ($first.Start + $open.Length) $body.Length
+            }
+            # 줄 맨 앞 ``` → 닫는 울타리를 아래 줄에
+            $line = Get-WtMemoTextLine $t $pos
+            $head = $t.Substring($line.Start, $pos - $line.Start) + '`'
+            if ($head -notmatch '^[ \t]{0,3}```$') { return $null }
+            if ($t.Substring($pos, $line.End - $pos).Trim()) { return $null }
+            $above = $script:mtFence.Matches($t.Substring(0, $line.Start)).Count
+            $below = if ($line.Next -ge 0) { $script:mtFence.Matches($t.Substring($line.Next)).Count } else { 0 }
+            if ($above % 2 -or $below % 2) { return $null }
+            $ind = [regex]::Match($line.Text, '^[ \t]*').Value
+            return New-WtMemoTextResult $pos ($line.End - $pos) ('`' + (Get-WtMemoTextNewline $t) + $ind + '```') ($pos + 1)
+        }
+        '[' {
+            if ($n -gt 0 -or $pos -lt 1 -or $t[$pos - 1] -ne '[') { return $null }
+            if ($pos -ge 2 -and $t[$pos - 2] -eq '[') { return $null }
+            if ($pos -lt $t.Length -and $t[$pos] -eq ']') { return $null }
+            $e = New-WtMemoTextResult $pos 0 '[]]' ($pos + 1)
+            $e.Suggest = 'wiki'
+            return $e
+        }
+        ']' {
+            if ($n -gt 0 -or $pos -ge $t.Length -or $t[$pos] -ne ']') { return $null }
+            $line = Get-WtMemoTextLine $t $pos
+            $head = $t.Substring($line.Start, $pos - $line.Start)
+            $k = $head.LastIndexOf('[[')
+            if ($k -lt 0 -or $head.IndexOf(']]', $k) -ge 0) { return $null }
+            return New-WtMemoTextResult $pos 0 '' ($pos + 1)
+        }
+    }
+    $null
+}
+
+# ---- Enter -----------------------------------------------------------------------------------
+
+# 다음 번호 표지 (9. → 10.), 글머리표는 그대로
+function Get-WtMemoTextNextMarker([string]$Mk) {
+    if ($Mk -match '^(\d+)([.)])$') { return "$([int64]$Matches[1] + 1)$($Matches[2])" }
+    $Mk
+}
+
+function Get-WtMemoEnterEdit($s) {
+    $t = [string]$s.Text; $pos = [int]$s.Start
+    if ([int]$s.Length -gt 0) { return $null }
+    $line = Get-WtMemoTextLine $t $pos
+    $col = $pos - $line.Start
+    $nl = Get-WtMemoTextNewline $t
+    # 커서 뒤 공백은 다음 줄로 넘기지 않는다
+    $gap = 0
+    while ($pos + $gap -lt $line.End -and ($t[$pos + $gap] -eq ' ' -or $t[$pos + $gap] -eq "`t")) { $gap++ }
+
+    # 코드 울타리 안: 줄바꿈 + 앞 공백 유지
+    if (Test-WtMemoTextInFence $t $line) {
+        $ws = [regex]::Match($line.Text, '^[ \t]*').Value
+        if ($ws.Length -gt $col) { $ws = $ws.Substring(0, $col) }
+        return New-WtMemoTextResult $pos 0 "$nl$ws" ($pos + $nl.Length + $ws.Length)
+    }
+
+    $info = Get-WtMemoTextLineInfo $line.Text
+    if ($info.List) {
+        $cs = $line.Text.Length - $info.Body.Length
+        if ($col -lt $cs) { return $null }
+        if ($info.Body.Trim()) {
+            $ins = $nl + $info.Q + $info.Ind + (Get-WtMemoTextNextMarker $info.Mk) + $info.Sp + $(if ($info.Cb) { '[ ] ' } else { '' })
+            return New-WtMemoTextResult $pos $gap $ins ($pos + $ins.Length)
+        }
+        $from = $line.Start + $info.Q.Length
+        if (-not $info.Ind) {
+            # 들여쓰기 없는 빈 항목: 표지를 지워 목록을 끝낸다
+            return New-WtMemoTextResult $from ($line.End - $from) '' $from
+        }
+        # 들여쓴 빈 항목: 한 단계 내어쓰기. 부모(더 얕은 목록 줄)의 다음 형제가 된다
+        $ind = ' ' * [Math]::Max(0, $info.W - 4); $mk = $info.Mk; $sp = $info.Sp
+        $p = Get-WtMemoTextPrevLine $t $line
+        while ($p) {
+            $pi = Get-WtMemoTextLineInfo $p.Text
+            if (-not $pi.Blank -and $pi.W -lt $info.W) {
+                if ($pi.List) {
+                    $ind = $pi.Ind; $sp = $pi.Sp
+                    $mk = if ($pi.Mk -match '^\d') { Get-WtMemoTextNextMarker $pi.Mk } else { $pi.Mk }
+                }
+                break
+            }
+            $p = Get-WtMemoTextPrevLine $t $p
+        }
+        $new = $ind + $mk + $sp + $(if ($info.Cb) { '[ ] ' } else { '' })
+        return New-WtMemoTextResult $from ($line.End - $from) $new ($from + $new.Length)
+    }
+
+    $m = $script:mtQuote.Match($line.Text)
+    if ($m.Success) {
+        $q = $m.Groups[1].Value
+        if ($col -lt $q.Length) { return $null }
+        if ($m.Groups[2].Value.Trim()) { return New-WtMemoTextResult $pos $gap "$nl$q" ($pos + $nl.Length + $q.Length) }
+        return New-WtMemoTextResult $line.Start $line.Text.Length '' $line.Start
+    }
+    $null
+}
+
+# ---- Tab / Shift+Tab -------------------------------------------------------------------------
+
+# 들여쓰기 고칠 곳: 너비 $Delta만큼 넣거나(+) 뺀다(-). 들여쓰기에 탭이 있으면 공백으로 다시 쓴다
+function Get-WtMemoTextIndentOp($Line, $Info, [int]$Delta) {
+    $at = $Line.Start + $Info.Q.Length
+    if ($Delta -gt 0) {
+        if ($Info.Ind.Contains("`t")) { return New-WtMemoTextOp $at $Info.Ind.Length (' ' * ($Info.W + $Delta)) }
+        return New-WtMemoTextOp $at 0 (' ' * $Delta)
+    }
+    $d = [Math]::Min(-$Delta, $Info.W)
+    if ($d -le 0) { return $null }
+    if ($Info.Ind.Contains("`t")) { return New-WtMemoTextOp $at $Info.Ind.Length (' ' * ($Info.W - $d)) }
+    New-WtMemoTextOp $at $d
+}
+
+function Get-WtMemoIndentEdit($s, [switch]$Outdent) {
+    $t = [string]$s.Text; $pos = [int]$s.Start; $n = [int]$s.Length
+    $lines = Get-WtMemoTextSelLines $t $pos $n
+    $group = $lines
+    $head = $null; $headLine = $null
+    foreach ($l in $lines) { $i = Get-WtMemoTextLineInfo $l.Text; if (-not $i.Blank) { $head = $i; $headLine = $l; break } }
+    if (-not $head) { return $null }
+    $isList = $head.List -and -not (Test-WtMemoTextInFence $t $headLine)
+
+    if ($lines.Count -eq 1) {
+        if ($isList) {
+            if ($Outdent -and $head.W -eq 0) { return $null }
+            # 항목과 바로 아래 자식 줄들(더 깊게 들여쓴 이어진 줄)을 같이 옮긴다
+            $list = [System.Collections.Generic.List[object]]::new(); $list.Add($headLine)
+            $nx = Get-WtMemoTextNextLine $t $headLine
+            while ($nx) {
+                $ni = Get-WtMemoTextLineInfo $nx.Text
+                if ($ni.Blank -or $ni.W -le $head.W) { break }
+                $list.Add($nx); $nx = Get-WtMemoTextNextLine $t $nx
+            }
+            $group = $list.ToArray()
+        } else {
+            if (-not $Outdent -and $n -eq 0) { return $null }
+            if ($Outdent -and $head.W -eq 0) { return $null }
+        }
+    }
+
+    # 옮길 너비
+    if ($isList) {
+        $p = Get-WtMemoTextPrevLine $t $headLine
+        if (-not $Outdent) {
+            # 바로 위의 같은 깊이 목록 줄(새 부모)의 내용 시작 위치로. 없으면 들여쓰지 않는다(코드 블록이 됨)
+            $delta = 0
+            while ($p) {
+                $pi = Get-WtMemoTextLineInfo $p.Text
+                if (-not $pi.Blank -and $pi.W -le $head.W) {
+                    if ($pi.W -eq $head.W -and $pi.List) { $delta = $pi.MW }
+                    break
+                }
+                $p = Get-WtMemoTextPrevLine $t $p
+            }
+            if ($delta -le 0) { return $null }
+        } else {
+            # 위쪽의 더 얕은 목록 줄(부모)의 들여쓰기로
+            $to = [Math]::Max(0, $head.W - 4)
+            while ($p) {
+                $pi = Get-WtMemoTextLineInfo $p.Text
+                if (-not $pi.Blank -and $pi.W -lt $head.W) { if ($pi.List) { $to = $pi.W }; break }
+                $p = Get-WtMemoTextPrevLine $t $p
+            }
+            $delta = - ($head.W - $to)
+            if ($delta -eq 0) { $delta = -4 }
+        }
+    } else {
+        $delta = if ($Outdent) { -4 } else { 4 }
+    }
+
+    $ops = @(foreach ($l in $group) {
+            $i = Get-WtMemoTextLineInfo $l.Text
+            if ($i.Blank) { continue }
+            Get-WtMemoTextIndentOp $l $i $delta
+        })
+    if (-not $ops.Count) { return $null }
+    New-WtMemoTextOpsEdit $t $ops $pos ($pos + $n)
+}
+
+# ---- Ctrl+L 할 일 ----------------------------------------------------------------------------
+
+# 줄마다: 목록 아님 → - [ ] 붙임(빈 줄도) · 체크박스 없음 → [ ] · [ ] → [x] · [x] → [ ]
+function Get-WtMemoTaskEdit($s) {
+    $t = [string]$s.Text; $pos = [int]$s.Start; $n = [int]$s.Length
+    $ops = @(foreach ($l in (Get-WtMemoTextSelLines $t $pos $n)) {
+            $m = $script:mtList.Match($l.Text)
+            if ($m.Success) {
+                $at = $l.Start + $m.Groups[1].Length + $m.Groups[2].Length + $m.Groups[3].Length + $m.Groups[4].Length
+                if ($m.Groups[5].Success) {
+                    $mark = if ($t[$at + 1] -eq ' ') { 'x' } else { ' ' }
+                    New-WtMemoTextOp ($at + 1) 1 $mark
+                } else { New-WtMemoTextOp $at 0 '[ ] ' }
+            } else {
+                New-WtMemoTextOp ($l.Start + $script:mtLead.Match($l.Text).Length) 0 '- [ ] '
+            }
+        })
+    New-WtMemoTextOpsEdit $t $ops $pos ($pos + $n)
+}
+
+# ---- Ctrl+K 링크 -----------------------------------------------------------------------------
+
+function Test-WtMemoTextUrl([string]$Text) { $script:mtUrl.IsMatch($Text.Trim()) }
+
+function Get-WtMemoLinkEdit($s) {
+    $t = [string]$s.Text; $pos = [int]$s.Start; $n = [int]$s.Length
+    $sel = $t.Substring($pos, $n)
+    if ($sel.Contains("`n") -or $sel.Contains("`r")) { return $null }
+    if (-not $n) { return New-WtMemoTextResult $pos 0 '[]()' ($pos + 1) }
+    if (Test-WtMemoTextUrl $sel) { return New-WtMemoTextResult $pos $n "[]($sel)" ($pos + 1) }
+    New-WtMemoTextResult $pos $n "[$sel]()" ($pos + $n + 3)
+}
+
+# ---- Alt+↑/↓ 줄 옮기기 -----------------------------------------------------------------------
+
+function Get-WtMemoMoveLinesEdit($s, [switch]$Up) {
+    $t = [string]$s.Text; $pos = [int]$s.Start; $n = [int]$s.Length
+    $block = Get-WtMemoTextSelLines $t $pos $n
+    if ($Up) {
+        $nb = Get-WtMemoTextPrevLine $t $block[0]
+        if (-not $nb) { return $null }
+        $old = @($nb) + $block
+        $order = @(1..$block.Count) + 0
+    } else {
+        $nb = Get-WtMemoTextNextLine $t $block[-1]
+        if (-not $nb) { return $null }
+        $old = $block + @($nb)
+        $order = @($block.Count) + @(0..($block.Count - 1))
+    }
+    # 줄바꿈은 자리마다 그대로 두고 줄만 바꾼다. 마지막 줄 뒤 줄바꿈은 범위 밖이라 그대로 남는다
+    $k = $old.Count
+    $breaks = @(for ($i = 0; $i -lt $k - 1; $i++) { $t.Substring($old[$i].End, $old[$i].Next - $old[$i].End) })
+    $regionStart = $old[0].Start; $regionEnd = $old[-1].End
+    $newIndex = @{}
+    $sb = [System.Text.StringBuilder]::new()
+    $starts = @()
+    for ($j = 0; $j -lt $k; $j++) {
+        $newIndex[$order[$j]] = $j
+        $starts += $regionStart + $sb.Length
+        [void]$sb.Append($old[$order[$j]].Text)
+        if ($j -lt $k - 1) { [void]$sb.Append($breaks[$j]) }
+    }
+    $blockIdx = @(for ($i = 0; $i -lt $block.Count; $i++) { if ($Up) { $i + 1 } else { $i } })
+    $after = { param($j) if ($j -lt $k - 1) { $starts[$j + 1] } else { $old[-1].Next } }
+    $map = {
+        param($p)
+        foreach ($i in $blockIdx) {
+            if ($p -ge $old[$i].Start -and $p -le $old[$i].End) { return $starts[$newIndex[$i]] + ($p - $old[$i].Start) }
+        }
+        # 여러 줄 선택 끝이 다음 줄 0칸: 옮긴 묶음 바로 뒤
+        & $after $newIndex[$blockIdx[-1]]
+    }
+    $a = & $map $pos
+    $b = if ($n) { & $map ($pos + $n) } else { $a }
+    New-WtMemoTextResult $regionStart ($regionEnd - $regionStart) $sb.ToString() $a ($b - $a)
+}
+
+# ---- 붙여넣기 · 끌어 놓기 --------------------------------------------------------------------
+
+# 파일 · 폴더 경로 → [이름](<C:/경로>). 역슬래시는 / 로 (CommonMark에서 \는 이스케이프라 사라진다)
+function ConvertTo-WtMemoPathLink([string]$Path, [string]$Label = '') {
+    $p = $Path.Trim().Trim('"').Trim()
+    $target = $p.Replace('\', '/')
+    if ($target -match '^[A-Za-z]:$') { $target += '/' }
+    while ($target.Length -gt 1 -and $target.EndsWith('/') -and $target -notmatch '^[A-Za-z]:/$') { $target = $target.Substring(0, $target.Length - 1) }
+    if (-not $Label) {
+        $parts = @($target.Split('/') | Where-Object { $_ })
+        $Label = if ($target -match '^[A-Za-z]:/$') { $target.Substring(0, 2) } elseif ($parts.Count) { $parts[-1] } else { $p }
+    }
+    $Label = [regex]::Replace($Label, '([\\\[\]`])', '\$1')
+    # 미리보기가 %xx를 풀어 읽으므로 이름에 든 %xx는 %25xx로
+    $target = [regex]::Replace($target, '%(?=[0-9A-Fa-f]{2})', '%25')
+    "[$Label](<$target>)"
+}
+
+function Get-WtMemoPasteEdit($s, [string]$Clip) {
+    $t = [string]$s.Text; $pos = [int]$s.Start; $n = [int]$s.Length
+    if (-not $Clip -or -not $Clip.Trim()) { return $null }
+    $sel = $t.Substring($pos, $n)
+    $oneLine = $n -gt 0 -and $sel.Trim() -and -not $sel.Contains("`n") -and -not $sel.Contains("`r")
+    # 한 줄 선택 + URL 하나 → [선택](url)
+    if ($oneLine -and (Test-WtMemoTextUrl $Clip) -and -not (Test-WtMemoTextUrl $sel)) {
+        $ins = "[$sel]($($Clip.Trim()))"
+        return New-WtMemoTextResult $pos $n $ins ($pos + $ins.Length)
+    }
+    # 모두 Windows 절대 경로 → 경로 링크
+    $paths = @($Clip -split "`r?`n" | ForEach-Object { $_.Trim().Trim('"').Trim() } | Where-Object { $_ })
+    if (-not $paths.Count -or @($paths | Where-Object { -not $script:mtPath.IsMatch($_) }).Count) { return $null }
+    $label = if ($paths.Count -eq 1 -and $oneLine) { $sel.Trim() } else { '' }
+    $ins = (@($paths | ForEach-Object { ConvertTo-WtMemoPathLink $_ $label }) -join (Get-WtMemoTextNewline $t))
+    New-WtMemoTextResult $pos $n $ins ($pos + $ins.Length)
+}
+
+# 탐색기에서 끌어 놓은 파일 · 폴더. 여러 개이고 커서가 줄 중간이면 앞에 줄바꿈 하나
+function Get-WtMemoDropEdit($s, [string[]]$Paths) {
+    $t = [string]$s.Text; $pos = [int]$s.Start; $n = [int]$s.Length
+    $list = @($Paths | Where-Object { $_ -and $_.Trim() })
+    if (-not $list.Count) { return $null }
+    $nl = Get-WtMemoTextNewline $t
+    $ins = (@($list | ForEach-Object { ConvertTo-WtMemoPathLink $_ }) -join $nl)
+    if ($list.Count -gt 1 -and $pos -gt (Get-WtMemoTextLine $t $pos).Start) { $ins = $nl + $ins }
+    New-WtMemoTextResult $pos $n $ins ($pos + $ins.Length)
+}
+} | Import-Module -Force -DisableNameChecking
+# ---- addons\memo\MemoText.psm1 끝 ----
 
 # ---- addons\schedule\Schedule.psm1 ----
 New-Module -Name 'WorkTool.addon.schedule' -ScriptBlock {
