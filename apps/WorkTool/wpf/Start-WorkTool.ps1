@@ -39,9 +39,21 @@ if ($env:DOTNET_TieredCompilation -ne '0') {
     exit $childExit
 }
 
+$previousRenderMode = $null
+$renderModeChanged = $false
 try {
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+
+# 화면은 기본으로 소프트웨어 렌더링으로 그린다. GPU 렌더링에서는 창이 앞에 있거나 탭 위에 마우스만 올려도
+# PC 전체가 버벅이는 PC가 있었고, 이 앱은 화면이 단순해서 소프트웨어로 그려도 속도 차이가 거의 없다.
+# 진단할 때만 WORKTOOL_HARDWARE_RENDER=1로 GPU 렌더링을 쓴다. 이 프로세스에만 적용되고 사용자 설정 · 레지스트리는 바꾸지 않는다.
+# 반드시 첫 창을 만들기 전에 적용한다.
+if ($env:WORKTOOL_HARDWARE_RENDER -ne '1') {
+    $previousRenderMode = [System.Windows.Media.RenderOptions]::ProcessRenderMode
+    [System.Windows.Media.RenderOptions]::ProcessRenderMode = [System.Windows.Interop.RenderMode]::SoftwareOnly
+    $renderModeChanged = $true
+}
 
 #region 모듈 불러오기 (묶음 파일에서는 이 구역이 모듈 소스로 바뀐다)
 $coreModules = 'Storage', 'Settings', 'Theme', 'Ui', 'Highlight', 'Markdown', 'Mermaid', 'Addons', 'Pages', 'Shell'
@@ -62,5 +74,9 @@ foreach ($file in (Get-ChildItem (Join-Path $PSScriptRoot 'addons') -Filter '*.p
             Add-Type -AssemblyName System.Windows.Forms
             [void][System.Windows.Forms.MessageBox]::Show($msg, 'WorkTool 시작 오류', 'OK', 'Error')
         } catch { }
+    }
+} finally {
+    if ($renderModeChanged) {
+        [System.Windows.Media.RenderOptions]::ProcessRenderMode = $previousRenderMode
     }
 }

@@ -30,6 +30,9 @@ $script:icon = $null
 $script:lastImport = $null
 $script:warmQueue = $null      # 켠 뒤 미리 만들 화면 ID (Start-WtWarmUp)
 $script:warmTimer = $null
+$script:warmEnabled = $false  # WORKTOOL_WARMUP=1인 진단 세션에서만 켠다
+$script:warmStarted = $false  # ContentRendered가 다시 와도 세션당 한 번만 예약
+$script:forceOpaque = $false  # WORKTOOL_FORCE_OPAQUE=1: 설정을 저장하지 않는 불투명 창
 
 $script:shellXaml = @'
 <Window {NS}
@@ -177,18 +180,34 @@ function Reset-WtViews {
 # 탭은 등록할 때 WarmUp을 준 것만(Addons.psm1 참고), 그다음 설정 · 도움말 차례다.
 # 화면 하나를 만드는 동안은 화면 스레드를 쓰므로, 하나 끝날 때마다 쉬어서 그사이 들어온 입력을 먼저 처리한다
 function Start-WtWarmUp {
+    if (-not $script:warmEnabled -or $script:warmStarted -or $script:exiting) { return }
+    $script:warmStarted = $true
     $ids = @(Get-WtAddon | Where-Object { $_.WarmUp } | ForEach-Object { $_.Id }) + @('_settings', '_help')
     $script:warmQueue = [System.Collections.Generic.Queue[string]]::new([string[]]$ids)
     if (-not $script:warmTimer) {
         $script:warmTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::ApplicationIdle)
         $script:warmTimer.Interval = [TimeSpan]::FromMilliseconds(300)
-        $script:warmTimer.Add_Tick({ if (-not (Invoke-WtWarmUpStep)) { $script:warmTimer.Stop() } })
+        $script:warmTimer.Add_Tick({
+            if ($script:exiting) { $script:warmTimer.Stop(); return }
+            # ApplicationIdle도 실행을 시작하면 UI를 점유한다. 사용 중이거나 숨긴 창에서는 만들지 않는다.
+            if (-not (Test-WtCanWarmUp)) { return }
+            if (-not (Invoke-WtWarmUpStep)) { $script:warmTimer.Stop() }
+        })
     }
     $script:warmTimer.Start()
 }
 
+function Test-WtCanWarmUp {
+    $w = $script:window
+    $script:warmEnabled -and -not $script:exiting -and $w -and
+        -not [System.Windows.Interop.ComponentDispatcher]::IsThreadModal -and
+        $w.IsVisible -and $w.IsEnabled -and -not $w.IsActive -and
+        $w.WindowState -ne [System.Windows.WindowState]::Minimized -and -not $script:selecting
+}
+
 # 미리 만들기 한 단계. 아직 남은 것이 있으면 $true
 function Invoke-WtWarmUpStep {
+    if ($script:exiting -or -not $script:warmEnabled) { return $false }
     while ($script:warmQueue -and $script:warmQueue.Count) {
         $id = $script:warmQueue.Dequeue()
         if ($id -eq $script:current -or ($id -notlike '_*' -and $script:views.ContainsKey($id))) { continue }   # 이미 열었다
@@ -201,6 +220,7 @@ function Invoke-WtWarmUpStep {
             $script:ui.WarmHost.UpdateLayout()
         } catch {
             # 미리 만들기는 덤이다. 실패하면 그 화면을 열 때 원래대로 만들고, 오류도 그때 알린다
+            if ($id -ne $script:current) { [void]$script:views.Remove($id) }
         } finally { $script:ui.WarmHost.Content = $null }
         return [bool]$script:warmQueue.Count
     }
@@ -256,6 +276,7 @@ function Switch-WtCollapsed { Set-WtSetting 'nav.collapsed' (-not [bool](Get-WtS
 # ---- 창 크기 · 투명도 -------------------------------------------------------------------------
 
 function Set-WtOpacity([double]$Percent = -1) {
+    if ($script:forceOpaque) { $script:window.Opacity = 1.0; return }
     if ($Percent -lt 0) { $Percent = [double](Get-WtSetting 'ui.opacity') }
     if (-not $script:window.AllowsTransparency) { return }   # 보통 창으로 띄웠으면 다시 시작해야 투명도가 바뀐다 (Test-WtOpacityNeedsRestart)
     $script:window.Opacity = [Math]::Max(0.6, [Math]::Min(1.0, $Percent / 100))
@@ -531,6 +552,11 @@ function Start-WtApp {
     $script:current = $null
     $script:maxed = $false
     $script:fullscreen = $false
+    $script:warmEnabled = $env:WORKTOOL_WARMUP -eq '1'
+    $script:warmStarted = $false
+    $script:warmQueue = $null
+    if ($script:warmTimer) { $script:warmTimer.Stop() }
+    $script:forceOpaque = $env:WORKTOOL_FORCE_OPAQUE -eq '1'
     Set-WtAppRoot $AppRoot
     $dataLock = Open-WtDataLock
     try {
@@ -543,8 +569,9 @@ function Start-WtApp {
     $w.Resources.MergedDictionaries.Add($script:themeDict)
     $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
     # 투명 창은 ClearType이 꺼져 글자가 흐리게(회색조로) 그려진다. 불투명도 100%로 시작하면 보통 창으로 만들어 또렷하게 그린다
-    if ([double](Get-WtSetting 'ui.opacity') -ge 100) {
+    if ($script:forceOpaque -or [double](Get-WtSetting 'ui.opacity') -ge 100) {
         $w.AllowsTransparency = $false
+        $w.Opacity = 1.0
         $w.SetResourceReference([System.Windows.Window]::BackgroundProperty, 'B.WindowBg')
     }
 
@@ -650,6 +677,8 @@ function Start-WtApp {
     if ($first) { Select-WtPage $first.Id } else { Select-WtPage '_settings' }
     if (-not $script:exiting) { [System.Windows.Threading.Dispatcher]::PushFrame($script:frame) }
     } finally {
+        if ($script:warmTimer) { $script:warmTimer.Stop() }
+        $script:warmQueue = $null
         try {
             if ($script:notify) { $script:notify.Visible = $false; $script:notify.Dispose() }
             if ($script:icon) { $script:icon.Dispose() }
