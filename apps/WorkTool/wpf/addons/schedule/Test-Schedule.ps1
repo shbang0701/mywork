@@ -1,9 +1,16 @@
 <#
 .SYNOPSIS
-    일정 탭을 임시 데이터로 검사한다: 예전 데이터 가져오기 · 반복 · 하루 일정 순서 · 알람 표시.
+    일정 탭을 임시 데이터로 검사한다: 형식 · schema 이전 · 모르는 값 보존 · 예전 데이터 가져오기(합치기) · 반복 펼치기 · 화면.
 
 .DESCRIPTION
     tests\Test-Core.ps1이 찾아서 돌린다. 혼자 돌려도 된다. 실제 데이터 폴더(문서\WorkTool)는 쓰지 않는다.
+    고정 시험 자료(fixtures\)는 더하기만 하고 고치지 않는다. 형식을 바꾸면 옛 자료는 그대로 두고 새 자료를 더한다.
+    그래야 예전에 쓴 파일이 계속 읽히는지 늘 확인된다. 모두 가짜 값이다.
+      legacy.csv      예전 WinForms schedule.csv (BOM 붙은 UTF-8). Excel이 바꾼 날짜 · 시각, 모르는 반복, 깨진 줄, id 없는 줄
+      v1.json         1단계 WPF가 쓴 schema 1
+      v2.json         schema 2 대표 예 (매월 31일 · 둘째 화요일 · 말일 · 2월 29일 · 격주 · 건너뛰기 · 한 회차 바꿈 · 자정 넘김 · 지운 항목)
+      v2-future.json  더 새 앱이 쓴 schema 2 흉내 (모르는 맨 위 키 · 칸 · kind · freq · 요일 코드 · 알람 모양)
+    기대 값(회차 목록 등)은 여기에 못 박아 둔다. 규칙을 바꿔 값이 바뀌면 이 파일을 일부러 고쳐야 한다.
 
 .EXAMPLE
     pwsh -NoProfile -File apps/WorkTool/wpf/addons/schedule/Test-Schedule.ps1
@@ -15,50 +22,233 @@ param()
 $ErrorActionPreference = 'Stop'
 . (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'tests/TestKit.ps1')
 Import-WtTestCore
+Import-Module (Join-Path $PSScriptRoot 'ScheduleData.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Schedule.psm1') -Force -DisableNameChecking
-$test = New-WtTestData 'schedule'
+$fixtures = Join-Path $PSScriptRoot 'fixtures'
+$inv = [System.Globalization.CultureInfo]::InvariantCulture
+$d = { param($t) [datetime]::ParseExact($t, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) }
+$tests = [System.Collections.Generic.List[object]]::new()
+
+function Copy-WtTestFixture([string]$Name) { [System.IO.File]::Copy((Join-Path $fixtures $Name), (Get-WtStorePath 'schedule'), $true) }
+function Read-WtTestDoc { [System.IO.File]::ReadAllText((Get-WtStorePath 'schedule')) | ConvertFrom-Json -Depth 20 -DateKind String }
+function Get-WtTestKeys($Occurrences) { (@($Occurrences) | ForEach-Object { $_.Key }) -join ',' }
+function Get-WtTestJson($Value) { ConvertTo-Json -InputObject $Value -Depth 20 -Compress }
+function Get-WtTestById($Entries) { $m = @{}; foreach ($e in @($Entries)) { if ($e.Id -and -not $m.ContainsKey($e.Id)) { $m[$e.Id] = $e } }; $m }
+function ConvertTo-WtTestItem([string]$Json) { $Json | ConvertFrom-Json -Depth 20 -DateKind String }
 
 try {
-    Write-WtTestLegacyCsv $test 'schedule' @'
-"Id","Date","Time","Title","Note","Alarm","Repeat","LastAlarm","Updated"
-"s1","2026-10-01","09:30","주간 회의","","10","weekly","",""
-"s2","2026-10-01","14:00","백업 확인","","","weekdays","",""
-"s3","2026-10-23","","보안 교육","","","","",""
-"s4","2026-10-20","08:00","매일 점검","","0","daily","",""
-'@
+    # ---- 예전 CSV (legacy.csv) ----
+    $test = New-WtTestData 'schedule'; $tests.Add($test)
+    [void][System.IO.Directory]::CreateDirectory($test.Legacy)
+    [System.IO.File]::Copy((Join-Path $fixtures 'legacy.csv'), (Join-Path $test.Legacy 'schedule.csv'))
     $r = Import-WtLegacyData
-    Assert-WtTest '일정: 예전 데이터를 가져온다' ($r.Count -eq 4 -and $r.Tabs.Count -eq 1) "($($r.Count) / $($r.Tabs -join ', '))"
+    Assert-WtTest '일정: 예전 CSV를 가져온다 (깨진 줄 · id 없는 줄도 버리지 않음)' ($r.Count -eq 8 -and $r.Tabs.Count -eq 1) "($($r.Count) / $($r.Tabs -join ', '))"
+    $data = Get-WtScheduleData
+    $byId = Get-WtTestById $data.Entries
+    $doc = Read-WtTestDoc
+    Assert-WtTest '일정: 가져온 파일은 schema 2 · 가져온 위치 · CSV 해시를 남긴다' ($doc.schema -eq 2 -and $doc.importedFrom -eq $test.Legacy -and $doc.legacy.sha256.Length -eq 64 -and $doc.legacy.encoding -eq 'utf-8' -and $doc.legacy.rows -eq 8) "($($doc.schema) · $($doc.importedFrom) · $($doc.legacy.rows))"
+    Assert-WtTest '일정: 가져온 항목은 원본 줄을 origin에 남기고, 울린 알람은 데이터에 넣지 않는다' (
+        -not @($doc.items | Where-Object { $_.origin.from -ne 'winforms-csv' -or $null -eq $_.origin.row }).Count -and
+        $doc.items[0].origin.row.LastAlarm -eq '2026-10-22 09:30' -and -not ($doc.items[0].PSObject.Properties.Name -contains 'lastAlarm'))
+    $s1 = $byId.s1
+    Assert-WtTest '일정: weekly → 매주 시작일 요일, 알람 → [{ before }]' ($s1.State -eq 'ok' -and $s1.Repeat.Freq -eq 'weekly' -and ($s1.Repeat.Days -join ',') -eq 'Thursday' -and ($s1.Alarms -join ',') -eq '10' -and $s1.Start -eq (& $d '2026-10-01').AddHours(9.5))
+    Assert-WtTest '일정: Excel이 바꾼 날짜 · 시각(2026/10/1 · 9:30 · 2026. 10. 30. · 오후 2:30)을 읽는다' (
+        $byId.s2.State -eq 'ok' -and $byId.s2.Item.start.date -eq '2026-10-01' -and $byId.s2.Item.start.time -eq '09:30' -and
+        $byId.s5.Item.start.date -eq '2026-10-30' -and $byId.s5.Item.start.time -eq '14:30' -and ($byId.s5.Alarms -join ',') -eq '60')
+    Assert-WtTest '일정: weekdays → 매주 월~금, daily → 매일, 쉼표 · 따옴표 · 여러 줄 메모' (
+        ($byId.s2.Repeat.Days -join ',') -eq 'Monday,Tuesday,Wednesday,Thursday,Friday' -and $byId.s4.Repeat.Freq -eq 'daily' -and ($byId.s4.Alarms -join ',') -eq '0' -and
+        $byId.s2.Note -eq '쉼표, 따옴표 "확인"' -and ($byId.s3.Note -replace "`r`n", "`n") -eq "첫 줄`n둘째 줄" -and $byId.s3.AllDay)
+    Assert-WtTest '일정: 모르는 반복 값은 읽기 전용, 깨진 날짜는 고칠 항목(원래 글을 남김)' (
+        $byId.s6.State -eq 'readonly' -and $byId.s7.State -eq 'broken' -and $byId.s7.Problem -like '*날짜*' -and $byId.s7.Item.start.date -eq '내일' -and $byId.s7.Item.origin.row.Date -eq '내일')
+    $noId = @($data.Entries | Where-Object { $_.Id -like 'csv-*' })
+    Assert-WtTest '일정: id 없는 줄은 줄 내용으로 정한 id를 받는다' ($noId.Count -eq 1 -and $noId[0].State -eq 'ok' -and $noId[0].Title -eq 'id 없는 줄')
+    $order = (@((Get-WtScheduleDays $data.Entries (& $d '2026-10-22') 1)[0]) | ForEach-Object { $_.Entry.Id }) -join ','
+    Assert-WtTest '일정: 하루 일정은 시각 순서, 같은 시각이면 제목 순서 (08:00 매일 점검 · 09:30 백업 확인 · 09:30 주간 회의)' ($order -eq 's4,s2,s1') $order
 
-    $s = Get-WtScheduleItems
-    $byId = @{}; foreach ($i in $s) { $byId[$i.id] = $i }
-    $d = { param($t) [datetime]::ParseExact($t, 'yyyy-MM-dd', $null) }
-    Assert-WtTest '일정: 매주(목) 반복' ((Test-WtScheduleOn $byId.s1 (& $d '2026-10-22')) -and -not (Test-WtScheduleOn $byId.s1 (& $d '2026-10-21')))
-    Assert-WtTest '일정: 평일 반복' (-not (Test-WtScheduleOn $byId.s2 (& $d '2026-10-24')) -and (Test-WtScheduleOn $byId.s2 (& $d '2026-10-26')))
-    Assert-WtTest '일정: 반복 없음' ((Test-WtScheduleOn $byId.s3 (& $d '2026-10-23')) -and -not (Test-WtScheduleOn $byId.s3 (& $d '2026-10-24')))
-    Assert-WtTest '일정: 매일 반복은 시작일부터' (-not (Test-WtScheduleOn $byId.s4 (& $d '2026-10-19')) -and (Test-WtScheduleOn $byId.s4 (& $d '2026-10-22')))
-    $order = (@(Get-WtScheduleOn (& $d '2026-10-22') $s) | ForEach-Object id) -join ','
-    Assert-WtTest '일정: 하루 일정은 시각 순서' ($order -eq 's4,s1,s2') $order
-    Assert-WtTest '일정: 알람 표시' ((Format-WtAlarm 0) -eq '정시' -and (Format-WtAlarm 10) -eq '10분 전' -and (Format-WtAlarm 60) -eq '1시간 전' -and (Format-WtAlarm 1440) -eq '하루 전' -and $null -eq (Format-WtAlarm ''))
-    Assert-WtTest '일정: 기간 일정 칸이 있다' ($byId.s1.endDate -eq '2026-10-01' -and $byId.s1.PSObject.Properties.Name -contains 'tags')
-    $range = & (Get-Module Schedule) { param($items) Get-WtScheduleRange ([datetime]'2026-10-20') 20 $items } $s
-    $sameRange = $true
-    for ($i = 0; $i -lt 20; $i++) {
-        $expected = @(Get-WtScheduleOn ([datetime]'2026-10-20').AddDays($i) $s).id -join ','
-        if ((@($range[$i]).id -join ',') -cne $expected) { $sameRange = $false }
+    # ---- 다시 가져오기: 덮어쓰지 않고 합친다 ----
+    $noIdKey = $noId[0].Id
+    $r2 = Import-WtLegacyData -Force
+    $m = Get-WtScheduleLastImport
+    Assert-WtTest '일정 합치기: 그대로인 CSV는 아무것도 바꾸지 않고, id 없는 줄도 같은 id' ($r2.Count -eq 0 -and $m.Unchanged -eq 8 -and (Get-WtTestById (Get-WtScheduleData).Entries).ContainsKey($noIdKey))
+    $items = @((Get-WtScheduleData).Items)
+    foreach ($i in $items) {
+        if ($i.id -eq 's1') { $i.title = '이 앱에서 고친 제목'; $i.updated = '2099-01-01T00:00:00+09:00' }
+        if ($i.id -eq 's4') { $i.deleted = '2099-01-01T00:00:00+09:00' }
     }
-    Assert-WtTest '일정: 여러 날 조회도 반복·기간·정렬이 하루 조회와 같다' ($range.Count -eq 20 -and $sameRange)
+    Save-WtScheduleItems $items
+    $csv = [System.IO.File]::ReadAllText((Join-Path $fixtures 'legacy.csv'))
+    $csv = $csv.Replace('"s1","2026-10-01","09:30","주간 회의"', '"s1","2026-10-01","09:30","예전 앱에서 고친 제목"')
+    $csv = $csv.Replace('"쉼표, 따옴표 ""확인"""', '"예전 앱에서 고친 메모"')
+    $csv = [regex]::Replace($csv, '"s3".*?둘째 줄","","","",""\r?\n', '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    $csv += '"s9","2026-11-03","13:00","새로 더한 줄","","","","",""' + "`r`n"
+    Write-WtTestLegacyCsv $test 'schedule' $csv
+    $r3 = Import-WtLegacyData -Force
+    $m = Get-WtScheduleLastImport
+    $after = Get-WtTestById (Get-WtScheduleData).Entries
+    Assert-WtTest '일정 합치기: 새 줄은 더하고, 예전 앱에서만 바뀐 줄은 새 값으로' ($r3.Count -eq 2 -and $m.Added -eq 1 -and $m.Updated -eq 1 -and $after.s9.Title -eq '새로 더한 줄' -and $after.s2.Note -eq '예전 앱에서 고친 메모') "($($r3.Count) · 더함 $($m.Added) · 바꿈 $($m.Updated))"
+    Assert-WtTest '일정 합치기: 이 앱에서 고친 항목은 두고 충돌로 알리고, 지운 항목은 되살리지 않는다' (
+        $after.s1.Title -eq '이 앱에서 고친 제목' -and ($m.Conflicts -join ',') -eq 's1' -and $after.s4.State -eq 'deleted' -and $m.KeptDeleted -eq 1)
+    Assert-WtTest '일정 합치기: 예전 CSV에서 없어진 항목은 지우지 않고 알리기만' ($after.s3.State -eq 'ok' -and ($m.Missing -join ',') -eq 's3')
+
+    # ---- 1단계 WPF 파일 (v1.json) → schema 2 ----
+    $test = New-WtTestData 'schedule-v1'; $tests.Add($test)
+    Copy-WtTestFixture 'v1.json'
+    $original = [System.IO.File]::ReadAllBytes((Get-WtStorePath 'schedule'))
+    $data = Get-WtScheduleData
+    $byId = Get-WtTestById $data.Entries
+    $doc = Read-WtTestDoc
+    $backups = @(Get-ChildItem -LiteralPath $test.Data -Filter 'schedule.json.schema1.*.bak')
+    Assert-WtTest '일정 이전: schema 1을 읽으면 2로 올려 쓰고, 맨 위 키를 잃지 않는다' (-not $data.Error -and $doc.schema -eq 2 -and $doc.importedFrom -eq 'C:\WorkTool\data' -and $doc._fixture -like '고정 시험 자료*' -and @($data.Entries | Where-Object State -eq 'ok').Count -eq 5) "$($data.Error)"
+    Assert-WtTest '일정 이전: 바꾸기 전 원본을 날짜 붙은 백업으로 그대로 남긴다' ($backups.Count -eq 1 -and $backups[0].Name -match '^schedule\.json\.schema1\.\d{8}-\d{6}\.bak$' -and
+        [Convert]::ToHexString([System.IO.File]::ReadAllBytes($backups[0].FullName)) -eq [Convert]::ToHexString($original))
+    Assert-WtTest '일정 이전: 날짜처럼 보이는 글은 글 그대로 (자동 [datetime] 변환 없음)' ($byId.s3.Note -ceq '2026-10-25T21:54:29' -and $doc.items[2].note -ceq '2026-10-25T21:54:29')
+    Assert-WtTest '일정 이전: 기간 · 태그 · 모르는 칸을 옮기고, origin은 예전 CSV 줄 모양' (
+        $byId.s8.AllDay -and $byId.s8.LastDay -eq (& $d '2026-11-03') -and ($byId.s8.Tags -join ',') -eq '교육' -and $byId.s8.Item.color -eq '모르는 칸' -and
+        $byId.s1.Item.origin.via -eq 'schema1' -and $byId.s1.Item.origin.row.Alarm -eq '10' -and $byId.s1.Item.origin.row.Date -eq '2026-10-01' -and $byId.s1.Item.updated -eq $byId.s1.Item.origin.at)
+    $null = Get-WtScheduleData
+    Assert-WtTest '일정 이전: 한 번만 바꾸고 백업도 하나' (@(Get-ChildItem -LiteralPath $test.Data -Filter 'schedule.json.schema1.*.bak').Count -eq 1)
+    [void][System.IO.Directory]::CreateDirectory($test.Legacy)
+    [System.IO.File]::Copy((Join-Path $fixtures 'legacy.csv'), (Join-Path $test.Legacy 'schedule.csv'))
+    [void](Import-WtLegacyData -Force)
+    $m = Get-WtScheduleLastImport
+    Assert-WtTest '일정 이전: 올린 뒤 예전 CSV를 다시 가져와도 같은 줄은 그대로 (s1 · s4), 1단계에만 있던 항목은 알리기만 (s8)' (
+        $m.Unchanged -eq 2 -and $m.Updated -eq 2 -and $m.Added -eq 4 -and ($m.Missing -join ',') -eq 's8') "(그대로 $($m.Unchanged) · 바꿈 $($m.Updated) · 더함 $($m.Added) · 없어짐 $($m.Missing -join ','))"
+
+    # ---- schema 2 대표 예 (v2.json) ----
+    $test = New-WtTestData 'schedule-v2'; $tests.Add($test)
+    Copy-WtTestFixture 'v2.json'
+    $original = [System.IO.File]::ReadAllBytes((Get-WtStorePath 'schedule'))
+    $data = Get-WtScheduleData
+    $byId = Get-WtTestById $data.Entries
+    $states = (@($data.Entries) | ForEach-Object { $_.State } | Group-Object | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ' '
+    Assert-WtTest '일정 v2: 모두 읽힌다 (지운 항목 2 · 나머지 계산 가능), 읽기만 해서는 파일을 바꾸지 않는다' ($states -eq 'deleted=2 ok=9' -and
+        [Convert]::ToHexString([System.IO.File]::ReadAllBytes((Get-WtStorePath 'schedule'))) -eq [Convert]::ToHexString($original)) $states
+    $keys = Get-WtTestKeys (Get-WtScheduleOccurrences $data.Entries (& $d '2026-10-26') (& $d '2026-11-15'))
+    $expected = 'a1b2c3d4e5f6@2026-10-28,s1@2026-10-29,c6c2c3d4e5f6@2026-10-30,c1c2c3d4e5f6@2026-10-31,c3c2c3d4e5f6@2026-10-31,b1b2c3d4e5f6@2026-11-02,c5c2c3d4e5f6@2026-11-02,c5c2c3d4e5f6@2026-11-04,s1@2026-11-05,c2c2c3d4e5f6@2026-11-10'
+    Assert-WtTest '일정 v2: 3주 회차 목록 (기간 · 반복 · 건너뛰기 · 한 회차 바꿈 · 자정 넘김)' ($keys -eq $expected) $keys
+    $dates = { param($id, $from, $to) (@((Get-WtScheduleOccurrences @($byId[$id]) (& $d $from) (& $d $to))) | ForEach-Object { $_.Start.ToString('yyyy-MM-dd', $inv) }) -join ',' }
+    Assert-WtTest '일정 v2: 매월 31일은 31일이 없는 달을 건너뛴다' ((& $dates 'c1c2c3d4e5f6' '2026-01-01' '2027-12-31') -eq '2026-01-31,2026-03-31,2026-05-31,2026-07-31,2026-08-31,2026-10-31,2026-12-31')
+    Assert-WtTest '일정 v2: 둘째 화요일 6회 (count)' ((& $dates 'c2c2c3d4e5f6' '2026-01-01' '2027-12-31') -eq '2026-10-13,2026-11-10,2026-12-08,2027-01-12,2027-02-09,2027-03-09')
+    Assert-WtTest '일정 v2: 말일(monthDay -1)' ((& $dates 'c3c2c3d4e5f6' '2026-10-01' '2027-03-31') -eq '2026-10-31,2026-11-30,2026-12-31,2027-01-31,2027-02-28,2027-03-31')
+    Assert-WtTest '일정 v2: 2월 29일 매년은 윤년에만' ((& $dates 'c4c2c3d4e5f6' '2024-01-01' '2032-12-31') -eq '2024-02-29,2028-02-29,2032-02-29')
+    Assert-WtTest '일정 v2: 격주 월 · 수, 끝나는 날 포함' ((& $dates 'c5c2c3d4e5f6' '2026-10-01' '2026-12-31') -eq '2026-10-05,2026-10-07,2026-10-19,2026-10-21,2026-11-02,2026-11-04,2026-11-16,2026-11-18,2026-11-30')
+    $moved = @(Get-WtScheduleOccurrences @($byId.s1) (& $d '2026-11-06') (& $d '2026-11-06'))
+    Assert-WtTest '일정 v2: 다른 날로 옮긴 회차는 옮긴 날에, 바꾼 칸만 바뀐다' ($moved.Count -eq 1 -and $moved[0].Key -eq 's1@2026-11-05' -and $moved[0].Changed -and
+        $moved[0].Start -eq (& $d '2026-11-06').AddHours(10) -and $moved[0].Note -eq '목요일 휴무로 금요일에' -and $moved[0].Title -eq '주간 회의' -and
+        -not @(Get-WtScheduleOccurrences @($byId.s1) (& $d '2026-11-05') (& $d '2026-11-05')).Count)
+    $days = Get-WtScheduleDays $data.Entries (& $d '2026-10-30') 3
+    $daysText = (@($days | ForEach-Object { (@($_) | ForEach-Object { $_.Entry.Id.Substring(0, 2) }) -join '+' }) -join ' | ')
+    Assert-WtTest '일정 v2: 날마다 목록 (자정을 넘긴 일정은 다음 날에도, 하루 종일 · 이어진 일정이 먼저)' ($daysText -eq 'c6 | c1+c6+c3 | ') $daysText
+    $span = Get-WtScheduleDays @($byId.b1b2c3d4e5f6) (& $d '2026-11-01') 5
+    Assert-WtTest '일정 v2: 하루 종일 기간 일정은 걸친 날마다' ((@($span | ForEach-Object { @($_).Count }) -join ',') -eq '0,1,1,1,0')
+
+    # ---- 더 새 앱이 쓴 파일 (v2-future.json) ----
+    $test = New-WtTestData 'schedule-future'; $tests.Add($test)
+    Copy-WtTestFixture 'v2-future.json'
+    $before = [System.IO.File]::ReadAllText((Get-WtStorePath 'schedule')) | ConvertFrom-Json -Depth 20 -DateKind String
+    $data = Get-WtScheduleData
+    $byId = Get-WtTestById $data.Entries
+    Assert-WtTest '일정 새 버전: 모르는 kind · freq · 요일 코드는 읽기 전용, 모르는 칸 · 알람 모양만 있으면 그대로 쓴다' (
+        -not $data.Error -and $byId.f1f2f3f4f5f6.State -eq 'ok' -and ($byId.f1f2f3f4f5f6.Alarms -join ',') -eq '5' -and
+        $byId.f2f2f3f4f5f6.State -eq 'readonly' -and $byId.f3f2f3f4f5f6.State -eq 'readonly' -and $byId.f4f2f3f4f5f6.State -eq 'readonly' -and $byId.f5f2f3f4f5f6.State -eq 'ok')
+    $occ = @(Get-WtScheduleOccurrences $data.Entries (& $d '2026-10-26') (& $d '2026-11-08'))
+    Assert-WtTest '일정 새 버전: 읽기 전용 항목은 회차(계산 · 알람)에서 빠진다' ((Get-WtTestKeys $occ) -eq 'f5f2f3f4f5f6@2026-10-26,f1f2f3f4f5f6@2026-10-29,f5f2f3f4f5f6@2026-11-02' -and
+        $occ[2].Title -eq '바뀐 제목') (Get-WtTestKeys $occ)
+    $items = @($data.Items)
+    $items[0].title = '이 앱에서 고친 제목'
+    Save-WtScheduleItems $items
+    $saved = Read-WtTestDoc
+    $sameOthers = $true
+    for ($i = 1; $i -lt $before.items.Count; $i++) { if ((Get-WtTestJson $before.items[$i]) -cne (Get-WtTestJson $saved.items[$i])) { $sameOthers = $false } }
+    Assert-WtTest '일정 새 버전: 한 항목을 고쳐 저장해도 모르는 맨 위 키 · 칸 · 항목이 그대로' (
+        (Get-WtTestJson $saved.sync) -ceq (Get-WtTestJson $before.sync) -and $saved._fixture -ceq $before._fixture -and $saved.items.Count -eq $before.items.Count -and $sameOthers -and
+        $saved.items[0].title -eq '이 앱에서 고친 제목' -and $saved.items[0].color -eq '#C00000' -and $saved.items[0].location.room -eq '3층 회의실' -and
+        $saved.items[0].start.zone -eq 'Asia/Seoul' -and $saved.items[0].alarms[1].at -ceq '2026-10-29T08:00' -and $saved.items[0].alarms[0].sound -eq 'chime')
+
+    # ---- 규칙 하나씩 (고칠 항목 · 횟수 · 끝나는 날) ----
+    $base = '"id": "x", "kind": "event", "title": "x", "note": "", "alarms": [], "tags": []'
+    $cases = [ordered]@{
+        '끝나는 날과 횟수 둘 다' = "{ $base, ""start"": { ""date"": ""2026-10-01"", ""time"": null }, ""end"": null, ""repeat"": { ""freq"": ""daily"", ""until"": ""2026-10-05"", ""count"": 3 } }"
+        '끝이 시작보다 이름' = "{ $base, ""start"": { ""date"": ""2026-10-02"", ""time"": ""10:00"" }, ""end"": { ""date"": ""2026-10-01"", ""time"": ""11:00"" } }"
+        '한쪽에만 시각' = "{ $base, ""start"": { ""date"": ""2026-10-01"", ""time"": ""10:00"" }, ""end"": { ""date"": ""2026-10-02"", ""time"": null } }"
+        '글로 쓴 알람' = "{ $base, ""start"": { ""date"": ""2026-10-01"", ""time"": ""10:00"" }, ""end"": null, ""alarms"": [ { ""before"": ""10"" } ] }"
+        '매주에 monthDay' = "{ $base, ""start"": { ""date"": ""2026-10-01"", ""time"": null }, ""end"": null, ""repeat"": { ""freq"": ""weekly"", ""monthDay"": 3 } }"
+        '요일 없는 nth' = "{ $base, ""start"": { ""date"": ""2026-10-01"", ""time"": null }, ""end"": null, ""repeat"": { ""freq"": ""monthly"", ""nth"": 2 } }"
+        '없는 날짜' = "{ $base, ""start"": { ""date"": ""2026-02-30"", ""time"": null }, ""end"": null }"
+        '24시' = "{ $base, ""start"": { ""date"": ""2026-10-01"", ""time"": ""24:00"" }, ""end"": null }"
+    }
+    $wrong = @(foreach ($k in $cases.Keys) { $e = ConvertFrom-WtScheduleItem (ConvertTo-WtTestItem $cases[$k]); if ($e.State -ne 'broken') { "$k=$($e.State)" } })
+    Assert-WtTest '일정 규칙: 틀린 값은 고칠 항목' (-not $wrong.Count) ($wrong -join ', ')
+    $e = ConvertFrom-WtScheduleItem (ConvertTo-WtTestItem "{ $base, ""start"": { ""date"": ""2026-10-01"", ""time"": null }, ""end"": null, ""repeat"": { ""freq"": ""daily"", ""interval"": 2, ""count"": 4, ""skip"": [ ""2026-10-03"" ] } }")
+    Assert-WtTest '일정 규칙: 횟수는 건너뛴 회차도 센다 (RFC 5545)' ((Get-WtTestKeys (Get-WtScheduleOccurrences @($e) (& $d '2026-09-01') (& $d '2026-12-31'))) -eq 'x@2026-10-01,x@2026-10-05,x@2026-10-07') (Get-WtTestKeys (Get-WtScheduleOccurrences @($e) (& $d '2026-09-01') (& $d '2026-12-31')))
+    $e = ConvertFrom-WtScheduleItem (ConvertTo-WtTestItem "{ $base, ""start"": { ""date"": ""2026-10-01"", ""time"": null }, ""end"": null, ""repeat"": { ""freq"": ""weekly"" } }")
+    Assert-WtTest '일정 규칙: 요일 없는 매주는 시작일 요일, 칸이 없어도 기본값' ($e.State -eq 'ok' -and (Get-WtTestKeys (Get-WtScheduleOccurrences @($e) (& $d '2026-10-01') (& $d '2026-10-15'))) -eq 'x@2026-10-01,x@2026-10-08,x@2026-10-15')
+    $e = ConvertFrom-WtScheduleItem (ConvertTo-WtTestItem "{ $base, ""start"": { ""date"": ""2026-10-01"", ""time"": ""09:00"" }, ""end"": null, ""repeat"": { ""freq"": ""daily"", ""until"": ""2026-10-03"" } }")
+    Assert-WtTest '일정 규칙: 끝나는 날은 그날 포함, 범위가 시작보다 한참 뒤여도 빠르게 건너뛴다' (
+        (Get-WtTestKeys (Get-WtScheduleOccurrences @($e) (& $d '2026-09-01') (& $d '2026-12-31'))) -eq 'x@2026-10-01,x@2026-10-02,x@2026-10-03')
+    $e = ConvertFrom-WtScheduleItem (ConvertTo-WtTestItem "{ $base, ""start"": { ""date"": ""2000-01-03"", ""time"": ""09:00"" }, ""end"": null, ""repeat"": { ""freq"": ""weekly"", ""interval"": 3, ""days"": [ ""mon"" ] } }")
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    $far = Get-WtTestKeys (Get-WtScheduleOccurrences @($e) (& $d '2026-10-01') (& $d '2026-10-31'))
+    # 2000-01-03(월)부터 3주마다: 2026-10-05는 1396주째(3의 배수 아님), 2026-10-19가 1398주째
+    Assert-WtTest "일정 규칙: 오래전에 시작한 3주마다 반복도 주 간격을 지키고 빠르게 건너뛴다 ($($watch.ElapsedMilliseconds)ms)" ($far -eq 'x@2026-10-19' -and $watch.ElapsedMilliseconds -lt 2000) $far
+
+    # ---- 문화권이 달라도 같은 결과 (날짜 글 · 숫자) ----
+    $rows = (Read-WtLegacyCsv $fixtures 'legacy').Rows
+    $v2 = (Get-Content -LiteralPath (Join-Path $fixtures 'v2.json') -Raw -Encoding utf8 | ConvertFrom-Json -Depth 20 -DateKind String).items
+    $snapshot = {
+        $converted = Get-WtTestJson @(foreach ($row in $rows) { ConvertFrom-WtScheduleRow $row '2026-10-26T09:00:00+09:00' })
+        $entries = @(foreach ($i in $v2) { ConvertFrom-WtScheduleItem $i })
+        $occ = (@(Get-WtScheduleOccurrences $entries (& $d '2026-10-01') (& $d '2027-03-31')) | ForEach-Object { "$($_.Key)=$($_.Start.ToString('yyyy-MM-dd HH:mm', $inv))~$($_.End.ToString('yyyy-MM-dd HH:mm', $inv))" }) -join ';'
+        "$converted|$occ"
+    }
+    $thread = [System.Threading.Thread]::CurrentThread
+    $oldCulture = $thread.CurrentCulture
+    $results = @{}
+    try {
+        foreach ($c in 'en-US', 'ko-KR', 'th-TH', 'ar-SA') { $thread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($c); $results[$c] = & $snapshot }
+    } finally { $thread.CurrentCulture = $oldCulture }
+    Assert-WtTest '일정: 문화권(en-US · ko-KR · th-TH 불기 · ar-SA 회교력)이 달라도 가져오기 · 회차가 같다' (@($results.Values | Sort-Object -Unique).Count -eq 1)
+
+    # ---- 읽을 수 없는 파일: 화면은 열리고 파일은 그대로 ----
+    $test = New-WtTestData 'schedule-bad'; $tests.Add($test)
+    $bad = [ordered]@{ '더 새 schema' = '{ "schema": 3, "items": [] }'; '깨진 JSON' = '{ "schema": 2, "items": [ { "id": '; 'schema 없음' = '{ "items": [] }' }
+    foreach ($k in $bad.Keys) {
+        [System.IO.File]::WriteAllText((Get-WtStorePath 'schedule'), $bad[$k], [System.Text.UTF8Encoding]::new($false))
+        $data = Get-WtScheduleData
+        $importError = $null
+        [void][System.IO.Directory]::CreateDirectory($test.Legacy)
+        [System.IO.File]::Copy((Join-Path $fixtures 'legacy.csv'), (Join-Path $test.Legacy 'schedule.csv'), $true)
+        try { [void](Import-WtLegacyData -Force) } catch { $importError = $_.Exception.Message }
+        Assert-WtTest "일정 못 읽는 파일($k): 오류로 알리고, 다시 가져오기도 덮어쓰지 않는다" ($data.Error -and -not $data.Entries.Count -and $importError -and
+            [System.IO.File]::ReadAllText((Get-WtStorePath 'schedule')) -ceq $bad[$k]) "$($data.Error) / $importError"
+    }
+
     if (Test-WtTestWpf) {
+        $test = New-WtTestData 'schedule-view'; $tests.Add($test)
+        [void][System.IO.Directory]::CreateDirectory($test.Legacy)
+        [System.IO.File]::Copy((Join-Path $fixtures 'legacy.csv'), (Join-Path $test.Legacy 'schedule.csv'))
+        [void](Import-WtLegacyData)
         $module = Get-Module Schedule
         $view = New-WtTestView 'schedule'
-        & $module { Update-WtScheduleView; $script:testFirst = $script:list.Children[0]; Update-WtScheduleView }
-        Assert-WtTest '일정: 같은 데이터는 화면을 다시 만들지 않는다' (& $module { [object]::ReferenceEquals($script:testFirst, $script:list.Children[0]) })
-        $byId.s4.title = '바뀐 매일 점검'
-        Write-WtStore schedule -Items $s
+        & $module { Update-WtScheduleView; $script:testFirst = $script:body.Children[0]; Update-WtScheduleView }
+        Assert-WtTest '일정 화면: 같은 데이터는 다시 만들지 않는다' (& $module { [object]::ReferenceEquals($script:testFirst, $script:body.Children[0]) })
+        $texts = @(Get-WtTestTexts $view)
+        Assert-WtTest '일정 화면: 매일 반복 · 고칠 항목 · 새 버전 항목을 보여 준다' ($texts -contains '매일 점검' -and @($texts | Where-Object { $_ -like '고칠 항목*' }).Count -eq 1 -and
+            @($texts | Where-Object { $_ -like '새 버전에서 만든 항목*' }).Count -eq 1 -and $texts -contains '날짜가 깨진 줄')
+        $items = @((Get-WtScheduleData).Items)
+        foreach ($i in $items) { if ($i.id -eq 's4') { $i.title = '바뀐 매일 점검' } }
+        Save-WtScheduleItems $items
         & $module { Update-WtScheduleView }
-        Assert-WtTest '일정: 외부 저장 변경을 재진입 때 반영한다' ((Get-WtTestTexts $view) -contains '바뀐 매일 점검')
-        & $module { $script:testFirst = $script:list.Children[0]; $script:viewKey = '어제'; Update-WtScheduleView }
-        Assert-WtTest '일정: 날짜 키가 바뀌면 다시 만든다' (& $module { -not [object]::ReferenceEquals($script:testFirst, $script:list.Children[0]) })
+        Assert-WtTest '일정 화면: 저장이 바뀌면 다시 들어올 때 반영한다' ((Get-WtTestTexts $view) -contains '바뀐 매일 점검')
+        & $module { $script:testFirst = $script:body.Children[0]; $script:viewKey = '어제'; Update-WtScheduleView }
+        Assert-WtTest '일정 화면: 날짜 키가 바뀌면 다시 만든다' (& $module { -not [object]::ReferenceEquals($script:testFirst, $script:body.Children[0]) })
+        $cards = @(& $module { New-WtScheduleHomeCards })
+        Assert-WtTest '일정 화면: 홈 카드 둘' ($cards.Count -eq 2 -and @(Get-WtTestTexts $cards[0] | Where-Object { $_ -like '오늘 일정*' }).Count -eq 1)
+        [System.IO.File]::WriteAllText((Get-WtStorePath 'schedule'), '{ "schema": 3, "items": [] }', [System.Text.UTF8Encoding]::new($false))
+        & $module { Update-WtScheduleView }
+        $texts = @(Get-WtTestTexts $view)
+        Assert-WtTest '일정 화면: 못 읽는 파일이면 화면은 열고 이유를 보여 준다' ($texts -contains '일정 파일을 읽지 못했습니다' -and @($texts | Where-Object { $_ -like '*더 새 버전*' }).Count -eq 1)
     }
 } finally {
-    Remove-WtTestData $test
+    foreach ($t in $tests) { Remove-WtTestData $t }
 }

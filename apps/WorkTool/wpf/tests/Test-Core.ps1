@@ -25,6 +25,7 @@ $script:failed = 0
 function Assert-Wt([string]$Name, [bool]$Ok, $Detail = '') {
     if ($Ok) { Write-Host "PASS $Name" } else { Write-Host "FAIL $Name $Detail" -ForegroundColor Red; $script:failed++ }
 }
+function Get-WtTestJsonCore($Value) { ConvertTo-Json -InputObject $Value -Depth 20 -Compress }
 
 $test = New-WtTestData 'core'
 $wpf = Test-WtTestWpf
@@ -139,10 +140,129 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
         $d
     }
     Assert-Wt '형식 변환: schema 1 → 2' ($doc.schema -eq 2 -and $doc.items[0].extra -eq 'from1')
-    Assert-Wt '형식 변환 전 원본을 남긴다' (Test-Path ((Get-WtStorePath 'mig') + '.schema1.bak'))
+    $migBackups = @(Get-ChildItem -LiteralPath $test.Data -Filter 'mig.json.schema1.*.bak' | ForEach-Object Name)
+    Assert-Wt '형식 변환 전 원본을 날짜 붙은 백업으로 남긴다' ($migBackups.Count -eq 1 -and $migBackups[0] -match '^mig\.json\.schema1\.\d{8}-\d{6}\.bak$') ($migBackups -join ', ')
     $threw = $false
     try { [void](Read-WtStore -Name 'mig' -Schema 1) } catch { $threw = $true }
     Assert-Wt '더 새 형식 파일은 읽지 않고 멈춘다' $threw
+
+    # 형식 규칙 (core\Records.psm1 · 저장 모듈): 가짜 저장소로 본다. 칸의 뜻은 탭이 정하고, 여기서는 모양만 본다
+    $raw = { param($name, $json) [System.IO.File]::WriteAllText((Get-WtStorePath $name), $json, [System.Text.UTF8Encoding]::new($false)) }
+    & $raw 'kind-text' '{ "schema": 1, "saved": "2026-10-25T21:54:29", "future": { "a": 1 }, "items": [ { "id": "k1", "at": "2026-10-25T21:54:29", "when": "2026-10-25T21:54:29+09:00", "n": 3 } ] }'
+    $kt = Get-WtStoreItems 'kind-text'
+    Assert-Wt '저장: 날짜처럼 보이는 글을 [datetime]으로 바꾸지 않는다 (-DateKind String)' ($kt[0].at -is [string] -and $kt[0].at -ceq '2026-10-25T21:54:29' -and $kt[0].when -ceq '2026-10-25T21:54:29+09:00')
+    Write-WtStore 'kind-text' -Items @($kt)
+    $ktDoc = [System.IO.File]::ReadAllText((Get-WtStorePath 'kind-text')) | ConvertFrom-Json -DateKind String
+    Assert-Wt '저장: 맨 위의 모르는 키는 다시 써도 남고, saved는 시간대 붙은 시각' ($ktDoc.future.a -eq 1 -and $ktDoc.items[0].at -ceq '2026-10-25T21:54:29' -and
+        $ktDoc.saved -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$') $ktDoc.saved
+    & $raw 'mig-top' '{ "schema": 1, "saved": "x", "importedFrom": "C:\\old", "future": [ 1, 2 ], "items": [ { "id": "t1" } ] }'
+    $mt = Read-WtStore -Name 'mig-top' -Schema 2 -Migrate { param($doc, $from) foreach ($i in $doc.items) { $i | Add-Member -NotePropertyName v -NotePropertyValue $from -Force }; $doc }
+    $mtDoc = [System.IO.File]::ReadAllText((Get-WtStorePath 'mig-top')) | ConvertFrom-Json -DateKind String
+    Assert-Wt '형식 변환: 맨 위의 모르는 키를 잃지 않고, 저장한 모양 그대로 돌려준다' ($mtDoc.schema -eq 2 -and $mtDoc.importedFrom -eq 'C:\old' -and ($mtDoc.future -join ',') -eq '1,2' -and
+        $mt.items[0].v -eq 1 -and $mt.importedFrom -eq 'C:\old')
+    $failText = '{ "schema": 1, "items": [ { "id": "f1" } ] }'
+    & $raw 'mig-fail' $failText
+    $failError = $null
+    try { [void](Read-WtStore -Name 'mig-fail' -Schema 2 -Migrate { param($doc, $from) throw '일부러 낸 변환 오류' }) } catch { $failError = $_.Exception.Message }
+    Assert-Wt '형식 변환: 실패하면 원본 파일 · 백업을 건드리지 않고 이유를 알린다' ($failError -like '*원본 파일은 그대로*일부러 낸 변환 오류*' -and
+        [System.IO.File]::ReadAllText((Get-WtStorePath 'mig-fail')) -ceq $failText -and -not @(Get-ChildItem -LiteralPath $test.Data -Filter 'mig-fail.json.*.bak').Count) $failError
+    $badSchema = foreach ($j in '{ "items": [] }', '{ "schema": "2", "items": [] }', '{ "schema": 1.5, "items": [] }', '[ 1, 2 ]') {
+        & $raw 'bad-schema' $j
+        $e = $null; try { [void](Get-WtStoreItems 'bad-schema') } catch { $e = $_.Exception.Message }
+        if ($e -notlike '*형식 번호*' -or [System.IO.File]::ReadAllText((Get-WtStorePath 'bad-schema')) -cne $j) { $j }
+    }
+    Assert-Wt '저장: schema가 없거나 숫자가 아니면 읽지 않고 파일도 그대로' (-not @($badSchema).Count) (@($badSchema) -join ' | ')
+    $storageModule = Get-Module Storage
+    $stem = Join-Path $test.Data 'backup-test.json.schema1.20261026-090000'
+    & $raw 'backup-test' '{ "schema": 1, "items": [] }'
+    $b1 = & $storageModule { param($p, $s) Invoke-WtDataIo Backup -Arguments $p, $s, $null } (Get-WtStorePath 'backup-test') $stem
+    $b2 = & $storageModule { param($p, $s) Invoke-WtDataIo Backup -Arguments $p, $s, '보류된 내용' } (Get-WtStorePath 'backup-test') $stem
+    Assert-Wt '저장: 변환 전 백업은 덮어쓰지 않고 -2를 붙이며, 아직 파일에 쓰이지 않은 내용은 그 글로 남긴다' ($b1 -eq "$stem.bak" -and $b2 -eq "$stem-2.bak" -and
+        [System.IO.File]::ReadAllText($b1) -ceq '{ "schema": 1, "items": [] }' -and [System.IO.File]::ReadAllText($b2) -ceq '보류된 내용')
+
+    Assert-Wt '형식: 앱이 찍는 시각은 시간대 포함 · 날짜 · 시각 글은 정한 모양만' (
+        (Get-WtStamp ([datetime]'2026-10-25 21:54:29')) -match '^2026-10-25T21:54:29[+-]\d{2}:\d{2}$' -and (ConvertFrom-WtStamp '2026-10-25T21:54:29+09:00').Offset.TotalHours -eq 9 -and
+        $null -eq (ConvertFrom-WtStamp '2026-10-25 21:54:29') -and (ConvertFrom-WtDateText '2026-02-28') -eq [datetime]'2026-02-28' -and $null -eq (ConvertFrom-WtDateText '2026-02-30') -and
+        $null -eq (ConvertFrom-WtDateText '2026-1-5') -and (ConvertFrom-WtTimeText '09:30') -eq [timespan]'09:30' -and $null -eq (ConvertFrom-WtTimeText '9:30') -and $null -eq (ConvertFrom-WtTimeText '24:00'))
+    $looseDates = @('2026-10-01', '2026-10-1', '2026/10/1', '2026.10.01', '2026. 10. 1.', '20261001', '10/1/2026', ' 2026-10-01 ') | ForEach-Object { ConvertFrom-WtLegacyDate $_ }
+    $looseTimes = @('9:30', '09:30', '09:30:00', '오전 9:30', '오후 2:30', '2:30 PM', '오후 2:30:00') | ForEach-Object { ConvertFrom-WtLegacyTime $_ }
+    Assert-Wt '형식: 예전 CSV 값은 Excel이 바꾼 모양도 읽고, 못 읽으면 $null' (
+        (@($looseDates | Sort-Object -Unique) -join ',') -eq '2026-10-01' -and @($looseDates).Count -eq 8 -and (($looseTimes | Select-Object -Unique) -join ',') -eq '09:30,14:30' -and
+        $null -eq (ConvertFrom-WtLegacyDate '내일') -and $null -eq (ConvertFrom-WtLegacyDate '2026-13-01') -and $null -eq (ConvertFrom-WtLegacyTime '25:00') -and
+        (ConvertFrom-WtLegacyStamp '2026-10-25 21:54:29') -match '^2026-10-25T21:54:29[+-]\d{2}:\d{2}$' -and (ConvertFrom-WtLegacyStamp '2026-10-25T21:54:29+09:00') -ceq '2026-10-25T21:54:29+09:00' -and
+        $null -eq (ConvertFrom-WtLegacyStamp '모름')) "$($looseDates -join ',') / $($looseTimes -join ',')"
+    $thread = [System.Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture
+    try {
+        $thread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('th-TH')
+        $thai = @((ConvertTo-WtDateText ([datetime]'2026-10-25')), (Get-WtStamp ([datetime]'2026-10-25 09:00')).Substring(0, 19), (ConvertFrom-WtLegacyDate '2026/10/25'))
+    } finally { $thread.CurrentCulture = $oldCulture }
+    Assert-Wt '형식: 불기 · 회교력 문화권에서도 그레고리력 글 (th-TH)' (($thai -join '|') -eq '2026-10-25|2026-10-25T09:00:00|2026-10-25') ($thai -join '|')
+    $fieldObj = [pscustomobject]@{ a = 1 }
+    Set-WtField $fieldObj 'b' @('x'); Set-WtField $fieldObj 'a' 2
+    Assert-Wt '형식: 칸 읽기 · 넣기 (없는 count는 PowerShell의 Count(1)가 아니라 $null)' ($null -eq (Get-WtField $fieldObj 'count') -and $fieldObj.count -eq 1 -and $fieldObj.a -eq 2 -and
+        $fieldObj.b -is [array] -and (Get-WtField ([ordered]@{ count = 3 }) 'count') -eq 3 -and @(Copy-WtItem @($fieldObj, $fieldObj)).Count -eq 2 -and (Copy-WtItem $fieldObj).a -eq 2)
+    $now = [DateTimeOffset]::new(2026, 10, 26, 9, 0, 0, [timespan]::FromHours(9))
+    $del = @(Compress-WtDeletedItems @(
+            [pscustomobject]@{ id = 'old'; title = '지운 지 오래'; deleted = '2026-07-01T09:00:00+09:00' },
+            [pscustomobject]@{ id = 'new'; title = '최근에 지움'; deleted = '2026-10-01T09:00:00+09:00' },
+            [pscustomobject]@{ id = 'bad'; title = '시각 모름'; deleted = '언젠가' },
+            [pscustomobject]@{ id = 'live'; title = '살아 있음'; deleted = $null },
+            [pscustomobject]@{ id = 'no'; title = 'false'; deleted = $false }) -Days 90 -Now $now)
+    Assert-Wt '형식: 지운 지 90일 지난 기록은 { id, deleted }만 남기고, 나머지는 그대로' ((Get-WtTestJsonCore $del[0]) -ceq '{"id":"old","deleted":"2026-07-01T09:00:00+09:00"}' -and
+        $del[1].title -eq '최근에 지움' -and $del[2].title -eq '시각 모름' -and -not (Test-WtDeleted $del[3]) -and -not (Test-WtDeleted $del[4]) -and (Test-WtDeleted $del[2]) -and $del.Count -eq 5)
+    $mOld = @(
+        [pscustomobject]@{ id = 'same'; title = 'A'; updated = 't0'; origin = [pscustomobject]@{ from = 'winforms-csv'; at = 't0'; row = [pscustomobject]@{ Id = 'same'; T = 'A' } } },
+        [pscustomobject]@{ id = 'theirs'; title = 'B'; extra = '남길 칸'; updated = 't0'; origin = [pscustomobject]@{ from = 'winforms-csv'; at = 't0'; row = [pscustomobject]@{ Id = 'theirs'; T = 'B' } } },
+        [pscustomobject]@{ id = 'both'; title = '고침'; updated = 't9'; origin = [pscustomobject]@{ from = 'winforms-csv'; at = 't0'; row = [pscustomobject]@{ Id = 'both'; T = 'C' } } },
+        [pscustomobject]@{ id = 'gone'; deleted = 't9' },
+        [pscustomobject]@{ id = 'mine'; title = '이 앱에서 만듦'; updated = 't9'; origin = $null },
+        [pscustomobject]@{ id = 'left'; title = 'L'; updated = 't0'; origin = [pscustomobject]@{ from = 'winforms-csv'; at = 't0'; row = [pscustomobject]@{ Id = 'left' } } })
+    $mNew = @(foreach ($p in @(@('same', 'A'), @('theirs', 'B2'), @('both', 'C2'), @('gone', 'G'), @('mine', 'M'), @('add', 'N'), @('add', '겹친 줄'))) {
+            [pscustomobject]@{ id = $p[0]; title = $p[1]; updated = 't1'; origin = [pscustomobject]@{ from = 'winforms-csv'; at = 't1'; row = [pscustomobject]@{ T = $p[1]; Id = $p[0] } } }
+        })
+    $mr = Merge-WtLegacyItems -Items $mOld -Incoming $mNew
+    $mById = @{}; foreach ($i in $mr.Items) { $mById[$i.id] = $i }
+    Assert-Wt '형식: 예전 데이터 합치기 (그대로 · 예전 쪽만 바뀜 · 양쪽 다 고침 · 지운 것 · 이 앱에서 만든 것 · 새 줄 · 없어진 줄)' (
+        $mr.Unchanged -eq 1 -and $mr.Updated -eq 1 -and $mr.Added -eq 1 -and $mr.KeptDeleted -eq 1 -and ($mr.Conflicts -join ',') -eq 'both,mine' -and ($mr.Missing -join ',') -eq 'left' -and
+        $mById.theirs.title -eq 'B2' -and $mById.theirs.extra -eq '남길 칸' -and $mById.both.title -eq '고침' -and $null -eq $mById.gone.title -and $mById.add.title -eq 'N' -and
+        $mr.Items.Count -eq 7 -and (Get-WtRowKey ([pscustomobject]@{ a = 1; b = 2 })) -ceq (Get-WtRowKey ([ordered]@{ b = 2; a = 1 })))
+
+    # 예전 CSV 인코딩: WinForms는 BOM 붙은 UTF-8, Excel로 다시 저장하면 BOM 없는 CP949가 될 수 있다. 어느 쪽이든 한글이 그대로 읽힌다
+    $csvText = "`"Id`",`"Title`"`r`n`"e1`",`"한글 제목, 쉼표`"`r`n"
+    $encDir = Join-Path $test.Root 'legacy-enc'
+    [void][System.IO.Directory]::CreateDirectory($encDir)
+    $encResults = foreach ($enc in @(@('bom', [System.Text.UTF8Encoding]::new($true)), @('utf8', [System.Text.UTF8Encoding]::new($false)), @('cp949', [System.Text.Encoding]::GetEncoding(949)))) {
+        [System.IO.File]::WriteAllBytes((Join-Path $encDir "$($enc[0]).csv"), [byte[]]@($enc[1].GetPreamble()) + $enc[1].GetBytes($csvText))
+        $rc = Read-WtLegacyCsv $encDir $enc[0]
+        "$($enc[0])=$($rc.Encoding):$($rc.Rows[0].Title):$($rc.Sha256.Length)"
+    }
+    Assert-Wt '예전 CSV: BOM UTF-8 · BOM 없는 UTF-8 · CP949 모두 한글이 그대로 읽힌다' (($encResults -join '|') -eq 'bom=utf-8:한글 제목, 쉼표:64|utf8=utf-8:한글 제목, 쉼표:64|cp949=cp949:한글 제목, 쉼표:64') ($encResults -join '|')
+    Assert-Wt '예전 CSV: 없으면 $null, 빈 파일이면 빈 줄 목록' ($null -eq (Read-WtLegacyCsv $encDir 'none') -and $(
+            [System.IO.File]::WriteAllText((Join-Path $encDir 'empty.csv'), ''); $e = Read-WtLegacyCsv $encDir 'empty'; $e.Rows.Count -eq 0 -and (Import-WtLegacyCsv $encDir 'empty').Count -eq 0))
+
+    # ---- 휴무일 (core\Calendar.psm1, 고정 시험 자료 tests\fixtures\holidays*.json: 더하기만 하고 고치지 않는다) ----
+    [System.IO.File]::Copy((Join-Path $PSScriptRoot 'fixtures\holidays.json'), (Get-WtStorePath 'holidays'), $true)
+    $hd = Get-WtHolidayData
+    $hStates = (@($hd.Entries) | ForEach-Object { "$($_.Id.Substring(0, 2))=$($_.State)" }) -join ','
+    $hSet = Get-WtHolidayDates   # 날짜 모음(HashSet) 하나를 돌려준다. 변수에 받은 뒤 펼친다
+    $hDates = @($hSet) | Sort-Object
+    $hOct = Get-WtHolidayDates ([datetime]'2026-10-05') ([datetime]'2026-10-31')
+    Assert-Wt '휴무일: 공휴일 · 개인 · 회사 휴무를 읽고, 지운 것 · 날짜가 깨진 것은 계산에서 뺀다' (-not $hd.Error -and $hStates -eq 'h2=ok,h2=ok,p1=ok,c1=ok,x1=deleted,b1=broken' -and
+        ($hDates -join ',') -eq '2026-10-03,2026-10-08,2026-10-09,2026-11-20' -and ((@($hOct) | Sort-Object) -join ',') -eq '2026-10-08,2026-10-09') "$hStates / $($hDates -join ',')"
+    [System.IO.File]::Copy((Join-Path $PSScriptRoot 'fixtures\holidays-future.json'), (Get-WtStorePath 'holidays'), $true)
+    $hBefore = [System.IO.File]::ReadAllText((Get-WtStorePath 'holidays')) | ConvertFrom-Json -Depth 20 -DateKind String
+    $hd = Get-WtHolidayData
+    $hSet = Get-WtHolidayDates
+    Assert-Wt '휴무일 새 버전: 모르는 종류는 읽기 전용(계산에서 뺌)' (((@($hd.Entries) | ForEach-Object State) -join ',') -eq 'ok,readonly' -and (@($hSet) -join ',') -eq '2026-12-25')
+    $hItems = @($hd.Items); $hItems[0].name = '고친 이름'
+    Save-WtHolidayItems $hItems
+    $hAfter = [System.IO.File]::ReadAllText((Get-WtStorePath 'holidays')) | ConvertFrom-Json -Depth 20 -DateKind String
+    Assert-Wt '휴무일 새 버전: 고쳐 저장해도 모르는 맨 위 키 · 칸 · 항목이 그대로' ((Get-WtTestJsonCore $hAfter.region) -ceq (Get-WtTestJsonCore $hBefore.region) -and $hAfter.items[0].name -eq '고친 이름' -and
+        $hAfter.items[0].observed -eq $true -and $hAfter.items[0].origin.line -eq 12 -and (Get-WtTestJsonCore $hAfter.items[1]) -ceq (Get-WtTestJsonCore $hBefore.items[1]))
+    & $raw 'holidays' '{ "schema": 2, "items": [] }'
+    $hd = Get-WtHolidayData
+    $hSet = Get-WtHolidayDates
+    Assert-Wt '휴무일: 못 읽으면 예외 없이 오류만 알리고 계산에는 휴무일이 없다' ($hd.Error -like '*더 새 버전*' -and $hSet.Count -eq 0)
 
     # ---- 설정 ----
     Initialize-WtSettings

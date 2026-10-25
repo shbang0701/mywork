@@ -1,7 +1,12 @@
 # 저장 담당. 기능 모듈은 파일을 직접 읽고 쓰지 않고 이 모듈만 거친다.
 # - 데이터는 앱 폴더 밖(기본: 문서\WorkTool)에 둔다. 앱을 새 버전으로 덮어써도 데이터는 그대로다.
 # - 저장소(store) 하나 = JSON 파일 하나. 파일마다 schema 번호를 붙여, 형식이 바뀌면 읽을 때 한 단계씩 변환한다.
+#   schema는 옛 앱이 잘못 읽게 되는 변경에만 올린다(칸 · 값을 더하는 것은 올리지 않는다). 더 새 schema 파일은 읽지 않는다.
+#   변환하기 전 원본은 날짜 붙은 백업(<이름>.json.schema1.20261025-215429.bak)으로 남기고 덮어쓰지 않는다. 변환에 실패하면 원본을 건드리지 않는다.
+# - 읽을 때 날짜처럼 보이는 글을 [datetime]으로 바꾸지 않는다(-DateKind String). 글은 쓴 그대로 돌아온다.
+# - 맨 위의 모르는 키(importedFrom · 더 새 앱이 더한 키)는 기억해 두었다가 쓸 때 같이 쓴다. 변환할 때도 잃지 않는다.
 # - 쓸 때는 임시 파일에 먼저 쓰고 바꿔치기한다. 직전 파일은 .bak으로 하나 남긴다.
+# - 날짜 모양 · 지운 표시 · 예전 데이터 합치기 같은 형식 규칙은 Records.psm1, 칸의 뜻은 탭이 정한다.
 # - 읽기 실패는 항상 예외로 올린다. 빈 결과로 넘기면 다음 저장에서 기존 데이터를 덮어쓰기 때문이다.
 # - 읽기는 화면 밖(core\Work.psm1)에서 하고 $script:ioTimeoutMs까지만 기다린다. 데이터 폴더가 응답 없는 공유 폴더여도 화면이 멈추지 않고
 #   읽기 실패(IOException)로 올라간다. 그 폴더에 답 없는 읽기가 남아 있으면 기다리지 않고 바로 실패한다.
@@ -28,7 +33,20 @@ $script:writeHandlers = [System.Collections.Generic.List[scriptblock]]::new()
 $script:io = @{
     Lock = { param($p) [System.IO.File]::Open($p, 'OpenOrCreate', 'ReadWrite', 'None') }
     Unlock = { param($l) $l.Dispose() }
-    Copy = { param($a, $b) [System.IO.File]::Copy($a, $b, $true) }
+    # 변환 전 백업: 이미 있는 파일은 덮어쓰지 않고 -2 · -3 …을 붙인다. $text가 있으면(아직 파일에 쓰이지 않은 내용) 그 글을 쓴다
+    Backup = {
+        param($p, $stem, $text)
+        for ($n = 1; $n -lt 1000; $n++) {
+            $b = if ($n -eq 1) { "$stem.bak" } else { "$stem-$n.bak" }
+            if ([System.IO.Path]::Exists($b)) { continue }
+            if ($null -ne $text) {
+                $s = [System.IO.FileStream]::new($b, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+                try { $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes([string]$text); $s.Write($bytes, 0, $bytes.Length) } finally { $s.Dispose() }
+            } else { [System.IO.File]::Copy($p, $b, $false) }
+            return $b
+        }
+        throw [System.IO.IOException]::new("백업 파일 이름을 정하지 못했습니다: $stem")
+    }
     FindLegacy = {
         param($folders)
         foreach ($c in $folders) {
@@ -38,10 +56,21 @@ $script:io = @{
         }
         $null
     }
+    # 예전 CSV: WinForms는 BOM 붙은 UTF-8로 쓴다. Excel에서 「CSV(쉼표로 분리)」로 다시 저장하면 BOM 없는 CP949가 될 수 있어서,
+    # UTF-8로 읽히지 않으면 CP949로 읽는다(한글이 깨진 채로 가져오지 않게). 내용의 해시도 같이 돌려준다(바뀌었는지 알아보는 데 쓴다)
     ReadCsv = {
         param($p)
         if (-not [System.IO.Path]::Exists($p)) { return $null }
-        , @(Import-Csv -LiteralPath $p -Encoding utf8)
+        $bytes = [System.IO.File]::ReadAllBytes($p)
+        $enc = 'utf-8'
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $text = [System.Text.UTF8Encoding]::new($false, $true).GetString($bytes, 3, $bytes.Length - 3)
+        } else {
+            try { $text = [System.Text.UTF8Encoding]::new($false, $true).GetString($bytes) }
+            catch { $text = [System.Text.Encoding]::GetEncoding(949).GetString($bytes); $enc = 'cp949' }
+        }
+        $rows = if ($text.Trim()) { @(ConvertFrom-Csv -InputObject $text) } else { @() }
+        @{ Rows = $rows; Sha256 = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)); Encoding = $enc }
     }
 }
 
@@ -76,6 +105,7 @@ function Invoke-WtDataCall {
 function Set-WtAppRoot([string]$Path) {
     $script:appRoot = $Path
     $script:dataRoot = $null
+    $script:storeTops = @{}
 }
 
 function Get-WtAppRoot { $script:appRoot }
@@ -119,13 +149,14 @@ function Get-WtDataRoot {
 }
 
 # JSON 파일 하나를 읽는다. 없으면 $null. 아직 파일에 쓰이지 않은 내용(쓰는 중 · 늦게 실패해 앱이 가진 것)이 있으면
-# 디스크 대신 그것을 돌려준다. 앱이 가진 내용과 화면이 늘 같게
+# 디스크 대신 그것을 돌려준다. 앱이 가진 내용과 화면이 늘 같게.
+# 날짜처럼 보이는 글("2026-10-25T21:54:29")도 글 그대로 둔다. 기본값이면 [datetime]으로 바뀌고, 다시 글로 쓰면 문화권 모양이 된다
 function Read-WtJsonFile([string]$Path) {
     $pending = Get-WtDataWritePending $Path
-    if ($pending) { return $pending.Json | ConvertFrom-Json -Depth 20 }
+    if ($pending) { return $pending.Json | ConvertFrom-Json -Depth 20 -DateKind String }
     try { $text = Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllText $Path) }
     catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return $null }
-    $text | ConvertFrom-Json -Depth 20
+    $text | ConvertFrom-Json -Depth 20 -DateKind String
 }
 
 <#
@@ -356,6 +387,7 @@ function Send-WtDataWriteNotices {
 $script:writeNotices = [System.Collections.Generic.List[object]]::new()
 $script:writeNoticeQueued = $false
 $script:writeFiles = @{}
+$script:storeTops = @{}          # 저장소 파일마다 마지막으로 읽은(쓴) 맨 위 키. Write-WtStore가 같이 쓴다
 
 function Get-WtStorePath {
     param([Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$Name)
@@ -393,9 +425,22 @@ function Get-WtStoreStamp([string]$Name) {
     "$path|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
 }
 
-# 저장소 하나를 읽는다. 파일이 없으면 $null.
-# $Migrate는 { param($doc, $from) ... $doc } 형태로, schema $from 문서를 $from+1 형식으로 바꿔 돌려준다.
-# 변환하기 전 원본은 <이름>.json.schema<번호>.bak으로 남긴다.
+# 문서 맨 위의 키 중 schema · saved · items가 아닌 것 (importedFrom · 더 새 앱이 더한 키 등)
+function Get-WtStoreTops($Doc) {
+    $tops = [ordered]@{}
+    foreach ($p in @($Doc.PSObject.Properties)) {
+        if ($p.Name -notin 'schema', 'saved', 'items') { $tops[$p.Name] = $p.Value }
+    }
+    $tops
+}
+
+<#
+저장소 하나를 읽는다. 파일이 없으면 $null.
+$Migrate는 { param($doc, $from) ... $doc } 형태로, schema $from 문서를 $from+1 형식으로 바꿔 돌려준다. 읽은 칸을 버리지 말고 아는 칸만 바꾼다.
+  변환은 메모리에서 먼저 끝까지 한다. 실패하면 원본 파일은 건드리지 않고 예외를 올린다(탭은 그 오류를 화면에 보여 준다).
+  성공하면 원본을 날짜 붙은 백업 <이름>.json.schema<번호>.<날짜-시각>.bak으로 남기고(덮어쓰지 않음) 새 형식으로 다시 쓴다.
+맨 위의 모르는 키는 기억해 두었다가 Write-WtStore가 같이 쓴다.
+#>
 function Read-WtStore {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -403,21 +448,38 @@ function Read-WtStore {
         [scriptblock]$Migrate
     )
     $path = Get-WtStorePath $Name
+    $key = $path.ToLowerInvariant()
     $doc = Read-WtJsonFile $path
-    if ($null -eq $doc) { return $null }
-    $from = [int]$doc.schema
+    if ($null -eq $doc) { [void]$script:storeTops.Remove($key); return $null }
+    $num = $doc.schema
+    if ($doc -isnot [System.Management.Automation.PSCustomObject] -or $num -isnot [ValueType] -or $num -is [bool] -or [double]$num -ne [Math]::Floor([double]$num) -or [double]$num -lt 1) {
+        throw "$Name.json에 형식 번호(schema)가 없거나 잘못됐습니다. 파일은 바꾸지 않았습니다."
+    }
+    $from = [int]$num
     if ($from -gt $Schema) {
-        throw "$Name.json은 더 새 버전(schema $from)에서 저장됐습니다. WorkTool을 최신으로 바꿔 주세요."
+        throw "$Name.json은 더 새 버전(schema $from)에서 저장됐습니다. WorkTool을 최신으로 바꿔 주세요. 파일은 바꾸지 않았습니다."
     }
     if ($from -lt $Schema) {
         if (-not $Migrate) { throw "$Name.json을 schema $from에서 $Schema(으)로 바꾸는 방법이 없습니다." }
-        [void](Invoke-WtDataIo Copy -Arguments $path, "$path.schema$from.bak")
-        while ($from -lt $Schema) {
-            $doc = & $Migrate $doc $from
-            $from++
-            $doc.schema = $from
+        $first = $from
+        try {
+            while ($from -lt $Schema) {
+                $doc = & $Migrate $doc $from
+                $from++
+                $doc.schema = $from
+            }
+        } catch {
+            throw "$Name.json을 schema $first에서 $Schema(으)로 바꾸지 못했습니다. 원본 파일은 그대로 둡니다. ($($_.Exception.Message))"
         }
+        $pending = Get-WtDataWritePending $path
+        $stem = "$path.schema$first.$((Get-Date).ToString('yyyyMMdd-HHmmss', [System.Globalization.CultureInfo]::InvariantCulture))"
+        [void](Invoke-WtDataIo Backup -Arguments $path, $stem, $(if ($pending) { $pending.Json } else { $null }))
+        $script:storeTops[$key] = Get-WtStoreTops $doc
         Write-WtStore -Name $Name -Schema $Schema -Items @($doc.items)
+        # 변환 코드가 만든 객체(해시 테이블 등) 대신, 다음에 읽을 때와 같은 모양(저장한 JSON을 다시 읽은 것)으로 돌려준다
+        $doc = Read-WtJsonFile $path
+    } else {
+        $script:storeTops[$key] = Get-WtStoreTops $doc
     }
     $doc
 }
@@ -430,7 +492,8 @@ function Get-WtStoreItems {
     , @($doc.items | Where-Object { $null -ne $_ })
 }
 
-# 저장소 하나를 통째로 쓴다. $Extra의 키는 문서 맨 위에 함께 저장된다 (예: 가져온 위치)
+# 저장소 하나를 통째로 쓴다. 마지막으로 읽은(또는 쓴) 맨 위 키를 같이 쓰고, $Extra의 키는 그 위에 덮어 쓴다 (예: 가져온 위치).
+# saved는 앱이 찍는 시각(시간대 포함)이다
 function Write-WtStore {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -438,10 +501,16 @@ function Write-WtStore {
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Items,
         [hashtable]$Extra
     )
-    $doc = [ordered]@{ schema = $Schema; saved = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss') }
+    $path = Get-WtStorePath $Name
+    $key = $path.ToLowerInvariant()
+    $doc = [ordered]@{ schema = $Schema; saved = (Get-WtStamp) }
+    if ($script:storeTops.ContainsKey($key)) { foreach ($k in $script:storeTops[$key].Keys) { $doc[$k] = $script:storeTops[$key][$k] } }
     if ($Extra) { foreach ($k in $Extra.Keys) { $doc[$k] = $Extra[$k] } }
+    $tops = [ordered]@{}
+    foreach ($k in $doc.Keys) { if ($k -notin 'schema', 'saved') { $tops[$k] = $doc[$k] } }
+    $script:storeTops[$key] = $tops
     $doc['items'] = @($Items | Where-Object { $null -ne $_ })
-    Write-WtJsonFile (Get-WtStorePath $Name) $doc
+    Write-WtJsonFile $path $doc
 }
 
 # 새 항목 ID
@@ -466,12 +535,21 @@ function Find-WtLegacyFolder {
     catch { $null }
 }
 
-# 예전 CSV 하나를 읽는다. 파일이 없으면 $null (빈 파일이면 빈 배열)
+# 예전 CSV 하나를 읽는다. 파일이 없으면 $null. 있으면 @{ Rows(줄 목록, 빈 파일이면 빈 배열); Sha256(내용 해시); Encoding('utf-8' | 'cp949'); File }
+function Read-WtLegacyCsv([string]$Folder, [string]$Name) {
+    $r = Invoke-WtDataIo ReadCsv -Arguments (Join-Path $Folder "$Name.csv") -Key 'legacy' -Where '예전 데이터 위치' -Session Default
+    if ($null -eq $r) { return $null }
+    [pscustomobject]@{ Rows = @($r.Rows); Sha256 = $r.Sha256; Encoding = $r.Encoding; File = "$Name.csv" }
+}
+
+# 예전 CSV 하나의 줄만 읽는다. 파일이 없으면 $null (빈 파일이면 빈 배열)
 function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
-    Invoke-WtDataIo ReadCsv -Arguments (Join-Path $Folder "$Name.csv") -Key 'legacy' -Where '예전 데이터 위치' -Session Default
+    $r = Read-WtLegacyCsv $Folder $Name
+    if ($null -eq $r) { return $null }
+    , $r.Rows
 }
 
 Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
     Test-WtDataWriting, Get-WtDataWriteState, Get-WtDataWriteStatus, Get-WtDataUnsaved, Resume-WtDataWrites, Register-WtDataWriteHandler, Stop-WtDataWrites,
     Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
-    Find-WtLegacyFolder, Import-WtLegacyCsv
+    Find-WtLegacyFolder, Read-WtLegacyCsv, Import-WtLegacyCsv

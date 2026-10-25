@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "saved": "2027-01-02T09:00:00+09:00",
+  "_fixture": "고정 시험 자료(가짜 값): 더 새 앱이 쓴 파일 흉내. 모르는 맨 위 키 · 칸 · 종류. 더하기만 하고 고치지 않는다.",
+  "region": { "country": "KR", "source": "manual" },
+  "items": [
+    { "id": "h20261225", "date": "2026-12-25", "name": "기독탄신일", "kind": "public", "note": "", "observed": true, "created": "2026-01-02T09:00:00+09:00", "updated": "2026-01-02T09:00:00+09:00", "deleted": null, "origin": { "from": "paste", "at": "2026-01-02T09:00:00+09:00", "line": 12 } },
+    { "id": "s20261224", "date": "2026-12-24", "name": "오후만 쉼", "kind": "half-day", "note": "", "hours": 4, "created": "2026-12-01T09:00:00+09:00", "updated": "2026-12-01T09:00:00+09:00", "deleted": null, "origin": null }
+  ]
+}

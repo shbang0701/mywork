@@ -1,117 +1,57 @@
-# 일정 탭 (1단계: 보기 전용). 편집 · 알람은 2단계에서 옮긴다.
-# 저장소 schedule.json (schema 1). 항목:
-#   id, title, startDate, endDate(기간 일정. 하루짜리는 startDate와 같음), time(''=하루 종일), endTime,
-#   note, alarm(분 전, $null=없음), repeat(''|daily|weekdays|weekly), tags[], lastAlarm, updated
+# 일정 탭 화면 (1단계: 보기 전용). 편집 · 알람은 2단계에서 옮긴다.
+# 데이터 형식 · 읽기 · 예전 데이터 가져오기 · 반복 펼치기는 ScheduleData.psm1 (화면 없음). 이 파일은 그 결과를 그리기만 한다.
+# 파일을 못 읽거나(더 새 버전 · 깨짐) 항목 몇 개를 못 읽어도 화면은 열린다: 못 읽은 이유 · 고칠 항목 · 새 버전 항목을 따로 보여 준다.
 
 $ErrorActionPreference = 'Stop'
 
-$script:schema = 1
-$script:inv = [System.Globalization.CultureInfo]::InvariantCulture
-$script:repeatNames = @{ daily = '매일'; weekdays = '평일'; weekly = '매주' }
 $script:list = $null
+$script:inv = [System.Globalization.CultureInfo]::InvariantCulture
 
-function ConvertTo-SchDate([string]$Text) { [datetime]::ParseExact($Text, 'yyyy-MM-dd', $script:inv) }
-
-function Get-WtScheduleItems { Get-WtStoreItems -Name 'schedule' -Schema $script:schema }
-
-# $Item이 $Day에 있는지 (반복 포함)
-function Test-WtScheduleOn($Item, [datetime]$Day) {
-    $d = $Day.Date
-    $start = ConvertTo-SchDate $Item.startDate
-    $end = if ($Item.endDate) { ConvertTo-SchDate $Item.endDate } else { $start }
-    if ($d -lt $start) { return $false }
-    switch ([string]$Item.repeat) {
-        'daily' { return $true }
-        'weekdays' { return [int]$d.DayOfWeek -ge 1 -and [int]$d.DayOfWeek -le 5 }
-        'weekly' { return $d.DayOfWeek -eq $start.DayOfWeek }
-        default { return $d -le $end }
-    }
-}
-
-# 그날 일정을 시간 순서로 (하루 종일이 먼저)
-function Get-WtScheduleOn([datetime]$Day, [object[]]$Items) {
-    if ($null -eq $Items) { $Items = Get-WtScheduleItems }
-    @($Items | Where-Object { Test-WtScheduleOn $_ $Day } | Sort-Object { if ($_.time) { $_.time } else { '' } }, { $_.title })
-}
-
-# 여러 날을 그릴 때 항목의 날짜를 한 번만 읽는다. 반복 판단과 날짜별 정렬은 하루 조회와 같다.
-function Get-WtScheduleRange([datetime]$From, [int]$Count, [object[]]$Items) {
-    $dates = @(); $buckets = @()
-    for ($i = 0; $i -lt $Count; $i++) {
-        $dates += $From.Date.AddDays($i)
-        $buckets += , [Collections.Generic.List[object]]::new()
-    }
-    foreach ($item in $Items) {
-        $start = [datetime]::ParseExact($item.startDate, 'yyyy-MM-dd', $script:inv)
-        $end = if ($item.endDate) { [datetime]::ParseExact($item.endDate, 'yyyy-MM-dd', $script:inv) } else { $start }
-        for ($i = 0; $i -lt $Count; $i++) {
-            $day = $dates[$i]
-            if ($day -lt $start) { continue }
-            $on = switch ([string]$item.repeat) {
-                'daily' { $true }
-                'weekdays' { [int]$day.DayOfWeek -ge 1 -and [int]$day.DayOfWeek -le 5 }
-                'weekly' { $day.DayOfWeek -eq $start.DayOfWeek }
-                default { $day -le $end }
-            }
-            if ($on) { $buckets[$i].Add($item) }
-        }
-    }
-    $result = @()
-    foreach ($bucket in $buckets) {
-        $result += , @($bucket | Sort-Object { if ($_.time) { $_.time } else { '' } }, { $_.title })
-    }
-    , $result
-}
-
-function Format-WtAlarm($Alarm) {
-    if ($null -eq $Alarm -or "$Alarm" -eq '') { return $null }
-    $m = [int]$Alarm
+function Format-WtAlarm($Minutes) {
+    if ($null -eq $Minutes -or "$Minutes" -eq '') { return $null }
+    $m = [int]$Minutes
     if ($m -eq 0) { '정시' } elseif ($m -eq 1440) { '하루 전' } elseif ($m % 60 -eq 0) { "$($m / 60)시간 전" } else { "${m}분 전" }
 }
 
-# 예전 schedule.csv → schedule.json. 가져온 개수를 돌려준다.
-function Import-WtScheduleLegacy([string]$Folder) {
-    $rows = Import-WtLegacyCsv $Folder 'schedule'
-    if ($null -eq $rows) { return $null }
-    $items = foreach ($r in $rows) {
-        [ordered]@{
-            id        = [string]$r.Id
-            title     = [string]$r.Title
-            startDate = [string]$r.Date
-            endDate   = [string]$r.Date
-            time      = [string]$r.Time
-            endTime   = ''
-            note      = [string]$r.Note
-            alarm     = if ("$($r.Alarm)" -eq '') { $null } else { [int]$r.Alarm }
-            repeat    = [string]$r.Repeat
-            tags      = @()
-            lastAlarm = [string]$r.LastAlarm
-            updated   = [string]$r.Updated
+# 반복 규칙(ConvertFrom-WtScheduleItem의 Repeat) → 짧은 이름
+function Get-WtRepeatLabel($Rule) {
+    if (-not $Rule) { return $null }
+    $n = [int]$Rule.Interval
+    switch ($Rule.Freq) {
+        'daily' { if ($n -eq 1) { '매일' } else { "${n}일마다" } }
+        'weekly' {
+            $weekdays = $Rule.Days.Count -eq 5 -and -not @($Rule.Days | Where-Object { [int]$_ -eq 0 -or [int]$_ -eq 6 }).Count
+            if ($n -eq 1 -and $weekdays) { '평일' } elseif ($n -eq 1) { '매주' } elseif ($n -eq 2) { '격주' } else { "${n}주마다" }
         }
+        'monthly' { if ($n -eq 1) { '매월' } else { "${n}개월마다" } }
+        'yearly' { if ($n -eq 1) { '매년' } else { "${n}년마다" } }
     }
-    Write-WtStore -Name 'schedule' -Schema $script:schema -Items @($items) -Extra @{ importedFrom = $Folder }
-    @($items).Count
 }
 
-# 한 줄: 시각 · 제목 · 표시(반복 · 알람)
-function New-WtScheduleRow($Item, [string]$DayLabel) {
+# 한 줄: 시각 · 표시(반복 · 알람 · 바뀐 회차 · 태그) · 제목. $Day는 이 줄을 놓는 날(여러 날에 걸친 일정의 둘째 날부터는 「~끝 시각」)
+function New-WtScheduleRow($Occ, [string]$DayLabel, $Day) {
     $parts = [System.Collections.Generic.List[object]]::new()
     if ($DayLabel) {
         $d = New-WtText $DayLabel 'T.Sub'
         $d.Width = 84
         $parts.Add($d)
     }
-    $t = New-WtText $(if ($Item.time) { $Item.time } else { '하루 종일' }) 'T.Strong'
+    $when = if ($Occ.AllDay) { '하루 종일' }
+    elseif ($null -eq $Day -or $Occ.Start.Date -ge ([datetime]$Day).Date) { $Occ.Start.ToString('HH:mm', $script:inv) }
+    elseif ($Occ.LastDay -eq ([datetime]$Day).Date) { '~' + $Occ.End.ToString('HH:mm', $script:inv) }
+    else { '하루 종일' }
+    $t = New-WtText $when 'T.Strong'
     $t.Width = 72
     $parts.Add($t)
     $tags = New-WtStack Horizontal 6
-    $rep = $script:repeatNames[[string]$Item.repeat]
+    $rep = Get-WtRepeatLabel $Occ.Entry.Repeat
     if ($rep) { [void](Add-WtChild $tags (New-WtTag $rep -Icon 0xE8EE)) }
-    $al = Format-WtAlarm $Item.alarm
+    $al = Format-WtAlarm @($Occ.Alarms)[0]
     if ($al) { [void](Add-WtChild $tags (New-WtTag $al -Icon 0xEA8F)) }
-    foreach ($tag in @($Item.tags)) { if ($tag) { [void](Add-WtChild $tags (New-WtTag "#$tag")) } }
+    if ($Occ.Changed) { [void](Add-WtChild $tags (New-WtTag '이 회차만 바뀜')) }
+    foreach ($tag in @($Occ.Entry.Tags)) { if ($tag) { [void](Add-WtChild $tags (New-WtTag "#$tag")) } }
     if ($tags.Children.Count) { $parts.Add($tags) }
-    $title = New-WtText $Item.title 'T.Body'
+    $title = New-WtText $Occ.Title 'T.Body'
     $title.TextTrimming = 'CharacterEllipsis'
     $title.TextWrapping = 'NoWrap'
     $parts.Add($title)
@@ -119,30 +59,66 @@ function New-WtScheduleRow($Item, [string]$DayLabel) {
     New-WtListRow $parts.ToArray()
 }
 
+# 못 읽은 파일 · 고칠 항목 · 새 버전 항목 안내 카드들. 없으면 아무것도 돌려주지 않는다
+function New-WtScheduleNotices($Data) {
+    if ($Data.Error) {
+        $card = New-WtCard
+        $col = New-WtStack Vertical 8
+        [void](Add-WtChild $col (New-WtCardHeader '일정 파일을 읽지 못했습니다'))
+        [void](Add-WtChild $col (New-WtTag '읽기 전용' 'WarnBg' 'Warn'))
+        [void](Add-WtChild $col (New-WtText $Data.Error 'T.Body'))
+        [void](Add-WtChild $col (New-WtText '파일은 바꾸지 않았습니다. 데이터 폴더의 schedule.json과 백업(.bak)을 확인하세요.' 'T.Sub'))
+        $card.Child = $col
+        $card
+        return
+    }
+    foreach ($g in @(
+            @('broken', '고칠 항목', '날짜 · 시각을 읽지 못해 목록과 알람에서 뺐습니다. 저장할 때는 그대로 둡니다.'),
+            @('readonly', '새 버전에서 만든 항목', '이 버전이 모르는 값이 있어 읽기만 하고, 목록과 알람에서 뺐습니다. 저장할 때는 그대로 둡니다.'))) {
+        $rows = @($Data.Entries | Where-Object { $_.State -eq $g[0] })
+        if (-not $rows.Count) { continue }
+        $card = New-WtCard
+        $col = New-WtStack Vertical
+        [void](Add-WtChild $col (New-WtCardHeader $g[1] "$($rows.Count)"))
+        [void](Add-WtChild $col (New-WtText $g[2] 'T.Sub'))
+        foreach ($r in $rows) {
+            $name = New-WtText $(if ($r.Title) { $r.Title } elseif ($r.Id) { $r.Id } else { '(이름 없음)' }) 'T.Body'
+            $name.Width = 200
+            $name.TextTrimming = 'CharacterEllipsis'
+            [void](Add-WtChild $col (New-WtListRow @($name, (New-WtText $r.Problem 'T.Sub'))))
+        }
+        $card.Child = $col
+        $card
+    }
+}
+
 function New-WtScheduleView {
     $script:viewKey = $null
     $page = New-WtPage
     [void](Add-WtChild $page.Panel (New-WtPageHeader '일정' '보기 전용 · 편집과 알람은 2단계에서 옮깁니다'))
-    $card = New-WtCard
-    $script:list = New-WtStack Vertical
-    $card.Child = $script:list
-    [void](Add-WtChild $page.Panel $card)
+    $script:body = New-WtStack Vertical 16
+    [void](Add-WtChild $page.Panel $script:body)
     $page.Root
 }
 
 function Update-WtScheduleView {
-    $key = @((Get-WtStoreStamp 'schedule'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    $data = Get-WtScheduleData
+    $key = @($data.Stamp, [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
     if ($script:viewKey -ceq $key) { return }
-    $items = Get-WtScheduleItems
-    $days = Get-WtScheduleRange ([datetime]::Today) 14 $items
-    $script:list.Children.Clear()
+    $script:body.Children.Clear()
+    foreach ($n in @(New-WtScheduleNotices $data)) { [void](Add-WtChild $script:body $n) }
+    $card = New-WtCard
+    $script:list = New-WtStack Vertical
+    $card.Child = $script:list
+    [void](Add-WtChild $script:body $card)
     [void](Add-WtChild $script:list (New-WtCardHeader '다가오는 14일'))
+    $days = Get-WtScheduleDays $data.Entries ([datetime]::Today) 14
     $any = $false
     for ($i = 0; $i -lt 14; $i++) {
         $day = [datetime]::Today.AddDays($i)
         $label = if ($i -eq 0) { '오늘' } elseif ($i -eq 1) { '내일' } else { Format-WtDate $day "M'/'d (ddd)" }
-        foreach ($it in $days[$i]) {
-            [void](Add-WtChild $script:list (New-WtScheduleRow $it $label))
+        foreach ($o in $days[$i]) {
+            [void](Add-WtChild $script:list (New-WtScheduleRow $o $label $day))
             $label = ''
             $any = $true
         }
@@ -152,17 +128,18 @@ function Update-WtScheduleView {
 }
 
 function New-WtScheduleHomeCards {
-    $key = @((Get-WtStoreStamp 'schedule'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    $data = Get-WtScheduleData
+    $key = @($data.Stamp, [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
     if ($script:homeKey -ceq $key -and $script:homeCards -and -not @($script:homeCards | Where-Object Parent).Count) { return $script:homeCards }
-    $items = Get-WtScheduleItems
-    $days = Get-WtScheduleRange ([datetime]::Today) 8 $items
+    $days = Get-WtScheduleDays $data.Entries ([datetime]::Today) 8
     $today = @($days[0])
 
     $c1 = New-WtCard
     $col = New-WtStack Vertical
     [void](Add-WtChild $col (New-WtCardHeader '오늘 일정' "$($today.Count)" '일정 열기' 'schedule'))
-    foreach ($it in $today) { [void](Add-WtChild $col (New-WtScheduleRow $it)) }
-    if (-not $today.Count) { [void](Add-WtChild $col (New-WtText '오늘은 일정이 없습니다.' 'T.Sub')) }
+    if ($data.Error) { [void](Add-WtChild $col (New-WtTag '일정 파일을 읽지 못했습니다' 'WarnBg' 'Warn')) }
+    foreach ($o in $today) { [void](Add-WtChild $col (New-WtScheduleRow $o '' ([datetime]::Today))) }
+    if (-not $today.Count -and -not $data.Error) { [void](Add-WtChild $col (New-WtText '오늘은 일정이 없습니다.' 'T.Sub')) }
     $c1.Child = $col
 
     $c2 = New-WtCard
@@ -171,9 +148,12 @@ function New-WtScheduleHomeCards {
     $n = 0
     for ($i = 1; $i -le 7; $i++) {
         $day = [datetime]::Today.AddDays($i)
-        foreach ($it in $days[$i]) {
-            if ($it.repeat -eq 'daily' -or $it.repeat -eq 'weekdays') { continue }   # 매일 반복은 오늘 카드에서만
-            [void](Add-WtChild $col (New-WtScheduleRow $it (Format-WtDate $day "M'/'d (ddd)")))
+        foreach ($o in $days[$i]) {
+            # 매일 · 평일 반복과 앞날부터 이어진 일정은 오늘 카드에서만 (같은 줄이 날마다 되풀이되지 않게)
+            $rule = $o.Entry.Repeat
+            if ($rule -and ($rule.Freq -eq 'daily' -or ($rule.Freq -eq 'weekly' -and $rule.Days.Count -ge 5))) { continue }
+            if ($o.Start.Date -lt $day) { continue }
+            [void](Add-WtChild $col (New-WtScheduleRow $o (Format-WtDate $day "M'/'d (ddd)") $day))
             $n++
         }
     }
@@ -191,4 +171,4 @@ Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Order 20 -WarmUp F
     -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } `
     -Help '일정은 보기만 합니다. 편집과 알람은 2단계에서 옮깁니다.'
 
-Export-ModuleMember -Function Get-WtScheduleItems, Test-WtScheduleOn, Get-WtScheduleOn, Format-WtAlarm, Import-WtScheduleLegacy
+Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel
