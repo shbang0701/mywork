@@ -7,7 +7,8 @@
       모듈 코드는 문자열로 실행하지 않고 스크립트 블록 안에 그대로 들어간다 (Invoke-Expression 없음).
     - core 순서는 Start-WorkTool.ps1의 $coreModules를 따르고, addons는 Start-WorkTool.ps1과 같은 순서(전체 경로 순)로 넣는다.
     - 결과는 원본이 같으면 항상 같다 (날짜 · 커밋을 넣지 않음). 다시 만들어서 차이가 없으면 최신이다.
-    - 저장소 맨 위에 worktool.zip(묶음 파일 + Start-WorkTool.cmd + 콘솔 없는 실행 보조 스크립트)도 같이 만든다.
+    - 저장소 맨 위에 worktool.zip(묶음 파일 + Start-WorkTool.cmd + 콘솔 없는 실행 보조 스크립트 + 예제 scripts\)도 같이 만든다.
+      zip 안의 scripts\는 저장소 scripts/의 .ps1을 그대로 담는다. 풀고 켜면 업무 탭에 「예제 스크립트」로 보인다.
 
 .EXAMPLE
     pwsh ./apps/WorkTool/wpf/build/Build-Bundle.ps1
@@ -75,14 +76,29 @@ Write-Host "만듦: $outPath (core $($core.Count)개 · addons $($blocks.Count -
 # 저장소 맨 위 worktool.zip: 묶음 파일 + 더블클릭 실행 파일. 날짜를 고정해서 원본이 같으면 zip도 같다
 $launcher = (Get-SourceText (Join-Path $PSScriptRoot 'start-worktool.cmd')).Replace("`n", "`r`n") + "`r`n"
 $launchScript = Get-SourceText (Join-Path $PSScriptRoot 'start-launcher.ps1')
-$zipPath = Join-Path (Split-Path (Split-Path (Split-Path $src -Parent) -Parent) -Parent) 'worktool.zip'
+$repoRoot = Split-Path (Split-Path (Split-Path $src -Parent) -Parent) -Parent
+$zipPath = Join-Path $repoRoot 'worktool.zip'
 $stamp = [DateTimeOffset]::new(2026, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
 $fs = [System.IO.File]::Create($zipPath)
 try {
     $zip = [System.IO.Compression.ZipArchive]::new($fs, [System.IO.Compression.ZipArchiveMode]::Create)
-    foreach ($item in @(@('WorkTool-WPF.ps1', [System.IO.File]::ReadAllBytes($outPath)),
-            @('Start-WorkTool.cmd', [System.Text.UTF8Encoding]::new($false).GetBytes($launcher)),
-            @('Start-WorkTool-Launcher.ps1', [System.Text.UTF8Encoding]::new($false).GetBytes($launchScript + "`n")))) {
+    $items = [System.Collections.Generic.List[object]]::new()
+    $items.Add(@('WorkTool-WPF.ps1', [System.IO.File]::ReadAllBytes($outPath)))
+    $items.Add(@('Start-WorkTool.cmd', [System.Text.UTF8Encoding]::new($false).GetBytes($launcher)))
+    $items.Add(@('Start-WorkTool-Launcher.ps1', [System.Text.UTF8Encoding]::new($false).GetBytes($launchScript + "`n")))
+    # 예제 스크립트: 저장소 맨 위 scripts/의 .ps1을 같은 폴더 구조로 넣는다. 풀고 켜면 업무 탭의 「예제 스크립트」에 보인다.
+    # 순서는 경로 순(대소문자 구분 없이 고정), 줄 끝은 CRLF로 맞춰 PC마다 git 줄 끝 설정이 달라도 zip이 같게 한다
+    $scriptRoot = Join-Path $repoRoot 'scripts'
+    if (Test-Path -LiteralPath $scriptRoot -PathType Container) {
+        $scriptFiles = @(Get-ChildItem -LiteralPath $scriptRoot -Filter '*.ps1' -File -Recurse | Where-Object Extension -eq '.ps1' |
+                ForEach-Object { [pscustomobject]@{ File = $_; Rel = [System.IO.Path]::GetRelativePath($scriptRoot, $_.FullName).Replace('\', '/') } } |
+                Sort-Object { $_.Rel.ToLowerInvariant() } -Culture ([System.Globalization.CultureInfo]::InvariantCulture))
+        foreach ($s in $scriptFiles) {
+            $body = (Get-SourceText $s.File.FullName).Replace("`n", "`r`n") + "`r`n"
+            $items.Add(@("scripts/$($s.Rel)", [System.Text.UTF8Encoding]::new($false).GetBytes($body)))
+        }
+    }
+    foreach ($item in $items) {
         $entry = $zip.CreateEntry($item[0], [System.IO.Compression.CompressionLevel]::Optimal)
         $entry.LastWriteTime = $stamp
         $es = $entry.Open()

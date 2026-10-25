@@ -10,3 +10,6 @@ apps/WorkTool/**/datapath.txt
 # 스크립트 옆에 두는 실제 대상 목록 · 실행 기록 (실제 IP · 호스트명)
 scripts/**/ping-hosts.txt
 scripts/**/ping-logs/
+scripts/**/*-targets.txt
+# 예제 스크립트가 만드는 결과 파일 (CSV)
+scripts/**/output/

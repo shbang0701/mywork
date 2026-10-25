@@ -294,7 +294,7 @@ function Show-Board($Targets, [datetime]$Start, [int]$Round, [bool]$Live) {
         $hidden = $Targets.Count - $rows.Count
     }
     foreach ($t in $rows) { $lines.Add((Format-Row $t $Live $noteWidth)) }
-    if ($hidden) { $lines.Add(" 그 밖에 $hidden개는 창이 작아 생략했습니다(끊김부터 보여 줍니다). 창을 키우면 모두 보입니다.") }
+    if ($hidden) { $lines.Add(" 그 밖에 ${hidden}개는 창이 작아 생략했습니다(끊김부터 보여 줍니다). 창을 키우면 모두 보입니다.") }
     if ($Live) { [Console]::Write("`e[H" + (($lines | ForEach-Object { "$_`e[K" }) -join "`n") + "`e[J") }
     else { $lines.Add(''); [Console]::Out.Write(($lines -join [Environment]::NewLine) + [Environment]::NewLine) }
 }

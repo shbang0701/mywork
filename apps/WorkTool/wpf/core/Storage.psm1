@@ -73,6 +73,14 @@ function Get-WtStorePath {
 
 function Test-WtStore([string]$Name) { Test-Path -LiteralPath (Get-WtStorePath $Name) }
 
+# 데이터 폴더 안의 하위 폴더(예: 사용자가 파일을 넣어 두는 곳). -Create면 없을 때 만든다
+function Get-WtDataFolder {
+    param([Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$Name, [switch]$Create)
+    $path = Join-Path (Get-WtDataRoot) $Name
+    if ($Create -and -not (Test-Path -LiteralPath $path -PathType Container)) { [void][System.IO.Directory]::CreateDirectory($path) }
+    $path
+}
+
 # 화면에서 변경 여부를 판단하는 표식. 파일 조회와 읽고 쓰기는 이 모듈로 모은다.
 function Get-WtStoreStamp([string]$Name) {
     $path = Get-WtStorePath $Name
@@ -170,5 +178,5 @@ function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
 }
 
 Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
-    Get-WtStorePath, Test-WtStore, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
+    Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
     Find-WtLegacyFolder, Import-WtLegacyCsv
