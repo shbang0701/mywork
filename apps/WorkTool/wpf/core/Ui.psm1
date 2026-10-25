@@ -935,6 +935,64 @@ $script:stylesXaml = @'
     <Setter Property="LineHeight" Value="Auto"/>
     <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
   </Style>
+  <!-- 그리면 보이지 않는 줄(링크 정의 · 주석)을 편집 화면에서 원문 그대로 흐리게 -->
+  <Style x:Key="Md.Raw" TargetType="Paragraph">
+    <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
+    <Setter Property="Margin" Value="0,0,0,12"/>
+  </Style>
+
+  <!-- 메모 실시간 편집: 고치는 블록 자리에 들어가는 원문 입력칸(섬). 그린 글과 같은 글꼴 · 줄 높이 -->
+  <Style x:Key="Memo.Island" TargetType="TextBox">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="Margin" Value="0"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource B.Text}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.BodyLine}"/>
+    <Setter Property="TextBlock.LineStackingStrategy" Value="BlockLineHeight"/>
+    <Setter Property="TextWrapping" Value="Wrap"/>
+    <Setter Property="AcceptsReturn" Value="True"/>
+    <Setter Property="AcceptsTab" Value="True"/>
+    <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="HorizontalAlignment" Value="Stretch"/>
+  </Style>
+  <Style x:Key="Memo.IslandH1" TargetType="TextBox" BasedOn="{StaticResource Memo.Island}">
+    <Setter Property="FontSize" Value="{DynamicResource F.MdH1}"/>
+    <Setter Property="FontWeight" Value="Bold"/>
+    <Setter Property="TextBlock.LineHeight" Value="Auto"/>
+  </Style>
+  <Style x:Key="Memo.IslandH2" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH1}">
+    <Setter Property="FontSize" Value="{DynamicResource F.MdH2}"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+  </Style>
+  <Style x:Key="Memo.IslandH3" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH2}">
+    <Setter Property="FontSize" Value="{DynamicResource F.MdH3}"/>
+  </Style>
+  <Style x:Key="Memo.IslandH4" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH2}">
+    <Setter Property="FontSize" Value="{DynamicResource F.H2}"/>
+  </Style>
+  <Style x:Key="Memo.IslandH5" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH4}">
+    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+  </Style>
+  <Style x:Key="Memo.IslandH6" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH5}">
+    <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
+  </Style>
+  <Style x:Key="Memo.IslandCode" TargetType="TextBox" BasedOn="{StaticResource Memo.Island}">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Code}"/>
+    <Setter Property="TextBlock.LineHeight" Value="Auto"/>
+    <Setter Property="Background" Value="{DynamicResource B.Code.Bg}"/>
+    <Setter Property="Padding" Value="12,8"/>
+  </Style>
+  <!-- 섬을 담는 블록: 그린 문단과 같은 아래 여백 -->
+  <Style x:Key="Memo.IslandBox" TargetType="BlockUIContainer">
+    <Setter Property="Margin" Value="0,0,0,12"/>
+  </Style>
 
   <Style x:Key="Task.Check" TargetType="CheckBox">
     <Setter Property="VerticalAlignment" Value="Center"/>

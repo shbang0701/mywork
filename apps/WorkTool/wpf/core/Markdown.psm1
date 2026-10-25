@@ -100,6 +100,150 @@ function ConvertTo-WtMarkdownModel([AllowEmptyString()][string]$Text) {
     @{ Blocks = $blocks; Headings = $ctx.Headings.ToArray() }
 }
 
+<#
+블록 단위 (글을 고치면서 블록 하나씩 바꿔 그리는 화면용. 메모 편집기가 쓴다)
+  Get-WtMarkdownUnits $text [-LineOffset n] → 단위 배열. 단위 = @{ Start; End; Kind; Depth; Last; Text; ListId }
+    Start · End  원문 줄 번호(0부터, End는 들지 않음). 블록 사이의 빈 줄은 어느 단위에도 들지 않는다.
+                 -LineOffset을 주면 그만큼 더한다(글 일부만 다시 나눌 때)
+    Kind         heading · para · list-item · quote · callout · code · math · hr · html · table · props · raw
+                 raw = 그리면 보이지 않는 줄(링크 정의 · 주석 · 각주 정의 등). 원문을 흐리게 보여 준다
+    Depth        목록 항목의 깊이. 목록 항목은 항목 하나씩 단위가 되고, 안쪽 목록도 따로 단위가 된다
+    Last         목록 항목: 목록의 마지막 줄인지 (아래 여백)
+    Text         단위의 원문 (줄바꿈은 \n). 그린 것을 다시 쓸지 비교할 때 쓴다
+  그릴 모델은 나눌 때 만들지 않고 New-WtMarkdownUnitSection이 그릴 때 만든다 (긴 글을 빨리 나누려고).
+#>
+function Get-WtMarkdownUnits([AllowEmptyString()][string]$Text, [int]$LineOffset = 0) {
+    $src = ([string]$Text).Replace("`r`n", "`n").Replace("`r", "`n")
+    $lines = $src -split "`n"
+    $starts = [int[]]::new($lines.Count)
+    $pos = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) { $starts[$i] = $pos; $pos += $lines[$i].Length + 1 }
+    $doc = [Markdig.Markdown]::Parse($src, (Get-WtMarkdownPipeline))
+    $ctx = @{ Src = $src; Headings = [System.Collections.Generic.List[object]]::new(); Starts = $starts; Lines = $lines; Offset = $LineOffset }
+    $units = [System.Collections.Generic.List[object]]::new()
+    foreach ($b in $doc) { Add-WtMdUnitsOf $units $b $ctx 0 }
+
+    # 어느 단위에도 들지 않은 글 줄(링크 정의 · HTML 주석 등)은 raw 단위로 채운다. 그래야 모든 줄을 고칠 수 있다
+    $covered = [bool[]]::new($lines.Count)
+    foreach ($u in $units) { for ($l = $u.Start; $l -lt $u.End; $l++) { $covered[$l] = $true } }
+    $l = 0
+    while ($l -lt $lines.Count) {
+        if ($covered[$l] -or -not $lines[$l].Trim()) { $l++; continue }
+        $s = $l
+        while ($l -lt $lines.Count -and -not $covered[$l] -and $lines[$l].Trim()) { $l++ }
+        $units.Add((New-WtMdUnit 'raw' $s $l $null $ctx))
+    }
+    $sorted = @($units | Sort-Object { $_.Start })
+    # 목록 항목의 아래 여백: 다음 단위가 이어지는 목록 항목이 아니면 목록 끝
+    for ($i = 0; $i -lt $sorted.Count; $i++) {
+        $u = $sorted[$i]
+        if ($u.Kind -ne 'list-item') { continue }
+        $next = if ($i + 1 -lt $sorted.Count) { $sorted[$i + 1] } else { $null }
+        $u.Last = -not ($next -and $next.Kind -eq 'list-item' -and $next.ListId -eq $u.ListId)
+    }
+    if ($LineOffset) { foreach ($u in $sorted) { $u.Start += $LineOffset; $u.End += $LineOffset } }
+    , $sorted
+}
+
+# 단위. Md = Markdig 블록(그릴 때 모델로 바꿈), Own = 목록 항목에서 안쪽 목록을 뺀 자식들
+function New-WtMdUnit([string]$Kind, [int]$Start, [int]$End, $Md, $Ctx, [int]$Depth = 0) {
+    $text = ($Ctx.Lines[$Start..($End - 1)]) -join "`n"
+    @{ Kind = $Kind; Start = $Start; End = $End; Md = $Md; Ctx = $Ctx; Depth = $Depth; Last = $true; Text = $text; ListId = 0; Block = $null }
+}
+
+# 단위의 그릴 모델 (처음 부를 때 만든다). 줄 번호(모델의 Line)는 나눈 글 기준에 LineOffset을 더한 것
+function Get-WtMdUnitModel($Unit) {
+    if ($Unit.Block -or $Unit.Kind -eq 'raw' -or -not $Unit.Md) { return $Unit.Block }
+    $ctx = $Unit.Ctx
+    if ($Unit.Kind -eq 'list-item') {
+        $li = $Unit.Md
+        $blocks = ConvertFrom-WtMdBlocks $Unit.Own $ctx
+        $task = $null
+        if ($blocks.Count -and $blocks[0].T -eq 'para' -and $blocks[0].Inl.Count -and $blocks[0].Inl[0].T -eq 'task') {
+            $task = [bool]$blocks[0].Inl[0].Checked
+            $rest = @($blocks[0].Inl | Select-Object -Skip 1)
+            if ($rest.Count -and $rest[0].T -eq 'text') { $rest[0].Text = $rest[0].Text.TrimStart() }
+            $blocks[0].Inl = $rest
+        }
+        $list = $Unit.List
+        $start = 1
+        if ($list.IsOrdered) {
+            if ($li.Order) { $start = [int]$li.Order } else { [void][int]::TryParse([string]$list.OrderedStart, [ref]$start) }
+        }
+        $line = $li.Line + 1 + [int]$ctx.Offset
+        $Unit.Block = @{ T = 'list'; Ordered = [bool]$list.IsOrdered; Start = $start; Loose = [bool]$list.IsLoose; Items = @(@{ Task = $task; Blocks = $blocks; Line = $line }); Line = $line }
+    } else {
+        $Unit.Block = ConvertFrom-WtMdBlock $Unit.Md $ctx
+    }
+    $Unit.Block
+}
+
+# Markdig 블록이 차지하는 줄 범위 (끝 줄 포함 안 함)
+function Get-WtMdBlockLines($B, $Ctx) {
+    $start = [Math]::Max(0, [int]$B.Line)
+    $endChar = [Math]::Max($B.Span.Start, $B.Span.End)
+    $i = [array]::BinarySearch($Ctx.Starts, [int]$endChar)
+    if ($i -lt 0) { $i = (-bnot $i) - 1 }
+    @($start, [Math]::Max($start + 1, $i + 1))
+}
+
+function Add-WtMdUnitsOf($Units, $B, $Ctx, [int]$Depth, [int]$ListId = 0) {
+    $type = $B.GetType().Name
+    if ($type -in 'LinkReferenceDefinitionGroup', 'FootnoteGroup', 'BlankLineBlock') { return }   # 원문 위치가 흩어져 있어 raw로 채운다
+    if ($B.Span.End -lt $B.Span.Start) { return }
+    $range = Get-WtMdBlockLines $B $Ctx
+    if ($type -eq 'ListBlock') {
+        $id = [int]$B.Span.Start + 1
+        if ($Depth -gt 0) { $id = $ListId }
+        foreach ($li in $B) { Add-WtMdListItemUnits $Units $B $li $Ctx $Depth $id }
+        return
+    }
+    # 종류는 Markdig 블록 종류와 원문만 보고 정한다 (모델은 그릴 때)
+    $text = ($Ctx.Lines[$range[0]..($range[1] - 1)]) -join "`n"
+    $kind = switch ($type) {
+        'HeadingBlock' { 'heading' }
+        'ParagraphBlock' {
+            # 보이는 글이 없는 문단(%%주석%%만 있는 줄 등)은 raw로 보여 준다
+            if (-not ($text -replace '%%[\s\S]*?%%', '').Trim()) { 'raw' } else { 'para' }
+        }
+        'QuoteBlock' { if ($text -match '^\s*>\s*\[![A-Za-z][\w-]*\]') { 'callout' } else { 'quote' } }
+        'FencedCodeBlock' { 'code' }
+        'CodeBlock' { 'code' }
+        'MathBlock' { 'math' }
+        'ThematicBreakBlock' { 'hr' }
+        'HtmlBlock' {
+            $plain = ($text -replace '<br\s*/?>', ' ' -replace '<[^>]+>', '').Trim()
+            if ($text.TrimStart().StartsWith('<!--') -or -not $plain) { 'raw' } else { 'html' }
+        }
+        'Table' { 'table' }
+        'YamlFrontMatterBlock' { 'props' }
+        default { 'raw' }
+    }
+    $Units.Add((New-WtMdUnit $kind $range[0] $range[1] $(if ($kind -eq 'raw') { $null } else { $B }) $Ctx $Depth))
+}
+
+# 목록 항목 하나 = 단위 하나. 안쪽 목록이 항목 끝에만 있으면 따로 나눠 Depth+1로, 아니면 항목 통째로
+function Add-WtMdListItemUnits($Units, $List, $Li, $Ctx, [int]$Depth, [int]$ListId) {
+    $children = @($Li)
+    $firstNested = -1
+    for ($i = 0; $i -lt $children.Count; $i++) { if ($children[$i].GetType().Name -eq 'ListBlock') { $firstNested = $i; break } }
+    $split = $firstNested -ge 1
+    if ($split) { for ($i = $firstNested; $i -lt $children.Count; $i++) { if ($children[$i].GetType().Name -ne 'ListBlock') { $split = $false } } }
+    $own = if ($split) { @($children[0..($firstNested - 1)]) } else { $children }
+    $range = Get-WtMdBlockLines $Li $Ctx
+    $end = if ($split) { (Get-WtMdBlockLines $children[$firstNested] $Ctx)[0] } else { $range[1] }
+    # 항목 안 빈 줄은 단위에 넣지 않는다 (뒤쪽 빈 줄 떼기)
+    while ($end - 1 -gt $range[0] -and -not $Ctx.Lines[$end - 1].Trim()) { $end-- }
+    $u = New-WtMdUnit 'list-item' $range[0] $end $Li $Ctx $Depth
+    $u.ListId = $ListId
+    $u.List = $List
+    $u.Own = $own
+    $Units.Add($u)
+    if ($split) {
+        for ($i = $firstNested; $i -lt $children.Count; $i++) { Add-WtMdUnitsOf $Units $children[$i] $Ctx ($Depth + 1) $ListId }
+    }
+}
+
 # Markdig는 PowerShell 7에 들어 있다 (ConvertFrom-Markdown이 쓰는 것). 처음 한 번 불러와서 쓸 확장만 켠다.
 function Get-WtMarkdownPipeline {
     if (-not $script:pipeline) {
@@ -501,6 +645,47 @@ function Set-WtMarkdownText {
         $doc.Blocks.Add($raw)
     }
     $View.Document = $doc
+}
+
+# 단위 하나를 Section 하나로 그린다 (Section.Tag = 단위). 보기의 상태(링크 처리 등)를 같이 쓴다.
+# 보기의 문서를 직접 꾸리는 화면(메모 편집기)이 Get-WtMarkdownUnits와 함께 쓴다.
+function New-WtMarkdownUnitSection {
+    param([Parameter(Mandatory)]$View, [Parameter(Mandatory)]$Unit)
+    $st = $View.Tag
+    $sec = [System.Windows.Documents.Section]::new()
+    $sec.Tag = $Unit
+    try {
+        $model = Get-WtMdUnitModel $Unit
+        if ($Unit.Kind -eq 'raw' -or -not $model) {
+            $p = New-WtMdPara 'Md.Raw'
+            $parts = $Unit.Text -split "`n"
+            for ($i = 0; $i -lt $parts.Count; $i++) {
+                if ($i) { $p.Inlines.Add([System.Windows.Documents.LineBreak]::new()) }
+                if ($parts[$i]) { $p.Inlines.Add((New-WtMdRun $parts[$i])) }
+            }
+            $sec.Blocks.Add($p)
+            return $sec
+        }
+        $st.ListDepth = [int]$Unit.Depth
+        try { Add-WtMdBlock $sec.Blocks $model $st } finally { $st.ListDepth = 0 }
+        if ($Unit.Kind -eq 'list-item') {
+            # 항목마다 따로 그린 목록을 이어 붙여 하나처럼 보이게: 들여쓰기 = 목록 안쪽 여백 × 깊이, 항목 사이 = 항목 아래 여백
+            $list = $sec.Blocks.FirstBlock
+            if ($list -is [System.Windows.Documents.List]) {
+                $li = $list.ListItems.FirstListItem
+                $gap = if ($li) { $li.Margin.Bottom } else { 0 }
+                $bottom = if ($Unit.Last) { $list.Margin.Bottom } else { $gap }
+                $list.Margin = [System.Windows.Thickness]::new($list.Padding.Left * $Unit.Depth, 0, 0, $bottom)
+                if ($li) { $li.Margin = [System.Windows.Thickness]::new(0) }
+            }
+        }
+    } catch {
+        $sec.Blocks.Clear()
+        $p = New-WtMdPara 'Md.Raw'
+        $p.Inlines.Add((New-WtMdRun $Unit.Text))
+        $sec.Blocks.Add($p)
+    }
+    $sec
 }
 
 # 모델의 제목 목록 (목차 등). @{ Level; Text; Line }
@@ -1036,4 +1221,5 @@ Register-WtSettingHandler {
 }
 
 Export-ModuleMember -Function Register-WtMarkdownCodeRenderer, Register-WtMarkdownCallout, ConvertTo-WtMarkdownModel,
-    Get-WtMarkdownSnippet, Get-WtMarkdownHeadings, New-WtMarkdownView, Set-WtMarkdownText, Invoke-WtMarkdownLink
+    Get-WtMarkdownSnippet, Get-WtMarkdownHeadings, New-WtMarkdownView, Set-WtMarkdownText, Invoke-WtMarkdownLink,
+    Get-WtMarkdownUnits, New-WtMarkdownUnitSection
