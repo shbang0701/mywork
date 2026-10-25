@@ -1,9 +1,9 @@
 # 셸: 메인 창 틀, 왼쪽 메뉴, 제목 줄 버튼, 트레이, 단축키, 화면 전환.
 # 메뉴는 Addons.psm1에 등록된 애드온 목록으로 만든다. 탭을 더하거나 빼도 이 파일은 고치지 않는다.
 #
-# 창은 투명도를 바꿀 수 있게 WindowStyle=None + AllowsTransparency로 만들고, 제목 줄은 직접 그린다.
+# 창은 WindowStyle=None으로 만들고 제목 줄은 직접 그린다. 투명도를 100%보다 낮게 고르면 투명 창(AllowsTransparency)으로 띄운다.
 # 그래서 이 창 안에는 WindowsFormsHost · WebBrowser를 넣지 않는다 (투명 창에서는 그려지지 않는다).
-# 투명 창은 ClearType을 못 쓰고 회색조로 글자를 그린다. 이때 Display 모드는 획이 픽셀에 맞춰 꺾여 각져 보이므로 Ideal로 그린다.
+# 투명 창은 ClearType을 못 쓰고 회색조로 글자를 그려서, 100%면 보통 창으로 띄운다 (Start-WtApp). 글자는 Ideal 모드로 그린다.
 #
 # 이벤트 처리기는 나중에 디스패처가 부르므로, 만든 함수의 지역 변수를 볼 수 없다.
 # 처리기 안에서는 $script: 변수와 $s(보낸 요소)의 Tag만 쓴다.
@@ -28,6 +28,8 @@ $script:fullFromMax = $false   # 최대화 상태에서 전체 화면으로 갔�
 $script:settingBounds = $false # 코드로 창 위치 · 크기를 바꾸는 중
 $script:icon = $null
 $script:lastImport = $null
+$script:warmQueue = $null      # 켠 뒤 미리 만들 화면 ID (Start-WtWarmUp)
+$script:warmTimer = $null
 
 $script:shellXaml = @'
 <Window {NS}
@@ -90,7 +92,11 @@ $script:shellXaml = @'
             <TextBlock Text="&#xE8BB;" Style="{DynamicResource T.Icon}" FontSize="10"/>
           </Button>
         </StackPanel>
-        <ContentControl x:Name="PageHost" Focusable="False"/>
+        <Grid>
+          <!-- 미리 만든 화면을 잠깐 붙여 배치만 해 보는 자리 (Invoke-WtWarmUpStep). 보이지 않고 누를 수도 없다 -->
+          <ContentControl x:Name="WarmHost" Focusable="False" Visibility="Hidden" IsHitTestVisible="False"/>
+          <ContentControl x:Name="PageHost" Focusable="False"/>
+        </Grid>
       </DockPanel>
     </Grid>
   </Border>
@@ -107,9 +113,22 @@ function Get-WtElements($Output) {
 }
 
 function Get-WtPageView([string]$Id) {
-    switch ($Id) {
-        '_settings' { return @{ View = (New-WtSettingsPage); Addon = $null } }
-        '_help' { return @{ View = (New-WtHelpPage); Addon = $null } }
+    if ($Id -in '_settings', '_help') {
+        # 등록 객체도 비교하므로 같은 ID의 탭을 다시 등록한 경우까지 반영한다.
+        $registrations = @(foreach ($a in @(Get-WtAddon -All)) {
+            [ordered]@{ Identity = [Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($a); Id = $a.Id; Title = $a.Title
+                Description = $a.Description; Required = $a.Required; Order = $a.Order; Help = $a.Help; Shortcuts = $a.Shortcuts }
+        })
+        $settings = @(foreach ($name in 'theme.color','ui.opacity','ui.fontScale','window.closeToTray','addons.disabled','legacy.path') {
+            [ordered]@{ Key = $name; Value = (Get-WtSetting $name) }
+        })
+        $key = ConvertTo-Json -Compress -Depth 8 -InputObject @(
+            (Get-WtDataRoot), $settings, $registrations, (Find-WtLegacyFolder), (Get-WtLastImport))
+        if (-not $script:views.ContainsKey($Id) -or $script:views[$Id].Key -cne $key) {
+            $view = if ($Id -eq '_settings') { New-WtSettingsPage } else { New-WtHelpPage }
+            $script:views[$Id] = @{ View = $view; Addon = $null; Key = $key }
+        }
+        return $script:views[$Id]
     }
     if (-not $script:views.ContainsKey($Id)) {
         $a = Get-WtAddon -Id $Id
@@ -150,6 +169,42 @@ function Reset-WtViews {
         $script:current = $null
         Select-WtPage $id
     }
+}
+
+# ---- 미리 만들기 ------------------------------------------------------------------------------
+
+# 켠 뒤 한가할 때 아직 안 연 화면을 하나씩 미리 만들어 둔다. 처음 누를 때도 다시 누를 때처럼 빨리 뜨게 하려는 것이다.
+# 탭은 등록할 때 WarmUp을 준 것만(Addons.psm1 참고), 그다음 설정 · 도움말 차례다.
+# 화면 하나를 만드는 동안은 화면 스레드를 쓰므로, 하나 끝날 때마다 쉬어서 그사이 들어온 입력을 먼저 처리한다
+function Start-WtWarmUp {
+    $ids = @(Get-WtAddon | Where-Object { $_.WarmUp } | ForEach-Object { $_.Id }) + @('_settings', '_help')
+    $script:warmQueue = [System.Collections.Generic.Queue[string]]::new([string[]]$ids)
+    if (-not $script:warmTimer) {
+        $script:warmTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::ApplicationIdle)
+        $script:warmTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+        $script:warmTimer.Add_Tick({ if (-not (Invoke-WtWarmUpStep)) { $script:warmTimer.Stop() } })
+    }
+    $script:warmTimer.Start()
+}
+
+# 미리 만들기 한 단계. 아직 남은 것이 있으면 $true
+function Invoke-WtWarmUpStep {
+    while ($script:warmQueue -and $script:warmQueue.Count) {
+        $id = $script:warmQueue.Dequeue()
+        if ($id -eq $script:current -or ($id -notlike '_*' -and $script:views.ContainsKey($id))) { continue }   # 이미 열었다
+        try {
+            $page = Get-WtPageView $id
+            if (-not $page) { continue }
+            if ($page.Addon -and $page.Addon.WarmUp -eq 'Full' -and $page.Addon.Refresh) { [void](& $page.Addon.Refresh $page.View) }
+            # 안 보이는 자리에 잠깐 붙여 틀 적용 · 글자 배치까지 해 두고, 바로 떼어 실제 자리로 옮길 수 있게 한다
+            $script:ui.WarmHost.Content = $page.View
+            $script:ui.WarmHost.UpdateLayout()
+        } catch {
+            # 미리 만들기는 덤이다. 실패하면 그 화면을 열 때 원래대로 만들고, 오류도 그때 알린다
+        } finally { $script:ui.WarmHost.Content = $null }
+        return [bool]$script:warmQueue.Count
+    }
+    $false
 }
 
 # ---- 왼쪽 메뉴 --------------------------------------------------------------------------------
@@ -202,7 +257,13 @@ function Switch-WtCollapsed { Set-WtSetting 'nav.collapsed' (-not [bool](Get-WtS
 
 function Set-WtOpacity([double]$Percent = -1) {
     if ($Percent -lt 0) { $Percent = [double](Get-WtSetting 'ui.opacity') }
+    if (-not $script:window.AllowsTransparency) { return }   # 보통 창으로 띄웠으면 다시 시작해야 투명도가 바뀐다 (Test-WtOpacityNeedsRestart)
     $script:window.Opacity = [Math]::Max(0.6, [Math]::Min(1.0, $Percent / 100))
+}
+
+# 투명도를 이 값으로 바꾸면 다시 시작해야 하는지. 투명 창 여부는 창을 보이기 전에만 정할 수 있다 (Start-WtApp)
+function Test-WtOpacityNeedsRestart([double]$Percent) {
+    $script:window -and $script:window.AllowsTransparency -ne ($Percent -lt 100)
 }
 
 # 창이 있는 화면의 작업 영역(또는 전체) 크기를 WPF 단위로
@@ -403,6 +464,7 @@ function Stop-WtApp {
         }
     }
     $script:exiting = $true
+    if ($script:warmTimer) { $script:warmTimer.Stop() }
     try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
     try { if ($script:icon) { $script:icon.Dispose() } } catch { }
     if ($script:frame) { $script:frame.Continue = $false }
@@ -480,9 +542,14 @@ function Start-WtApp {
     $script:ui = Get-WtNamedElements $w $script:shellXaml
     $w.Resources.MergedDictionaries.Add($script:themeDict)
     $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    # 투명 창은 ClearType이 꺼져 글자가 흐리게(회색조로) 그려진다. 불투명도 100%로 시작하면 보통 창으로 만들어 또렷하게 그린다
+    if ([double](Get-WtSetting 'ui.opacity') -ge 100) {
+        $w.AllowsTransparency = $false
+        $w.SetResourceReference([System.Windows.Window]::BackgroundProperty, 'B.WindowBg')
+    }
 
     Update-WtAppIcon
-    $w.Add_ContentRendered({ Update-WtAppIcon })
+    $w.Add_ContentRendered({ Update-WtAppIcon; Start-WtWarmUp })
     $script:ui.TodayText.Text = Format-WtDate (Get-Date) 'yyyy년 M월 d일 dddd'
 
     # 제목 줄 · 메뉴 아래 버튼
@@ -590,5 +657,5 @@ function Start-WtApp {
     }
 }
 
-Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Set-WtOpacity,
+Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp

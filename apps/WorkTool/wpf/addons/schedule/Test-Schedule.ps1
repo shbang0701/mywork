@@ -40,6 +40,25 @@ try {
     Assert-WtTest '일정: 하루 일정은 시각 순서' ($order -eq 's4,s1,s2') $order
     Assert-WtTest '일정: 알람 표시' ((Format-WtAlarm 0) -eq '정시' -and (Format-WtAlarm 10) -eq '10분 전' -and (Format-WtAlarm 60) -eq '1시간 전' -and (Format-WtAlarm 1440) -eq '하루 전' -and $null -eq (Format-WtAlarm ''))
     Assert-WtTest '일정: 기간 일정 칸이 있다' ($byId.s1.endDate -eq '2026-10-01' -and $byId.s1.PSObject.Properties.Name -contains 'tags')
+    $range = & (Get-Module Schedule) { param($items) Get-WtScheduleRange ([datetime]'2026-10-20') 20 $items } $s
+    $sameRange = $true
+    for ($i = 0; $i -lt 20; $i++) {
+        $expected = @(Get-WtScheduleOn ([datetime]'2026-10-20').AddDays($i) $s).id -join ','
+        if ((@($range[$i]).id -join ',') -cne $expected) { $sameRange = $false }
+    }
+    Assert-WtTest '일정: 여러 날 조회도 반복·기간·정렬이 하루 조회와 같다' ($range.Count -eq 20 -and $sameRange)
+    if (Test-WtTestWpf) {
+        $module = Get-Module Schedule
+        $view = New-WtTestView 'schedule'
+        & $module { Update-WtScheduleView; $script:testFirst = $script:list.Children[0]; Update-WtScheduleView }
+        Assert-WtTest '일정: 같은 데이터는 화면을 다시 만들지 않는다' (& $module { [object]::ReferenceEquals($script:testFirst, $script:list.Children[0]) })
+        $byId.s4.title = '바뀐 매일 점검'
+        Write-WtStore schedule -Items $s
+        & $module { Update-WtScheduleView }
+        Assert-WtTest '일정: 외부 저장 변경을 재진입 때 반영한다' ((Get-WtTestTexts $view) -contains '바뀐 매일 점검')
+        & $module { $script:testFirst = $script:list.Children[0]; $script:viewKey = '어제'; Update-WtScheduleView }
+        Assert-WtTest '일정: 날짜 키가 바뀌면 다시 만든다' (& $module { -not [object]::ReferenceEquals($script:testFirst, $script:list.Children[0]) })
+    }
 } finally {
     Remove-WtTestData $test
 }

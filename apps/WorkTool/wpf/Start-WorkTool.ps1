@@ -25,6 +25,20 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
     return
 }
 
+# 계층 컴파일의 백그라운드 처리가 화면 조작과 경합하므로 이 앱의 프로세스에서만 끈다.
+if ($env:DOTNET_TieredCompilation -ne '0') {
+    $previousTiered = [Environment]::GetEnvironmentVariable('DOTNET_TieredCompilation', 'Process')
+    $env:DOTNET_TieredCompilation = '0'
+    try {
+        & (Join-Path $PSHOME 'pwsh.exe') -NoLogo -NoProfile -STA -File $PSCommandPath @PSBoundParameters @args
+        $childExit = $LASTEXITCODE
+    } finally {
+        # 같은 콘솔에서 다음에 켤 때도 실제 런타임 설정과 환경 변수 표식이 어긋나지 않게 되돌린다.
+        [Environment]::SetEnvironmentVariable('DOTNET_TieredCompilation', $previousTiered, 'Process')
+    }
+    exit $childExit
+}
+
 try {
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing

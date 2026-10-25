@@ -3,9 +3,13 @@
 $ErrorActionPreference = 'Stop'
 $script:ui = @{}
 $script:items = @()
+$script:snapshotKey = $null
+$script:snapshotVersion = 0
+$script:listKey = $null
 $script:visible = @()
 $script:expanded = @{}
 $script:job = $null
+$script:workerRunspace = $null
 $script:timer = $null
 $script:paused = $false
 $script:next = [datetime]::MaxValue
@@ -89,10 +93,13 @@ function Get-WtTaskHostIds {
 }
 
 function Set-WtTaskSnapshot([object[]]$Items) {
+    $key = ConvertTo-Json -Compress -Depth 5 -InputObject @($Items | Select-Object -Property * -ExcludeProperty Selected)
     $picked = @{}
     foreach ($row in $script:items) { if ($row.Selected) { $picked[$row.Id] = $true } }
     foreach ($row in $Items) { $row.Selected = $row.CanClose -and $picked.ContainsKey($row.Id) }
-    $script:items = @($Items)
+    if ($script:snapshotKey -cne $key) {
+        $script:items = @($Items); $script:snapshotKey = $key; $script:snapshotVersion++
+    }
     $script:lastScan = Get-Date
 }
 
@@ -301,17 +308,27 @@ function Get-WtTaskWorker { $script:worker }
 function Start-WtTaskJob([string]$Action, [object[]]$Targets = @()) {
     if ($script:job) { return }
     $cancel = [hashtable]::Synchronized(@{ Value = $false })
-    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
-    # 작업마다 새 스레드. ReuseThread는 실행 공간을 버리기 전까지 스레드가 남아, 끝낼 때 응답 없는 작업이 있으면 앱 프로세스가 끝나지 않는다
-    $runspace.ApartmentState = 'MTA'; $runspace.ThreadOptions = 'UseNewThread'; $runspace.Open()
-    $ps = [powershell]::Create(); $ps.Runspace = $runspace
-    [void]$ps.AddScript($script:worker.ToString()).AddArgument(@{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; HostProcessIds = @(Get-WtTaskHostIds); Cancel = $cancel })
+    $ps = $null
     try {
+        if (-not $script:workerRunspace -or $script:workerRunspace.RunspaceStateInfo.State -ne 'Opened') {
+            if ($script:workerRunspace) { $script:workerRunspace.Dispose(); $script:workerRunspace = $null }
+            $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+            # 실행 공간은 재사용하되 호출마다 새 스레드다. ReuseThread로 남는 실행 스레드를 만들지 않는다.
+            $runspace.ApartmentState = 'MTA'; $runspace.ThreadOptions = 'UseNewThread'
+            try { $runspace.Open(); $script:workerRunspace = $runspace } catch { $runspace.Dispose(); throw }
+        }
+        $runspace = $script:workerRunspace
+        $ps = [powershell]::Create(); $ps.Runspace = $runspace
+        # 부모 조회도 배경에서 한다. 함수와 작업 본문을 스크립트 하나에 그대로 넣어 지역 범위로 돌린다(실행 공간에 남기지 않는다).
+        # 글을 코드로 바꾸는 [scriptblock]::Create는 쓰지 않는다 (AGENTS.md 「코드 규칙」 4번)
+        $runner = "param(`$request)`ntry {`nfunction Get-WtTaskHostIds {`n$((Get-Command Get-WtTaskHostIds).Definition)`n}`n" +
+            "`$request.HostProcessIds = @(Get-WtTaskHostIds)`n& {`n$($script:worker.ToString())`n} `$request`n} finally { `$Error.Clear() }"
+        [void]$ps.AddScript($runner, $true).AddArgument(@{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; Cancel = $cancel })
         $handle = $ps.BeginInvoke()
         $script:job = @{ PowerShell = $ps; Runspace = $runspace; Handle = $handle; Cancel = $cancel; Action = $Action; Started = [datetime]::UtcNow }
         $script:timer.Start()
         Update-WtTaskStatus
-    } catch { $ps.Dispose(); $runspace.Dispose(); throw }
+    } catch { if ($ps) { $ps.Dispose() }; throw }
 }
 
 function Complete-WtTaskJob {
@@ -337,7 +354,7 @@ function Complete-WtTaskJob {
             $scanNext = $true
         }
     } catch { $script:lastError = '작업을 완료하지 못했습니다. 다시 시도하세요.'; $script:ui.Status.ToolTip = $_.Exception.Message }
-    finally { $job.PowerShell.Dispose(); $job.Runspace.Dispose() }
+    finally { $job.PowerShell.Dispose() }
     $option = Get-WtTaskRefresh; $script:next = [datetime]::UtcNow.AddMinutes($option.minutes)
     Update-WtTaskStatus
     if ($scanNext) { Start-WtTaskJob 'scan' }
@@ -346,6 +363,8 @@ function Complete-WtTaskJob {
 function Invoke-WtTaskTick {
     Complete-WtTaskJob
     if (-not $script:ui.Count) { return }
+    # 숨겨진 화면에서도 실행 중인 결과는 회수한다. 완료 뒤에는 다음에 보일 때까지 멈춘다.
+    if (-not $script:ui.Root.IsVisible -and -not $script:job) { $script:timer.Stop(); return }
     $window = Get-WtWindow
     $visible = $script:ui.Root.IsVisible -and $window -and $window.IsVisible -and $window.WindowState -ne 'Minimized'
     $option = Get-WtTaskRefresh
@@ -355,11 +374,14 @@ function Invoke-WtTaskTick {
 
 function Stop-WtTasks {
     if ($script:timer) { $script:timer.Stop(); $script:timer = $null }
+    $runspace = $script:workerRunspace; $script:workerRunspace = $null
     if ($script:job) {
         $job = $script:job; $script:job = $null; $job.Cancel.Value = $true
         if ($job.Handle.IsCompleted) { $job.PowerShell.Dispose(); $job.Runspace.Dispose() }
         else { [void]$job.PowerShell.BeginStop($null, $null); $job.Runspace.CloseAsync() }
+        $runspace = $null
     }
+    if ($runspace) { $runspace.Dispose() }
 }
 
 function Update-WtTaskStatus {
@@ -391,6 +413,8 @@ function Update-WtTaskStatus {
 function Update-WtTaskList([switch]$KeepSelection) {
     if (-not $script:ui.Count) { return }
     if (-not $KeepSelection) { foreach ($row in $script:items) { $row.Selected = $false } }
+    $key = ConvertTo-Json -Compress -Depth 4 -InputObject @($script:snapshotVersion, $script:ui.Search.Text, $script:appFilter, $script:sortColumn, $script:sortDirection, @($script:items | Where-Object Selected | ForEach-Object Id))
+    if ($script:listKey -ceq $key) { Update-WtTaskStatus; return }
     $scroll = Get-WtVisualChild $script:ui.Grid ([System.Windows.Controls.ScrollViewer])
     $offset = if ($scroll) { $scroll.VerticalOffset } else { 0 }
     $script:visible = @(Find-WtTaskItems $script:items $script:ui.Search.Text $script:appFilter)
@@ -405,6 +429,7 @@ function Update-WtTaskList([switch]$KeepSelection) {
     $script:ui.Grid.UpdateLayout()
     if ($scroll) { $scroll.ScrollToVerticalOffset($offset) }
     Update-WtTaskStatus
+    $script:listKey = $key
 }
 
 # 표를 다시 만들면 방금 누른 체크박스가 새것으로 바뀐다. 같은 항목 · 같은 그룹의 체크박스로 포커스를 돌려줘
@@ -490,6 +515,7 @@ function Close-WtSelectedTasks {
 
 function New-WtActiveTasksView {
     Stop-WtTasks
+    $script:listKey = $null
     $script:ui = @{}
     $page = New-WtTaskPage
     $header = New-WtPageHeader '활성 작업' '' $null
@@ -589,12 +615,18 @@ function New-WtActiveTasksView {
     })
     $script:timer = [System.Windows.Threading.DispatcherTimer]::new()
     $script:timer.Interval = [timespan]::FromMilliseconds(250); $script:timer.Add_Tick({ Invoke-WtTaskTick })
-    $page.Root.Add_Loaded({ $script:timer.Start() })
+    $page.Root.Add_Loaded({ if ($script:timer) { $script:timer.Start() } })
+    $page.Root.Add_Unloaded({ if ($script:timer -and -not $script:job) { $script:timer.Stop() } })
+    $page.Root.Add_IsVisibleChanged({
+        param($s, $e)
+        if (-not $script:timer) { return }
+        if ($s.IsVisible -or $script:job) { $script:timer.Start() } else { $script:timer.Stop() }
+    })
     Update-WtTaskList -KeepSelection
     $page.Root
 }
 
-Register-WtAddon -Id 'active-tasks' -Title '활성 작업' -Icon 0xE7C4 -Order 60 `
+Register-WtAddon -Id 'active-tasks' -Title '활성 작업' -Icon 0xE7C4 -Order 60 -WarmUp View `
     -NewView { New-WtActiveTasksView } -Refresh { param($view) Start-WtTaskJob 'scan' } -OnExit { Stop-WtTasks } `
     -Help @(
         '활성 작업은 열린 창과 Chrome·Edge·웨일 탭을 모아 보고 선택한 항목을 닫습니다. 새로 고침 버튼을 우클릭하면 수동·자동을 고를 수 있고, 자동은 분 단위 간격을 설정합니다.'

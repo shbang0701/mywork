@@ -102,6 +102,25 @@ try {
         & $module { Update-WtTaskList -KeepSelection }
         $view.Measure([Windows.Size]::new(1048, 632)); $view.Arrange([Windows.Rect]::new(0, 0, 1048, 632)); $view.UpdateLayout()
         Assert-Active '표 · 그룹을 렌더링' ((& $module { $script:ui.Grid.Items.Count }) -eq 3)
+        & $module {
+            $script:testGridSource = $script:ui.Grid.ItemsSource; $script:testModel = $script:items[0]
+            $script:lastScan = [datetime]::Today.AddDays(-1)
+            $data = @($script:items | ForEach-Object { $_.PSObject.Copy() })
+            Set-WtTaskSnapshot $data; Update-WtTaskList -KeepSelection
+        }
+        Assert-Active '같은 수집 결과는 표·바인딩 객체 재사용 · 수집 시각 갱신' (& $module {
+            [object]::ReferenceEquals($script:testGridSource,$script:ui.Grid.ItemsSource) -and
+                [object]::ReferenceEquals($script:testModel,$script:items[0]) -and $script:lastScan -ge [datetime]::Today
+        })
+        & $module {
+            $script:testOriginalRows = @($script:items)
+            $data = @($script:items | ForEach-Object { $_.PSObject.Copy() }); $data[0].Status = '바뀐 상태'
+            Set-WtTaskSnapshot $data; Update-WtTaskList -KeepSelection
+        }
+        Assert-Active '같은 ID의 상태가 바뀌면 표에 새 결과를 반영한다' (& $module {
+            -not [object]::ReferenceEquals($script:testGridSource,$script:ui.Grid.ItemsSource) -and $script:items[0].Status -eq '바뀐 상태'
+        })
+        & $module { Set-WtTaskSnapshot $script:testOriginalRows; Update-WtTaskList -KeepSelection }
         Assert-Active '우클릭 메뉴에 수동 · 자동' ((& $module { $script:ui.Refresh.ContextMenu.Items.Count }) -eq 2)
         Assert-Active '수동 메뉴 체크와 간격 표시' ((& $module { $script:ui.Manual.IsChecked }) -and (& $module { $script:ui.Mode.Text }) -eq '수동')
         Set-WtTaskRefresh 'auto' '2'
@@ -174,6 +193,11 @@ try {
             $testHost.Hide()
             & $module { $script:next = [datetime]::UtcNow.AddMinutes(-1); Invoke-WtTaskTick }
             Assert-Active '창을 숨기면 자동 수집 안 함' ((& $module { $script:testJobs }) -eq 1)
+            Assert-Active '숨긴 탭의 유휴 타이머 중지' (-not (& $module { $script:timer.IsEnabled }))
+            $testHost.Show()
+            Assert-Active '다시 보이면 타이머 재시작' (& $module { $script:timer.IsEnabled })
+            $testHost.Content = $null
+            Assert-Active '탭을 떼어 내면 유휴 타이머 중지' (-not (& $module { $script:timer.IsEnabled }))
         } finally {
             $testHost.Close(); & $shellModule { $script:window = $null }
             & $module { Stop-WtTasks; Set-Item Function:script:Start-WtTaskJob -Value $script:originalStart; Remove-Item Function:script:New-WtModal }
@@ -185,6 +209,7 @@ try {
             $script:timer = [Windows.Threading.DispatcherTimer]::new()
             Start-WtTaskJob 'scan'
             $first = $script:job
+            $script:testFirstRunspace = $first.Runspace; $script:testFirstPowerShell = $first.PowerShell
             Start-WtTaskJob 'scan'
             if (-not [object]::ReferenceEquals($first, $script:job)) { throw '중복 작업이 시작되었습니다.' }
         }
@@ -194,7 +219,35 @@ try {
                 Start-Sleep -Milliseconds 25; & $module { Complete-WtTaskJob }
             }
             Assert-Active '비동기 수집 완료 · 중복 실행 방지' (-not (& $module { [bool]$script:job }) -and (& $module { $script:items.Count }) -eq 0)
+            & $module {
+                $script:testThreads = [Collections.Generic.List[int]]::new()
+                $script:workerRunspace.SessionStateProxy.SetVariable('testThreads', $script:testThreads)
+                $script:worker = {
+                    param($request)
+                    $global:testThreads.Add([Threading.Thread]::CurrentThread.ManagedThreadId)
+                    @{ Items = @(); FailedWindows = 0; Canceled = $false }
+                }
+            }
+            foreach ($i in 1..2) {
+                & $module { Start-WtTaskJob 'scan'; $script:testLastPowerShell = $script:job.PowerShell }
+                $watch.Restart()
+                while ((& $module { [bool]$script:job }) -and $watch.Elapsed.TotalSeconds -lt 5) {
+                    Start-Sleep -Milliseconds 25; & $module { Complete-WtTaskJob }
+                }
+            }
+            Assert-Active '실행 공간만 재사용하고 PowerShell 객체·스레드는 호출마다 새로 만든다' (& $module {
+                [object]::ReferenceEquals($script:testFirstRunspace,$script:workerRunspace) -and
+                    -not [object]::ReferenceEquals($script:testFirstPowerShell,$script:testLastPowerShell) -and
+                    $script:testThreads.Count -eq 2 -and $script:testThreads[0] -ne $script:testThreads[1]
+            })
+            Assert-Active '완료 뒤 요청·worker 변수가 실행 공간 전역에 남지 않는다' (& $module {
+                $null -eq $script:workerRunspace.SessionStateProxy.GetVariable('request') -and
+                    $null -eq $script:workerRunspace.SessionStateProxy.GetVariable('workerSource')
+            })
+            & $module { Invoke-WtTaskTick }
+            Assert-Active '숨긴 탭도 실행 결과 회수 뒤 타이머 중지' (-not (& $module { $script:timer.IsEnabled }))
         } finally { & $module { Stop-WtTasks; $script:worker = $script:savedWorker } }
+        Assert-Active '끝낼 때 재사용 실행 공간도 닫는다' (& $module { $null -eq $script:workerRunspace -and $script:testFirstRunspace.RunspaceStateInfo.State -eq 'Closed' })
         if ($PreviewPath) {
             $bitmap = [Windows.Media.Imaging.RenderTargetBitmap]::new(1048, 632, 96, 96, [Windows.Media.PixelFormats]::Pbgra32)
             $bitmap.Render($view)

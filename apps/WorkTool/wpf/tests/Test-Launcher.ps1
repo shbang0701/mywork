@@ -102,6 +102,7 @@ $script:sampleTimer.Add_Tick({
             IconWidth = $window.Icon.PixelWidth; HasOverlay = [bool]$window.TaskbarItemInfo.Overlay
             Description = $window.TaskbarItemInfo.Description
             Apartment = [string][Threading.Thread]::CurrentThread.GetApartmentState()
+            Tiered = $env:DOTNET_TieredCompilation
         } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:sampleRoot 'state.json') -Encoding utf8
         $script:sampleReported = $true
     }
@@ -125,6 +126,7 @@ try { Start-WtApp -AppRoot $PSScriptRoot } finally { $script:sampleTimer.Stop() 
     Assert-Launcher '콘솔 생성과 셸 실행을 끈다' ($info.CreateNoWindow -and -not $info.UseShellExecute)
     Assert-Launcher '특수문자 경로를 하나의 파일 인수로 전달한다' ($info.ArgumentList.Count -eq 5 -and $info.ArgumentList[4] -ceq $entry -and $info.WorkingDirectory -ceq $fixture)
     Assert-Launcher '실행 정책 우회 옵션을 넣지 않는다' (-not ($info.ArgumentList -match 'ExecutionPolicy|Bypass|EncodedCommand'))
+    Assert-Launcher 'GUI 프로세스에만 계층 컴파일 끄기를 전달한다' ($info.Environment['DOTNET_TieredCompilation'] -ceq '0')
     Push-Location -LiteralPath $fixture
     try { $relative = New-WtLaunchStartInfo '.\WorkTool-WPF.ps1' } finally { Pop-Location }
     Assert-Launcher '상대 경로는 지금 위치 기준 전체 경로로 넘긴다' ($relative.ArgumentList[4] -ceq $entry -and $relative.WorkingDirectory -ceq $fixture)
@@ -138,12 +140,40 @@ try { Start-WtApp -AppRoot $PSScriptRoot } finally { $script:sampleTimer.Stop() 
     $ownedWindows = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $ownedCondition)
     Assert-Launcher '이 프로세스에는 WorkTool GUI 창 하나만 있다' ($ownedWindows.Count -eq 1 -and $ownedWindows[0].Current.Name -eq 'WorkTool')
     Assert-Launcher 'GUI는 STA·보통 창 상태로 실행한다' ($state.Apartment -eq 'STA' -and $state.WindowState -eq 'Normal')
+    Assert-Launcher 'GUI가 계층 컴파일 끄기 설정을 상속한다' ($state.Tiered -ceq '0')
     Assert-Launcher '전체 창 아이콘을 적용하고 작은 배지를 제거한다' ($state.IconWidth -eq 32 -and -not $state.HasOverlay -and $state.Description -eq 'WorkTool')
     Assert-Launcher 'GUI 종료 뒤 프로세스도 끝난다' (Stop-WtLauncherGui $run $fixture)
 
     $dev = Invoke-WtLauncherCmd $devFixture 'start-dev.cmd'
     Assert-Launcher '저장소 실행 파일(start-dev.cmd)도 CMD는 끝나고 원본 GUI만 STA로 남는다' ($dev.Bootstrap.HasExited -and -not $dev.Gui.HasExited -and $dev.State.Visible -and $dev.State.Apartment -eq 'STA')
     Assert-Launcher '저장소 실행 파일의 GUI도 종료 뒤 프로세스가 끝난다' (Stop-WtLauncherGui $dev $devFixture)
+
+    # 실제 진입 코드만 떼어, 앱 대신 인수/종료 코드를 기록한다. 재실행은 최대 한 번이어야 한다.
+    $realEntry = [IO.File]::ReadAllText((Join-Path $root 'Start-WorkTool.ps1'))
+    $prefix = $realEntry.Substring(0, $realEntry.IndexOf("`ntry {"))
+    $prefix = $prefix.Replace('param()', 'param([string]$Marker)')
+    $prefix = $prefix.Replace("`$ErrorActionPreference = 'Stop'", "`$ErrorActionPreference = 'Stop'`nAdd-Content -LiteralPath (Join-Path `$PSScriptRoot 'hops.txt') -Value `$PID")
+    $probe = Join-Path $fixture 'restart-probe.ps1'
+    $probeBody = @'
+[pscustomobject]@{ Marker = $Marker; Tiered = $env:DOTNET_TieredCompilation; Apartment = [string][Threading.Thread]::CurrentThread.GetApartmentState() } |
+    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'restart.json') -Encoding utf8
+exit 23
+'@
+    [IO.File]::WriteAllText($probe, ($prefix + "`n" + $probeBody), [Text.UTF8Encoding]::new($false))
+    foreach ($tiered in '1','0') {
+        [IO.File]::WriteAllText((Join-Path $fixture 'hops.txt'), '')
+        $probeInfo = [Diagnostics.ProcessStartInfo]::new()
+        $probeInfo.FileName = Join-Path $PSHOME 'pwsh.exe'; $probeInfo.UseShellExecute = $false; $probeInfo.CreateNoWindow = $true
+        $probeInfo.Environment['DOTNET_TieredCompilation'] = $tiered
+        foreach ($arg in @('-NoLogo','-NoProfile','-STA','-File',$probe,'-Marker',"한글 O'Brien & (검사)! %test%")) { $probeInfo.ArgumentList.Add($arg) }
+        $probeProcess = [Diagnostics.Process]::Start($probeInfo); $script:owned.Add($probeProcess)
+        if (-not $probeProcess.WaitForExit(15000)) { throw '재실행 검사가 끝나지 않았습니다.' }
+        $probeState = Get-Content (Join-Path $fixture 'restart.json') -Raw | ConvertFrom-Json
+        $hops = @(Get-Content (Join-Path $fixture 'hops.txt') | Where-Object { $_ })
+        Assert-Launcher "계층 컴파일 $tiered 입력: 재실행 횟수·인수·종료 코드 보존" (
+            $hops.Count -eq $(if ($tiered -eq '0') { 1 } else { 2 }) -and $probeProcess.ExitCode -eq 23 -and
+            $probeState.Marker -ceq "한글 O'Brien & (검사)! %test%" -and $probeState.Tiered -ceq '0' -and $probeState.Apartment -eq 'STA')
+    }
 
     $bad = Join-Path $fixture 'bad.ps1'
     Set-Content -LiteralPath $bad -Value 'function {' -Encoding utf8

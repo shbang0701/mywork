@@ -79,10 +79,11 @@ $script:fontScales = @{ s = 0.93; m = 1.0; l = 1.12 }
 # MdH1~3 · Code · BodyLine(본문 줄 높이 1.5배)은 마크다운 보기용
 $script:fontSizes = @{ Title = 26; Number = 22; H2 = 16; Dialog = 20; Body = 14; Small = 12.5; Icon = 16; MdH1 = 24; MdH2 = 20; MdH3 = 17; Code = 13; BodyLine = 21 }
 $script:fonts = @{
-    # 설치된 글꼴 중 앞에서부터 쓴다. 맑은 고딕은 Windows 기본이라 항상 있다.
-    UI   = 'Pretendard, Noto Sans KR, Malgun Gothic'
+    # 앞 글꼴에 없는 글자는 다음 글꼴로 그린다. UI는 Windows 기본 글꼴만 쓴다: 영문 · 숫자는 Segoe UI Variable(Windows 11)
+    # → Segoe UI(Windows 10), 한글은 맑은 고딕. 따로 설치하는 글꼴(Noto Sans KR 등)은 PC마다 있고 없고가 달라 쓰지 않는다
+    UI   = 'Segoe UI Variable Text, Segoe UI, Malgun Gothic'
     Icon = 'Segoe Fluent Icons, Segoe MDL2 Assets'
-    Mono = 'Consolas, D2Coding, Malgun Gothic'
+    Mono = 'Consolas, Malgun Gothic'   # 코드 · 출력 칸. 영문은 Consolas, 한글은 맑은 고딕 (둘 다 Windows 기본)
 }
 
 # ---- 색 계산 (WPF 없이도 동작: 테스트용) ------------------------------------------------------
