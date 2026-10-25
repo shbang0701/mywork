@@ -919,7 +919,8 @@ function New-WtMdTaskLink($Box, [int]$Line, $St) {
     $h.Tag = @{ Line = $Line; State = $St }
     $h.Add_Click({
             param($s, $e)
-            try { [void](& $s.Tag.State.OnTask $s.Tag.Line) } catch { Show-WtError $_ '할 일 표시' }
+            # 둘째 값은 누른 요소. 문서를 블록 단위로 다시 쓰는 화면(메모 편집기)이 지금 줄 번호를 찾을 때 쓴다
+            try { [void](& $s.Tag.State.OnTask $s.Tag.Line $s) } catch { Show-WtError $_ '할 일 표시' }
         })
     $h
 }
@@ -950,7 +951,8 @@ function Invoke-WtMarkdownLink($St, $Link) {
         return
     }
     if ($St.OnLink) {
-        $handled = & $St.OnLink $Link | Select-Object -Last 1
+        # 둘째 값은 보기의 상태(Tag). 보기를 여럿 둔 화면이 어느 보기에서 눌렸는지 알 때 쓴다
+        $handled = & $St.OnLink $Link $St | Select-Object -Last 1
         if ($handled -eq $true) { return }
     }
     switch ($Link.Kind) {
@@ -973,7 +975,8 @@ function Resolve-WtMdPath([string]$Target, [string]$BaseDir) {
     if ($t -match '^file:') {
         try { $t = ([uri]$t).LocalPath } catch { return $null }
     }
-    $t = $t -replace '#.*$', ''
+    # 상대 경로의 #제목은 문서 안 자리라서 뗀다. 드라이브 · UNC 경로의 #은 이름의 일부다(예: C:\C# 공부)
+    if ($t -notmatch '^([A-Za-z]:[\\/]|[\\/]{2})') { $t = $t -replace '#.*$', '' }
     if (-not $t) { return $null }
     try {
         if ([System.IO.Path]::IsPathRooted($t)) { return [System.IO.Path]::GetFullPath($t) }
