@@ -322,6 +322,13 @@ function Set-EdCaret($Ed, [int]$Line, [int]$Col) {
 }
 # 실행 취소 단위를 끊는다 (사용자가 쉬었다 치는 것처럼)
 function Suspend-EdTyping($Ed) { $Ed.LastEdit = [datetime]::MinValue }
+# 왼쪽 단추를 누른 채 움직인 MouseEventArgs 흉내. GetPosition은 묻는 요소와 상관없이 $X, $Y를 돌려준다
+function New-EdMouseMove([double]$X, [double]$Y) {
+    $o = [pscustomobject]@{ LeftButton = 'Pressed'; Point = [System.Windows.Point]::new($X, $Y) }
+    $o | Add-Member ScriptMethod GetPosition { param($el) $this.Point }
+    $o
+}
+function Send-EdMouseMove($Ed, [double]$X, [double]$Y) { & $script:em { param($s, $e) Invoke-WtMemoLiveMouseMove $s $e } $Ed.Live (New-EdMouseMove $X $Y) }
 
 # 그린 글에서 $Needle의 $Index번째 글자 왼쪽 끝 + 1px (보기 좌표)
 function Get-EdPoint($View, [string]$Needle, [int]$Index = 0) {
@@ -860,6 +867,26 @@ try {
         Open-EdAt $ed $hit.Line $hit.Col
         Assert-Ed '편집기 클릭: 그 자리로 섬을 연다 (섬을 닫은 뒤 기준)' ((Get-EdCaret $ed) -eq '7:3' -and (Get-EdLines $ed)[7] -ceq '- 항목 2') (Get-EdCaret $ed)
         [void](Test-EdContract $ed '클릭으로 섬 옮김')
+    }
+    Invoke-EdCase '끌어 고르기' {
+        $ed = New-EdEditor
+        Set-EdText $ed $sampleText
+        Open-EdAt $ed 3 0
+        $ed.Live.UpdateLayout()
+        # 다른 단위를 누르면 섬을 그리로 옮기고 마우스를 잡는다. 잡는 순간 이동이 바로 온다(섬은 아직 배치 전)
+        Open-EdAt $ed 6 2
+        $ed.Drag = @{ Line = 6; Col = 2 }
+        $err = $null
+        try { Send-EdMouseMove $ed 5 5 } catch { $err = $_.Exception.Message }
+        Assert-Ed '편집기 끌기: 섬을 옮긴 직후의 이동에 오류가 나지 않는다' (-not $err -and (Get-EdCaret $ed) -eq '6:2') "$err / 커서 $(Get-EdCaret $ed)"
+        # 배치가 끝난 뒤 섬 안에서 끌면 누른 자리부터 고른다
+        $ed.Live.UpdateLayout()
+        $box = $ed.IslandBox
+        $r = $box.GetRectFromCharacterIndex($box.Text.Length - 1)
+        Send-EdMouseMove $ed ($r.X + 1) ($r.Y + $r.Height / 2)
+        Assert-Ed '편집기 끌기: 섬 안에서 끌면 누른 자리부터 고른다' ($box.SelectionStart -eq 2 -and $box.SelectionLength -gt 0) "Start $($box.SelectionStart) Length $($box.SelectionLength)"
+        $ed.Drag = $null
+        [void](Test-EdContract $ed '끌어 고르기')
     }
     Invoke-EdCase '클릭 위치: 공백 뒤 · 기호 뒤' {
         $ed = New-EdEditor

@@ -1179,6 +1179,9 @@ function Invoke-WtMemoLiveMouseMove($S, $E) {
     $ed = $S.Tag.Editor
     if (-not $ed -or -not $ed.Drag -or $E.LeftButton -ne 'Pressed' -or -not $ed.Island) { return }
     $box = $ed.IslandBox
+    # 막 옮긴 섬은 배치 전이라 글자 위치를 물으면 예외가 난다. 누르면서 마우스를 잡을 때(CaptureMouse) 이동이 바로 오므로
+    # 이번 것은 건너뛴다. 다음 이동 전에는 배치가 끝나 있다
+    if (-not $box.IsArrangeValid) { return }
     $p = $E.GetPosition($box)
     $anchor = $ed.Drag
     if ($p.Y -ge 0 -and $p.Y -le $box.ActualHeight) {
