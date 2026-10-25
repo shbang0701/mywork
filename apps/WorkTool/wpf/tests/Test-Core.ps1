@@ -561,7 +561,7 @@ if (-not (& (Get-Module Markdown) { `$script:pathJobs.Count })) { exit 2 }
     $addonFiles = @(Get-ChildItem (Join-Path $root 'addons') -Filter '*.psm1' -Recurse | Sort-Object FullName)
     $addonModules = @(foreach ($f in $addonFiles) { Import-Module $f.FullName -Force -DisableNameChecking -PassThru })
     $ids = @(Get-WtAddon -All | ForEach-Object Id)
-    # 탭 폴더 하나에 모듈이 여럿일 수 있다(예: memo의 Memo.psm1 · MemoText.psm1). 등록은 폴더마다 하나
+    # 탭 폴더 하나에 모듈이 여럿일 수 있다(예: memo의 Memo.psm1 · MemoEditor.psm1 · MemoText.psm1). 등록은 폴더마다 하나
     $addonDirs = @($addonFiles | ForEach-Object { $_.Directory.FullName } | Sort-Object -Unique)
     Assert-Wt '탭 모아 보기: 탭 폴더마다 ID 하나씩 등록한다 (겹치는 ID 없음)' ($ids.Count -eq $addonDirs.Count) "(탭 폴더 $($addonDirs.Count)개 · 등록 $($ids -join ', '))"
     $owners = @{}

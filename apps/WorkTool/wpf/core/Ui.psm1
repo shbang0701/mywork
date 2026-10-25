@@ -448,6 +448,142 @@ $script:stylesXaml = @'
   <Style x:Key="Memo.List" TargetType="ListBox" BasedOn="{StaticResource List}">
     <Setter Property="ItemTemplate" Value="{StaticResource Memo.Item}"/>
   </Style>
+
+  <!-- 메모 칸(pane): 맨 위 탭 줄이 카드 가장자리에 붙도록 안쪽 여백 없는 카드 -->
+  <Style x:Key="Memo.Pane" TargetType="Border" BasedOn="{StaticResource Card}">
+    <Setter Property="Padding" Value="0"/>
+  </Style>
+  <Style x:Key="Memo.TabBar" TargetType="Border">
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
+    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+    <Setter Property="Padding" Value="8,4,8,0"/>
+  </Style>
+  <!-- 메모 탭 하나. 선택 표시는 바탕 + 아래 가운데 막대(3 × 16). 막대 색은 BorderBrush로 받는다
+       Memo.Tab: 선택 안 됨 · Memo.Tab.Current: 포커스가 있는 칸의 지금 탭 · Memo.Tab.Selected: 다른 칸의 지금 탭(덜 강조) -->
+  <Style x:Key="Memo.Tab" TargetType="Button">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderBrush" Value="Transparent"/>
+    <Setter Property="MinHeight" Value="40"/>
+    <Setter Property="Padding" Value="12,0,4,0"/>
+    <Setter Property="Margin" Value="0,0,4,0"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Grid>
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="Transparent" BorderThickness="1"
+                    CornerRadius="8,8,0,0" Padding="{TemplateBinding Padding}">
+              <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/>
+            </Border>
+            <Border Width="16" Height="3" CornerRadius="1" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                    Background="{TemplateBinding BorderBrush}"/>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource B.Text}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Hover}"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Memo.Tab.Selected" TargetType="Button" BasedOn="{StaticResource Memo.Tab}">
+    <Setter Property="Background" Value="{DynamicResource B.Chip}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.InputBorder}"/>
+  </Style>
+  <Style x:Key="Memo.Tab.Current" TargetType="Button" BasedOn="{StaticResource Memo.Tab}">
+    <Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Memo.TabText" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
+    <Setter Property="TextWrapping" Value="NoWrap"/>
+    <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    <Setter Property="MaxWidth" Value="160"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+  </Style>
+  <!-- 탭의 닫기(X). 탭 바탕(마우스 올림 · 선택)과 겹치지 않게 마우스 올림은 테두리 색 -->
+  <Style x:Key="Memo.TabClose" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
+    <Setter Property="Width" Value="24"/>
+    <Setter Property="Height" Value="24"/>
+    <Setter Property="Margin" Value="4,0,0,0"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Border}"/>
+        <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+  <!-- 두 칸 사이 경계: 폭 16(칸 사이 간격)을 끌어 폭을 바꾼다. 마우스를 올리거나 끌 때만 가운데 선이 보인다 -->
+  <Style x:Key="Memo.Splitter" TargetType="GridSplitter">
+    <Setter Property="Width" Value="16"/>
+    <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    <Setter Property="VerticalAlignment" Value="Stretch"/>
+    <Setter Property="ResizeDirection" Value="Columns"/>
+    <Setter Property="ResizeBehavior" Value="PreviousAndNext"/>
+    <Setter Property="Cursor" Value="SizeWE"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="GridSplitter">
+          <Grid Background="Transparent">
+            <Border x:Name="Line" Width="2" CornerRadius="1" Margin="0,16" Background="Transparent"/>
+          </Grid>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Line" Property="Background" Value="{DynamicResource B.InputBorder}"/>
+            </Trigger>
+            <Trigger Property="IsKeyboardFocused" Value="True">
+              <Setter TargetName="Line" Property="Background" Value="{DynamicResource B.Text}"/>
+            </Trigger>
+            <Trigger Property="IsDragging" Value="True">
+              <Setter TargetName="Line" Property="Background" Value="{DynamicResource B.Accent}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+  <!-- 빠른 이동(Ctrl+O): 메모 화면 위 가운데에 겹쳐 뜨는 검색 상자 + 결과 목록. 그림자는 Overlay.Shadow를 뒤에 깐다 -->
+  <Style x:Key="Memo.QuickHost" TargetType="Grid">
+    <Setter Property="Width" Value="560"/>
+    <Setter Property="HorizontalAlignment" Value="Center"/>
+    <Setter Property="VerticalAlignment" Value="Top"/>
+    <Setter Property="Margin" Value="0,24,0,0"/>
+  </Style>
+  <Style x:Key="Memo.QuickPanel" TargetType="Border" BasedOn="{StaticResource Card}">
+    <Setter Property="Padding" Value="12"/>
+  </Style>
+  <DataTemplate x:Key="Memo.QuickItem">
+    <StackPanel>
+      <TextBlock Text="{Binding Title}" Style="{DynamicResource T.Strong}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+      <TextBlock x:Name="Sub" Text="{Binding Sub}" Style="{DynamicResource T.Sub}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+    </StackPanel>
+    <DataTemplate.Triggers>
+      <DataTrigger Binding="{Binding Sub}" Value="">
+        <Setter TargetName="Sub" Property="Visibility" Value="Collapsed"/>
+      </DataTrigger>
+    </DataTemplate.Triggers>
+  </DataTemplate>
+  <Style x:Key="Memo.QuickList" TargetType="ListBox" BasedOn="{StaticResource List}">
+    <Setter Property="ItemTemplate" Value="{StaticResource Memo.QuickItem}"/>
+    <Setter Property="MaxHeight" Value="400"/>
+    <Setter Property="Margin" Value="0,8,0,0"/>
+  </Style>
   <Style x:Key="Doc.Row" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
     <Setter Property="Padding" Value="12,6"/>
     <Setter Property="Tag" Value="{Binding}"/>
