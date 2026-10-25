@@ -8,7 +8,7 @@
       Ports 없이 IncludeConnections를 켜면 연결된(ESTABLISHED 등) 것도 모두, IncludeUdp를 켜면 UDP도 본다.
     - Windows 기본 명령(Get-NetTCPConnection · Get-NetUDPEndpoint)만 쓴다. 관리자 권한이 필요 없다.
       권한이 없으면 다른 사용자 · 시스템 프로그램의 경로가 비어 보일 수 있다.
-    - 포트 목록을 읽지 못하면 「없음」이라고 하지 않고 실패로 끝난다. 서비스 이름만 못 읽으면 표는 보이고 「부분 완료」(실패 종료)로 알린다.
+    - 포트 목록을 읽지 못하면 「없음」이라고 하지 않고 실패로 끝난다. 서비스 이름(덧붙이는 정보)만 못 읽으면 서비스 칸을 비운 채 표를 보이고 한 줄로 알린다 (정상 종료).
     - 보기만 한다. 프로그램을 끄지 않는다.
     - SaveCsv를 켜면 결과를 output 폴더에 날짜가 붙은 CSV로 저장한다.
 
@@ -101,7 +101,7 @@ try {
     foreach ($s in Get-CimInstance Win32_Service -Filter 'ProcessId > 0' -ErrorAction Stop) {
         $services[[int]$s.ProcessId] = @($services[[int]$s.ProcessId] | Where-Object { $_ }) + $s.Name
     }
-} catch { $serviceError = $_.Exception.Message; Write-Host "서비스 목록을 읽지 못해 서비스 이름은 비워 둡니다: $serviceError" }
+} catch { $serviceError = $_.Exception.Message }   # 서비스 이름은 덧붙이는 정보라 못 읽어도 실패로 치지 않는다 (표 아래에 알림)
 
 function New-Row([string]$Protocol, $Entry, [string]$State, [string]$Remote, $RemotePort) {
     $id = [int]$Entry.OwningProcess
@@ -133,7 +133,7 @@ $sorted = @($rows | Sort-Object 프로토콜, '로컬 포트', 상태, '로컬 �
 
 if (-not $sorted.Count) {
     Write-Host $(if ($want.Count) { "포트 $($want -join ', ')을(를) 쓰는 프로그램이 없습니다." } else { '대기 중인 포트가 없습니다.' })
-    if ($serviceError) { exit 1 }
+    if ($serviceError) { Write-Host "서비스 이름을 읽지 못했습니다($serviceError)." }
     return
 }
 Show-Table $sorted @('프로토콜', '로컬 주소', '로컬 포트', '원격 주소', '원격 포트', '상태', 'PID', '프로그램', '서비스')
@@ -144,7 +144,4 @@ if ($SaveCsv) {
     $sorted | Export-Csv -LiteralPath $out -Encoding utf8BOM -NoTypeInformation
     Write-Host "저장: $out"
 }
-if ($serviceError) {
-    Write-Host '부분 완료: 포트 · 프로그램은 위와 같지만 서비스 이름은 확인하지 못했습니다.'
-    exit 1
-}
+if ($serviceError) { Write-Host "서비스 이름을 읽지 못했습니다($serviceError). 서비스 칸은 비워 두었습니다." }
