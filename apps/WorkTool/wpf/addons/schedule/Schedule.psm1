@@ -34,6 +34,35 @@ function Get-WtScheduleOn([datetime]$Day, [object[]]$Items) {
     @($Items | Where-Object { Test-WtScheduleOn $_ $Day } | Sort-Object { if ($_.time) { $_.time } else { '' } }, { $_.title })
 }
 
+# 여러 날을 그릴 때 항목의 날짜를 한 번만 읽는다. 반복 판단과 날짜별 정렬은 하루 조회와 같다.
+function Get-WtScheduleRange([datetime]$From, [int]$Count, [object[]]$Items) {
+    $dates = @(); $buckets = @()
+    for ($i = 0; $i -lt $Count; $i++) {
+        $dates += $From.Date.AddDays($i)
+        $buckets += , [Collections.Generic.List[object]]::new()
+    }
+    foreach ($item in $Items) {
+        $start = [datetime]::ParseExact($item.startDate, 'yyyy-MM-dd', $script:inv)
+        $end = if ($item.endDate) { [datetime]::ParseExact($item.endDate, 'yyyy-MM-dd', $script:inv) } else { $start }
+        for ($i = 0; $i -lt $Count; $i++) {
+            $day = $dates[$i]
+            if ($day -lt $start) { continue }
+            $on = switch ([string]$item.repeat) {
+                'daily' { $true }
+                'weekdays' { [int]$day.DayOfWeek -ge 1 -and [int]$day.DayOfWeek -le 5 }
+                'weekly' { $day.DayOfWeek -eq $start.DayOfWeek }
+                default { $day -le $end }
+            }
+            if ($on) { $buckets[$i].Add($item) }
+        }
+    }
+    $result = @()
+    foreach ($bucket in $buckets) {
+        $result += , @($bucket | Sort-Object { if ($_.time) { $_.time } else { '' } }, { $_.title })
+    }
+    , $result
+}
+
 function Format-WtAlarm($Alarm) {
     if ($null -eq $Alarm -or "$Alarm" -eq '') { return $null }
     $m = [int]$Alarm
@@ -91,6 +120,7 @@ function New-WtScheduleRow($Item, [string]$DayLabel) {
 }
 
 function New-WtScheduleView {
+    $script:viewKey = $null
     $page = New-WtPage
     [void](Add-WtChild $page.Panel (New-WtPageHeader '일정' '보기 전용 · 편집과 알람은 2단계에서 옮깁니다'))
     $card = New-WtCard
@@ -101,25 +131,32 @@ function New-WtScheduleView {
 }
 
 function Update-WtScheduleView {
+    $key = @((Get-WtStoreStamp 'schedule'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    if ($script:viewKey -ceq $key) { return }
+    $items = Get-WtScheduleItems
+    $days = Get-WtScheduleRange ([datetime]::Today) 14 $items
     $script:list.Children.Clear()
     [void](Add-WtChild $script:list (New-WtCardHeader '다가오는 14일'))
-    $items = Get-WtScheduleItems
     $any = $false
     for ($i = 0; $i -lt 14; $i++) {
         $day = [datetime]::Today.AddDays($i)
         $label = if ($i -eq 0) { '오늘' } elseif ($i -eq 1) { '내일' } else { Format-WtDate $day "M'/'d (ddd)" }
-        foreach ($it in (Get-WtScheduleOn $day $items)) {
+        foreach ($it in $days[$i]) {
             [void](Add-WtChild $script:list (New-WtScheduleRow $it $label))
             $label = ''
             $any = $true
         }
     }
     if (-not $any) { [void](Add-WtChild $script:list (New-WtText '다가오는 일정이 없습니다.' 'T.Sub')) }
+    $script:viewKey = $key
 }
 
 function New-WtScheduleHomeCards {
+    $key = @((Get-WtStoreStamp 'schedule'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    if ($script:homeKey -ceq $key -and $script:homeCards -and -not @($script:homeCards | Where-Object Parent).Count) { return $script:homeCards }
     $items = Get-WtScheduleItems
-    $today = @(Get-WtScheduleOn ([datetime]::Today) $items)
+    $days = Get-WtScheduleRange ([datetime]::Today) 8 $items
+    $today = @($days[0])
 
     $c1 = New-WtCard
     $col = New-WtStack Vertical
@@ -134,7 +171,7 @@ function New-WtScheduleHomeCards {
     $n = 0
     for ($i = 1; $i -le 7; $i++) {
         $day = [datetime]::Today.AddDays($i)
-        foreach ($it in (Get-WtScheduleOn $day $items)) {
+        foreach ($it in $days[$i]) {
             if ($it.repeat -eq 'daily' -or $it.repeat -eq 'weekdays') { continue }   # 매일 반복은 오늘 카드에서만
             [void](Add-WtChild $col (New-WtScheduleRow $it (Format-WtDate $day "M'/'d (ddd)")))
             $n++
@@ -143,8 +180,8 @@ function New-WtScheduleHomeCards {
     if (-not $n) { [void](Add-WtChild $col (New-WtText '다가오는 일정이 없습니다.' 'T.Sub')) }
     $c2.Child = $col
 
-    $c1
-    $c2
+    $script:homeCards = @($c1, $c2); $script:homeKey = $key
+    $script:homeCards
 }
 
 Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Order 20 `

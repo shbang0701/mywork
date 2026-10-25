@@ -38,6 +38,7 @@ function New-WtLaunchStartInfo([string]$ScriptPath) {
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $info.WorkingDirectory = [System.IO.Path]::GetDirectoryName($ScriptPath)
+    $info.Environment['DOTNET_TieredCompilation'] = '0'
     foreach ($arg in @('-NoLogo', '-NoProfile', '-STA', '-File', $ScriptPath)) { $info.ArgumentList.Add($arg) }
     $info
 }

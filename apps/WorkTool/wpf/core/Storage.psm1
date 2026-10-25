@@ -73,6 +73,19 @@ function Get-WtStorePath {
 
 function Test-WtStore([string]$Name) { Test-Path -LiteralPath (Get-WtStorePath $Name) }
 
+# 화면에서 변경 여부를 판단하는 표식. 파일 조회와 읽고 쓰기는 이 모듈로 모은다.
+function Get-WtStoreStamp([string]$Name) {
+    $path = Get-WtStorePath $Name
+    $info = [System.IO.FileInfo]::new($path)
+    $info.Refresh()
+    if (-not $info.Exists) { return "$path|missing" }
+    # 같은 크기·시각으로 덮어쓴 외부 변경도 놓치지 않는다. JSON 해석 없이 작은 버퍼로 읽는다.
+    $stream = [System.IO.File]::OpenRead($path)
+    try { $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($stream)) }
+    finally { $stream.Dispose() }
+    "$path|$($info.LastWriteTimeUtc.Ticks)|$($info.CreationTimeUtc.Ticks)|$($info.Length)|$hash"
+}
+
 # 저장소 하나를 읽는다. 파일이 없으면 $null.
 # $Migrate는 { param($doc, $from) ... $doc } 형태로, schema $from 문서를 $from+1 형식으로 바꿔 돌려준다.
 # 변환하기 전 원본은 <이름>.json.schema<번호>.bak으로 남긴다.
@@ -154,5 +167,5 @@ function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
 }
 
 Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
-    Get-WtStorePath, Test-WtStore, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
+    Get-WtStorePath, Test-WtStore, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
     Find-WtLegacyFolder, Import-WtLegacyCsv

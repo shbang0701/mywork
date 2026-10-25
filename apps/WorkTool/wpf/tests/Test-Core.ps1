@@ -56,6 +56,15 @@ try {
     Assert-Wt '빈 목록 저장 · 읽기' ((Get-WtStoreItems -Name 'sample').Count -eq 0)
     Assert-Wt '덮어쓸 때 .bak을 남긴다' (Test-Path ((Get-WtStorePath 'sample') + '.bak'))
     Assert-Wt '없는 저장소는 빈 배열' ((Get-WtStoreItems -Name 'nothing').Count -eq 0)
+    $missingStamp = Get-WtStoreStamp 'cache-sample'
+    Write-WtStore cache-sample -Items @([ordered]@{ id = 'c1'; title = '캐시-A' })
+    $cacheStamp = Get-WtStoreStamp 'cache-sample'
+    Assert-Wt '저장 표식: 생성·같은 파일 반복 조회' ($missingStamp -cne $cacheStamp -and $cacheStamp -ceq (Get-WtStoreStamp 'cache-sample'))
+    $cachePath = Get-WtStorePath 'cache-sample'
+    $cacheTime = [IO.File]::GetLastWriteTimeUtc($cachePath)
+    [IO.File]::WriteAllText($cachePath, [IO.File]::ReadAllText($cachePath).Replace('캐시-A','캐시-B'), [Text.UTF8Encoding]::new($false))
+    [IO.File]::SetLastWriteTimeUtc($cachePath, $cacheTime)
+    Assert-Wt '저장 표식: 크기·시각이 같아도 본문 변경을 알아본다' ($cacheStamp -cne (Get-WtStoreStamp 'cache-sample') -and (Get-WtStoreItems 'cache-sample')[0].title -eq '캐시-B')
 
     Write-WtStore -Name 'mig' -Schema 1 -Items @([ordered]@{ id = 'm1' })
     $doc = Read-WtStore -Name 'mig' -Schema 2 -Migrate {
@@ -221,6 +230,11 @@ Get-Item C:\
     Assert-Wt '마크다운: 제목 목록' ($mm.Headings.Count -eq 1 -and $mm.Headings[0].Text -eq '제목 굵게')
     $snip = Get-WtMarkdownSnippet "# 점검`n- [ ] 디스크`n- **로그** 확인`n| a | b |`n|--|--|`n[[메모|별칭]]"
     Assert-Wt '마크다운: 목록용 한 줄 요약' ($snip -eq '점검 · 디스크 · 로그 확인 · a  b · 별칭') $snip
+    $longSnippet = "---`ntitle: 숨긴 제목`n---`n%%숨김%%`n# **첫 줄** &amp; [링크](https://example.com)`n| 항목 | 값 |`n|---|---|`n" + ("`n- [ ] [[메모|별칭]] <b>확인</b>" * 100)
+    $wholeSnippet = Get-WtMarkdownSnippet $longSnippet 100000
+    $prefixOk = $true
+    foreach ($limit in 0,1,5,12,300) { if ((Get-WtMarkdownSnippet $longSnippet $limit) -cne $wholeSnippet.Substring(0, [Math]::Min($limit, $wholeSnippet.Length))) { $prefixOk = $false } }
+    Assert-Wt '마크다운: 긴 글 요약도 속성·주석·줄 구분을 처리한 접두사와 같다' $prefixOk
     Assert-Wt '마크다운: 빈 글' ((ConvertTo-WtMarkdownModel '').Blocks.Count -eq 0 -and (Get-WtMarkdownSnippet '') -eq '')
 
     # ---- 코드 색칠 ----
@@ -301,6 +315,29 @@ pie
         $texts = @(Get-WtTestTexts (New-WtHelpPage))
         Assert-Wt 'WPF 도움말: 탭 설명 · 단축키 · 카드를 싣는다' ($texts -contains '가짜 탭 설명' -and $texts -contains '가짜 카드' -and $texts -contains '엑스 · 와이: 새로 고침')
         Assert-Wt 'WPF 도움말: 실패한 탭 카드는 알리고 나머지는 연다' (@($texts | Where-Object { $_ -like '고장 도움말을 만들지 못했습니다*' }).Count -eq 1)
+
+        $shell = Get-Module Shell
+        $help1 = & $shell { Get-WtPageView '_help' }
+        $help2 = & $shell { Get-WtPageView '_help' }
+        Assert-Wt 'WPF 도움말: 같은 조건이면 화면 재사용' ([object]::ReferenceEquals($help1.View, $help2.View))
+        Register-WtAddon -Id 'test-help' -Title '도움' -Order 50 -NewView { } -Help '바뀐 가짜 설명'
+        $help3 = & $shell { Get-WtPageView '_help' }
+        Assert-Wt 'WPF 도움말: 같은 ID 재등록도 새 설명 반영' (-not [object]::ReferenceEquals($help2.View, $help3.View) -and (Get-WtTestTexts $help3.View) -contains '바뀐 가짜 설명')
+        Set-WtSetting 'addons.disabled' @('test-help')
+        $hiddenHelp = & $shell { Get-WtPageView '_help' }
+        Assert-Wt 'WPF 도움말: 숨긴 탭 설명은 재진입 때 빠진다' ((Get-WtTestTexts $hiddenHelp.View) -notcontains '바뀐 가짜 설명')
+        Set-WtSetting 'addons.disabled' @()
+        $font = Get-WtSetting 'ui.fontScale'; Set-WtSetting 'ui.fontScale' 'l'
+        $largeHelp = & $shell { Get-WtPageView '_help' }
+        Assert-Wt 'WPF 도움말: 글자 크기 변경 시 다시 만든다' (-not [object]::ReferenceEquals($hiddenHelp.View, $largeHelp.View))
+        Set-WtSetting 'ui.fontScale' $font
+        $settings1 = & $shell { Get-WtPageView '_settings' }
+        $settings2 = & $shell { Get-WtPageView '_settings' }
+        Assert-Wt 'WPF 설정: 같은 조건이면 화면 재사용' ([object]::ReferenceEquals($settings1.View, $settings2.View))
+        $close = Get-WtSetting 'window.closeToTray'; Set-WtSetting 'window.closeToTray' (-not $close)
+        $settings3 = & $shell { Get-WtPageView '_settings' }
+        Assert-Wt 'WPF 설정: 바뀐 설정은 재진입 때 다시 읽는다' (-not [object]::ReferenceEquals($settings2.View, $settings3.View))
+        Set-WtSetting 'window.closeToTray' $close
 
         # 공통 모양: 스크롤 막대는 화살표 없이 손잡이만 두고, 가로 · 세로 막대가 만나는 모서리에 회색 칸이 없다. 막대를 누르면 한 화면씩 움직인다
         $box = [System.Windows.Controls.Border]::new()

@@ -505,70 +505,86 @@ function Update-WtFlowTree {
     # 다른 탭에 다녀와도 고치던 칸 값과 실행 방식은 그대로 둔다
     $carry = if ($keep -and $script:fields.Count) { @{ Key = $keep; Values = (Get-WtFlowFormValues); Mode = (Get-WtFlowMode) } } else { $null }
     if ($script:pendingFlow) { $keep = "flow:$($script:pendingFlow)"; $script:pendingFlow = $null }
+    $flows = @(Get-WtFlows)
+    $groups = @(Find-WtFlowScripts (Get-WtFlowRoots))
+    $missingPaths = @{}
+    foreach ($f in $flows) { $missingPaths[[string]$f.script] = -not (Test-Path -LiteralPath ([string]$f.script) -PathType Leaf) }
+    $key = ConvertTo-Json -Compress -Depth 10 -InputObject @($flows, $groups, $missingPaths, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
     $script:filling = $true
     try {
-        $tree.Items.Clear()
         $found = $null
-        $saved = New-WtFlowTreeItem '저장한 업무' 0xE734 @{ Kind = 'group' }
-        $flows = @(Get-WtFlows)
-        foreach ($f in $flows) {
-            $missing = -not (Test-Path -LiteralPath ([string]$f.script) -PathType Leaf)
-            $label = if ($missing) { "$($f.title) · 스크립트 없음" } else { [string]$f.title }
-            $node = New-WtFlowTreeItem $label 0xE768 @{ Kind = 'flow'; Id = [string]$f.id } ([string]$f.script)
-            [void]$saved.Items.Add($node)
-            if ($keep -eq "flow:$($f.id)") { $found = $node }
-        }
-        if (-not $flows.Count) {
-            $hint = New-WtFlowTreeItem '아직 없습니다' 0xE946 @{ Kind = 'hint' } '스크립트를 고르고 [업무로 저장]하면 여기에 생깁니다' -Muted
-            $hint.Focusable = $false
-            [void]$saved.Items.Add($hint)
-        }
-        [void]$tree.Items.Add($saved)
-        $groups = @(Find-WtFlowScripts (Get-WtFlowRoots))
-        # 이름이 같은 스크립트 폴더가 둘 이상이면 위 폴더 이름을 붙여 구분한다 (예: mywork\scripts)
-        $leafCount = @{}
-        foreach ($g in $groups) { $leaf = Split-Path $g.Root -Leaf; $leafCount[$leaf] = 1 + [int]$leafCount[$leaf] }
-        foreach ($group in $groups) {
-            $rootName = Split-Path $group.Root -Leaf
-            if (-not $rootName) { $rootName = $group.Root }
-            elseif ($leafCount[$rootName] -gt 1) {
-                $parentName = Split-Path (Split-Path $group.Root -Parent) -Leaf
-                if ($parentName) { $rootName = "$parentName\$rootName" }
+        if ($script:treeKey -ceq $key) {
+            # 진입 때마다 펼침·선택을 초기화하는 동작은 유지하고, 같은 노드의 생성만 생략한다.
+            $queue = [Collections.Generic.Queue[object]]::new()
+            foreach ($node in $tree.Items) { $queue.Enqueue($node) }
+            while ($queue.Count) {
+                $node = $queue.Dequeue(); $node.IsExpanded = $true; $node.IsSelected = $false
+                if (($node.Tag.Kind -eq 'flow' -and $keep -eq "flow:$($node.Tag.Id)") -or
+                    ($node.Tag.Kind -eq 'script' -and $keep -eq "script:$($node.Tag.Path)")) { $found = $node }
+                foreach ($child in $node.Items) { $queue.Enqueue($child) }
             }
-            $label = if ($group.Missing) { "$rootName · 폴더 없음" } else { $rootName }
-            $rootNode = New-WtFlowTreeItem $label 0xE8B7 @{ Kind = 'root'; Path = $group.Root } $group.Root
-            $folders = @{}
-            foreach ($s in $group.Scripts) {
-                $parent = $rootNode
-                if ($s.Folder) {
-                    if (-not $folders.ContainsKey($s.Folder)) {
-                        $folders[$s.Folder] = New-WtFlowTreeItem $s.Folder 0xE8B7 @{ Kind = 'folder' } (Join-Path $group.Root $s.Folder)
-                        [void]$rootNode.Items.Add($folders[$s.Folder])
-                    }
-                    $parent = $folders[$s.Folder]
-                }
-                $node = New-WtFlowTreeItem $s.Name 0xE756 @{ Kind = 'script'; Path = $s.Path } $s.Path
-                [void]$parent.Items.Add($node)
-                if ($keep -eq "script:$($s.Path)") { $found = $node }
+        } else {
+            $tree.Items.Clear()
+            $saved = New-WtFlowTreeItem '저장한 업무' 0xE734 @{ Kind = 'group' }
+            foreach ($f in $flows) {
+                $missing = $missingPaths[[string]$f.script]
+                $label = if ($missing) { "$($f.title) · 스크립트 없음" } else { [string]$f.title }
+                $node = New-WtFlowTreeItem $label 0xE768 @{ Kind = 'flow'; Id = [string]$f.id } ([string]$f.script)
+                [void]$saved.Items.Add($node)
+                if ($keep -eq "flow:$($f.id)") { $found = $node }
             }
-            if (-not $group.Missing -and -not $group.Scripts.Count) {
-                $hint = New-WtFlowTreeItem '.ps1 파일 없음' 0xE946 @{ Kind = 'hint' } -Muted
+            if (-not $flows.Count) {
+                $hint = New-WtFlowTreeItem '아직 없습니다' 0xE946 @{ Kind = 'hint' } '스크립트를 고르고 [업무로 저장]하면 여기에 생깁니다' -Muted
                 $hint.Focusable = $false
-                [void]$rootNode.Items.Add($hint)
+                [void]$saved.Items.Add($hint)
             }
-            [void]$tree.Items.Add($rootNode)
+            [void]$tree.Items.Add($saved)
+            # 이름이 같은 스크립트 폴더가 둘 이상이면 위 폴더 이름을 붙여 구분한다 (예: mywork\scripts)
+            $leafCount = @{}
+            foreach ($g in $groups) { $leaf = Split-Path $g.Root -Leaf; $leafCount[$leaf] = 1 + [int]$leafCount[$leaf] }
+            foreach ($group in $groups) {
+                $rootName = Split-Path $group.Root -Leaf
+                if (-not $rootName) { $rootName = $group.Root }
+                elseif ($leafCount[$rootName] -gt 1) {
+                    $parentName = Split-Path (Split-Path $group.Root -Parent) -Leaf
+                    if ($parentName) { $rootName = "$parentName\$rootName" }
+                }
+                $label = if ($group.Missing) { "$rootName · 폴더 없음" } else { $rootName }
+                $rootNode = New-WtFlowTreeItem $label 0xE8B7 @{ Kind = 'root'; Path = $group.Root } $group.Root
+                $folders = @{}
+                foreach ($s in $group.Scripts) {
+                    $parent = $rootNode
+                    if ($s.Folder) {
+                        if (-not $folders.ContainsKey($s.Folder)) {
+                            $folders[$s.Folder] = New-WtFlowTreeItem $s.Folder 0xE8B7 @{ Kind = 'folder' } (Join-Path $group.Root $s.Folder)
+                            [void]$rootNode.Items.Add($folders[$s.Folder])
+                        }
+                        $parent = $folders[$s.Folder]
+                    }
+                    $node = New-WtFlowTreeItem $s.Name 0xE756 @{ Kind = 'script'; Path = $s.Path } $s.Path
+                    [void]$parent.Items.Add($node)
+                    if ($keep -eq "script:$($s.Path)") { $found = $node }
+                }
+                if (-not $group.Missing -and -not $group.Scripts.Count) {
+                    $hint = New-WtFlowTreeItem '.ps1 파일 없음' 0xE946 @{ Kind = 'hint' } -Muted
+                    $hint.Focusable = $false
+                    [void]$rootNode.Items.Add($hint)
+                }
+                [void]$tree.Items.Add($rootNode)
+            }
         }
         if ($found) { $found.IsSelected = $true; $found.BringIntoView() }
         $script:ui.RemoveRoot.IsEnabled = $false   # 다시 만든 목록에서는 고른 폴더가 없다
     } finally { $script:filling = $false }
     if ($found) {
-        Select-WtFlowNode $found.Tag
+        Select-WtFlowNode $found.Tag -Reuse
         if ($carry -and $carry.Key -eq $keep) {
             Set-WtFlowFormValues $carry.Values
             foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq $carry.Mode) }
         }
     } elseif ($keep) { Clear-WtFlowSelection }
-    else { Update-WtFlowCenter }
+    else { Update-WtFlowCenter -Reuse }
+    $script:treeKey = $key
 }
 
 function Add-WtFlowRoot {
@@ -613,7 +629,7 @@ function Reset-WtFlowOutput([string]$Key) {
     $script:outputKey = $null
 }
 
-function Select-WtFlowNode($Tag) {
+function Select-WtFlowNode($Tag, [switch]$Reuse) {
     $script:ui.RemoveRoot.IsEnabled = ($Tag.Kind -eq 'root')
     if ($Tag.Kind -eq 'script') { Reset-WtFlowOutput "script:$($Tag.Path)" }
     elseif ($Tag.Kind -eq 'flow') { Reset-WtFlowOutput "flow:$($Tag.Id)" }
@@ -621,28 +637,34 @@ function Select-WtFlowNode($Tag) {
         'script' {
             $script:flow = $null
             $script:info = Read-WtFlowScript $Tag.Path
-            Update-WtFlowCenter
+            Update-WtFlowCenter -Reuse:$Reuse
         }
         'flow' {
             $f = Get-WtFlows | Where-Object { $_.id -eq $Tag.Id } | Select-Object -First 1
             if (-not $f) { Clear-WtFlowSelection; return }
             $script:flow = $f
             $script:info = Read-WtFlowScript ([string]$f.script)
-            Update-WtFlowCenter
+            Update-WtFlowCenter -Reuse:$Reuse
         }
     }
 }
 
 # 가운데 · 오른쪽을 고른 것에 맞춘다
-function Update-WtFlowCenter {
+function Update-WtFlowCenter([switch]$Reuse) {
     $u = $script:ui
     if (-not $u.Count) { return }
+    $hasFlows = @(Get-WtFlows).Count -gt 0
+    $key = ConvertTo-Json -Compress -Depth 10 -InputObject @($script:info, $script:flow, @(Get-WtFlowRoots), $hasFlows, [bool]$script:run, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
+    if ($Reuse -and $script:centerKey -ceq $key) {
+        foreach ($entry in $script:fields) { Set-WtFlowFieldError $entry '' }
+        Update-WtFlowCommands; Update-WtFlowHelp; return
+    }
     $u.Form.Children.Clear()
     $script:fields = @()
     $hasRoots = (Get-WtFlowRoots).Count -gt 0
     if (-not $script:info) {
         $u.Title.Text = '업무'
-        $u.Sub.Text = if ($hasRoots -or (Get-WtFlows).Count) { '왼쪽에서 스크립트나 저장한 업무를 고르세요.' } else { '스크립트 폴더를 더하면 그 안의 스크립트를 폼으로 실행합니다.' }
+        $u.Sub.Text = if ($hasRoots -or $hasFlows) { '왼쪽에서 스크립트나 저장한 업무를 고르세요.' } else { '스크립트 폴더를 더하면 그 안의 스크립트를 폼으로 실행합니다.' }
         Set-WtResource $u.Sub 'Foreground' 'B.SubText'
         $u.Title.ToolTip = $null
         $u.Empty.Visibility = if ($hasRoots -or $script:run) { 'Collapsed' } else { 'Visible' }
@@ -653,6 +675,7 @@ function Update-WtFlowCenter {
         $u.OutArea.Visibility = $keep
         Update-WtFlowCommands
         Update-WtFlowHelp
+        $script:centerKey = $key
         return
     }
     $u.Empty.Visibility = 'Collapsed'
@@ -706,6 +729,7 @@ function Update-WtFlowCenter {
     $u.Repick.Visibility = if ($script:flow -and -not (Test-Path -LiteralPath $info.Path -PathType Leaf)) { 'Visible' } else { 'Collapsed' }
     Update-WtFlowCommands
     Update-WtFlowHelp
+    $script:centerKey = $key
 }
 
 # 칸 하나: 라벨(필수) · 설명 · 입력 · 오류
@@ -1125,8 +1149,14 @@ function Update-WtFlowHelp {
     $box.Visibility = if ($show) { 'Visible' } else { 'Collapsed' }
     $u.HelpOpen.Visibility = if ($show) { 'Collapsed' } else { 'Visible' }
     $panel = $u.HelpPanel
+    if (-not $show) { $panel.Children.Clear(); $script:helpKey = $null; $script:helpList = $null; return }
+    $key = ConvertTo-Json -Compress -Depth 10 -InputObject @((Get-WtStoreStamp 'workflow-runs'), $script:info, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
+    if ($script:helpKey -ceq $key) {
+        if ($script:helpList) { $script:helpList.SelectedItem = $null }
+        return
+    }
     $panel.Children.Clear()
-    if (-not $show) { return }
+    $script:helpKey = $null; $script:helpList = $null
     $info = $script:info
     if (-not $info) {
         $t = New-WtText '스크립트를 고르면 그 스크립트의 도움말과 최근 실행 기록이 여기에 보입니다.' 'T.Sub'
@@ -1162,7 +1192,7 @@ function Update-WtFlowHelp {
     $head.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)
     [void](Add-WtChild $panel $head)
     $runs = @(Get-WtFlowRuns | Where-Object { -not $info -or $_.script -eq $info.Path } | Select-Object -First 10)
-    if (-not $runs.Count) { [void](Add-WtChild $panel (New-WtText '아직 실행 기록이 없습니다.' 'T.Sub')); return }
+    if (-not $runs.Count) { [void](Add-WtChild $panel (New-WtText '아직 실행 기록이 없습니다.' 'T.Sub')); $script:helpKey = $key; return }
     $list = [System.Windows.Controls.ListBox]::new()
     Set-WtStyle $list 'List'
     [System.Windows.Controls.ScrollViewer]::SetVerticalScrollBarVisibility($list, 'Disabled')
@@ -1183,6 +1213,7 @@ function Update-WtFlowHelp {
     }
     $list.Add_SelectionChanged({ param($s, $e) if ($s.SelectedItem) { Show-WtFlowRecordTail $s.SelectedItem.Tag } })
     [void](Add-WtChild $panel $list)
+    $script:helpList = $list; $script:helpKey = $key
 }
 
 # 가운데 · 양옆 패널이 놓일 폭이 세 칸에 모자라는지 (아직 배치 전이라 폭이 0이면 모자라지 않은 것으로 본다)
@@ -1230,6 +1261,8 @@ function Show-WtFlowRecordTail($Record) {
 # ---- 화면 만들기 --------------------------------------------------------------------------------
 
 function New-WtFlowsView {
+    $script:treeKey = $null; $script:centerKey = $null
+    $script:helpKey = $null; $script:helpList = $null
     if ($script:timer) { $script:timer.Stop() }
     $script:ui = @{}
     $page = New-WtPage -Fill

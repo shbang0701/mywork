@@ -107,9 +107,22 @@ function Get-WtElements($Output) {
 }
 
 function Get-WtPageView([string]$Id) {
-    switch ($Id) {
-        '_settings' { return @{ View = (New-WtSettingsPage); Addon = $null } }
-        '_help' { return @{ View = (New-WtHelpPage); Addon = $null } }
+    if ($Id -in '_settings', '_help') {
+        # 등록 객체도 비교하므로 같은 ID의 탭을 다시 등록한 경우까지 반영한다.
+        $registrations = @(foreach ($a in @(Get-WtAddon -All)) {
+            [ordered]@{ Identity = [Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($a); Id = $a.Id; Title = $a.Title
+                Description = $a.Description; Required = $a.Required; Order = $a.Order; Help = $a.Help; Shortcuts = $a.Shortcuts }
+        })
+        $settings = @(foreach ($name in 'theme.color','ui.opacity','ui.fontScale','window.closeToTray','addons.disabled','legacy.path') {
+            [ordered]@{ Key = $name; Value = (Get-WtSetting $name) }
+        })
+        $key = ConvertTo-Json -Compress -Depth 8 -InputObject @(
+            (Get-WtDataRoot), $settings, $registrations, (Find-WtLegacyFolder), (Get-WtLastImport))
+        if (-not $script:views.ContainsKey($Id) -or $script:views[$Id].Key -cne $key) {
+            $view = if ($Id -eq '_settings') { New-WtSettingsPage } else { New-WtHelpPage }
+            $script:views[$Id] = @{ View = $view; Addon = $null; Key = $key }
+        }
+        return $script:views[$Id]
     }
     if (-not $script:views.ContainsKey($Id)) {
         $a = Get-WtAddon -Id $Id

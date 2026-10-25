@@ -372,12 +372,24 @@ try {
     [void](& $addon.Refresh $view)
     $top = & $mod { @($script:ui.Tree.Items | ForEach-Object { $_.Header.Children[1].Text }) }
     Assert-WtTest 'WPF 업무: 목록은 저장한 업무 · 스크립트 폴더 · 없는 폴더 표시' ($top.Count -eq 3 -and $top[0] -eq '저장한 업무' -and $top[1] -eq '스크립트 폴더' -and $top[2] -eq '없는 폴더 · 폴더 없음') ($top -join ' / ')
+    & $mod { $script:testHelp = $script:ui.HelpPanel.Children[0]; Update-WtFlowsView }
+    Assert-WtTest 'WPF 업무: 같은 도움말·실행 기록은 요소를 재사용한다' (& $mod { [object]::ReferenceEquals($script:testHelp,$script:ui.HelpPanel.Children[0]) })
+    & $mod { $script:testNode = $script:ui.Tree.Items[1]; $script:testNode.IsExpanded = $false; $script:testNode.IsSelected = $true; Update-WtFlowsView }
+    Assert-WtTest 'WPF 업무: 같은 트리는 재사용하고 진입 시 펼침·선택 초기화 유지' (& $mod {
+        [object]::ReferenceEquals($script:testNode,$script:ui.Tree.Items[1]) -and $script:testNode.IsExpanded -and
+            -not $script:testNode.IsSelected -and -not $script:ui.RemoveRoot.IsEnabled
+    })
     & $mod { param($p) Select-WtFlowNode @{ Kind = 'script'; Path = $p } } $sample
     $state = & $mod { @{ Fields = $script:fields.Count; Mode = (Get-WtFlowMode); Run = $script:ui.RunButton.IsEnabled; Preview = $script:ui.Preview.IsEnabled; Cancel = $script:ui.Cancel.IsEnabled; Title = $script:ui.Title.Text } }
     Assert-WtTest 'WPF 업무: 스크립트를 고르면 칸 · 실행 방식(콘솔) · 명령이 맞춰진다' ($state.Fields -eq 10 -and $state.Mode -eq 'console' -and $state.Run -and $state.Preview -and -not $state.Cancel -and $state.Title -eq 'Check-Sample')
     & $mod { Invoke-WtFlowRun }
     $err = & $mod { ($script:fields | Where-Object { $_.Field.Name -eq 'Target' }).Error }
     Assert-WtTest 'WPF 업무: 필수 칸을 비우고 실행하면 칸 아래에 알리고 실행하지 않는다' ($err.Visibility -eq 'Visible' -and $err.Text -eq '값을 넣으세요.' -and -not (& $mod { $script:run }))
+    & $mod { $script:testField = $script:fields[0]; Update-WtFlowsView }
+    Assert-WtTest 'WPF 업무: 폼 재사용 때도 재진입 오류·화면 읽기 도움말 초기화' (& $mod {
+        [object]::ReferenceEquals($script:testField,$script:fields[0]) -and $script:testField.Error.Visibility -eq 'Collapsed' -and
+            -not [Windows.Automation.AutomationProperties]::GetHelpText($script:testField.Input)
+    })
     $countState = & $mod {
         $x = $script:fields | Where-Object { $_.Field.Name -eq 'Count' }
         $x.Input.Text = '99'; Set-WtFlowFieldError $x
@@ -490,6 +502,18 @@ try {
     # 앱을 끄면 앱 안 실행은 멈추고 기록한다
     & $addon.OnExit
     Assert-WtTest 'WPF 업무: 앱을 끄면 앱 안 실행을 멈추고 멈춤으로 기록한다' (-not (& $mod { $script:run }) -and @(Get-WtFlowRuns)[0].status -eq 'stopped')
+    Set-WtSetting 'workflows.roots' @()
+    Save-WtFlows @()
+    & $mod { Clear-WtFlowSelection; Update-WtFlowsView }
+    $emptySub = & $mod { $script:ui.Sub.Text }
+    Save-WtFlows @([pscustomobject](New-WtFlow '외부에서 추가한 가짜 업무' $sample @{} 'app'))
+    & $mod { Update-WtFlowsView }
+    $addedSub = & $mod { $script:ui.Sub.Text }
+    Save-WtFlows @()
+    & $mod { Update-WtFlowsView }
+    Assert-WtTest 'WPF 업무: 선택·폴더가 없어도 외부 업무 추가·비우기에 안내 갱신' (
+        $emptySub -eq '스크립트 폴더를 더하면 그 안의 스크립트를 폼으로 실행합니다.' -and
+        $addedSub -eq '왼쪽에서 스크립트나 저장한 업무를 고르세요.' -and (& $mod { $script:ui.Sub.Text }) -eq $emptySub)
 } finally {
     foreach ($r in $running) { try { if ($r.Process -and -not $r.Process.HasExited) { $r.Process.Kill($true) } } catch { } }
     & $mod { if ($script:timer) { $script:timer.Stop() } }

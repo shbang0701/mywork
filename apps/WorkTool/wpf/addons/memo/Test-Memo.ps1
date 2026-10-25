@@ -60,11 +60,25 @@ try {
 
     if (-not (Test-WtTestWpf)) { Write-Host 'SKIP 메모 화면 · 저장 실패 (Windows STA에서만)'; return }
     $addon = Get-WtAddon -Id 'memo'
+    $lazyMemo = New-WtMemo; $lazyMemo.title = '가짜 요약 검사'; $lazyMemo.body = '# 제목' + "`n**본문**"
+    $lazyRow = & $memoModule { param($m) New-WtMemoListItem $m } $lazyMemo
+    $lazyBefore = $null -eq $lazyRow.SnippetValue
+    $lazyText = [Windows.Controls.TextBlock]::new(); $lazyText.DataContext = $lazyRow
+    [void][Windows.Data.BindingOperations]::SetBinding($lazyText, [Windows.Controls.TextBlock]::TextProperty, [Windows.Data.Binding]::new('Snippet'))
+    $lazyText.GetBindingExpression([Windows.Controls.TextBlock]::TextProperty).UpdateTarget()
+    Assert-WtTest 'WPF 메모: 보이는 행이 요약을 읽을 때 원래 문자열로 한 번 만든다' ($lazyBefore -and $lazyText.Text -eq '제목 · 본문' -and $lazyRow.SnippetValue -eq $lazyText.Text)
 
     # ---- 화면: 새 메모 → 입력 → 저장 → 삭제 → 실행 취소 ----
     $view = New-WtTestView 'memo'
     [void](& $addon.Refresh $view)
     $before = (Get-WtMemoItems).Count
+    & $memoModule { $script:testRows = $script:ui.List.ItemsSource; Update-WtMemoView }
+    Assert-WtTest 'WPF 메모: 같은 목록은 다시 바인딩하지 않는다' (& $memoModule { [object]::ReferenceEquals($script:testRows, $script:ui.List.ItemsSource) })
+    & $memoModule { Select-WtMemoItem ([string]$script:items[-1].id); Update-WtMemoView }
+    Assert-WtTest 'WPF 메모: 같은 데이터로 재진입해도 원래처럼 첫 메모를 선택한다' (& $memoModule { $script:currentId -eq $script:items[0].id -and $script:ui.List.SelectedItem.Id -eq $script:currentId })
+    & $memoModule { $script:ui.BodyBox.AppendText('가'); $script:testStatus = $script:ui.Status.Content; $script:ui.BodyBox.AppendText('나') }
+    Assert-WtTest 'WPF 메모: 연속 입력은 상태 요소 재사용 · 자동 저장 예약 유지' (& $memoModule { [object]::ReferenceEquals($script:testStatus, $script:ui.Status.Content) -and $script:saveTimer.IsEnabled })
+    [void](& $memoModule { Save-WtMemoNow })
     [void](& $memoModule { Add-WtMemo; $script:ui.TitleBox.Text = '새 제목'; $script:ui.BodyBox.Text = "본문 #새태그"; Save-WtMemoNow })
     $saved = Get-WtMemoItems
     $new = $saved | Where-Object title -eq '새 제목'
@@ -97,6 +111,8 @@ try {
     $original = [System.IO.File]::ReadAllText($memoPath)
     $held = [System.IO.File]::Open($memoPath, 'Open', 'Read', 'Read')
     Assert-WtTest '메모 안정성: 잠긴 파일 저장은 실패를 돌려준다' (-not (& $memoModule { Save-WtMemoNow }))
+    & $memoModule { $script:ui.BodyBox.AppendText(''); Set-WtMemoDirty }
+    Assert-WtTest '메모 안정성: 저장 오류 뒤 다시 입력하면 저장 안 됨 표시' (& $memoModule { (Get-WtTestTexts $script:ui.Status) -contains '저장 안 됨' })
     & $memoModule { Update-WtMemoView }
     Assert-WtTest '메모 안정성: 실패 후 새로 고침해도 작성 중인 본문·dirty를 유지한다' ((& $memoModule { $script:ui.BodyBox.Text }) -eq 'unsaved draft' -and (& $memoModule { $script:dirty }))
     & $memoModule { param($id) Select-WtMemoItem $id } $two.id

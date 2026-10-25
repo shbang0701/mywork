@@ -418,6 +418,7 @@ function Get-WtMarkdownSnippet([AllowEmptyString()][string]$Text, [int]$MaxLengt
     $t = $Text.Replace("`r", '')
     $t = $t -replace '\A---\n[\s\S]*?\n---(\n|\z)', ''
     $t = $t -replace '%%[\s\S]*?%%', ''
+    $length = 0
     $lines = foreach ($line in ($t -split "`n")) {
         $l = $line.Trim()
         if (-not $l) { continue }
@@ -435,7 +436,11 @@ function Get-WtMarkdownSnippet([AllowEmptyString()][string]$Text, [int]$MaxLengt
         $l = [System.Net.WebUtility]::HtmlDecode(($l -replace '<[^>]+>', ' '))
         if ($l.StartsWith('|')) { $l = $l.Trim('|') -replace '\s*\|\s*', '  ' }
         $l = ($l -replace '\s{3,}', '  ').Trim()
-        if ($l) { $l }
+        if ($l) {
+            $l
+            $length += $l.Length + 3   # 줄 사이의 ' · '까지 센다
+            if ($MaxLength -ge 0 -and $length - 3 -ge $MaxLength) { break }
+        }
     }
     $s = @($lines) -join ' · '
     if ($s.Length -gt $MaxLength) { $s = $s.Substring(0, $MaxLength) }

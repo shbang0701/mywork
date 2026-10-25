@@ -41,6 +41,22 @@ try {
     Assert-WtTest '근태: 출장 건수' ($sum.Trip -eq 1) $sum.Trip
     Assert-WtTest '근태: 휴가 일수(반차 0.5, 달 경계 자름)' ($sum.Leave -eq 2.5) $sum.Leave
     Assert-WtTest '근태: 시간 표시' ((Format-WtHours 270) -eq '4.5' -and (Format-WtHours 120) -eq '2')
+    if (Test-WtTestWpf) {
+        $module = Get-Module Attendance
+        $view = New-WtTestView 'attendance'
+        & $module { Update-WtAttendanceView; $script:testFirst = $script:body.Children[0]; Update-WtAttendanceView }
+        Assert-WtTest '근태: 같은 월과 데이터는 화면을 재사용한다' (& $module { [object]::ReferenceEquals($script:testFirst, $script:body.Children[0]) })
+        & $module { $script:month = $script:month.AddMonths(-1); Update-WtAttendanceView }
+        Assert-WtTest '근태: 달을 바꾸면 다시 만들고 재진입해도 고른 달 유지' (& $module {
+            $month = $script:month; $changed = -not [object]::ReferenceEquals($script:testFirst, $script:body.Children[0])
+            Update-WtAttendanceView; $changed -and $script:month -eq $month
+        })
+        $items = Get-WtAttendanceItems
+        $items[0].detail = '외부에서 바꾼 기록'; $items[0].startDate = ([datetime]::Today.AddMonths(-1)).ToString('yyyy-MM-dd'); $items[0].endDate = $items[0].startDate
+        Write-WtStore attendance -Items $items
+        & $module { Update-WtAttendanceView }
+        Assert-WtTest '근태: 외부 저장 변경을 재진입 때 반영한다' ((Get-WtTestTexts $view) -contains '외부에서 바꾼 기록')
+    }
 } finally {
     Remove-WtTestData $test
 }

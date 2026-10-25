@@ -20,6 +20,7 @@
   - [wpf/](apps/WorkTool/wpf/) — 새 버전(WPF): 마크다운 메모 · 문서 · **활성 작업**(창·Chrome/Edge/웨일 탭 조회, 선택 닫기, 분 단위 자동 새로 고침) · **업무**(스크립트 폴더의 스크립트를 폼으로 실행 · 기록, [설계](docs/plans/workflows-design.md)). 파일 하나 버전은 `apps/WorkTool/dist/WorkTool-WPF.ps1`
     - 탭 하나 = `addons/<이름>/` 폴더 하나입니다. 탭의 도움말 · 단축키 · 검사(`Test-*.ps1`)도 그 폴더에 있어서, 폴더를 더하거나 지우는 것으로 탭을 더하고 뺍니다. 방법은 [WPF README](apps/WorkTool/wpf/README.md#탭애드온-더하기--빼기)
     - [전체 검사](apps/WorkTool/wpf/tests/Test-Core.ps1) — 코어 검사, 모든 탭을 함께 불러 겹침 확인, 탭 폴더의 검사, [셸 · 저장 안정성 검사](apps/WorkTool/wpf/tests/Test-Reliability.ps1)(중복 실행 차단, 저장 실패 때 묻는 흐름), 실행 파일 검사를 차례로 돌립니다.
+    - [경량 성능 확인](apps/WorkTool/wpf/tests/Measure-WtPerformance.ps1) — 창 표시 없이 CPU·시간 예산 안에서 화면 구성 비용을 확인합니다. A~H 전체 판정은 하지 않습니다. [사용법](apps/WorkTool/wpf/README.md#성능-설정과-측정)
 - **[docs/guides/](docs/guides/)** — 읽는 가이드
   - [productivity/](docs/guides/productivity/) — 업무 효율·작업 환경
     - [갤럭시 S26 울트라 앱별 키보드 가이드](docs/guides/productivity/galaxy-s26-ultra-app-keyboard-guide.md)

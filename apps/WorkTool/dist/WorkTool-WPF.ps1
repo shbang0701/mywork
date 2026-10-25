@@ -27,6 +27,20 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
     return
 }
 
+# 계층 컴파일의 백그라운드 처리가 화면 조작과 경합하므로 이 앱의 프로세스에서만 끈다.
+if ($env:DOTNET_TieredCompilation -ne '0') {
+    $previousTiered = [Environment]::GetEnvironmentVariable('DOTNET_TieredCompilation', 'Process')
+    $env:DOTNET_TieredCompilation = '0'
+    try {
+        & (Join-Path $PSHOME 'pwsh.exe') -NoLogo -NoProfile -STA -File $PSCommandPath @PSBoundParameters @args
+        $childExit = $LASTEXITCODE
+    } finally {
+        # 같은 콘솔에서 다음에 켤 때도 실제 런타임 설정과 환경 변수 표식이 어긋나지 않게 되돌린다.
+        [Environment]::SetEnvironmentVariable('DOTNET_TieredCompilation', $previousTiered, 'Process')
+    }
+    exit $childExit
+}
+
 try {
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -109,6 +123,19 @@ function Get-WtStorePath {
 
 function Test-WtStore([string]$Name) { Test-Path -LiteralPath (Get-WtStorePath $Name) }
 
+# 화면에서 변경 여부를 판단하는 표식. 파일 조회와 읽고 쓰기는 이 모듈로 모은다.
+function Get-WtStoreStamp([string]$Name) {
+    $path = Get-WtStorePath $Name
+    $info = [System.IO.FileInfo]::new($path)
+    $info.Refresh()
+    if (-not $info.Exists) { return "$path|missing" }
+    # 같은 크기·시각으로 덮어쓴 외부 변경도 놓치지 않는다. JSON 해석 없이 작은 버퍼로 읽는다.
+    $stream = [System.IO.File]::OpenRead($path)
+    try { $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($stream)) }
+    finally { $stream.Dispose() }
+    "$path|$($info.LastWriteTimeUtc.Ticks)|$($info.CreationTimeUtc.Ticks)|$($info.Length)|$hash"
+}
+
 # 저장소 하나를 읽는다. 파일이 없으면 $null.
 # $Migrate는 { param($doc, $from) ... $doc } 형태로, schema $from 문서를 $from+1 형식으로 바꿔 돌려준다.
 # 변환하기 전 원본은 <이름>.json.schema<번호>.bak으로 남긴다.
@@ -190,7 +217,7 @@ function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
 }
 
 Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
-    Get-WtStorePath, Test-WtStore, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
+    Get-WtStorePath, Test-WtStore, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
     Find-WtLegacyFolder, Import-WtLegacyCsv
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Storage.psm1 끝 ----
@@ -2500,6 +2527,7 @@ function Get-WtMarkdownSnippet([AllowEmptyString()][string]$Text, [int]$MaxLengt
     $t = $Text.Replace("`r", '')
     $t = $t -replace '\A---\n[\s\S]*?\n---(\n|\z)', ''
     $t = $t -replace '%%[\s\S]*?%%', ''
+    $length = 0
     $lines = foreach ($line in ($t -split "`n")) {
         $l = $line.Trim()
         if (-not $l) { continue }
@@ -2517,7 +2545,11 @@ function Get-WtMarkdownSnippet([AllowEmptyString()][string]$Text, [int]$MaxLengt
         $l = [System.Net.WebUtility]::HtmlDecode(($l -replace '<[^>]+>', ' '))
         if ($l.StartsWith('|')) { $l = $l.Trim('|') -replace '\s*\|\s*', '  ' }
         $l = ($l -replace '\s{3,}', '  ').Trim()
-        if ($l) { $l }
+        if ($l) {
+            $l
+            $length += $l.Length + 3   # 줄 사이의 ' · '까지 센다
+            if ($MaxLength -ge 0 -and $length - 3 -ge $MaxLength) { break }
+        }
     }
     $s = @($lines) -join ' · '
     if ($s.Length -gt $MaxLength) { $s = $s.Substring(0, $MaxLength) }
@@ -4936,9 +4968,22 @@ function Get-WtElements($Output) {
 }
 
 function Get-WtPageView([string]$Id) {
-    switch ($Id) {
-        '_settings' { return @{ View = (New-WtSettingsPage); Addon = $null } }
-        '_help' { return @{ View = (New-WtHelpPage); Addon = $null } }
+    if ($Id -in '_settings', '_help') {
+        # 등록 객체도 비교하므로 같은 ID의 탭을 다시 등록한 경우까지 반영한다.
+        $registrations = @(foreach ($a in @(Get-WtAddon -All)) {
+            [ordered]@{ Identity = [Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($a); Id = $a.Id; Title = $a.Title
+                Description = $a.Description; Required = $a.Required; Order = $a.Order; Help = $a.Help; Shortcuts = $a.Shortcuts }
+        })
+        $settings = @(foreach ($name in 'theme.color','ui.opacity','ui.fontScale','window.closeToTray','addons.disabled','legacy.path') {
+            [ordered]@{ Key = $name; Value = (Get-WtSetting $name) }
+        })
+        $key = ConvertTo-Json -Compress -Depth 8 -InputObject @(
+            (Get-WtDataRoot), $settings, $registrations, (Find-WtLegacyFolder), (Get-WtLastImport))
+        if (-not $script:views.ContainsKey($Id) -or $script:views[$Id].Key -cne $key) {
+            $view = if ($Id -eq '_settings') { New-WtSettingsPage } else { New-WtHelpPage }
+            $script:views[$Id] = @{ View = $view; Addon = $null; Key = $key }
+        }
+        return $script:views[$Id]
     }
     if (-not $script:views.ContainsKey($Id)) {
         $a = Get-WtAddon -Id $Id
@@ -5442,9 +5487,13 @@ New-Module -Name 'WorkTool.addon.active-tasks' -ScriptBlock {
 $ErrorActionPreference = 'Stop'
 $script:ui = @{}
 $script:items = @()
+$script:snapshotKey = $null
+$script:snapshotVersion = 0
+$script:listKey = $null
 $script:visible = @()
 $script:expanded = @{}
 $script:job = $null
+$script:workerRunspace = $null
 $script:timer = $null
 $script:paused = $false
 $script:next = [datetime]::MaxValue
@@ -5528,10 +5577,13 @@ function Get-WtTaskHostIds {
 }
 
 function Set-WtTaskSnapshot([object[]]$Items) {
+    $key = ConvertTo-Json -Compress -Depth 5 -InputObject @($Items | Select-Object -Property * -ExcludeProperty Selected)
     $picked = @{}
     foreach ($row in $script:items) { if ($row.Selected) { $picked[$row.Id] = $true } }
     foreach ($row in $Items) { $row.Selected = $row.CanClose -and $picked.ContainsKey($row.Id) }
-    $script:items = @($Items)
+    if ($script:snapshotKey -cne $key) {
+        $script:items = @($Items); $script:snapshotKey = $key; $script:snapshotVersion++
+    }
     $script:lastScan = Get-Date
 }
 
@@ -5740,17 +5792,32 @@ function Get-WtTaskWorker { $script:worker }
 function Start-WtTaskJob([string]$Action, [object[]]$Targets = @()) {
     if ($script:job) { return }
     $cancel = [hashtable]::Synchronized(@{ Value = $false })
-    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
-    # 작업마다 새 스레드. ReuseThread는 실행 공간을 버리기 전까지 스레드가 남아, 끝낼 때 응답 없는 작업이 있으면 앱 프로세스가 끝나지 않는다
-    $runspace.ApartmentState = 'MTA'; $runspace.ThreadOptions = 'UseNewThread'; $runspace.Open()
-    $ps = [powershell]::Create(); $ps.Runspace = $runspace
-    [void]$ps.AddScript($script:worker.ToString()).AddArgument(@{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; HostProcessIds = @(Get-WtTaskHostIds); Cancel = $cancel })
+    $ps = $null
     try {
+        if (-not $script:workerRunspace -or $script:workerRunspace.RunspaceStateInfo.State -ne 'Opened') {
+            if ($script:workerRunspace) { $script:workerRunspace.Dispose(); $script:workerRunspace = $null }
+            $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+            # 실행 공간은 재사용하되 호출마다 새 스레드다. ReuseThread로 남는 실행 스레드를 만들지 않는다.
+            $runspace.ApartmentState = 'MTA'; $runspace.ThreadOptions = 'UseNewThread'
+            try { $runspace.Open(); $script:workerRunspace = $runspace } catch { $runspace.Dispose(); throw }
+        }
+        $runspace = $script:workerRunspace
+        $ps = [powershell]::Create(); $ps.Runspace = $runspace
+        # 부모 조회도 배경에서 한다. 내부 함수 소스만 넘기며 작업의 변수/함수/UIA 참조는 로컬 범위에 둔다.
+        $runner = {
+            param($request, $hostSource, $workerSource)
+            try {
+                $request.HostProcessIds = @(& ([scriptblock]::Create($hostSource)))
+                & ([scriptblock]::Create($workerSource)) $request
+            } finally { $Error.Clear() }
+        }
+        [void]$ps.AddScript($runner.ToString(), $true).AddArgument(@{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; Cancel = $cancel }).
+            AddArgument((Get-Command Get-WtTaskHostIds).Definition).AddArgument($script:worker.ToString())
         $handle = $ps.BeginInvoke()
         $script:job = @{ PowerShell = $ps; Runspace = $runspace; Handle = $handle; Cancel = $cancel; Action = $Action; Started = [datetime]::UtcNow }
         $script:timer.Start()
         Update-WtTaskStatus
-    } catch { $ps.Dispose(); $runspace.Dispose(); throw }
+    } catch { if ($ps) { $ps.Dispose() }; throw }
 }
 
 function Complete-WtTaskJob {
@@ -5776,7 +5843,7 @@ function Complete-WtTaskJob {
             $scanNext = $true
         }
     } catch { $script:lastError = '작업을 완료하지 못했습니다. 다시 시도하세요.'; $script:ui.Status.ToolTip = $_.Exception.Message }
-    finally { $job.PowerShell.Dispose(); $job.Runspace.Dispose() }
+    finally { $job.PowerShell.Dispose() }
     $option = Get-WtTaskRefresh; $script:next = [datetime]::UtcNow.AddMinutes($option.minutes)
     Update-WtTaskStatus
     if ($scanNext) { Start-WtTaskJob 'scan' }
@@ -5785,6 +5852,8 @@ function Complete-WtTaskJob {
 function Invoke-WtTaskTick {
     Complete-WtTaskJob
     if (-not $script:ui.Count) { return }
+    # 숨겨진 화면에서도 실행 중인 결과는 회수한다. 완료 뒤에는 다음에 보일 때까지 멈춘다.
+    if (-not $script:ui.Root.IsVisible -and -not $script:job) { $script:timer.Stop(); return }
     $window = Get-WtWindow
     $visible = $script:ui.Root.IsVisible -and $window -and $window.IsVisible -and $window.WindowState -ne 'Minimized'
     $option = Get-WtTaskRefresh
@@ -5794,11 +5863,14 @@ function Invoke-WtTaskTick {
 
 function Stop-WtTasks {
     if ($script:timer) { $script:timer.Stop(); $script:timer = $null }
+    $runspace = $script:workerRunspace; $script:workerRunspace = $null
     if ($script:job) {
         $job = $script:job; $script:job = $null; $job.Cancel.Value = $true
         if ($job.Handle.IsCompleted) { $job.PowerShell.Dispose(); $job.Runspace.Dispose() }
         else { [void]$job.PowerShell.BeginStop($null, $null); $job.Runspace.CloseAsync() }
+        $runspace = $null
     }
+    if ($runspace) { $runspace.Dispose() }
 }
 
 function Update-WtTaskStatus {
@@ -5830,6 +5902,8 @@ function Update-WtTaskStatus {
 function Update-WtTaskList([switch]$KeepSelection) {
     if (-not $script:ui.Count) { return }
     if (-not $KeepSelection) { foreach ($row in $script:items) { $row.Selected = $false } }
+    $key = ConvertTo-Json -Compress -Depth 4 -InputObject @($script:snapshotVersion, $script:ui.Search.Text, $script:appFilter, $script:sortColumn, $script:sortDirection, @($script:items | Where-Object Selected | ForEach-Object Id))
+    if ($script:listKey -ceq $key) { Update-WtTaskStatus; return }
     $scroll = Get-WtVisualChild $script:ui.Grid ([System.Windows.Controls.ScrollViewer])
     $offset = if ($scroll) { $scroll.VerticalOffset } else { 0 }
     $script:visible = @(Find-WtTaskItems $script:items $script:ui.Search.Text $script:appFilter)
@@ -5844,6 +5918,7 @@ function Update-WtTaskList([switch]$KeepSelection) {
     $script:ui.Grid.UpdateLayout()
     if ($scroll) { $scroll.ScrollToVerticalOffset($offset) }
     Update-WtTaskStatus
+    $script:listKey = $key
 }
 
 # 표를 다시 만들면 방금 누른 체크박스가 새것으로 바뀐다. 같은 항목 · 같은 그룹의 체크박스로 포커스를 돌려줘
@@ -5929,6 +6004,7 @@ function Close-WtSelectedTasks {
 
 function New-WtActiveTasksView {
     Stop-WtTasks
+    $script:listKey = $null
     $script:ui = @{}
     $page = New-WtTaskPage
     $header = New-WtPageHeader '활성 작업' '' $null
@@ -6028,7 +6104,13 @@ function New-WtActiveTasksView {
     })
     $script:timer = [System.Windows.Threading.DispatcherTimer]::new()
     $script:timer.Interval = [timespan]::FromMilliseconds(250); $script:timer.Add_Tick({ Invoke-WtTaskTick })
-    $page.Root.Add_Loaded({ $script:timer.Start() })
+    $page.Root.Add_Loaded({ if ($script:timer) { $script:timer.Start() } })
+    $page.Root.Add_Unloaded({ if ($script:timer -and -not $script:job) { $script:timer.Stop() } })
+    $page.Root.Add_IsVisibleChanged({
+        param($s, $e)
+        if (-not $script:timer) { return }
+        if ($s.IsVisible -or $script:job) { $script:timer.Start() } else { $script:timer.Stop() }
+    })
     Update-WtTaskList -KeepSelection
     $page.Root
 }
@@ -6173,6 +6255,7 @@ function New-WtAttRow($Item) {
 }
 
 function New-WtAttendanceView {
+    $script:viewKey = $null
     $page = New-WtPage
     $nav = New-WtStack Horizontal 6
     $prev = New-WtButton '' -Icon 0xE76B -ToolTip '이전 달'
@@ -6203,9 +6286,11 @@ function New-WtAttendanceView {
 }
 
 function Update-WtAttendanceView {
+    $key = @((Get-WtStoreStamp 'attendance'), $script:month.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    if ($script:viewKey -ceq $key) { return }
+    $items = Get-WtAttendanceItems
     $script:monthLabel.Text = Format-WtDate $script:month 'yyyy년 M월'
     $script:body.Children.Clear()
-    $items = Get-WtAttendanceItems
     [void](Add-WtChild $script:body (New-WtAttTiles (Get-WtAttendanceSummary $script:month $items) 4))
     $card = New-WtCard
     $col = New-WtStack Vertical
@@ -6216,9 +6301,12 @@ function Update-WtAttendanceView {
     if (-not $rows.Count) { [void](Add-WtChild $col (New-WtText '이 달에는 기록이 없습니다.' 'T.Sub')) }
     $card.Child = $col
     [void](Add-WtChild $script:body $card)
+    $script:viewKey = $key
 }
 
 function New-WtAttendanceHomeCard {
+    $key = @((Get-WtStoreStamp 'attendance'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    if ($script:homeKey -ceq $key -and $script:homeCard -and -not $script:homeCard.Parent) { return $script:homeCard }
     $items = Get-WtAttendanceItems
     $month = [datetime]::new([datetime]::Today.Year, [datetime]::Today.Month, 1)
     $card = New-WtCard
@@ -6230,6 +6318,7 @@ function New-WtAttendanceHomeCard {
     [void](Add-WtChild $col $status)
     [void](Add-WtChild $col (New-WtAttTiles (Get-WtAttendanceSummary $month $items) 2))
     $card.Child = $col
+    $script:homeCard = $card; $script:homeKey = $key
     $card
 }
 
@@ -7174,8 +7263,13 @@ function Get-WtMemoById([string]$Id) { $script:items | Where-Object { $_.id -eq 
 function New-WtMemoListItem($Memo) {
     $cached = $script:rowCache[$Memo.id]
     if ($cached -and $cached.Day -eq [datetime]::Today -and $cached.Body -ceq $Memo.body -and $cached.Title -ceq $Memo.title -and $cached.Updated -eq $Memo.updated) { return $cached.Row }
-    $snippet = if ($cached -and $cached.Body -ceq $Memo.body) { $cached.Row.Snippet } else { Get-WtMarkdownSnippet ([string]$Memo.body) }
-    $row = [pscustomobject]@{ Id = $Memo.id; Title = $Memo.title; Stamp = Format-WtMemoTime $Memo.updated; Snippet = $snippet }
+    $snippet = if ($cached -and $cached.Body -ceq $Memo.body) { $cached.Row.SnippetValue } else { $null }
+    $row = [pscustomobject]@{ Id = $Memo.id; Title = $Memo.title; Stamp = Format-WtMemoTime $Memo.updated; SnippetSource = [string]$Memo.body; SnippetValue = $snippet }
+    # 가상 목록에서 보이는 행이 값을 읽을 때만 요약한다. 지역 변수는 캡처하지 않고 행 자체에 둔다.
+    $row | Add-Member -MemberType ScriptProperty -Name Snippet -Value {
+        if ($null -eq $this.SnippetValue) { $this.SnippetValue = Get-WtMarkdownSnippet $this.SnippetSource }
+        $this.SnippetValue
+    }
     $script:rowCache[$Memo.id] = @{ Body = $Memo.body; Title = $Memo.title; Updated = $Memo.updated; Day = [datetime]::Today; Row = $row }
     $row
 }
@@ -7238,6 +7332,9 @@ function Switch-WtMemoMode {
 # 저장 상태 표시: saved · dirty · error · ''(숨김)
 function Set-WtMemoStatus([string]$State, [string]$Detail = '') {
     $s = $script:ui.Status
+    $stamp = if ($State -eq 'saved') { [string](Get-WtMemoById $script:currentId).updated } else { '' }
+    $key = @($State, $Detail, $stamp) -join "`n"
+    if ($s.Tag -ceq $key) { return }
     switch ($State) {
         'saved' {
             $m = Get-WtMemoById $script:currentId
@@ -7258,6 +7355,7 @@ function Set-WtMemoStatus([string]$State, [string]$Detail = '') {
         }
         default { $s.Visibility = 'Collapsed' }
     }
+    $s.Tag = $key
 }
 
 # 고친 내용이 있으면 바로 저장한다. 저장 시각 · 목록도 고친다
@@ -7387,15 +7485,21 @@ function Update-WtMemoList([switch]$KeepCurrent) {
     }
     $script:listUpdating = $true
     try {
-        $list.ItemsSource = @(foreach ($m in $shown) { New-WtMemoListItem $m })
+        $rows = @(foreach ($m in $shown) { New-WtMemoListItem $m })
+        $same = $list.Items.Count -eq $rows.Count
+        for ($i = 0; $same -and $i -lt $rows.Count; $i++) { $same = [object]::ReferenceEquals($list.Items[$i], $rows[$i]) }
+        if (-not $same) { $list.ItemsSource = $rows }
         $list.SelectedItem = $list.Items | Where-Object Id -eq $keep | Select-Object -First 1
         if (-not $list.SelectedItem -and $list.Items.Count) { $list.SelectedIndex = 0 }
     } finally { $script:listUpdating = $false }
     $selectedId = if ($list.SelectedItem) { $list.SelectedItem.Id } else { '' }
     if ($selectedId -ne $script:currentId) { Show-WtMemo $selectedId }
+    $script:listQuery = [string]$script:ui.Search.Text
 }
 
 function New-WtMemoView {
+    $script:viewStamp = $null
+    $script:listQuery = $null
     $script:ui = @{}
     if (-not $script:saveTimer) {
         $script:saveTimer = [System.Windows.Threading.DispatcherTimer]::new()
@@ -7556,20 +7660,34 @@ function New-WtMemoView {
 
 function Update-WtMemoView {
     if (-not (Save-WtMemoNow)) { return }
-    $script:items = @(Get-WtMemoSorted (Get-WtMemoItems))
-    $present = @{}
-    foreach ($item in $script:items) { $present[$item.id] = $true }
-    foreach ($id in @($script:rowCache.Keys)) { if (-not $present.ContainsKey($id)) { $script:rowCache.Remove($id) } }
+    $stamp = @((Get-WtStoreStamp 'memo'), [datetime]::Today.Ticks) -join '|'
+    if ($script:viewStamp -ceq $stamp -and $script:listQuery -ceq [string]$script:ui.Search.Text) {
+        # 원래 재진입처럼 첫 항목을 다시 고른다. 바뀌지 않은 전체 행을 다시 순회하지 않는다.
+        $script:currentId = $null
+        $id = if ($script:ui.List.Items.Count) { [string]$script:ui.List.Items[0].Id } else { '' }
+        Show-WtMemo $id
+        return
+    }
+    if ($script:viewStamp -cne $stamp) {
+        $script:items = @(Get-WtMemoSorted (Get-WtMemoItems))
+        $present = @{}
+        foreach ($item in $script:items) { $present[$item.id] = $true }
+        foreach ($id in @($script:rowCache.Keys)) { if (-not $present.ContainsKey($id)) { $script:rowCache.Remove($id) } }
+        $script:viewStamp = $stamp
+    }
     $script:currentId = $null
     Update-WtMemoList
 }
 
 function New-WtMemoHomeCard {
+    $key = @((Get-WtStoreStamp 'memo'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    if ($script:homeKey -ceq $key -and $script:homeCard -and -not $script:homeCard.Parent) { return $script:homeCard }
     $items = @(Get-WtMemoSorted (Get-WtMemoItems))
+    $recent = @($items | Select-Object -First 3)
     $card = New-WtCard
     $col = New-WtStack Vertical
     [void](Add-WtChild $col (New-WtCardHeader '최근 메모' '' '메모 열기' 'memo'))
-    foreach ($m in ($items | Select-Object -First 3)) {
+    foreach ($m in $recent) {
         $t = New-WtStack Vertical 2
         $name = New-WtText $m.title 'T.Strong'
         $name.TextTrimming = 'CharacterEllipsis'
@@ -7584,6 +7702,7 @@ function New-WtMemoHomeCard {
     }
     if (-not $items.Count) { [void](Add-WtChild $col (New-WtText '메모가 없습니다.' 'T.Sub')) }
     $card.Child = $col
+    $script:homeCard = $card; $script:homeKey = $key
     $card
 }
 
@@ -7714,6 +7833,35 @@ function Get-WtScheduleOn([datetime]$Day, [object[]]$Items) {
     @($Items | Where-Object { Test-WtScheduleOn $_ $Day } | Sort-Object { if ($_.time) { $_.time } else { '' } }, { $_.title })
 }
 
+# 여러 날을 그릴 때 항목의 날짜를 한 번만 읽는다. 반복 판단과 날짜별 정렬은 하루 조회와 같다.
+function Get-WtScheduleRange([datetime]$From, [int]$Count, [object[]]$Items) {
+    $dates = @(); $buckets = @()
+    for ($i = 0; $i -lt $Count; $i++) {
+        $dates += $From.Date.AddDays($i)
+        $buckets += , [Collections.Generic.List[object]]::new()
+    }
+    foreach ($item in $Items) {
+        $start = [datetime]::ParseExact($item.startDate, 'yyyy-MM-dd', $script:inv)
+        $end = if ($item.endDate) { [datetime]::ParseExact($item.endDate, 'yyyy-MM-dd', $script:inv) } else { $start }
+        for ($i = 0; $i -lt $Count; $i++) {
+            $day = $dates[$i]
+            if ($day -lt $start) { continue }
+            $on = switch ([string]$item.repeat) {
+                'daily' { $true }
+                'weekdays' { [int]$day.DayOfWeek -ge 1 -and [int]$day.DayOfWeek -le 5 }
+                'weekly' { $day.DayOfWeek -eq $start.DayOfWeek }
+                default { $day -le $end }
+            }
+            if ($on) { $buckets[$i].Add($item) }
+        }
+    }
+    $result = @()
+    foreach ($bucket in $buckets) {
+        $result += , @($bucket | Sort-Object { if ($_.time) { $_.time } else { '' } }, { $_.title })
+    }
+    , $result
+}
+
 function Format-WtAlarm($Alarm) {
     if ($null -eq $Alarm -or "$Alarm" -eq '') { return $null }
     $m = [int]$Alarm
@@ -7771,6 +7919,7 @@ function New-WtScheduleRow($Item, [string]$DayLabel) {
 }
 
 function New-WtScheduleView {
+    $script:viewKey = $null
     $page = New-WtPage
     [void](Add-WtChild $page.Panel (New-WtPageHeader '일정' '보기 전용 · 편집과 알람은 2단계에서 옮깁니다'))
     $card = New-WtCard
@@ -7781,25 +7930,32 @@ function New-WtScheduleView {
 }
 
 function Update-WtScheduleView {
+    $key = @((Get-WtStoreStamp 'schedule'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    if ($script:viewKey -ceq $key) { return }
+    $items = Get-WtScheduleItems
+    $days = Get-WtScheduleRange ([datetime]::Today) 14 $items
     $script:list.Children.Clear()
     [void](Add-WtChild $script:list (New-WtCardHeader '다가오는 14일'))
-    $items = Get-WtScheduleItems
     $any = $false
     for ($i = 0; $i -lt 14; $i++) {
         $day = [datetime]::Today.AddDays($i)
         $label = if ($i -eq 0) { '오늘' } elseif ($i -eq 1) { '내일' } else { Format-WtDate $day "M'/'d (ddd)" }
-        foreach ($it in (Get-WtScheduleOn $day $items)) {
+        foreach ($it in $days[$i]) {
             [void](Add-WtChild $script:list (New-WtScheduleRow $it $label))
             $label = ''
             $any = $true
         }
     }
     if (-not $any) { [void](Add-WtChild $script:list (New-WtText '다가오는 일정이 없습니다.' 'T.Sub')) }
+    $script:viewKey = $key
 }
 
 function New-WtScheduleHomeCards {
+    $key = @((Get-WtStoreStamp 'schedule'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    if ($script:homeKey -ceq $key -and $script:homeCards -and -not @($script:homeCards | Where-Object Parent).Count) { return $script:homeCards }
     $items = Get-WtScheduleItems
-    $today = @(Get-WtScheduleOn ([datetime]::Today) $items)
+    $days = Get-WtScheduleRange ([datetime]::Today) 8 $items
+    $today = @($days[0])
 
     $c1 = New-WtCard
     $col = New-WtStack Vertical
@@ -7814,7 +7970,7 @@ function New-WtScheduleHomeCards {
     $n = 0
     for ($i = 1; $i -le 7; $i++) {
         $day = [datetime]::Today.AddDays($i)
-        foreach ($it in (Get-WtScheduleOn $day $items)) {
+        foreach ($it in $days[$i]) {
             if ($it.repeat -eq 'daily' -or $it.repeat -eq 'weekdays') { continue }   # 매일 반복은 오늘 카드에서만
             [void](Add-WtChild $col (New-WtScheduleRow $it (Format-WtDate $day "M'/'d (ddd)")))
             $n++
@@ -7823,8 +7979,8 @@ function New-WtScheduleHomeCards {
     if (-not $n) { [void](Add-WtChild $col (New-WtText '다가오는 일정이 없습니다.' 'T.Sub')) }
     $c2.Child = $col
 
-    $c1
-    $c2
+    $script:homeCards = @($c1, $c2); $script:homeKey = $key
+    $script:homeCards
 }
 
 Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Order 20 `
@@ -8347,70 +8503,86 @@ function Update-WtFlowTree {
     # 다른 탭에 다녀와도 고치던 칸 값과 실행 방식은 그대로 둔다
     $carry = if ($keep -and $script:fields.Count) { @{ Key = $keep; Values = (Get-WtFlowFormValues); Mode = (Get-WtFlowMode) } } else { $null }
     if ($script:pendingFlow) { $keep = "flow:$($script:pendingFlow)"; $script:pendingFlow = $null }
+    $flows = @(Get-WtFlows)
+    $groups = @(Find-WtFlowScripts (Get-WtFlowRoots))
+    $missingPaths = @{}
+    foreach ($f in $flows) { $missingPaths[[string]$f.script] = -not (Test-Path -LiteralPath ([string]$f.script) -PathType Leaf) }
+    $key = ConvertTo-Json -Compress -Depth 10 -InputObject @($flows, $groups, $missingPaths, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
     $script:filling = $true
     try {
-        $tree.Items.Clear()
         $found = $null
-        $saved = New-WtFlowTreeItem '저장한 업무' 0xE734 @{ Kind = 'group' }
-        $flows = @(Get-WtFlows)
-        foreach ($f in $flows) {
-            $missing = -not (Test-Path -LiteralPath ([string]$f.script) -PathType Leaf)
-            $label = if ($missing) { "$($f.title) · 스크립트 없음" } else { [string]$f.title }
-            $node = New-WtFlowTreeItem $label 0xE768 @{ Kind = 'flow'; Id = [string]$f.id } ([string]$f.script)
-            [void]$saved.Items.Add($node)
-            if ($keep -eq "flow:$($f.id)") { $found = $node }
-        }
-        if (-not $flows.Count) {
-            $hint = New-WtFlowTreeItem '아직 없습니다' 0xE946 @{ Kind = 'hint' } '스크립트를 고르고 [업무로 저장]하면 여기에 생깁니다' -Muted
-            $hint.Focusable = $false
-            [void]$saved.Items.Add($hint)
-        }
-        [void]$tree.Items.Add($saved)
-        $groups = @(Find-WtFlowScripts (Get-WtFlowRoots))
-        # 이름이 같은 스크립트 폴더가 둘 이상이면 위 폴더 이름을 붙여 구분한다 (예: mywork\scripts)
-        $leafCount = @{}
-        foreach ($g in $groups) { $leaf = Split-Path $g.Root -Leaf; $leafCount[$leaf] = 1 + [int]$leafCount[$leaf] }
-        foreach ($group in $groups) {
-            $rootName = Split-Path $group.Root -Leaf
-            if (-not $rootName) { $rootName = $group.Root }
-            elseif ($leafCount[$rootName] -gt 1) {
-                $parentName = Split-Path (Split-Path $group.Root -Parent) -Leaf
-                if ($parentName) { $rootName = "$parentName\$rootName" }
+        if ($script:treeKey -ceq $key) {
+            # 진입 때마다 펼침·선택을 초기화하는 동작은 유지하고, 같은 노드의 생성만 생략한다.
+            $queue = [Collections.Generic.Queue[object]]::new()
+            foreach ($node in $tree.Items) { $queue.Enqueue($node) }
+            while ($queue.Count) {
+                $node = $queue.Dequeue(); $node.IsExpanded = $true; $node.IsSelected = $false
+                if (($node.Tag.Kind -eq 'flow' -and $keep -eq "flow:$($node.Tag.Id)") -or
+                    ($node.Tag.Kind -eq 'script' -and $keep -eq "script:$($node.Tag.Path)")) { $found = $node }
+                foreach ($child in $node.Items) { $queue.Enqueue($child) }
             }
-            $label = if ($group.Missing) { "$rootName · 폴더 없음" } else { $rootName }
-            $rootNode = New-WtFlowTreeItem $label 0xE8B7 @{ Kind = 'root'; Path = $group.Root } $group.Root
-            $folders = @{}
-            foreach ($s in $group.Scripts) {
-                $parent = $rootNode
-                if ($s.Folder) {
-                    if (-not $folders.ContainsKey($s.Folder)) {
-                        $folders[$s.Folder] = New-WtFlowTreeItem $s.Folder 0xE8B7 @{ Kind = 'folder' } (Join-Path $group.Root $s.Folder)
-                        [void]$rootNode.Items.Add($folders[$s.Folder])
-                    }
-                    $parent = $folders[$s.Folder]
-                }
-                $node = New-WtFlowTreeItem $s.Name 0xE756 @{ Kind = 'script'; Path = $s.Path } $s.Path
-                [void]$parent.Items.Add($node)
-                if ($keep -eq "script:$($s.Path)") { $found = $node }
+        } else {
+            $tree.Items.Clear()
+            $saved = New-WtFlowTreeItem '저장한 업무' 0xE734 @{ Kind = 'group' }
+            foreach ($f in $flows) {
+                $missing = $missingPaths[[string]$f.script]
+                $label = if ($missing) { "$($f.title) · 스크립트 없음" } else { [string]$f.title }
+                $node = New-WtFlowTreeItem $label 0xE768 @{ Kind = 'flow'; Id = [string]$f.id } ([string]$f.script)
+                [void]$saved.Items.Add($node)
+                if ($keep -eq "flow:$($f.id)") { $found = $node }
             }
-            if (-not $group.Missing -and -not $group.Scripts.Count) {
-                $hint = New-WtFlowTreeItem '.ps1 파일 없음' 0xE946 @{ Kind = 'hint' } -Muted
+            if (-not $flows.Count) {
+                $hint = New-WtFlowTreeItem '아직 없습니다' 0xE946 @{ Kind = 'hint' } '스크립트를 고르고 [업무로 저장]하면 여기에 생깁니다' -Muted
                 $hint.Focusable = $false
-                [void]$rootNode.Items.Add($hint)
+                [void]$saved.Items.Add($hint)
             }
-            [void]$tree.Items.Add($rootNode)
+            [void]$tree.Items.Add($saved)
+            # 이름이 같은 스크립트 폴더가 둘 이상이면 위 폴더 이름을 붙여 구분한다 (예: mywork\scripts)
+            $leafCount = @{}
+            foreach ($g in $groups) { $leaf = Split-Path $g.Root -Leaf; $leafCount[$leaf] = 1 + [int]$leafCount[$leaf] }
+            foreach ($group in $groups) {
+                $rootName = Split-Path $group.Root -Leaf
+                if (-not $rootName) { $rootName = $group.Root }
+                elseif ($leafCount[$rootName] -gt 1) {
+                    $parentName = Split-Path (Split-Path $group.Root -Parent) -Leaf
+                    if ($parentName) { $rootName = "$parentName\$rootName" }
+                }
+                $label = if ($group.Missing) { "$rootName · 폴더 없음" } else { $rootName }
+                $rootNode = New-WtFlowTreeItem $label 0xE8B7 @{ Kind = 'root'; Path = $group.Root } $group.Root
+                $folders = @{}
+                foreach ($s in $group.Scripts) {
+                    $parent = $rootNode
+                    if ($s.Folder) {
+                        if (-not $folders.ContainsKey($s.Folder)) {
+                            $folders[$s.Folder] = New-WtFlowTreeItem $s.Folder 0xE8B7 @{ Kind = 'folder' } (Join-Path $group.Root $s.Folder)
+                            [void]$rootNode.Items.Add($folders[$s.Folder])
+                        }
+                        $parent = $folders[$s.Folder]
+                    }
+                    $node = New-WtFlowTreeItem $s.Name 0xE756 @{ Kind = 'script'; Path = $s.Path } $s.Path
+                    [void]$parent.Items.Add($node)
+                    if ($keep -eq "script:$($s.Path)") { $found = $node }
+                }
+                if (-not $group.Missing -and -not $group.Scripts.Count) {
+                    $hint = New-WtFlowTreeItem '.ps1 파일 없음' 0xE946 @{ Kind = 'hint' } -Muted
+                    $hint.Focusable = $false
+                    [void]$rootNode.Items.Add($hint)
+                }
+                [void]$tree.Items.Add($rootNode)
+            }
         }
         if ($found) { $found.IsSelected = $true; $found.BringIntoView() }
         $script:ui.RemoveRoot.IsEnabled = $false   # 다시 만든 목록에서는 고른 폴더가 없다
     } finally { $script:filling = $false }
     if ($found) {
-        Select-WtFlowNode $found.Tag
+        Select-WtFlowNode $found.Tag -Reuse
         if ($carry -and $carry.Key -eq $keep) {
             Set-WtFlowFormValues $carry.Values
             foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq $carry.Mode) }
         }
     } elseif ($keep) { Clear-WtFlowSelection }
-    else { Update-WtFlowCenter }
+    else { Update-WtFlowCenter -Reuse }
+    $script:treeKey = $key
 }
 
 function Add-WtFlowRoot {
@@ -8455,7 +8627,7 @@ function Reset-WtFlowOutput([string]$Key) {
     $script:outputKey = $null
 }
 
-function Select-WtFlowNode($Tag) {
+function Select-WtFlowNode($Tag, [switch]$Reuse) {
     $script:ui.RemoveRoot.IsEnabled = ($Tag.Kind -eq 'root')
     if ($Tag.Kind -eq 'script') { Reset-WtFlowOutput "script:$($Tag.Path)" }
     elseif ($Tag.Kind -eq 'flow') { Reset-WtFlowOutput "flow:$($Tag.Id)" }
@@ -8463,28 +8635,34 @@ function Select-WtFlowNode($Tag) {
         'script' {
             $script:flow = $null
             $script:info = Read-WtFlowScript $Tag.Path
-            Update-WtFlowCenter
+            Update-WtFlowCenter -Reuse:$Reuse
         }
         'flow' {
             $f = Get-WtFlows | Where-Object { $_.id -eq $Tag.Id } | Select-Object -First 1
             if (-not $f) { Clear-WtFlowSelection; return }
             $script:flow = $f
             $script:info = Read-WtFlowScript ([string]$f.script)
-            Update-WtFlowCenter
+            Update-WtFlowCenter -Reuse:$Reuse
         }
     }
 }
 
 # 가운데 · 오른쪽을 고른 것에 맞춘다
-function Update-WtFlowCenter {
+function Update-WtFlowCenter([switch]$Reuse) {
     $u = $script:ui
     if (-not $u.Count) { return }
+    $hasFlows = @(Get-WtFlows).Count -gt 0
+    $key = ConvertTo-Json -Compress -Depth 10 -InputObject @($script:info, $script:flow, @(Get-WtFlowRoots), $hasFlows, [bool]$script:run, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
+    if ($Reuse -and $script:centerKey -ceq $key) {
+        foreach ($entry in $script:fields) { Set-WtFlowFieldError $entry '' }
+        Update-WtFlowCommands; Update-WtFlowHelp; return
+    }
     $u.Form.Children.Clear()
     $script:fields = @()
     $hasRoots = (Get-WtFlowRoots).Count -gt 0
     if (-not $script:info) {
         $u.Title.Text = '업무'
-        $u.Sub.Text = if ($hasRoots -or (Get-WtFlows).Count) { '왼쪽에서 스크립트나 저장한 업무를 고르세요.' } else { '스크립트 폴더를 더하면 그 안의 스크립트를 폼으로 실행합니다.' }
+        $u.Sub.Text = if ($hasRoots -or $hasFlows) { '왼쪽에서 스크립트나 저장한 업무를 고르세요.' } else { '스크립트 폴더를 더하면 그 안의 스크립트를 폼으로 실행합니다.' }
         Set-WtResource $u.Sub 'Foreground' 'B.SubText'
         $u.Title.ToolTip = $null
         $u.Empty.Visibility = if ($hasRoots -or $script:run) { 'Collapsed' } else { 'Visible' }
@@ -8495,6 +8673,7 @@ function Update-WtFlowCenter {
         $u.OutArea.Visibility = $keep
         Update-WtFlowCommands
         Update-WtFlowHelp
+        $script:centerKey = $key
         return
     }
     $u.Empty.Visibility = 'Collapsed'
@@ -8548,6 +8727,7 @@ function Update-WtFlowCenter {
     $u.Repick.Visibility = if ($script:flow -and -not (Test-Path -LiteralPath $info.Path -PathType Leaf)) { 'Visible' } else { 'Collapsed' }
     Update-WtFlowCommands
     Update-WtFlowHelp
+    $script:centerKey = $key
 }
 
 # 칸 하나: 라벨(필수) · 설명 · 입력 · 오류
@@ -8967,8 +9147,14 @@ function Update-WtFlowHelp {
     $box.Visibility = if ($show) { 'Visible' } else { 'Collapsed' }
     $u.HelpOpen.Visibility = if ($show) { 'Collapsed' } else { 'Visible' }
     $panel = $u.HelpPanel
+    if (-not $show) { $panel.Children.Clear(); $script:helpKey = $null; $script:helpList = $null; return }
+    $key = ConvertTo-Json -Compress -Depth 10 -InputObject @((Get-WtStoreStamp 'workflow-runs'), $script:info, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
+    if ($script:helpKey -ceq $key) {
+        if ($script:helpList) { $script:helpList.SelectedItem = $null }
+        return
+    }
     $panel.Children.Clear()
-    if (-not $show) { return }
+    $script:helpKey = $null; $script:helpList = $null
     $info = $script:info
     if (-not $info) {
         $t = New-WtText '스크립트를 고르면 그 스크립트의 도움말과 최근 실행 기록이 여기에 보입니다.' 'T.Sub'
@@ -9004,7 +9190,7 @@ function Update-WtFlowHelp {
     $head.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)
     [void](Add-WtChild $panel $head)
     $runs = @(Get-WtFlowRuns | Where-Object { -not $info -or $_.script -eq $info.Path } | Select-Object -First 10)
-    if (-not $runs.Count) { [void](Add-WtChild $panel (New-WtText '아직 실행 기록이 없습니다.' 'T.Sub')); return }
+    if (-not $runs.Count) { [void](Add-WtChild $panel (New-WtText '아직 실행 기록이 없습니다.' 'T.Sub')); $script:helpKey = $key; return }
     $list = [System.Windows.Controls.ListBox]::new()
     Set-WtStyle $list 'List'
     [System.Windows.Controls.ScrollViewer]::SetVerticalScrollBarVisibility($list, 'Disabled')
@@ -9025,6 +9211,7 @@ function Update-WtFlowHelp {
     }
     $list.Add_SelectionChanged({ param($s, $e) if ($s.SelectedItem) { Show-WtFlowRecordTail $s.SelectedItem.Tag } })
     [void](Add-WtChild $panel $list)
+    $script:helpList = $list; $script:helpKey = $key
 }
 
 # 가운데 · 양옆 패널이 놓일 폭이 세 칸에 모자라는지 (아직 배치 전이라 폭이 0이면 모자라지 않은 것으로 본다)
@@ -9072,6 +9259,8 @@ function Show-WtFlowRecordTail($Record) {
 # ---- 화면 만들기 --------------------------------------------------------------------------------
 
 function New-WtFlowsView {
+    $script:treeKey = $null; $script:centerKey = $null
+    $script:helpKey = $null; $script:helpList = $null
     if ($script:timer) { $script:timer.Stop() }
     $script:ui = @{}
     $page = New-WtPage -Fill

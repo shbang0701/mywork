@@ -110,8 +110,13 @@ function Get-WtMemoById([string]$Id) { $script:items | Where-Object { $_.id -eq 
 function New-WtMemoListItem($Memo) {
     $cached = $script:rowCache[$Memo.id]
     if ($cached -and $cached.Day -eq [datetime]::Today -and $cached.Body -ceq $Memo.body -and $cached.Title -ceq $Memo.title -and $cached.Updated -eq $Memo.updated) { return $cached.Row }
-    $snippet = if ($cached -and $cached.Body -ceq $Memo.body) { $cached.Row.Snippet } else { Get-WtMarkdownSnippet ([string]$Memo.body) }
-    $row = [pscustomobject]@{ Id = $Memo.id; Title = $Memo.title; Stamp = Format-WtMemoTime $Memo.updated; Snippet = $snippet }
+    $snippet = if ($cached -and $cached.Body -ceq $Memo.body) { $cached.Row.SnippetValue } else { $null }
+    $row = [pscustomobject]@{ Id = $Memo.id; Title = $Memo.title; Stamp = Format-WtMemoTime $Memo.updated; SnippetSource = [string]$Memo.body; SnippetValue = $snippet }
+    # 가상 목록에서 보이는 행이 값을 읽을 때만 요약한다. 지역 변수는 캡처하지 않고 행 자체에 둔다.
+    $row | Add-Member -MemberType ScriptProperty -Name Snippet -Value {
+        if ($null -eq $this.SnippetValue) { $this.SnippetValue = Get-WtMarkdownSnippet $this.SnippetSource }
+        $this.SnippetValue
+    }
     $script:rowCache[$Memo.id] = @{ Body = $Memo.body; Title = $Memo.title; Updated = $Memo.updated; Day = [datetime]::Today; Row = $row }
     $row
 }
@@ -174,6 +179,9 @@ function Switch-WtMemoMode {
 # 저장 상태 표시: saved · dirty · error · ''(숨김)
 function Set-WtMemoStatus([string]$State, [string]$Detail = '') {
     $s = $script:ui.Status
+    $stamp = if ($State -eq 'saved') { [string](Get-WtMemoById $script:currentId).updated } else { '' }
+    $key = @($State, $Detail, $stamp) -join "`n"
+    if ($s.Tag -ceq $key) { return }
     switch ($State) {
         'saved' {
             $m = Get-WtMemoById $script:currentId
@@ -194,6 +202,7 @@ function Set-WtMemoStatus([string]$State, [string]$Detail = '') {
         }
         default { $s.Visibility = 'Collapsed' }
     }
+    $s.Tag = $key
 }
 
 # 고친 내용이 있으면 바로 저장한다. 저장 시각 · 목록도 고친다
@@ -323,15 +332,21 @@ function Update-WtMemoList([switch]$KeepCurrent) {
     }
     $script:listUpdating = $true
     try {
-        $list.ItemsSource = @(foreach ($m in $shown) { New-WtMemoListItem $m })
+        $rows = @(foreach ($m in $shown) { New-WtMemoListItem $m })
+        $same = $list.Items.Count -eq $rows.Count
+        for ($i = 0; $same -and $i -lt $rows.Count; $i++) { $same = [object]::ReferenceEquals($list.Items[$i], $rows[$i]) }
+        if (-not $same) { $list.ItemsSource = $rows }
         $list.SelectedItem = $list.Items | Where-Object Id -eq $keep | Select-Object -First 1
         if (-not $list.SelectedItem -and $list.Items.Count) { $list.SelectedIndex = 0 }
     } finally { $script:listUpdating = $false }
     $selectedId = if ($list.SelectedItem) { $list.SelectedItem.Id } else { '' }
     if ($selectedId -ne $script:currentId) { Show-WtMemo $selectedId }
+    $script:listQuery = [string]$script:ui.Search.Text
 }
 
 function New-WtMemoView {
+    $script:viewStamp = $null
+    $script:listQuery = $null
     $script:ui = @{}
     if (-not $script:saveTimer) {
         $script:saveTimer = [System.Windows.Threading.DispatcherTimer]::new()
@@ -492,20 +507,34 @@ function New-WtMemoView {
 
 function Update-WtMemoView {
     if (-not (Save-WtMemoNow)) { return }
-    $script:items = @(Get-WtMemoSorted (Get-WtMemoItems))
-    $present = @{}
-    foreach ($item in $script:items) { $present[$item.id] = $true }
-    foreach ($id in @($script:rowCache.Keys)) { if (-not $present.ContainsKey($id)) { $script:rowCache.Remove($id) } }
+    $stamp = @((Get-WtStoreStamp 'memo'), [datetime]::Today.Ticks) -join '|'
+    if ($script:viewStamp -ceq $stamp -and $script:listQuery -ceq [string]$script:ui.Search.Text) {
+        # 원래 재진입처럼 첫 항목을 다시 고른다. 바뀌지 않은 전체 행을 다시 순회하지 않는다.
+        $script:currentId = $null
+        $id = if ($script:ui.List.Items.Count) { [string]$script:ui.List.Items[0].Id } else { '' }
+        Show-WtMemo $id
+        return
+    }
+    if ($script:viewStamp -cne $stamp) {
+        $script:items = @(Get-WtMemoSorted (Get-WtMemoItems))
+        $present = @{}
+        foreach ($item in $script:items) { $present[$item.id] = $true }
+        foreach ($id in @($script:rowCache.Keys)) { if (-not $present.ContainsKey($id)) { $script:rowCache.Remove($id) } }
+        $script:viewStamp = $stamp
+    }
     $script:currentId = $null
     Update-WtMemoList
 }
 
 function New-WtMemoHomeCard {
+    $key = @((Get-WtStoreStamp 'memo'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    if ($script:homeKey -ceq $key -and $script:homeCard -and -not $script:homeCard.Parent) { return $script:homeCard }
     $items = @(Get-WtMemoSorted (Get-WtMemoItems))
+    $recent = @($items | Select-Object -First 3)
     $card = New-WtCard
     $col = New-WtStack Vertical
     [void](Add-WtChild $col (New-WtCardHeader '최근 메모' '' '메모 열기' 'memo'))
-    foreach ($m in ($items | Select-Object -First 3)) {
+    foreach ($m in $recent) {
         $t = New-WtStack Vertical 2
         $name = New-WtText $m.title 'T.Strong'
         $name.TextTrimming = 'CharacterEllipsis'
@@ -520,6 +549,7 @@ function New-WtMemoHomeCard {
     }
     if (-not $items.Count) { [void](Add-WtChild $col (New-WtText '메모가 없습니다.' 'T.Sub')) }
     $card.Child = $col
+    $script:homeCard = $card; $script:homeKey = $key
     $card
 }
 

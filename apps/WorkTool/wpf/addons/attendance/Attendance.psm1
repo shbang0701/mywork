@@ -124,6 +124,7 @@ function New-WtAttRow($Item) {
 }
 
 function New-WtAttendanceView {
+    $script:viewKey = $null
     $page = New-WtPage
     $nav = New-WtStack Horizontal 6
     $prev = New-WtButton '' -Icon 0xE76B -ToolTip '이전 달'
@@ -154,9 +155,11 @@ function New-WtAttendanceView {
 }
 
 function Update-WtAttendanceView {
+    $key = @((Get-WtStoreStamp 'attendance'), $script:month.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    if ($script:viewKey -ceq $key) { return }
+    $items = Get-WtAttendanceItems
     $script:monthLabel.Text = Format-WtDate $script:month 'yyyy년 M월'
     $script:body.Children.Clear()
-    $items = Get-WtAttendanceItems
     [void](Add-WtChild $script:body (New-WtAttTiles (Get-WtAttendanceSummary $script:month $items) 4))
     $card = New-WtCard
     $col = New-WtStack Vertical
@@ -167,9 +170,12 @@ function Update-WtAttendanceView {
     if (-not $rows.Count) { [void](Add-WtChild $col (New-WtText '이 달에는 기록이 없습니다.' 'T.Sub')) }
     $card.Child = $col
     [void](Add-WtChild $script:body $card)
+    $script:viewKey = $key
 }
 
 function New-WtAttendanceHomeCard {
+    $key = @((Get-WtStoreStamp 'attendance'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
+    if ($script:homeKey -ceq $key -and $script:homeCard -and -not $script:homeCard.Parent) { return $script:homeCard }
     $items = Get-WtAttendanceItems
     $month = [datetime]::new([datetime]::Today.Year, [datetime]::Today.Month, 1)
     $card = New-WtCard
@@ -181,6 +187,7 @@ function New-WtAttendanceHomeCard {
     [void](Add-WtChild $col $status)
     [void](Add-WtChild $col (New-WtAttTiles (Get-WtAttendanceSummary $month $items) 2))
     $card.Child = $col
+    $script:homeCard = $card; $script:homeKey = $key
     $card
 }
 
