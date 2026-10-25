@@ -8,6 +8,7 @@
 # 화면마다 다른 것은 매개변수 · 등록으로 받는다
 # - 링크 · [[위키 링크]] · #태그를 눌렀을 때: New-WtMarkdownView -OnLink { param($link) ...; $true }
 #   $link = @{ Kind = 'url' | 'file' | 'wiki' | 'tag'; Target; Text }. $true를 돌려주면 처리한 것, 아니면 기본 동작(Invoke-WtMarkdownLink).
+# - 할 일 체크 표시를 눌렀을 때: New-WtMarkdownView -OnTask { param($line) ... } ($line = 그 항목의 원문 줄 번호, 1부터)
 # - 상대 경로(그림 · 파일 링크)의 기준 폴더: -BaseDir (메모처럼 파일이 아닌 글은 비워 둔다)
 # - 코드 블록을 언어별로 따로 그리기: Register-WtMarkdownCodeRenderer (예: Mermaid.psm1이 mermaid를 등록)
 # - 콜아웃 종류 더하기: Register-WtMarkdownCallout
@@ -26,6 +27,19 @@ $script:openable = @('.md', '.txt', '.log', '.csv', '.tsv', '.json', '.xml', '.y
     '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg',
     '.xlsx', '.xls', '.xlsm', '.docx', '.doc', '.pptx', '.ppt', '.vsdx', '.vsd', '.htm', '.html', '.zip')
 $script:imageExt = @('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.ico', '.webp')
+
+# 파일 링크를 열기 전 경로 확인 (있는지 · 폴더인지). 화면 밖(.NET 작업)에서 하고 타이머로 결과를 받는다
+$script:pathJobs = [System.Collections.Generic.List[object]]::new()
+$script:pathTimer = $null
+$script:pathTimeoutMs = 5000   # 이 시간 안에 답이 없으면 기다리지 않고 알린다
+$script:pathMaxJobs = 8        # 답이 없는 확인이 이만큼 남아 있으면 새로 시작하지 않는다
+$script:pathCursor = $null     # 확인 중 커서를 바꾸기 전 값 (@{ Old })
+# 확인 작업 만들기: 경로 → 끝나면 파일 속성(없으면 -1)을 주는 Task. 검사가 느린 경로를 흉내 내려고 바꿔 끼운다
+$script:pathProbe = {
+    param($path)
+    $info = [System.IO.FileInfo]::new($path)
+    [System.Threading.Tasks.Task[System.IO.FileAttributes]]::Run([Func[System.IO.FileAttributes]]$info.get_Attributes)
+}
 
 # ---- 등록 -------------------------------------------------------------------------------------
 
@@ -507,7 +521,7 @@ function Add-WtMdPlain($Out, [string]$Text) {
 
 function Get-WtMdLinkKind([string]$Url) {
     if ($Url.StartsWith('#')) { return 'anchor' }
-    if ($Url -match '^[A-Za-z]:[\\/]|^\\\\|^file:') { return 'file' }
+    if ($Url -match '^[A-Za-z]:[\\/]|^\\\\|^//|^file:') { return 'file' }   # //서버/공유: 메모 편집기가 UNC를 슬래시로 쓴다
     if ($Url -match '^[A-Za-z][A-Za-z0-9+.-]+:') { return 'url' }
     if ($Url -match '^www\.') { return 'url' }
     'file'
@@ -597,18 +611,19 @@ function Get-WtMarkdownSnippet([AllowEmptyString()][string]$Text, [int]$MaxLengt
 마크다운 보기 요소(읽기 전용 RichTextBox)를 만든다. 글은 Set-WtMarkdownText로 넣는다.
   -Scroll            스스로 스크롤한다 (남는 높이를 채우는 자리). 없으면 글 높이만큼 커진다 (바깥이 스크롤하는 자리)
   -OnLink            { param($link) ... $true } 링크 · 위키 링크 · 태그를 눌렀을 때. 이게 있으면 #태그도 누를 수 있게 그린다
+  -OnTask            { param($line) ... } 할 일 체크 표시를 눌렀을 때 (그 항목의 원문 줄 번호). 없으면 체크 표시는 누를 수 없다
   -BaseDir           상대 경로의 기준 폴더
   -StrictLineBreaks  줄바꿈 한 번은 이어 붙인다 (표준 마크다운). 없으면 Obsidian 기본값처럼 줄을 바꾼다
 #>
 function New-WtMarkdownView {
-    param([switch]$Scroll, [scriptblock]$OnLink, [string]$BaseDir = '', [switch]$StrictLineBreaks)
+    param([switch]$Scroll, [scriptblock]$OnLink, [scriptblock]$OnTask, [string]$BaseDir = '', [switch]$StrictLineBreaks)
     $v = [System.Windows.Controls.RichTextBox]::new()
     Set-WtMdStyle $v 'Md.View'
     $v.IsReadOnly = $true
     $v.IsDocumentEnabled = $true
     $v.VerticalScrollBarVisibility = if ($Scroll) { 'Auto' } else { 'Disabled' }
     $v.Tag = @{
-        Text = ''; BaseDir = $BaseDir; OnLink = $OnLink; Strict = [bool]$StrictLineBreaks
+        Text = ''; BaseDir = $BaseDir; OnLink = $OnLink; OnTask = $OnTask; Strict = [bool]$StrictLineBreaks
         Anchors = @{}; Remeasure = $false; Error = $null; ListDepth = 0
     }
     for ($i = $script:views.Count - 1; $i -ge 0; $i--) { if (-not $script:views[$i].IsAlive) { $script:views.RemoveAt($i) } }
@@ -832,8 +847,16 @@ function New-WtMdInline($X, $St) {
         'link' {
             if ($X.Kind -eq 'anchor' -and $X.Target -match '^\^') { return New-WtMdSpan $X.Inl $St }   # 블록 참조는 아직 없음
             $h = New-WtMdHyperlink @{ Kind = $X.Kind; Target = $X.Target; Text = (Get-WtMdInlineText $X.Inl) } $St
+            $where = $X.Target
+            if ($X.Kind -eq 'file') {
+                # 로컬 파일 · 폴더: 앞에 아이콘, 툴팁은 Windows 모양 전체 경로. 폴더인지는 디스크를 보지 않고 이름으로 추측한다
+                $where = Resolve-WtMdPath $X.Target $St.BaseDir
+                if (-not $where) { $where = $X.Target.Replace('/', '\') }
+                $h.Inlines.Add((New-WtMdIconRun $(if (Test-WtMdFolderLike $where) { 0xE8B7 } else { 0xE8A5 })))
+                $h.Inlines.Add((New-WtMdRun ' '))
+            }
             Add-WtMdInlines $h.Inlines $X.Inl $St
-            $tip = if ($X.Title) { "$($X.Title)`n$($X.Target)" } else { $X.Target }
+            $tip = if ($X.Title) { "$($X.Title)`n$where" } else { $where }
             if ($X.Kind -eq 'wiki') { $tip = "문서: $($X.Target)" }
             $h.ToolTip = $tip
             return $h
@@ -888,6 +911,19 @@ function New-WtMdTaskBox([bool]$Checked) {
     $r
 }
 
+# 할 일 체크 표시를 누를 수 있게 감싼다 (-OnTask가 있을 때만). Run보다 밑줄 없는 Hyperlink가 RichTextBox 안에서 확실히 눌린다
+function New-WtMdTaskLink($Box, [int]$Line, $St) {
+    $h = [System.Windows.Documents.Hyperlink]::new($Box)
+    Set-WtMdStyle $h 'Md.TaskLink'
+    $h.ToolTip = '완료 표시 / 해제'
+    $h.Tag = @{ Line = $Line; State = $St }
+    $h.Add_Click({
+            param($s, $e)
+            try { [void](& $s.Tag.State.OnTask $s.Tag.Line) } catch { Show-WtError $_ '할 일 표시' }
+        })
+    $h
+}
+
 function New-WtMdHyperlink($Link, $St) {
     $h = [System.Windows.Documents.Hyperlink]::new()
     Set-WtMdStyle $h 'Md.Link'
@@ -904,6 +940,7 @@ function New-WtMdHyperlink($Link, $St) {
 그 밖에는 -OnLink를 먼저 부르고, 처리하지 않았으면 기본 동작:
   url  http · https · mailto만 기본 브라우저 · 메일 프로그램으로 연다
   file 폴더는 탐색기로, 문서 · 그림은 기본 프로그램으로 연다. 실행 파일 · 스크립트는 열지 않고 탐색기에서 그 파일을 보여 준다
+       있는지 · 폴더인지는 화면 밖에서 확인한다 (Start-WtMdPathCheck). 응답 없는 공유 폴더에서도 화면이 멈추지 않는다
   wiki 연결할 곳을 모른다고 알린다 (메모 · 문서 화면이 -OnLink로 처리한다)
 #>
 function Invoke-WtMarkdownLink($St, $Link) {
@@ -923,10 +960,8 @@ function Invoke-WtMarkdownLink($St, $Link) {
         }
         'file' {
             $path = Resolve-WtMdPath $Link.Target $St.BaseDir
-            if (-not $path -or -not (Test-Path -LiteralPath $path)) { Show-WtMessage "파일을 찾지 못했습니다.`n$($Link.Target)"; return }
-            if (Test-Path -LiteralPath $path -PathType Container) { Invoke-Item -LiteralPath $path; return }
-            if ($script:openable -contains [System.IO.Path]::GetExtension($path).ToLowerInvariant()) { Invoke-Item -LiteralPath $path; return }
-            Start-Process explorer.exe -ArgumentList "/select,`"$path`""
+            if (-not $path) { Show-WtMessage "파일을 찾지 못했습니다.`n$($Link.Target)"; return }
+            Start-WtMdPathCheck $path $Link.Target
         }
         'wiki' { Show-WtMessage "연결된 문서를 찾지 못했습니다: $($Link.Target)" }
     }
@@ -945,6 +980,94 @@ function Resolve-WtMdPath([string]$Target, [string]$BaseDir) {
         if ($BaseDir) { return [System.IO.Path]::GetFullPath((Join-Path $BaseDir $t)) }
     } catch { }
     $null
+}
+
+# 이름만 보고 폴더인지 추측한다 (그리는 중에 디스크 · 네트워크를 건드리지 않는다).
+# 끝이 \ · /, 드라이브 루트(C:), UNC 서버 · 공유 루트(\\서버\공유), 마지막 이름에 확장자가 없으면 폴더
+function Test-WtMdFolderLike([string]$Path) {
+    $p = $Path.Replace('/', '\')
+    if (-not $p) { return $false }
+    if ($p.EndsWith('\') -or $p -match '^[A-Za-z]:$' -or $p -match '^\\\\[^\\]+(\\[^\\]+)?$') { return $true }
+    -not [System.IO.Path]::GetExtension($p)
+}
+
+<#
+파일 링크의 경로(있는지 · 폴더인지)를 화면 밖에서 확인하고, 끝나면 Invoke-WtMdPathResult로 연다.
+응답 없는 공유 폴더 · 끊긴 네트워크 드라이브에서도 화면이 멈추지 않는다. 로컬 드라이브도 끊긴 네트워크 드라이브일 수 있어서 모두 이 길로 간다.
+- 실행 공간 대신 .NET 작업(Task)으로 확인한다. 실행 공간은 응답 없는 OS 호출 중이면 Close · Dispose를 해도 앱 프로세스가 끝나지 않는다.
+  작업은 PowerShell 없이 스레드 풀(백그라운드 스레드)에서 돌아서, 끝나지 않은 채 남아도 프로세스를 붙잡지 않는다.
+- 확인하는 동안 커서는 AppStarting(화살표 + 모래시계). 기다리는 동안에도 앱은 쓸 수 있다.
+- 같은 경로를 확인 중에 또 누르면 겹쳐 시작하지 않는다. $script:pathTimeoutMs 안에 답이 없으면 기다리지 않고 알린다.
+#>
+function Start-WtMdPathCheck([string]$Path, [string]$Target) {
+    $key = $Path.ToLowerInvariant()
+    $same = @($script:pathJobs | Where-Object { $_.Key -eq $key })
+    if (@($same | Where-Object { -not $_.TimedOut }).Count) { return }
+    # 앞서 시간이 지난 확인이 아직 답을 기다리면, 또 기다리지 않고 바로 알린다
+    if ($same.Count) { Show-WtMessage (Get-WtMdPathTimeoutText $Path) 'WorkTool' 'Warning'; return }
+    if ($script:pathJobs.Count -ge $script:pathMaxJobs) {
+        Show-WtMessage "응답하지 않는 경로가 많아 지금은 열지 않습니다. 네트워크 연결을 확인하고 잠시 뒤 다시 누르세요.`n$Path" 'WorkTool' 'Warning'
+        return
+    }
+    try { $task = & $script:pathProbe $Path | Select-Object -Last 1 }
+    catch { Show-WtMessage "경로를 확인하지 못했습니다. 경로가 맞는지 확인하세요.`n$Path`n$($_.Exception.Message)" 'WorkTool' 'Warning'; return }
+    $script:pathJobs.Add(@{ Key = $key; Path = $Path; Target = $Target; Task = $task; Watch = [System.Diagnostics.Stopwatch]::StartNew(); TimedOut = $false })
+    Update-WtMdPathCursor
+    if (-not $script:pathTimer) { $script:pathTimer = New-WtPollTimer { Complete-WtMdPathChecks } }
+    $script:pathTimer.Start()
+}
+
+function Get-WtMdPathTimeoutText([string]$Path) {
+    "경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.`n$Path"
+}
+
+# 타이머가 부른다: 끝난 확인은 목록에서 빼고 열고, 시간이 지난 확인은 알린다 (작업은 끝날 때까지 목록에 남아 겹쳐 시작하지 않게 한다)
+function Complete-WtMdPathChecks {
+    $done = [System.Collections.Generic.List[object]]::new()
+    foreach ($job in @($script:pathJobs.ToArray())) {
+        if ($job.Task.IsCompleted) {
+            [void]$script:pathJobs.Remove($job)
+            if (-not $job.TimedOut) { $done.Add($job) }   # 시간이 지난 확인은 이미 알렸으므로 결과를 버린다
+        } elseif (-not $job.TimedOut -and $job.Watch.ElapsedMilliseconds -ge $script:pathTimeoutMs) {
+            $job.TimedOut = $true
+            $done.Add($job)
+        }
+    }
+    Update-WtMdPathCursor
+    if (-not $script:pathJobs.Count -and $script:pathTimer) { $script:pathTimer.Stop() }
+    # 알림 창이 떠 있는 동안에도 타이머가 돌 수 있으므로, 목록을 다 정리한 뒤에 연다
+    foreach ($job in $done) {
+        try { Invoke-WtMdPathResult $job } catch { Show-WtError $_ '링크 열기' }
+    }
+}
+
+# 확인 결과대로 연다: 폴더 → 탐색기, 열 수 있는 종류 → 기본 프로그램, 그 밖 → 탐색기에서 선택, 없음 → 알림
+function Invoke-WtMdPathResult($Job) {
+    $path = $Job.Path
+    if ($Job.TimedOut) { Show-WtMessage (Get-WtMdPathTimeoutText $path) 'WorkTool' 'Warning'; return }
+    if ($Job.Task.IsFaulted -or $Job.Task.IsCanceled) {
+        $why = if ($Job.Task.Exception) { $Job.Task.Exception.GetBaseException().Message } else { '' }
+        Show-WtMessage "경로를 확인하지 못했습니다. 접근 권한과 경로를 확인하세요.`n$path`n$why" 'WorkTool' 'Warning'
+        return
+    }
+    $attr = [int]$Job.Task.Result
+    if ($attr -eq -1) { Show-WtMessage "파일을 찾지 못했습니다.`n$($Job.Target)"; return }
+    if ($attr -band [int][System.IO.FileAttributes]::Directory) { Invoke-Item -LiteralPath $path; return }
+    if ($script:openable -contains [System.IO.Path]::GetExtension($path).ToLowerInvariant()) { Invoke-Item -LiteralPath $path; return }
+    Start-Process explorer.exe -ArgumentList "/select,`"$path`""
+}
+
+# 확인 중이면 커서를 AppStarting으로, 기다리는 확인이 없으면 원래대로
+function Update-WtMdPathCursor {
+    $waiting = @($script:pathJobs | Where-Object { -not $_.TimedOut }).Count -gt 0
+    $busy = [System.Windows.Input.Cursors]::AppStarting
+    if ($waiting -and -not $script:pathCursor) {
+        $script:pathCursor = @{ Old = [System.Windows.Input.Mouse]::OverrideCursor }
+        [System.Windows.Input.Mouse]::OverrideCursor = $busy
+    } elseif (-not $waiting -and $script:pathCursor) {
+        if ([object]::ReferenceEquals([System.Windows.Input.Mouse]::OverrideCursor, $busy)) { [System.Windows.Input.Mouse]::OverrideCursor = $script:pathCursor.Old }
+        $script:pathCursor = $null
+    }
 }
 
 # 로컬 그림 파일이면 Image 요소, 아니면 $null (웹 주소의 그림은 내려받지 않는다)
@@ -1000,7 +1123,9 @@ function New-WtMdList($B, $St, [bool]$Nested) {
                     Set-WtResource $text 'Foreground' 'B.SubText'
                     $text.TextDecorations = [System.Windows.TextDecorations]::Strikethrough
                 }
-                $p.Inlines.Add((New-WtMdTaskBox $it.Task))
+                $box = New-WtMdTaskBox $it.Task
+                if ($St.OnTask) { $box = New-WtMdTaskLink $box $it.Line $St }
+                $p.Inlines.Add($box)
                 $p.Inlines.Add((New-WtMdRun '  '))
                 $p.Inlines.Add($text)
             } elseif ($hasTask -and -not $B.Ordered -and $p -is [System.Windows.Documents.Paragraph]) {

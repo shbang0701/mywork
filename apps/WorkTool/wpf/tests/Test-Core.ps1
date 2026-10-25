@@ -239,6 +239,15 @@ Get-Item C:\
     foreach ($limit in 0,1,5,12,300) { if ((Get-WtMarkdownSnippet $longSnippet $limit) -cne $wholeSnippet.Substring(0, [Math]::Min($limit, $wholeSnippet.Length))) { $prefixOk = $false } }
     Assert-Wt '마크다운: 긴 글 요약도 속성·주석·줄 구분을 처리한 접두사와 같다' $prefixOk
     Assert-Wt '마크다운: 빈 글' ((ConvertTo-WtMarkdownModel '').Blocks.Count -eq 0 -and (Get-WtMarkdownSnippet '') -eq '')
+    # 파일 링크: 메모 편집기는 경로를 <C:/a b/c.txt> · <//서버/공유/x>처럼 슬래시로 쓴다. 역슬래시 경로 · file: 주소도 그대로 된다
+    $mdModule = Get-Module Markdown
+    $fileLinks = @((ConvertTo-WtMarkdownModel '[a](<C:/a b/c.txt>) [b](<//srv/share/x>) [c](C:\x\y.log) [d](file:///C:/a%20b/c.txt) [e](file://srv/share/f.md)').Blocks[0].Inl | Where-Object T -eq 'link')
+    $resolved = @($fileLinks | ForEach-Object { & $mdModule { param($t) Resolve-WtMdPath $t '' } $_.Target }) -join '|'
+    Assert-Wt '마크다운: 파일 링크 종류 · 경로 풀기 (슬래시 · UNC · 역슬래시 · file:)' ((@($fileLinks | ForEach-Object Kind) -join ',') -eq 'file,file,file,file,file' -and
+        $resolved -eq 'C:\a b\c.txt|\\srv\share\x|C:\x\y.log|C:\a b\c.txt|\\srv\share\f.md') $resolved
+    $guess = @('C:\a\', 'D:/x/', 'C:', 'C:\', '\\srv\share', '//srv/share', '\\srv', 'C:\a\b', '\\srv\share\x', 'C:\a\b.txt', '\\srv\share\x.xlsx', 'C:\a.b\c.md') |
+        ForEach-Object { if (& $mdModule { param($p) Test-WtMdFolderLike $p } $_) { 'D' } else { 'F' } }
+    Assert-Wt '마크다운: 폴더 추측 (끝 \ · 드라이브 루트 · 공유 루트 · 확장자 없음)' (($guess -join '') -eq 'DDDDDDDDDFFF') ($guess -join '')
 
     # ---- 코드 색칠 ----
     $tok = Get-WtCodeTokens 'Get-ChildItem -Path $env:TEMP | Where-Object { $_.Length -gt 1KB } # 주석' 'powershell'
@@ -311,6 +320,113 @@ pie
         $figs = @($view.Document.Blocks | Where-Object { $_ -is [System.Windows.Documents.BlockUIContainer] -and $_.Child -is [System.Windows.Controls.Border] })
         Assert-Wt 'WPF: Mermaid 2개는 그림, 모르는 종류는 코드 블록' ($figs.Count -eq 2 -and $view.Tag.Remeasure)
         Assert-Wt 'WPF: 제목 · 각주 자리' ($view.Tag.Anchors.ContainsKey('제목굵게') -and $view.Tag.Anchors.ContainsKey('fn1'))
+
+        # 파일 링크 아이콘: 폴더처럼 보이면 폴더, 아니면 문서. 툴팁은 Windows 모양 전체 경로. 웹 · 위키 링크에는 붙이지 않는다
+        $linkView = New-WtMarkdownView
+        Set-WtMarkdownText $linkView '[문서](<C:/a b/c.txt>) [공유](<//srv/share/x>) [웹](https://example.com) [[위키]]'
+        $hl = @($linkView.Document.Blocks.FirstBlock.Inlines | Where-Object { $_ -is [System.Windows.Documents.Hyperlink] })
+        $firstText = @($hl | ForEach-Object { $_.Inlines.FirstInline.Text })
+        Assert-Wt 'WPF: 파일 링크 앞 아이콘 (문서 · 폴더) · 툴팁 경로, 웹 · 위키 링크는 아이콘 없음' ($hl.Count -eq 4 -and
+            $firstText[0] -eq [string][char]0xE8A5 -and $firstText[1] -eq [string][char]0xE8B7 -and $firstText[2] -eq '웹' -and $firstText[3] -eq '위키' -and
+            $hl[0].ToolTip -eq 'C:\a b\c.txt' -and $hl[1].ToolTip -eq '\\srv\share\x') ($firstText -join ',')
+
+        # 할 일 누르기: -OnTask가 있으면 체크 표시를 Hyperlink로 감싸고, 누르면 그 항목의 원문 줄 번호로 부른다
+        $global:taskLines = [System.Collections.Generic.List[int]]::new()
+        $taskView = New-WtMarkdownView -OnTask { param($line) $global:taskLines.Add($line) }
+        Set-WtMarkdownText $taskView "# 할 일`n`n- [ ] 첫째`n- [x] 둘째`n  - [ ] 안쪽`n- 그냥 항목"
+        $taskLinks = [System.Collections.Generic.List[object]]::new()
+        $walkDoc = {
+            param($blocks)
+            foreach ($b in $blocks) {
+                if ($b -is [System.Windows.Documents.List]) { foreach ($li in $b.ListItems) { & $walkDoc $li.Blocks } }
+                elseif ($b -is [System.Windows.Documents.Section]) { & $walkDoc $b.Blocks }
+                elseif ($b -is [System.Windows.Documents.Paragraph]) { foreach ($i in $b.Inlines) { if ($i -is [System.Windows.Documents.Hyperlink] -and $i.ToolTip -eq '완료 표시 / 해제') { $taskLinks.Add($i) } } }
+            }
+        }
+        & $walkDoc $taskView.Document.Blocks
+        foreach ($h in $taskLinks) { $h.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Documents.Hyperlink]::ClickEvent)) }
+        Assert-Wt 'WPF: 할 일 체크 표시를 누르면 원문 줄 번호로 부른다 (손 모양 커서)' (($global:taskLines -join ',') -eq '3,4,5' -and $taskLinks[0].Cursor -eq [System.Windows.Input.Cursors]::Hand) ($global:taskLines -join ',')
+        $plainTask = New-WtMarkdownView
+        Set-WtMarkdownText $plainTask '- [ ] 하나'
+        $firstInline = $plainTask.Document.Blocks.FirstBlock.ListItems.FirstListItem.Blocks.FirstBlock.Inlines.FirstInline
+        Assert-Wt 'WPF: -OnTask가 없으면 체크 표시는 누를 수 없다' ($firstInline -is [System.Windows.Documents.Run] -and $firstInline.Text -eq [string][char]0xE739)
+
+        # 파일 링크 열기: 있는지 · 폴더인지는 화면 밖 작업으로 확인한다. 느린 경로 · 시간 초과는 확인 작업을 바꿔 끼워 흉내 낸다
+        # 알림 · 열기 · 탐색기는 기록만 하고 실제로 열지 않는다
+        & $mdModule {
+            $script:testSaid = [System.Collections.Generic.List[string]]::new()
+            function script:Show-WtMessage { param($Text, $Title, $Icon) $script:testSaid.Add("msg:$(($Text -split "`n")[0])") }
+            function script:Invoke-Item { param($LiteralPath) $script:testSaid.Add("open:$LiteralPath") }
+            function script:Start-Process { param($FilePath, $ArgumentList) $script:testSaid.Add("select:$ArgumentList") }
+            $script:testSources = @{}
+            $script:testRealProbe = $script:pathProbe
+            $script:pathProbe = { param($path) $src = [System.Threading.Tasks.TaskCompletionSource[System.IO.FileAttributes]]::new(); $script:testSources[$path] = $src; $src.Task }
+        }
+        $fakeState = @{ BaseDir = ''; OnLink = $null; Anchors = @{} }
+        $openLink = { param($target) Invoke-WtMarkdownLink $fakeState @{ Kind = 'file'; Target = $target; Text = 'x' } }
+        try {
+            & $openLink 'C:/wt/a.txt'; & $openLink 'C:/wt/a.txt'
+            & $openLink 'C:/wt/dir'; & $openLink 'C:/wt/run.exe'; & $openLink 'C:/wt/none.txt'
+            $pending = & $mdModule { @{ Jobs = $script:pathJobs.Count; Probes = $script:testSources.Count; Timer = $script:pathTimer.IsEnabled } }
+            $waitCursor = [System.Windows.Input.Mouse]::OverrideCursor
+            & $mdModule {
+                $script:testSources['C:\wt\a.txt'].SetResult([System.IO.FileAttributes]::Archive)
+                $script:testSources['C:\wt\dir'].SetResult([System.IO.FileAttributes]::Directory)
+                $script:testSources['C:\wt\run.exe'].SetResult([System.IO.FileAttributes]::Archive)
+                $script:testSources['C:\wt\none.txt'].SetResult([Enum]::ToObject([System.IO.FileAttributes], -1))   # 없는 경로는 -1
+                Complete-WtMdPathChecks
+            }
+            $said = @(& $mdModule { $script:testSaid })
+            $after = & $mdModule { @{ Jobs = $script:pathJobs.Count; Timer = $script:pathTimer.IsEnabled } }
+            Assert-Wt 'WPF 파일 링크: 같은 링크는 겹쳐 확인하지 않고, 확인 중에는 AppStarting 커서' ($pending.Jobs -eq 4 -and $pending.Probes -eq 4 -and $pending.Timer -and
+                $waitCursor -eq [System.Windows.Input.Cursors]::AppStarting) "(작업 $($pending.Jobs) · 커서 $waitCursor)"
+            Assert-Wt 'WPF 파일 링크: 확인 결과대로 열기 (파일 · 폴더 · 실행 파일은 탐색기에서 선택 · 없음)' (($said -join '|') -eq 'open:C:\wt\a.txt|open:C:\wt\dir|select:/select,"C:\wt\run.exe"|msg:파일을 찾지 못했습니다.') ($said -join '|')
+            Assert-Wt 'WPF 파일 링크: 끝나면 작업 목록 · 타이머 · 커서를 정리한다' ($after.Jobs -eq 0 -and -not $after.Timer -and $null -eq [System.Windows.Input.Mouse]::OverrideCursor)
+
+            # 시간 초과: 기다리지 않고 알리고, 커서는 돌려놓는다. 답이 없는 동안 또 누르면 새로 확인하지 않고 바로 알린다
+            & $mdModule { $script:testSaid.Clear(); $script:pathTimeoutMs = 50 }
+            & $openLink '//srv/share/slow.xlsx'
+            Start-Sleep -Milliseconds 120
+            & $mdModule { Complete-WtMdPathChecks }
+            & $openLink '//srv/share/slow.xlsx'
+            $slow = & $mdModule { @{ Said = @($script:testSaid); Jobs = $script:pathJobs.Count; Probes = $script:testSources.Count; Timer = $script:pathTimer.IsEnabled } }
+            $slowCursor = [System.Windows.Input.Mouse]::OverrideCursor
+            & $mdModule { $script:testSources['\\srv\share\slow.xlsx'].SetResult([System.IO.FileAttributes]::Archive); Complete-WtMdPathChecks }
+            $late = & $mdModule { @{ Said = @($script:testSaid); Jobs = $script:pathJobs.Count; Timer = $script:pathTimer.IsEnabled } }
+            Assert-Wt 'WPF 파일 링크: 시간 초과면 알리고 커서를 돌려놓으며, 답을 기다리는 경로를 또 누르면 바로 알린다' (
+                ($slow.Said -join '|') -eq 'msg:경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.|msg:경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.' -and
+                $slow.Jobs -eq 1 -and $slow.Probes -eq 5 -and $slow.Timer -and $null -eq $slowCursor) ($slow.Said -join '|')
+            Assert-Wt 'WPF 파일 링크: 늦게 온 답은 열지 않고 작업만 정리한다' ($late.Said.Count -eq 2 -and $late.Jobs -eq 0 -and -not $late.Timer)
+
+            # 실제 확인 작업: 임시 폴더 · 없는 파일
+            & $mdModule { $script:testSaid.Clear(); $script:pathTimeoutMs = 5000; $script:pathProbe = $script:testRealProbe }
+            $realDir = (New-Item -ItemType Directory -Path (Join-Path $test.Root '링크 폴더')).FullName
+            & $openLink ($realDir.Replace('\', '/')); & $openLink (Join-Path $realDir '없는 파일.txt')
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            while ((& $mdModule { $script:pathJobs.Count }) -and $watch.Elapsed.TotalSeconds -lt 5) { & $mdModule { Complete-WtMdPathChecks }; Start-Sleep -Milliseconds 10 }
+            $real = @(& $mdModule { $script:testSaid })
+            Assert-Wt 'WPF 파일 링크: 실제 확인 작업 (폴더는 열고, 없는 파일은 알린다)' (($real | Sort-Object) -join '|' -eq "msg:파일을 찾지 못했습니다.|open:$realDir") ($real -join '|')
+        } finally {
+            & $mdModule {
+                $script:pathTimeoutMs = 5000; $script:pathProbe = $script:testRealProbe
+                foreach ($n in 'Show-WtMessage', 'Invoke-Item', 'Start-Process') { Remove-Item -LiteralPath "Function:\$n" -ErrorAction SilentlyContinue }
+            }
+        }
+
+        # 앱이 끝날 때 답이 없는 확인 작업이 남아도 프로세스를 붙잡지 않는다 (응답 없는 공유 폴더를 끝나지 않는 작업으로 흉내 냄)
+        $exitScript = Join-Path $test.Root 'path-exit.ps1'
+        Set-Content -LiteralPath $exitScript -Encoding utf8 -Value @"
+. '$(Join-Path $PSScriptRoot 'TestKit.ps1')'
+Import-WtTestCore
+[void](Test-WtTestWpf)
+& (Get-Module Markdown) { `$script:pathProbe = { param(`$p) `$ev = [System.Threading.ManualResetEvent]::new(`$false); [System.Threading.Tasks.Task[bool]]::Run([Func[bool]]`$ev.WaitOne) } }
+Invoke-WtMarkdownLink @{ BaseDir = '' } @{ Kind = 'file'; Target = '//srv/share/hang.txt'; Text = 'x' }
+if (-not (& (Get-Module Markdown) { `$script:pathJobs.Count })) { exit 2 }
+"@
+        $child = Start-Process (Join-Path $PSHOME 'pwsh.exe') -ArgumentList '-NoProfile', '-STA', '-File', "`"$exitScript`"" -PassThru -WindowStyle Hidden
+        $exited = $child.WaitForExit(30000)
+        if (-not $exited) { $child.Kill() }
+        Assert-Wt 'WPF 파일 링크: 답이 없는 확인이 남아도 앱 프로세스는 끝난다' ($exited -and $child.ExitCode -eq 0) "(끝남 $exited · 코드 $(if ($exited) { $child.ExitCode }))"
 
         # 도움말: 탭이 등록한 설명 · 카드를 모은다. 카드 하나가 실패해도 도움말은 연다
         Register-WtAddon -Id 'test-help' -Title '도움' -Order 50 -NewView { } -Help '가짜 탭 설명' -HelpCard { New-WtText '가짜 카드' 'T.Body' }
