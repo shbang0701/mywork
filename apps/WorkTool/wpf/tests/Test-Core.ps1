@@ -445,7 +445,9 @@ pie
     $addonFiles = @(Get-ChildItem (Join-Path $root 'addons') -Filter '*.psm1' -Recurse | Sort-Object FullName)
     $addonModules = @(foreach ($f in $addonFiles) { Import-Module $f.FullName -Force -DisableNameChecking -PassThru })
     $ids = @(Get-WtAddon -All | ForEach-Object Id)
-    Assert-Wt '탭 모아 보기: 탭 폴더마다 ID 하나씩 등록한다 (겹치는 ID 없음)' ($ids.Count -eq $addonFiles.Count) "(모듈 $($addonFiles.Count)개 · 등록 $($ids -join ', '))"
+    # 탭 폴더 하나에 모듈이 여럿일 수 있다(예: memo의 Memo.psm1 · MemoText.psm1). 등록은 폴더마다 하나
+    $addonDirs = @($addonFiles | ForEach-Object { $_.Directory.FullName } | Sort-Object -Unique)
+    Assert-Wt '탭 모아 보기: 탭 폴더마다 ID 하나씩 등록한다 (겹치는 ID 없음)' ($ids.Count -eq $addonDirs.Count) "(탭 폴더 $($addonDirs.Count)개 · 등록 $($ids -join ', '))"
     $owners = @{}
     $dupes = foreach ($m in @(Get-Module | Where-Object { $_.Path -and $_.Path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) })) {
         foreach ($fn in $m.ExportedFunctions.Keys) {
