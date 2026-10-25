@@ -884,6 +884,15 @@ $script:stylesXaml = @'
     <Setter Property="FontSize" Value="{DynamicResource F.Small}"/>
     <Setter Property="TextDecorations" Value="{x:Null}"/>
   </Style>
+  <Style x:Key="Md.TaskLink" TargetType="Hyperlink">
+    <Setter Property="TextDecorations" Value="{x:Null}"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Hover}"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
   <Style x:Key="Md.Hr" TargetType="BlockUIContainer">
     <Setter Property="Margin" Value="0,8,0,20"/>
   </Style>

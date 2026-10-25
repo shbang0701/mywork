@@ -192,7 +192,7 @@ $view = New-WtMarkdownView -Scroll -BaseDir 'D:\문서' -OnLink {
     param($link)   # @{ Kind = 'url' | 'file' | 'wiki' | 'tag'; Target; Text }
     if ($link.Kind -eq 'wiki') { Open-MyDoc $link.Target; return $true }   # 처리했으면 $true
     $false                                                                # 아니면 기본 동작
-}
+} -OnTask { param($line) Switch-MyTask $line }                            # 할 일 체크 표시를 누를 때 (원문 줄 번호)
 Set-WtMarkdownText $view $text
 ```
 
@@ -201,7 +201,13 @@ Set-WtMarkdownText $view $text
 - `-OnLink`: 링크 · `[[위키 링크]]` · `#태그`를 눌렀을 때. 이게 있으면 태그도 누를 수 있게 그립니다. 처리하지 않은 링크의 기본 동작은 아래와 같습니다.
   - 웹 주소: `http` · `https` · `mailto`만 기본 브라우저 · 메일 프로그램으로 엽니다.
   - 파일: 폴더는 탐색기로, 문서 · 그림은 기본 프로그램으로 엽니다. 실행 파일 · 스크립트는 열지 않고 탐색기에서 그 파일을 보여 줍니다.
+    - 있는지 · 폴더인지는 화면 밖(.NET 작업)에서 확인합니다. 확인하는 동안 커서가 AppStarting(화살표 + 모래시계)이 되고, 앱은 계속 쓸 수 있습니다. 같은 링크를 또 눌러도 겹쳐 확인하지 않습니다.
+    - 5초 안에 답이 없으면 기다리지 않고 「경로가 응답하지 않습니다」를 알립니다. 그 확인이 아직 끝나지 않았을 때 같은 링크를 누르면 바로 같은 문구를 알립니다.
+    - 실행 공간을 쓰지 않습니다. 실행 공간은 응답 없는 공유 폴더를 기다리는 중이면 `Close` · `Dispose`를 해도 앱 프로세스가 끝나지 않습니다. .NET 작업은 백그라운드 스레드라 남아도 앱이 끝납니다.
   - 같은 문서 안 제목(`[[#제목]]`, `(#제목)`) · 각주: 그 자리로 스크롤합니다.
+- 파일 · 폴더 링크는 링크 글 앞에 문서 · 폴더 아이콘을 붙이고, 툴팁에 Windows 모양 전체 경로를 보입니다. 메모 편집기가 쓰는 `[이름](<C:/a b/c.txt>)` · `[이름](<//서버/공유/x>)`, 역슬래시 경로, `file:` 주소 모두 파일 링크입니다.
+  - 폴더인지는 디스크를 보지 않고 이름으로 추측합니다(그리는 중에 네트워크 경로를 건드리지 않게). 끝이 `/` · `\`, 드라이브 루트, UNC 공유 루트, 마지막 이름에 확장자가 없으면 폴더 아이콘입니다.
+- `-OnTask { param($line) ... }`: 할 일 체크 표시를 누를 수 있게 그리고(손 모양 커서, 툴팁 「완료 표시 / 해제」), 누르면 그 항목의 원문 줄 번호(1부터)로 부릅니다. 빼면 체크 표시는 누를 수 없습니다(읽기 전용 보기).
 - `-StrictLineBreaks`: 줄바꿈 한 번을 이어 붙입니다(표준 마크다운). 기본은 Obsidian처럼 줄을 바꿉니다.
 - 더 붙이기: 코드 블록을 언어별로 따로 그리려면 `Register-WtMarkdownCodeRenderer`(Mermaid가 이렇게 붙어 있음), 콜아웃 종류는 `Register-WtMarkdownCallout`, 코드 색칠 언어는 `Register-WtCodeLanguage`.
 - `Get-WtMarkdownSnippet`: 목록 한 줄 요약용으로 마크다운 기호를 뗀 글. `Get-WtMarkdownHeadings`: 제목 목록(목차용).
