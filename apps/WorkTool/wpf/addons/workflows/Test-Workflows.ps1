@@ -582,7 +582,7 @@ try {
     $gate = New-WtTestGate
     try {
         & $mod {
-            $script:savedWork = @{ Scan = $script:scanWork; Read = $script:readCall; Start = $script:startWork; ScanTimeout = $script:scanTimeoutMs; ReadTimeout = $script:readTimeoutMs; StartWait = $script:startWaitMs }
+            $script:savedWork = @{ Scan = $script:scanWork; Read = $script:readCall; Start = $script:startWork; ScanTimeout = $script:scanTimeoutMs; ReadTimeout = $script:readTimeoutMs; StartWait = $script:startWaitMs; StartTimeout = $script:startTimeoutMs }
             $script:scanWork = {
                 param($root, $max)
                 if ($root -like '\\wt-hang-*') {
@@ -666,16 +666,54 @@ try {
         do { Start-Sleep -Milliseconds 100; $left = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $PID" | Where-Object { $_.CommandLine -like '*Long-Sleep*' }) } while ($left.Count -and $watch.ElapsedMilliseconds -lt 3000)
         Assert-WtTest '업무 안정성: 프로세스를 만든 뒤 화면이 넘겨받기 전에 앱을 끄면 그 자식도 끝난다' ($made -and -not $left.Count -and -not (& $mod { $script:starting })) "(만듦 $made · 남은 자식 $($left.Count)개)"
         foreach ($c in $left) { try { Stop-Process -Id $c.ProcessId -Force } catch { } }
+        # 시작이 시간 초과된 뒤에 프로세스가 늦게 만들어지면, 취소와 같이 만든 쪽이 그 자식을 끝낸다
+        [void]$gate.Gate.Reset()
+        & $mod { $script:startWork = { param($start, $owner) [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.WaitOne(); Start-WtFlowChild $start $owner }; $script:startTimeoutMs = 300 }
+        $lateWork = & $mod { Invoke-WtFlowRun; $script:starting.Work }
+        Start-Sleep -Milliseconds 500; Update-WtWork
+        $lateNote = & $mod { $script:ui.Note.Text }
+        [void]$gate.Gate.Set()
+        $watch.Restart()
+        while (-not $lateWork.Handle.IsCompleted -and $watch.ElapsedMilliseconds -lt 15000) { Start-Sleep -Milliseconds 50 }
+        $left = @(); $watch.Restart()
+        do { Start-Sleep -Milliseconds 100; $left = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $PID" | Where-Object { $_.CommandLine -like '*Long-Sleep*' }) } while ($left.Count -and $watch.ElapsedMilliseconds -lt 3000)
+        Assert-WtTest '업무 안정성: 시작이 시간 초과된 뒤 늦게 만들어진 프로세스는 만든 쪽이 끝낸다' (
+            $lateWork.TimedOut -and $lateWork.Handle.IsCompleted -and -not $left.Count -and $lateNote -like '실행하지 못했습니다*' -and -not (& $mod { $script:starting })) "(남은 자식 $($left.Count)개 · $lateNote)"
+        foreach ($c in $left) { try { Stop-Process -Id $c.ProcessId -Force } catch { } }
     } finally {
         Remove-WtTestGate $gate
         & $mod {
             if ($script:savedWork) {
                 $script:scanWork = $script:savedWork.Scan; $script:readCall = $script:savedWork.Read; $script:startWork = $script:savedWork.Start
-                $script:scanTimeoutMs = $script:savedWork.ScanTimeout; $script:readTimeoutMs = $script:savedWork.ReadTimeout; $script:startWaitMs = $script:savedWork.StartWait
+                $script:scanTimeoutMs = $script:savedWork.ScanTimeout; $script:readTimeoutMs = $script:savedWork.ReadTimeout; $script:startWaitMs = $script:savedWork.StartWait; $script:startTimeoutMs = $script:savedWork.StartTimeout
             }
         }
     }
     Assert-WtTest 'WPF 업무 안정성: 문을 열면 남은 화면 밖 작업이 모두 끝나 치워진다' ((Get-WtWorkInfo).Running -eq 0 -and (Get-WtWorkInfo).Abandoned -eq 0 -and -not (Test-WtWorkStuck (Get-WtPathKey $hangRoot)))
+
+    # 끝낼 때 정리(남은 자식 찾기)는 작업 수 한도와 따로 둔다: 응답 없는 조회가 한도를 채운 채 앱을 꺼도, 끝난 스크립트가 남긴 자식을 끝낸다
+    $gate = New-WtTestGate
+    $hung = @()
+    try {
+        $run = Start-WtFlowProcess (New-WtFlowStartInfo $leaveInfo @{} 'app') (New-WtFlowRecord $leaveInfo @{} 'app' $false '')
+        $running.Add($run)
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        while (-not $run.Process.HasExited -and $watch.Elapsed.TotalSeconds -lt 30) { [void](Read-WtFlowOutput $run); Start-Sleep -Milliseconds 50 }
+        $runId = $run.Id; $runStarted = $run.Started
+        $workModule = Get-Module Work
+        $max = & $workModule { $script:maxJobs }
+        $hung = @(for ($i = (& $workModule { $script:jobs.Count }); $i -lt $max; $i++) { Start-WtWork $wtTestHang -Key 'path:\\wt-test\cap' -OnDone { } })
+        $full = $null; try { [void](Start-WtWork { 1 } -OnDone { }) } catch { $full = $_.Exception }
+        & $mod { param($r) $script:run = $r } $run
+        & $addon.OnExit
+        $left = @(); $watch.Restart()
+        do { Start-Sleep -Milliseconds 200; $left = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $runId" | Where-Object { $_.CreationDate -ge $runStarted.AddSeconds(-1) }) } while ($left.Count -and $watch.ElapsedMilliseconds -lt 4000)
+        Assert-WtTest '업무 안정성: 작업 수 한도가 찬 채 앱을 꺼도 끝난 스크립트가 남긴 자식을 찾아 끝낸다' ($full -is [System.InvalidOperationException] -and -not $left.Count) "(남은 자식 $($left.Count)개)"
+        foreach ($c in $left) { try { Stop-Process -Id $c.ProcessId -Force } catch { } }
+    } finally {
+        Stop-WtWork $hung
+        Remove-WtTestGate $gate
+    }
 
     # ---- 고른 것의 수명: 스크립트 읽기가 늦게 와도 고치던 값을 지키고, 그 사이 고른 것이 사라졌으면 결과를 넣지 않는다 ----
     # 읽기 호출만 끝을 검사가 정하는 호출로 바꾼다 (Seq · 수명 확인 · 칸 값 다시 넣기는 그대로 돈다)
@@ -697,6 +735,22 @@ try {
         while ((& $mod { $script:info -and $script:info.Loading }) -and $watch.ElapsedMilliseconds -lt 3000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
         $kept = & $mod { $f = $script:fields | Where-Object { $_.Field.Name -eq 'Target' }; if ($f) { $f.Input.Text } }
         Assert-WtTest '업무 안정성: 목록을 두 번 다시 그리는 동안 읽기가 늦어도 고치던 칸 값이 남는다' ($kept -eq '편집값') "(칸 값 '$kept')"
+        # 칸 없는 스크립트: 고른 실행 방식(콘솔)도 칸 수와 상관없이 고른 것의 수명에 남는다 (다시 읽기가 늦어도)
+        $noField = Write-WtTestScript 'No-Field.ps1' "<#`n.SYNOPSIS`n    칸 없음`n#>`n'ok'"
+        [void](& $addon.Refresh $view)
+        & $mod { param($p) Select-WtFlowNode @{ Kind = 'script'; Path = $p } } $noField
+        $watch.Restart()
+        while ((& $mod { $script:info -and $script:info.Loading }) -and $watch.ElapsedMilliseconds -lt 3000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+        & $mod { foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq 'console') } }
+        $tcs = [System.Threading.Tasks.TaskCompletionSource[string]]::new()
+        [AppDomain]::CurrentDomain.SetData('WtTestRead', @{ Path = $noField; Task = $tcs.Task })
+        & $mod { Show-WtFlowTree }
+        $during = & $mod { [bool]$script:info.Loading }
+        $tcs.SetResult([System.IO.File]::ReadAllText($noField))
+        $watch.Restart()
+        while ((& $mod { $script:info -and $script:info.Loading }) -and $watch.ElapsedMilliseconds -lt 3000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+        $modeAfter = & $mod { Get-WtFlowMode }
+        Assert-WtTest '업무 안정성: 칸 없는 스크립트도 다시 읽기가 늦어도 고른 실행 방식이 남는다' ($during -and $modeAfter -eq 'console') "(다시 읽음 $during · 방식 $modeAfter)"
         # 읽는 동안 업무를 지우면, 늦게 온 결과가 가운데를 다시 채우지 않는다
         Save-WtFlows @([pscustomobject](New-WtFlow '지울 업무' $editScript @{ Target = 'x' } 'app'))
         [void](& $addon.Refresh $view)

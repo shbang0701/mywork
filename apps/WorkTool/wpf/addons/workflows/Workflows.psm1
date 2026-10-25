@@ -490,7 +490,8 @@ function Stop-WtFlowProcess($Run) {
     }
     if ($Run.PSObject.Properties['Reaper'] -and $Run.Reaper -and -not $Run.Reaper.Finished) { return }   # 이미 찾는 중
     try {
-        $reaper = Start-WtWork -Script $script:reapWork -ArgumentList $Run.Id, $Run.Started.AddSeconds(-1) -Session Default -TimeoutMs 10000
+        # 정리 작업은 끝나지 않은 작업 수 한도와 따로 둔다 (-Reserved): 응답 없는 조회가 한도를 채워도 남은 자식은 끝낸다
+        $reaper = Start-WtWork -Script $script:reapWork -ArgumentList $Run.Id, $Run.Started.AddSeconds(-1) -Session Default -TimeoutMs 10000 -Reserved
         $Run | Add-Member -NotePropertyName Reaper -NotePropertyValue $reaper -Force
     } catch { }
 }
@@ -505,7 +506,7 @@ function Get-WtFlows {
 }
 
 # 데이터 폴더가 늦게 답하면 저장 통로가 끝까지 쓴다 (그동안 읽으면 저장한 내용이 나온다)
-function Save-WtFlows([object[]]$Items) { Write-WtStore -Name 'workflows' -Schema $script:schema -Items @($Items) -AllowPending }
+function Save-WtFlows([object[]]$Items) { Write-WtStore -Name 'workflows' -Schema $script:schema -Items @($Items) }
 
 function New-WtFlow([string]$Title, [string]$ScriptPath, [hashtable]$Values, [string]$Mode) {
     $now = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
@@ -521,7 +522,7 @@ function Get-WtFlowRuns {
 function Save-WtFlowRun($Record) {
     $rest = @(Get-WtFlowRuns | Where-Object { $_.id -ne $Record.id })
     $all = @(@($Record) + $rest | Sort-Object { [string]$_.started } -Descending | Select-Object -First $script:maxRuns)
-    Write-WtStore -Name 'workflow-runs' -Schema $script:schema -Items $all -AllowPending
+    Write-WtStore -Name 'workflow-runs' -Schema $script:schema -Items $all
 }
 
 # 실행 기록 하나. 넘긴 값만 남긴다 (스위치는 기본값과 다를 때만). 업무는 이름이 아니라 id로 가리킨다
@@ -937,11 +938,12 @@ function Enter-WtFlowSelection([string]$Key, [bool]$Keep) {
     $script:selection = @{ Key = $Key; Edits = $null }
 }
 
-# 지금 폼의 칸 값 · 실행 방식을 고른 것의 수명에 남긴다. 폼이 「읽는 중」이라 비어 있으면 앞서 남긴 값을 그대로 둔다
+# 지금 폼의 칸 값 · 실행 방식을 고른 것의 수명에 남긴다. 실행 방식은 칸이 없는 스크립트도 남긴다.
+# 폼이 「읽는 중」이거나 읽지 못해 그려지지 않았으면 앞서 남긴 값을 그대로 둔다
 function Save-WtFlowEdits {
     $sel = $script:selection
-    if (-not $sel -or -not $script:fields.Count -or -not $script:info -or $script:info.Loading) { return }
-    $sel.Edits = @{ Values = (Get-WtFlowFormValues); Mode = (Get-WtFlowMode) }
+    if (-not $sel -or -not $script:info -or $script:info.Loading -or $script:info.Error) { return }
+    $sel.Edits = @{ Values = $(if ($script:fields.Count) { Get-WtFlowFormValues } else { @{} }); Mode = (Get-WtFlowMode) }
 }
 
 function Select-WtFlowNode($Tag, [switch]$Reuse) {
@@ -1292,10 +1294,17 @@ function Complete-WtFlowStart($Work) {
     $ctx = $Work.Context
     if ([object]::ReferenceEquals($script:starting, $ctx)) { $script:starting = $null }
     $p = if ($Work.State -eq 'done') { $Work.Result } else { $null }
-    # 넘겨받는다. 그 사이 멈췄으면(같은 잠금 안에서 확인) 넘겨받지 않고 끝낸다
-    $owner = $ctx.Owner
-    [System.Threading.Monitor]::Enter($owner.SyncRoot)
-    try { if (-not $owner.Stopped) { $owner.Taken = $true } else { $ctx.Cancelled = $true } } finally { [System.Threading.Monitor]::Exit($owner.SyncRoot) }
+    if ($Work.State -ne 'done') {
+        # 시간 초과 · 실패: 취소와 같은 길로 멈춘다. 그 뒤 늦게 만들어지는 프로세스는 만든 쪽이 끝내고, 이미 만들어진 것은 여기서 끝낸다
+        $wasCancelled = [bool]$ctx.Cancelled
+        Stop-WtFlowStarting $ctx
+        $ctx.Cancelled = $wasCancelled   # 사용자가 먼저 취소했으면 취소로 알린다
+    } else {
+        # 넘겨받는다. 그 사이 멈췄으면(같은 잠금 안에서 확인) 넘겨받지 않고 끝낸다
+        $owner = $ctx.Owner
+        [System.Threading.Monitor]::Enter($owner.SyncRoot)
+        try { if (-not $owner.Stopped) { $owner.Taken = $true } else { $ctx.Cancelled = $true } } finally { [System.Threading.Monitor]::Exit($owner.SyncRoot) }
+    }
     if ($ctx.Cancelled) {
         if ($p) { try { $p.Kill($true) } catch { }; $p.Dispose() }
         Set-WtFlowNote '실행을 취소했습니다.'

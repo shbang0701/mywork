@@ -353,32 +353,73 @@ try {
     Assert-WtTest '메모 안정성: 자동 저장 뒤 목록 선택과 편집기 메모가 일치한다' ((Get-TestTabs).Current[0] -eq $two.id -and (& $memoModule { $script:ui.List.SelectedItem.Id }) -eq $two.id -and ((Get-WtMemoItems) | Where-Object id -eq $one.id).body -eq 'next draft')
     & $memoModule { param($id) Select-WtMemoItem $id } $one.id
 
-    # 데이터 폴더가 늦게 답하는 저장: 실패가 아니라 「저장하는 중」. 고친 표시를 남기고, 통로가 다 쓰면 다시 저장해 「자동 저장됨」이 된다
-    # 실제 쓰기(Write-WtDataFile) 앞에 기다림만 끼운다. 저장 통로 · 상태 바꾸기 · 다시 저장은 그대로 돈다
+    # 데이터 폴더가 늦게 답하는 저장. 실제 쓰기(Write-WtDataFile) 앞에 기다림만 끼운다. 저장 통로 · 버전 · 칸 표시는 그대로 돈다
+    # 저장 표시는 시간이 아니라 「받아들인 내용이 파일에 쓰였는지」로 정한다: 쓰는 중이면 「저장하는 중」, 쓰이면 「자동 저장됨」
     $storage = Get-Module Storage
+    $pump = { [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{ }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle) }
+    $settle = { param($ms) $w = [System.Diagnostics.Stopwatch]::StartNew(); while ($w.ElapsedMilliseconds -lt $ms) { Update-WtWork; & $pump; Start-Sleep -Milliseconds 20 } }
+    & $storage { $script:testJob = $script:writeJob }
     $gate = New-WtTestGate
     try {
-        & $storage { $script:testJob = $script:writeJob; $script:writeJob = { param($p, $json) [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.WaitOne(); Write-WtDataFile $p $json } }
+        & $storage { $script:writeJob = { param($p, $json) [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.WaitOne(); Write-WtDataFile $p $json } }
         Set-TestBody 0 'slow draft'
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
         $savedNow = & $memoModule { Save-WtMemoNow }
         $saveMs = $watch.ElapsedMilliseconds
         $writingTexts = @(Get-WtTestTexts $st0)
-        $stillDirty = & $memoModule { $script:panes[0].Dirty }
-        & $storage { $script:writeJob = $script:testJob }
+        $dirtyAfter = & $memoModule { $script:panes[0].Dirty }
         [void]$gate.Gate.Set()
-        $watch.Restart()
-        while ((Test-WtDataWriting) -and $watch.ElapsedMilliseconds -lt 5000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
-        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{ }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle)   # 통로가 미뤄 둔 알림 → 메모가 다시 저장
-        Assert-WtTest "메모 안정성: 저장이 늦으면 잠깐만 기다리고(${saveMs}ms) 실패가 아닌 「저장하는 중」, 다 쓰면 다시 저장해 「자동 저장됨」" (
-            -not $savedNow -and $saveMs -lt 1500 -and $stillDirty -and @($writingTexts | Where-Object { $_ -like '저장하는 중*' }).Count -eq 1 -and
-            -not @($writingTexts | Where-Object { $_ -like '저장하지 못했습니다*' }).Count -and -not (& $memoModule { $script:panes[0].Dirty }) -and
-            @(Get-WtTestTexts $st0 | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1 -and ((Get-WtMemoItems) | Where-Object id -eq $one.id).body -eq 'slow draft') ($writingTexts -join ' / ')
+        & $settle 1000
+        Assert-WtTest "메모 안정성: 저장이 늦으면 잠깐만 기다리고(${saveMs}ms) 「저장하는 중」, 파일에 쓰이면 「자동 저장됨」 (다시 저장하지 않는다)" (
+            $savedNow -and $saveMs -lt 1500 -and -not $dirtyAfter -and @($writingTexts | Where-Object { $_ -like '저장하는 중*' }).Count -eq 1 -and
+            @(Get-WtTestTexts $st0 | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1 -and ([System.IO.File]::ReadAllText($memoPath) -match 'slow draft')) ($writingTexts -join ' / ')
     } finally {
-        & $storage { if ($script:testJob) { $script:writeJob = $script:testJob } }
+        & $storage { $script:writeJob = $script:testJob }
         Remove-WtTestGate $gate
     }
-
+    # 모든 쓰기가 0.6초씩 걸리고 성공하는 폴더: 화면이 기다리는 시간(0.4초)보다 길어도 한 번 쓰면 「자동 저장됨」이고, 같은 내용을 되풀이해 쓰지 않는다
+    $slowWrites = [System.Collections.ArrayList]::Synchronized([System.Collections.ArrayList]::new())
+    [AppDomain]::CurrentDomain.SetData('WtTestWrites', $slowWrites)
+    try {
+        & $storage { $script:writeJob = { param($p, $json) [System.Threading.Thread]::Sleep(600); [void][AppDomain]::CurrentDomain.GetData('WtTestWrites').Add($p); Write-WtDataFile $p $json } }
+        Set-TestBody 0 'slow draft 2'
+        [void](& $memoModule { Save-WtMemoNow })
+        & $settle 2500
+        $memoWrites = @($slowWrites | Where-Object { $_ -ieq $memoPath }).Count
+        Assert-WtTest '메모 안정성: 모든 쓰기가 0.6초씩 걸려도 한 번 쓰면 「자동 저장됨」이고 되풀이해 쓰지 않는다' (
+            $memoWrites -eq 1 -and -not (& $memoModule { $script:panes[0].Dirty }) -and @(Get-WtTestTexts $st0 | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1 -and
+            ([System.IO.File]::ReadAllText($memoPath) -match 'slow draft 2')) "(memo 쓰기 ${memoWrites}번 · $(@(Get-WtTestTexts $st0) -join ' '))"
+    } finally {
+        & $storage { $script:writeJob = $script:testJob }
+        [AppDomain]::CurrentDomain.SetData('WtTestWrites', $null)
+    }
+    # 고친 칸이 없을 때 메모 추가 → 저장이 늦어 화면은 넘어감 → 나중에 실패. 그 내용은 앱이 가지고 있다:
+    # 다시 읽어도 보이고, 칸에 실패가 보이며, 끝내기 전에 묻고, Ctrl+S가 다시 쓴다
+    $gate = New-WtTestGate
+    try {
+        & $storage {
+            function script:Show-WtMessage { param($Text, $Title, $Icon) }
+            $script:writeJob = { param($p, $json) [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.WaitOne(); throw [System.IO.IOException]::new('검사용 늦은 실패') }
+        }
+        $added = & $memoModule { Add-WtMemo '늦게 실패할 메모' }
+        [void]$gate.Gate.Set()
+        & $settle 800
+        & $storage { $script:writeJob = $script:testJob }
+        $readBack = @(Get-WtMemoItems | Where-Object { $_.title -eq '늦게 실패할 메모' }).Count
+        $failText = @(& $memoModule { Get-WtTestTexts $script:panes[0].Status }) -join ' '
+        Assert-WtTest '메모 안정성: 고친 칸 없이 추가한 메모가 늦게 실패해도 앱이 가지고 있고(다시 읽어도 보임) 실패가 보인다' (
+            [bool]$added -and $readBack -eq 1 -and $failText -like '*저장하지 못했습니다*' -and -not ([System.IO.File]::ReadAllText($memoPath) -match '늦게 실패할 메모')) $failText
+        $stay = & $shellModule { $script:writingDropped = $false; $script:testAsked = @(); -not (Confirm-WtDataWrites) -and ($script:testAsked -join ',') -eq 'exit' }
+        Assert-WtTest '메모 안정성: 그 내용이 있으면 끝내기 전에 묻는다 ([취소]면 머문다)' $stay
+        [void](Send-TestKey S Control)
+        & $settle 800
+        Assert-WtTest '메모 안정성: Ctrl+S가 가지고 있던 내용을 다시 써서 파일에 남기고 「자동 저장됨」이 된다' (
+            ([System.IO.File]::ReadAllText($memoPath) -match '늦게 실패할 메모') -and @(& $memoModule { Get-WtTestTexts $script:panes[0].Status } | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1)
+        & $memoModule { Remove-WtMemoCurrent }   # 아래 검사가 메모 두 개로 시작하게
+    } finally {
+        & $storage { $script:writeJob = $script:testJob }
+        Remove-WtTestGate $gate
+    }
     # 실패한 삭제 · 실행 취소를 여러 번 해도 배열이 먼저 바뀌지 않는다
     $held = [System.IO.File]::Open($memoPath, 'Open', 'Read', 'Read')
     & $memoModule { Remove-WtMemoCurrent; Remove-WtMemoCurrent; [void](Add-WtMemo) }

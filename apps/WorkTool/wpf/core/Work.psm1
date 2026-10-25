@@ -128,8 +128,9 @@ function Get-WtWorkSession([string]$Kind) {
   -WaitMs        시작한 뒤 이 시간까지는 기다린다. 그 안에 끝나면 -OnDone을 부르고 돌아온다
                  -OnDone 안에서 부른 쪽의 상태를 바꾸면, 부른 함수가 끝난 뒤 Wait-WtWork로 기다리는 편이 안전하다
   -Call          -Script 대신 New-WtCall로 묶은 .NET 호출 하나. 실행 공간 없이 스레드 풀에서 부른다 ($WtCancel 없음)
-  -Reserved      끝나지 않은 작업 수 한도($script:maxJobs)를 보지 않는다. 한 번에 하나씩만 도는 통로(저장 · 잠금)가 쓴다.
-                 응답 없는 읽기가 한도를 채워도 저장은 막히지 않게
+  -Reserved      끝나지 않은 작업 수 한도($script:maxJobs)를 보지 않는다. 수가 정해진 작업만 쓴다:
+                 한 번에 하나씩 도는 통로(저장 · 잠금)와 실행 하나에 하나뿐인 정리(남은 자식 끝내기).
+                 응답 없는 읽기가 한도를 채워도 저장 · 정리는 막히지 않게
 되돌릴 수 없는 일(셸 열기 · 프로세스 만들기)을 하는 코드는 그 직전에 잠금 안에서 취소를 보고 $WtCancel.Committed를 $true로 둔다:
   [System.Threading.Monitor]::Enter($WtCancel.SyncRoot); try { if ($WtCancel.Value) { return }; $WtCancel.Committed = $true } finally { [System.Threading.Monitor]::Exit($WtCancel.SyncRoot) }
   그러면 시간 초과 · 멈춤 때 $w.Committed로 「이미 넘겼는지」를 정확히 안다 (넘기기 전이면 끝내 하지 않는다)

@@ -454,22 +454,25 @@ function Show-WtMainWindow {
 }
 
 # 저장하지 못한 내용이 있을 때 묻는다. 'retry'(다시 시도) · 'proceed'(그대로 끝내기 · 이동) · 'cancel' 중 하나를 돌려준다.
-function Show-WtPendingChoice([string]$Purpose, [string]$Title) {
+# -Text: 기본 문구 대신 보일 글. -NoCancel: [취소]가 없다 (정리를 시작한 뒤)
+function Show-WtPendingChoice([string]$Purpose, [string]$Title, [string]$Text = '', [switch]$NoCancel) {
     $exit = $Purpose -eq 'exit'
     $dialog = New-WtModal $(if ($exit) { '저장하지 않고 끝낼까요?' } else { '저장하지 않고 이동할까요?' })
-    $text = if ($exit) { "$Title 화면에서 저장하지 못한 내용은 끝내면 사라집니다." }
+    $message = if ($Text) { $Text }
+    elseif ($exit) { "$Title 화면에서 저장하지 못한 내용은 끝내면 사라집니다." }
     else { "$Title 화면에서 저장하지 못한 내용은 그 화면에 그대로 남습니다." }
-    [void](Add-WtChild $dialog.Body (New-WtText $text))
+    $body = New-WtText $message
+    $body.TextWrapping = 'Wrap'
+    [void](Add-WtChild $dialog.Body $body)
     $retry = New-WtButton '다시 시도' -Kind Primary; $retry.IsDefault = $true
     $go = if ($exit) { New-WtButton '끝내기' -Kind Danger } else { New-WtButton '이동' }
-    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
     $dialog.Window.Tag = @{ Choice = 'cancel'; Focus = $retry }
     foreach ($pair in @(@($retry, 'retry'), @($go, 'proceed'))) {
         $pair[0].Tag = @{ Window = $dialog.Window; Choice = $pair[1] }
         $pair[0].Add_Click({ param($s, $e) $s.Tag.Window.Tag.Choice = $s.Tag.Choice; $s.Tag.Window.DialogResult = $true })
         [void](Add-WtChild $dialog.Buttons $pair[0])
     }
-    [void](Add-WtChild $dialog.Buttons $cancel)
+    if (-not $NoCancel) { $cancel = New-WtButton '취소'; $cancel.IsCancel = $true; [void](Add-WtChild $dialog.Buttons $cancel) }
     $dialog.Window.Add_ContentRendered({ param($s, $e) [void]$s.Tag.Focus.Focus() })
     [void]$dialog.Window.ShowDialog()
     [string]$dialog.Window.Tag.Choice
@@ -518,14 +521,6 @@ function Save-WtPendingChanges([ValidateSet('check', 'switch', 'exit')][string]$
             try { $saved = (@(& $a.SavePending) | Select-Object -Last 1) -ne $false }
             catch { Show-WtError $_ "저장 확인: $($a.Title)" }
             if ($saved) { break }
-            # 저장 통로가 아직 쓰는 중이면(데이터 폴더가 늦게 답함) 실패로 묻지 않고, 끝날 때까지 기다리거나 기다리지 않고 진행할지 묻는다
-            if ($Purpose -ne 'check' -and (Test-WtDataWriting)) {
-                if ($script:window -and -not $script:window.IsVisible) { Show-WtMainWindow }
-                $choice = Show-WtWritingChoice $Purpose
-                if ($choice -eq 'done') { continue }        # 저장이 끝났다: 다시 저장해 본다
-                if ($choice -eq 'proceed') { $script:writingDropped = $Purpose -eq 'exit'; break }
-                return $false
-            }
             if ($Purpose -eq 'check') {
                 Show-WtMessage "$($a.Title) 화면에 저장하지 못한 내용이 있습니다. 저장 오류를 해결한 뒤 다시 시도하세요." '저장 확인' 'Warning'
                 return $false
@@ -538,6 +533,39 @@ function Save-WtPendingChanges([ValidateSet('check', 'switch', 'exit')][string]$
             return $false
         }
     }
+    # 저장 통로에 쓰지 못하고 남은 내용(데이터 폴더가 늦게 실패함)이 있으면, 덮어쓰는 작업 전에는 멈춘다 (끝낼 때는 Confirm-WtDataWrites가 묻는다)
+    if ($Purpose -eq 'check' -and @(Get-WtDataUnsaved).Count) {
+        Show-WtMessage "데이터 폴더에 저장하지 못한 내용이 있습니다 ($((@(Get-WtDataUnsaved) | ForEach-Object Name) -join ', ')). 다시 저장한 뒤 시도하세요." '저장 확인' 'Warning'
+        return $false
+    }
+    $true
+}
+
+<#
+끝내기 전에 저장 통로를 확인한다. 아직 파일에 쓰이지 않은 내용을 말없이 버리고 끝내지 않는다.
+  쓰는 중이면: 끝날 때까지 기다리는 창 (창은 멈추지 않고, 다 쓰면 저절로 닫힌다)
+  쓰지 못하고 남은 내용이 있으면: [다시 시도] · [끝내기] · [취소]
+사용자가 버리기를 고르면 $script:writingDropped. 계속해도 되면 $true, [취소]면 $false.
+-NoCancel: 정리(OnExit)를 시작한 뒤라 취소가 없다. 창을 그냥 닫으면 다시 묻는다
+#>
+function Confirm-WtDataWrites([switch]$NoCancel) {
+    while (-not $script:writingDropped) {
+        if (Test-WtDataWriting) {
+            if ($script:window -and -not $script:window.IsVisible) { Show-WtMainWindow }
+            $choice = Show-WtWritingChoice exit -NoCancel:$NoCancel
+            if ($choice -eq 'proceed') { $script:writingDropped = $true; break }
+            if ($choice -eq 'cancel' -and -not $NoCancel) { return $false }
+            continue
+        }
+        $left = @(Get-WtDataUnsaved)
+        if (-not $left.Count) { break }
+        if ($script:window -and -not $script:window.IsVisible) { Show-WtMainWindow }
+        $text = "데이터 폴더에 저장하지 못한 내용이 있습니다 ($(($left | ForEach-Object Name) -join ', ')).`n$($left[0].Message)`n`n끝내면 이 내용은 사라집니다."
+        $choice = Show-WtPendingChoice exit '데이터 폴더' -Text $text -NoCancel:$NoCancel
+        if ($choice -eq 'retry') { Resume-WtDataWrites; continue }
+        if ($choice -eq 'proceed') { $script:writingDropped = $true; break }
+        if (-not $NoCancel) { return $false }
+    }
     $true
 }
 
@@ -547,15 +575,12 @@ function Stop-WtApp {
     if (-not $script:exiting) {
         $script:writingDropped = $false
         if (-not (Save-WtPendingChanges -Purpose exit)) { return $false }
+        if (-not (Confirm-WtDataWrites)) { return $false }
         foreach ($a in @(Get-WtAddon -All)) {
             if ($a.OnExit) { try { [void](& $a.OnExit) } catch { Show-WtError $_ "끝내기 전 저장: $($a.Title)" } }
         }
-        # 정리 중에 시작한 저장(실행 기록 등)이 아직 쓰는 중이면 끝날 때까지 기다린다. 쓰는 중인 저장을 말없이 버리고 끝내지 않는다.
-        # 정리는 이미 했으니 취소는 없다. 창을 그냥 닫으면 다시 묻는다 (끝나거나 [기다리지 않고 끝내기]를 고를 때까지)
-        while (-not $script:writingDropped -and (Test-WtDataWriting)) {
-            if ($script:window -and -not $script:window.IsVisible) { Show-WtMainWindow }
-            if ((Show-WtWritingChoice exit -NoCancel) -eq 'proceed') { $script:writingDropped = $true }
-        }
+        # 정리 중에 시작한 저장(실행 기록 등)도 같다. 정리는 이미 했으니 취소는 없다
+        [void](Confirm-WtDataWrites -NoCancel)
     }
     $script:exiting = $true
     if ($script:writingDropped) { try { Stop-WtDataWrites } catch { } }   # 사용자가 기다리지 않고 끝내기를 골랐다

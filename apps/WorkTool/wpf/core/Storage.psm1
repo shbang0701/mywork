@@ -6,9 +6,10 @@
 # - 읽기는 화면 밖(core\Work.psm1)에서 하고 $script:ioTimeoutMs까지만 기다린다. 데이터 폴더가 응답 없는 공유 폴더여도 화면이 멈추지 않고
 #   읽기 실패(IOException)로 올라간다. 그 폴더에 답 없는 읽기가 남아 있으면 기다리지 않고 바로 실패한다.
 # - 쓰기는 저장 통로(Submit-WtDataWrite)가 한 번에 하나씩 들어온 차례대로 한다. 읽기 작업과 따로라 읽기가 많이 남아도 막히지 않는다.
-#   쓰기는 끝나거나 실패가 정해질 때까지 통로가 맡는다(시간이 지나도 버리지 않는다). 화면은 $script:writeWaitMs까지만 기다리고,
-#   그 안에 끝나지 않으면 「저장 중」이다(실패로 정하지 않는다). 그동안 그 파일을 읽으면 저장 중인 내용을 돌려준다.
-#   셸은 끝내기 · 화면 이동 전에 저장 중인 것이 있으면 끝날 때까지 기다리거나(창이 멈추지 않게) 사용자에게 묻는다.
+#   화면은 $script:writeWaitMs까지만 기다린다. 그 안에 끝나지 않은 쓰기도 받아들인 것이다: 통로가 파일에 쓰였다고 확인될 때까지 가지고 있고,
+#   실패하면 다시 시도하거나 사용자가 버리기를 고를 때까지 둔다. 그동안 그 파일을 읽으면 그 내용을 돌려준다.
+#   저장 상태는 시간이 아니라 파일마다의 버전으로 정한다(받아들인 버전 = 확인된 버전이면 저장됨, Get-WtDataWriteStatus).
+#   셸은 끝내기 전에 쓰는 중이면 끝날 때까지 기다리고(창이 멈추지 않게), 쓰지 못한 내용이 있으면 사용자에게 묻는다.
 
 $ErrorActionPreference = 'Stop'
 
@@ -117,7 +118,8 @@ function Get-WtDataRoot {
     $script:dataRoot
 }
 
-# JSON 파일 하나를 읽는다. 없으면 $null. 저장 중인 내용이 있으면 디스크 대신 그것을 돌려준다 (방금 저장한 것을 바로 읽을 수 있게)
+# JSON 파일 하나를 읽는다. 없으면 $null. 아직 파일에 쓰이지 않은 내용(쓰는 중 · 늦게 실패해 앱이 가진 것)이 있으면
+# 디스크 대신 그것을 돌려준다. 앱이 가진 내용과 화면이 늘 같게
 function Read-WtJsonFile([string]$Path) {
     $pending = Get-WtDataWritePending $Path
     if ($pending) { return $pending.Json | ConvertFrom-Json -Depth 20 }
@@ -128,27 +130,24 @@ function Read-WtJsonFile([string]$Path) {
 
 <#
 JSON 파일 하나를 바꿔치기로 쓴다. 직전 파일은 <파일>.bak. 저장 통로에 넣고 $script:writeWaitMs까지만 기다린다.
-  끝났으면 돌아오고, 실패했으면 그 예외를 올린다.
-  아직 쓰는 중이면 IOException(Data['WtSavePending'])을 올린다. 실패가 아니다: 통로가 끝까지 쓰고, 그동안 읽으면 이 내용이 나온다.
-  -AllowPending: 쓰는 중이어도 그냥 돌아온다 (설정 · 실행 기록처럼 통로에 맡기면 되는 것)
+  그 안에 끝났으면 돌아온다. 그 안에 실패했으면 그 예외를 올린다 (부른 쪽이 자기 상태를 그대로 둔다).
+  아직 쓰는 중이면 그냥 돌아온다. 이 내용은 받아들인 것이다: 통로가 파일에 쓰였다고 확인될 때까지 가지고 있고,
+  실패하면 다시 시도하거나 사용자가 버리기를 고를 때까지 둔다 (Get-WtDataUnsaved · Resume-WtDataWrites · 셸의 끝내기 확인).
+  기다리는 시간은 화면이 얼마나 기다릴지만 정한다. 저장 상태(저장됨 · 쓰는 중 · 실패)는 Get-WtDataWriteStatus가 버전으로 정한다
 #>
-function Write-WtJsonFile([string]$Path, $Data, [switch]$AllowPending) {
+function Write-WtJsonFile([string]$Path, $Data) {
     $json = ConvertTo-Json -InputObject $Data -Depth 20
     $entry = Submit-WtDataWrite $Path $json
     Wait-WtDataWrite $entry $script:writeWaitMs
-    if ($entry.State -eq 'done' -or $entry.State -eq 'superseded') { return }
     if ($entry.State -eq 'failed') { throw $entry.Exception }
-    $entry.Released = $true   # 부른 쪽은 결과를 받지 못했다. 나중에 실패로 정해지면 통로가 알린다 (Complete-WtDataWrite)
-    if ($AllowPending) { return }
-    $e = [System.IO.IOException]::new('저장하는 중입니다. 데이터 폴더가 늦게 답하고 있어, 답이 오면 이어서 저장합니다.')
-    $e.Data['WtSavePending'] = $true
-    throw $e
+    Set-WtDataWriteAccepted $entry
 }
 
-# 저장 중이라서 올린 예외인지 (실패가 아니다)
-function Test-WtSavePending($Exception) { $Exception -is [Exception] -and $Exception.Data.Contains('WtSavePending') }
-
 # ---- 저장 통로 --------------------------------------------------------------------------------
+# 파일마다 버전을 센다: 넣은 쓰기마다 버전이 하나씩 오른다.
+#   받아들인 버전(Accepted): 부른 쪽이 「저장했다」고 보고 넘어간 가장 새 내용 (기다리는 안에 끝났거나, 쓰는 중에 돌아왔거나)
+#   확인된 버전(Confirmed): 파일에 쓰였다고 확인된 가장 새 버전
+# 받아들인 버전 > 확인된 버전인데 쓰는 중인 것이 없으면, 그 내용을 실패로 남겨 둔다(Failed). 버전이 같아져야 「저장됨」이다
 
 # 실제로 쓰기 (화면 밖에서 돈다): 임시 파일에 쓰고 바꿔치기
 function Write-WtDataFile([string]$Path, [string]$Json) {
@@ -161,15 +160,33 @@ function Write-WtDataFile([string]$Path, [string]$Json) {
 # 통로가 돌리는 코드. 검사는 쓰기 앞에 기다림만 끼워 넣는다 (Write-WtDataFile은 그대로 돈다)
 $script:writeJob = { param($p, $json) Write-WtDataFile $p $json }
 
-# 쓰기 하나를 통로에 넣는다. 같은 파일의 아직 시작하지 않은 쓰기는 새 내용으로 바꾼다 (마지막 내용만 쓰면 된다)
+# 파일 하나의 기록 (버전 · 받아들인 것 · 실패로 남은 것)
+function Get-WtDataFileRecord([string]$Path) {
+    $k = $Path.ToLowerInvariant()
+    if (-not $script:writeFiles.ContainsKey($k)) {
+        $script:writeFiles[$k] = @{ Path = $Path; Version = 0; Accepted = $null; Confirmed = 0; Failed = $null; LastError = $null; Told = $false }
+    }
+    $script:writeFiles[$k]
+}
+
+# 쓰기 하나를 통로에 넣는다. 같은 파일의 아직 시작하지 않은 쓰기는 새 내용으로 바꾼다 (새 내용이 앞 내용을 담고 있다)
 function Submit-WtDataWrite([string]$Path, [string]$Json) {
+    $rec = Get-WtDataFileRecord $Path
     for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) {
         if ($script:writeQueue[$i].Path -ieq $Path) { $script:writeQueue[$i].State = 'superseded'; $script:writeQueue.RemoveAt($i) }
     }
-    $entry = @{ Path = $Path; Json = $Json; State = 'queued'; Work = $null; Exception = $null; Released = $false; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
+    $rec.Version++
+    $entry = @{ Path = $Path; Json = $Json; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Retry = $false; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
     $script:writeQueue.Add($entry)
     Start-WtDataWriteNext
     $entry
+}
+
+# 부른 쪽이 이 내용을 저장한 것으로 보고 넘어간다. 실패로 남아 있던 앞 내용은 이 내용이 담고 있으므로 이 쓰기가 맡는다
+function Set-WtDataWriteAccepted($Entry) {
+    $rec = Get-WtDataFileRecord $Entry.Path
+    if (-not $rec.Accepted -or $Entry.Version -gt $rec.Accepted.Version) { $rec.Accepted = $Entry }
+    Update-WtDataFileRecord $rec
 }
 
 # 쓰는 것이 없으면 다음 차례를 시작한다. 한 번에 하나만 쓴다 (같은 임시 파일 · 바꿔치기가 겹치지 않게)
@@ -186,24 +203,53 @@ function Start-WtDataWriteNext {
         } catch {
             $script:writeCurrent = $null
             $entry.State = 'failed'; $entry.Exception = $_.Exception
+            (Get-WtDataFileRecord $entry.Path).LastError = $_.Exception
         }
     }
 }
 $script:writeFunctions = $null
 
-# 쓰기 하나가 끝났을 때 (화면 스레드): 결과를 적고 다음 차례를 시작한 뒤, 기다리는 화면에 알린다.
-# 부른 쪽이 결과를 받지 못한 쓰기가 실패로 정해졌고 같은 파일에 뒤따르는 쓰기도 없으면, 사용자에게도 알린다 (조용히 잃지 않게)
+# 쓰기 하나가 끝났을 때 (화면 스레드): 결과를 적고 버전을 맞춘 뒤 다음 차례를 시작하고, 화면에 알린다
 function Complete-WtDataWrite($Work) {
     $entry = $Work.Context
-    if ($Work.State -eq 'done') { $entry.State = 'done' }
-    else {
+    $rec = Get-WtDataFileRecord $entry.Path
+    if ($Work.State -eq 'done') {
+        $entry.State = 'done'
+        if ($entry.Version -gt $rec.Confirmed) { $rec.Confirmed = $entry.Version }
+        # 기다리는 안에 끝난 쓰기도 부른 쪽은 저장된 것으로 보고 넘어간다
+        if (-not $rec.Accepted -or $entry.Version -gt $rec.Accepted.Version) { $rec.Accepted = $entry }
+    } else {
         $entry.State = 'failed'
         $entry.Exception = if ($Work.Exception) { $Work.Exception } else { [System.IO.IOException]::new("저장하지 못했습니다. $($Work.Error)") }
+        $rec.LastError = $entry.Exception
     }
     if ([object]::ReferenceEquals($script:writeCurrent, $entry)) { $script:writeCurrent = $null }
-    $tell = $entry.State -eq 'failed' -and $entry.Released -and -not (Get-WtDataWritePending $entry.Path)
     Start-WtDataWriteNext
-    Invoke-WtDataWriteHandlers $entry $tell
+    Update-WtDataFileRecord $rec
+    # 실패로 남으면 한 번 알린다 (저장될 때까지 다시 알리지 않는다. 사용자가 다시 시도해 또 실패한 것은 부른 쪽이 상태로 보인다)
+    $tell = $false
+    if ($rec.Failed) { if (-not $rec.Told -and -not $rec.Failed.Retry) { $tell = $true; $rec.Told = $true } }
+    elseif (-not $rec.Accepted -or $rec.Accepted.Version -le $rec.Confirmed) { $rec.Told = $false }
+    Invoke-WtDataWriteHandlers $rec $tell
+}
+
+# 받아들인 버전이 아직 파일에 쓰이지 않았는데 쓰는 중인 것도 없으면, 그 내용을 실패로 남긴다. 확인되면 지운다
+function Update-WtDataFileRecord($Rec) {
+    $acc = $Rec.Accepted
+    if (-not $acc -or $acc.Version -le $Rec.Confirmed) { $Rec.Failed = $null; return }
+    $flying = Get-WtDataWriteFlying $Rec.Path
+    if ($flying -and $flying.Version -ge $acc.Version) { $Rec.Failed = $null; return }   # 더 새 내용을 쓰는 중이다
+    if (-not $Rec.Failed -or $Rec.Failed.Version -lt $acc.Version) {
+        $Rec.Failed = @{ Path = $acc.Path; Json = $acc.Json; Version = $acc.Version; Retry = $acc.Retry
+            Exception = if ($acc.Exception) { $acc.Exception } elseif ($Rec.LastError) { $Rec.LastError } else { [System.IO.IOException]::new('저장하지 못했습니다.') } }
+    }
+}
+
+# 이 파일을 쓰는 중이거나 차례를 기다리는 것 중 가장 새 것
+function Get-WtDataWriteFlying([string]$Path) {
+    for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) { if ($script:writeQueue[$i].Path -ieq $Path) { return $script:writeQueue[$i] } }
+    if ($script:writeCurrent -and $script:writeCurrent.Path -ieq $Path) { return $script:writeCurrent }
+    $null
 }
 
 # 이 쓰기가 끝날 때까지 정한 시간만 기다린다. 앞 차례가 이미 오래 걸리면(응답 없는 폴더) 기다리지 않는다
@@ -220,17 +266,54 @@ function Wait-WtDataWrite($Entry, [int]$Milliseconds) {
     }
 }
 
-# 이 파일에 아직 끝나지 않은 쓰기 (가장 나중 것)
+# 이 파일에 아직 파일에 쓰이지 않은 내용: 쓰는 중인 가장 새 것, 없으면 실패로 남은 것
 function Get-WtDataWritePending([string]$Path) {
-    for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) { if ($script:writeQueue[$i].Path -ieq $Path) { return $script:writeQueue[$i] } }
-    if ($script:writeCurrent -and $script:writeCurrent.Path -ieq $Path) { return $script:writeCurrent }
+    $flying = Get-WtDataWriteFlying $Path
+    if ($flying) { return $flying }
+    $k = $Path.ToLowerInvariant()
+    if ($script:writeFiles.ContainsKey($k)) { return $script:writeFiles[$k].Failed }
     $null
 }
 
-# 저장 중인 것이 있는지
+<#
+파일 하나의 저장 상태. 시간이 아니라 버전으로 정한다.
+  State: saved(받아들인 내용이 파일에 쓰였다) · writing(쓰는 중이거나 차례를 기다림) · failed(쓰지 못한 내용을 앱이 가지고 있음)
+  Message: failed일 때 이유
+#>
+function Get-WtDataWriteStatus([string]$Path) {
+    if (Get-WtDataWriteFlying $Path) { return [pscustomobject]@{ State = 'writing'; Message = '' } }
+    $k = $Path.ToLowerInvariant()
+    $failed = if ($script:writeFiles.ContainsKey($k)) { $script:writeFiles[$k].Failed } else { $null }
+    if ($failed) { return [pscustomobject]@{ State = 'failed'; Message = [string]$failed.Exception.Message } }
+    [pscustomobject]@{ State = 'saved'; Message = '' }
+}
+
+# 쓰지 못한 내용을 앱이 가지고 있는 파일들 @{ Path; Name; Message }
+function Get-WtDataUnsaved {
+    foreach ($rec in @($script:writeFiles.Values)) {
+        if ($rec.Failed -and -not (Get-WtDataWriteFlying $rec.Path)) {
+            [pscustomobject]@{ Path = $rec.Path; Name = [System.IO.Path]::GetFileName($rec.Path); Message = [string]$rec.Failed.Exception.Message }
+        }
+    }
+}
+
+# 쓰지 못한 내용을 다시 쓴다 (사용자가 [다시 시도] · Ctrl+S를 눌렀을 때). -Path가 없으면 모두. 화면은 정한 시간만 기다린다
+function Resume-WtDataWrites([string]$Path = '') {
+    $entries = foreach ($rec in @($script:writeFiles.Values)) {
+        if (-not $rec.Failed -or ($Path -and $rec.Path -ine $Path) -or (Get-WtDataWriteFlying $rec.Path)) { continue }
+        $e = Submit-WtDataWrite $rec.Path $rec.Failed.Json
+        $e.Retry = $true
+        Set-WtDataWriteAccepted $e
+        $e
+    }
+    foreach ($e in @($entries)) { Wait-WtDataWrite $e $script:writeWaitMs }
+}
+
+# 저장 중이거나 쓰지 못한 내용이 있는지
 function Test-WtDataWriting { [bool]($script:writeCurrent -or $script:writeQueue.Count) }
 
-# 사용자가 「저장을 기다리지 않고 끝내기」를 골랐을 때만 셸이 부른다. 남은 쓰기를 버린다 (임시 파일에 쓰는 중이면 원래 파일은 그대로다)
+# 사용자가 「저장하지 않고 끝내기」를 골랐을 때만 셸이 부른다. 남은 쓰기와 쓰지 못한 내용을 버린다
+# (임시 파일에 쓰는 중이면 원래 파일은 그대로다)
 function Stop-WtDataWrites {
     foreach ($e in $script:writeQueue) { $e.State = 'dropped' }
     $script:writeQueue.Clear()
@@ -239,6 +322,7 @@ function Stop-WtDataWrites {
         Stop-WtWork $script:writeCurrent.Work
         $script:writeCurrent = $null
     }
+    foreach ($rec in @($script:writeFiles.Values)) { $rec.Failed = $null; $rec.Accepted = $null }
 }
 
 # 저장 통로 상태: 남은 수 · 「응답 없음」(지금 쓰는 것이 $script:writeSlowMs를 넘김) · 걸린 초
@@ -248,16 +332,17 @@ function Get-WtDataWriteState {
     [pscustomobject]@{ Count = $script:writeQueue.Count + [int][bool]$current; Slow = $ms -ge $script:writeSlowMs; Seconds = [int][Math]::Floor($ms / 1000) }
 }
 
-# 쓰기가 끝날 때(성공 · 실패) 부를 처리기 { param($path, $state) }. 나중에(화면 스레드가 한가할 때) 부른다
+# 파일 저장 상태가 바뀔 때(쓰기가 끝남 · 실패로 남음 · 다시 써서 저장됨) 부를 처리기 { param($path, $state) }.
+# $state는 Get-WtDataWriteStatus의 State. 나중에(화면 스레드가 한가할 때) 부른다
 function Register-WtDataWriteHandler([scriptblock]$Handler) { $script:writeHandlers.Add($Handler) }
 
-# 끝난 쓰기를 차례대로 모아 두고, 화면 스레드가 한가할 때 한 번에 알린다 (처리기 안에서 다시 저장해도 이 함수 안에서 겹치지 않게)
-function Invoke-WtDataWriteHandlers($Entry, [bool]$Tell) {
+# 알릴 것을 모아 두고, 화면 스레드가 한가할 때 한 번에 알린다 (처리기 안에서 다시 저장해도 이 함수 안에서 겹치지 않게)
+function Invoke-WtDataWriteHandlers($Rec, [bool]$Tell) {
     if (-not $script:writeHandlers.Count -and -not $Tell) { return }
     $type = 'System.Windows.Threading.Dispatcher' -as [type]
     $dispatcher = if ($type) { [System.Windows.Threading.Dispatcher]::FromThread([System.Threading.Thread]::CurrentThread) } else { $null }
     if (-not $dispatcher) { return }
-    $script:writeNotices.Add(@{ Path = $Entry.Path; State = $Entry.State; Tell = $Tell; Message = if ($Entry.Exception) { $Entry.Exception.Message } else { '' } })
+    $script:writeNotices.Add(@{ Path = $Rec.Path; Tell = $Tell; Message = if ($Rec.Failed) { [string]$Rec.Failed.Exception.Message } else { '' } })
     if ($script:writeNoticeQueued) { return }
     $script:writeNoticeQueued = $true
     [void]$dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [Action]{ Send-WtDataWriteNotices })
@@ -269,13 +354,15 @@ function Send-WtDataWriteNotices {
     foreach ($n in $list) {
         if ($n.Tell) {
             $name = [System.IO.Path]::GetFileName($n.Path)
-            try { Show-WtMessage "데이터 폴더에 저장하지 못했습니다 ($name).`n$($n.Message)`n`n다음에 저장할 때 다시 씁니다." 'WorkTool' 'Warning' } catch { }
+            try { Show-WtMessage "데이터 폴더에 저장하지 못했습니다 ($name).`n$($n.Message)`n`n그 내용은 앱이 가지고 있습니다. 다시 저장하거나(메모는 Ctrl+S), 끝낼 때 다시 시도할지 묻습니다." 'WorkTool' 'Warning' } catch { }
         }
-        foreach ($h in @($script:writeHandlers)) { try { [void](& $h $n.Path $n.State) } catch { } }
+        $state = (Get-WtDataWriteStatus $n.Path).State
+        foreach ($h in @($script:writeHandlers)) { try { [void](& $h $n.Path $state) } catch { } }
     }
 }
 $script:writeNotices = [System.Collections.Generic.List[object]]::new()
 $script:writeNoticeQueued = $false
+$script:writeFiles = @{}
 
 function Get-WtStorePath {
     param([Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$Name)
@@ -337,7 +424,7 @@ function Read-WtStore {
             $from++
             $doc.schema = $from
         }
-        Write-WtStore -Name $Name -Schema $Schema -Items @($doc.items) -AllowPending
+        Write-WtStore -Name $Name -Schema $Schema -Items @($doc.items)
     }
     $doc
 }
@@ -356,13 +443,12 @@ function Write-WtStore {
         [Parameter(Mandatory)][string]$Name,
         [int]$Schema = 1,
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Items,
-        [hashtable]$Extra,
-        [switch]$AllowPending   # 쓰는 중이어도 그냥 돌아온다 (Write-WtJsonFile 참고)
+        [hashtable]$Extra
     )
     $doc = [ordered]@{ schema = $Schema; saved = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss') }
     if ($Extra) { foreach ($k in $Extra.Keys) { $doc[$k] = $Extra[$k] } }
     $doc['items'] = @($Items | Where-Object { $null -ne $_ })
-    Write-WtJsonFile (Get-WtStorePath $Name) $doc -AllowPending:$AllowPending
+    Write-WtJsonFile (Get-WtStorePath $Name) $doc
 }
 
 # 새 항목 ID
@@ -393,6 +479,6 @@ function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
 }
 
 Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
-    Test-WtSavePending, Test-WtDataWriting, Get-WtDataWriteState, Register-WtDataWriteHandler, Stop-WtDataWrites,
+    Test-WtDataWriting, Get-WtDataWriteState, Get-WtDataWriteStatus, Get-WtDataUnsaved, Resume-WtDataWrites, Register-WtDataWriteHandler, Stop-WtDataWrites,
     Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
     Find-WtLegacyFolder, Import-WtLegacyCsv
