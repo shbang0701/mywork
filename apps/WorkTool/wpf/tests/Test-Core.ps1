@@ -65,6 +65,9 @@ try {
     [IO.File]::WriteAllText($cachePath, [IO.File]::ReadAllText($cachePath).Replace('캐시-A','캐시-B'), [Text.UTF8Encoding]::new($false))
     [IO.File]::SetLastWriteTimeUtc($cachePath, $cacheTime)
     Assert-Wt '저장 표식: 크기·시각이 같아도 본문 변경을 알아본다' ($cacheStamp -cne (Get-WtStoreStamp 'cache-sample') -and (Get-WtStoreItems 'cache-sample')[0].title -eq '캐시-B')
+    $cacheLock = [IO.File]::Open($cachePath, 'Open', 'ReadWrite', 'None')
+    try { $locked1 = Get-WtStoreStamp 'cache-sample'; $locked2 = Get-WtStoreStamp 'cache-sample' } finally { $cacheLock.Dispose() }
+    Assert-Wt '저장 표식: 다른 프로그램이 파일을 잡고 있어도 멈추지 않고, 매번 다시 읽게 한다' ($locked1 -cne $locked2)
 
     Write-WtStore -Name 'mig' -Schema 1 -Items @([ordered]@{ id = 'm1' })
     $doc = Read-WtStore -Name 'mig' -Schema 2 -Migrate {
@@ -379,6 +382,18 @@ pie
     # ReuseThread 실행 공간은 버리기(Dispose) 전까지 스레드가 남는다. 끝낼 때 응답 없는 작업이라 못 버리면 창을 닫아도 앱 프로세스가 끝나지 않는다
     $reuse = @(Get-ChildItem $root -Filter '*.psm1' -Recurse | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -match 'ThreadOptions\s*=\s*\S*ReuseThread' } | ForEach-Object Name)
     Assert-Wt '탭 모아 보기: 실행 공간을 ReuseThread로 만들지 않는다 (앱 프로세스가 끝나지 않는다)' (-not $reuse.Count) ($reuse -join ', ')
+    # 글을 코드로 바꿔 실행하는 동작(AGENTS.md 「코드 규칙」 4번)은 앱 코드에도 쓰지 않는다. 주석 · 도움말 글은 빼고 구문으로 찾는다
+    $dynamic = @(foreach ($f in Get-ChildItem $root -Recurse -Include '*.psm1', '*.ps1' | Where-Object { $_.Name -notlike 'Test-*' -and $_.FullName -notlike '*\tests\*' }) {
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$null)
+            $hits = $ast.FindAll({
+                    param($n)
+                    ($n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $n.Expression -is [System.Management.Automation.Language.TypeExpressionAst] -and
+                        $n.Expression.TypeName.Name -match '(?i)^(System\.Management\.Automation\.)?scriptblock$' -and $n.Member.Value -eq 'Create') -or
+                    ($n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in 'Invoke-Expression', 'iex')
+                }, $true)
+            if (@($hits).Count) { $f.Name }
+        })
+    Assert-Wt '탭 모아 보기: 글을 코드로 바꿔 실행하지 않는다 ([scriptblock]::Create · Invoke-Expression)' (-not $dynamic.Count) ($dynamic -join ', ')
     if ($wpf) {
         $texts = @(Get-WtTestTexts (New-WtHelpPage))
         $missing = @(foreach ($a in @(Get-WtAddon)) { foreach ($line in @($a.Help)) { if ($texts -notcontains $line) { "$($a.Id): $line" } } })

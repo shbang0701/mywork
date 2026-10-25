@@ -80,9 +80,12 @@ function Get-WtStoreStamp([string]$Name) {
     $info.Refresh()
     if (-not $info.Exists) { return "$path|missing" }
     # 같은 크기·시각으로 덮어쓴 외부 변경도 놓치지 않는다. JSON 해석 없이 작은 버퍼로 읽는다.
-    $stream = [System.IO.File]::OpenRead($path)
-    try { $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($stream)) }
-    finally { $stream.Dispose() }
+    # 다른 프로그램(동기화 · 백신 등)이 잠깐 잡고 있어 못 읽으면 매번 다른 표식을 돌려줘, 화면이 그냥 다시 읽게 한다
+    try {
+        $stream = [System.IO.File]::OpenRead($path)
+        try { $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($stream)) }
+        finally { $stream.Dispose() }
+    } catch [System.IO.IOException], [System.UnauthorizedAccessException] { $hash = "unread-$([guid]::NewGuid().ToString('N'))" }
     "$path|$($info.LastWriteTimeUtc.Ticks)|$($info.CreationTimeUtc.Ticks)|$($info.Length)|$hash"
 }
 

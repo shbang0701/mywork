@@ -319,16 +319,11 @@ function Start-WtTaskJob([string]$Action, [object[]]$Targets = @()) {
         }
         $runspace = $script:workerRunspace
         $ps = [powershell]::Create(); $ps.Runspace = $runspace
-        # 부모 조회도 배경에서 한다. 내부 함수 소스만 넘기며 작업의 변수/함수/UIA 참조는 로컬 범위에 둔다.
-        $runner = {
-            param($request, $hostSource, $workerSource)
-            try {
-                $request.HostProcessIds = @(& ([scriptblock]::Create($hostSource)))
-                & ([scriptblock]::Create($workerSource)) $request
-            } finally { $Error.Clear() }
-        }
-        [void]$ps.AddScript($runner.ToString(), $true).AddArgument(@{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; Cancel = $cancel }).
-            AddArgument((Get-Command Get-WtTaskHostIds).Definition).AddArgument($script:worker.ToString())
+        # 부모 조회도 배경에서 한다. 함수와 작업 본문을 스크립트 하나에 그대로 넣어 지역 범위로 돌린다(실행 공간에 남기지 않는다).
+        # 글을 코드로 바꾸는 [scriptblock]::Create는 쓰지 않는다 (AGENTS.md 「코드 규칙」 4번)
+        $runner = "param(`$request)`ntry {`nfunction Get-WtTaskHostIds {`n$((Get-Command Get-WtTaskHostIds).Definition)`n}`n" +
+            "`$request.HostProcessIds = @(Get-WtTaskHostIds)`n& {`n$($script:worker.ToString())`n} `$request`n} finally { `$Error.Clear() }"
+        [void]$ps.AddScript($runner, $true).AddArgument(@{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; Cancel = $cancel })
         $handle = $ps.BeginInvoke()
         $script:job = @{ PowerShell = $ps; Runspace = $runspace; Handle = $handle; Cancel = $cancel; Action = $Action; Started = [datetime]::UtcNow }
         $script:timer.Start()

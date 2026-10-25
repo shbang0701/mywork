@@ -130,9 +130,12 @@ function Get-WtStoreStamp([string]$Name) {
     $info.Refresh()
     if (-not $info.Exists) { return "$path|missing" }
     # 같은 크기·시각으로 덮어쓴 외부 변경도 놓치지 않는다. JSON 해석 없이 작은 버퍼로 읽는다.
-    $stream = [System.IO.File]::OpenRead($path)
-    try { $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($stream)) }
-    finally { $stream.Dispose() }
+    # 다른 프로그램(동기화 · 백신 등)이 잠깐 잡고 있어 못 읽으면 매번 다른 표식을 돌려줘, 화면이 그냥 다시 읽게 한다
+    try {
+        $stream = [System.IO.File]::OpenRead($path)
+        try { $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($stream)) }
+        finally { $stream.Dispose() }
+    } catch [System.IO.IOException], [System.UnauthorizedAccessException] { $hash = "unread-$([guid]::NewGuid().ToString('N'))" }
     "$path|$($info.LastWriteTimeUtc.Ticks)|$($info.CreationTimeUtc.Ticks)|$($info.Length)|$hash"
 }
 
@@ -375,7 +378,7 @@ $script:fonts = @{
     # → Segoe UI(Windows 10), 한글은 맑은 고딕. 따로 설치하는 글꼴(Noto Sans KR 등)은 PC마다 있고 없고가 달라 쓰지 않는다
     UI   = 'Segoe UI Variable Text, Segoe UI, Malgun Gothic'
     Icon = 'Segoe Fluent Icons, Segoe MDL2 Assets'
-    Mono = 'Consolas, D2Coding, Malgun Gothic'
+    Mono = 'Consolas, Malgun Gothic'   # 코드 · 출력 칸. 영문은 Consolas, 한글은 맑은 고딕 (둘 다 Windows 기본)
 }
 
 # ---- 색 계산 (WPF 없이도 동작: 테스트용) ------------------------------------------------------
@@ -5803,16 +5806,11 @@ function Start-WtTaskJob([string]$Action, [object[]]$Targets = @()) {
         }
         $runspace = $script:workerRunspace
         $ps = [powershell]::Create(); $ps.Runspace = $runspace
-        # 부모 조회도 배경에서 한다. 내부 함수 소스만 넘기며 작업의 변수/함수/UIA 참조는 로컬 범위에 둔다.
-        $runner = {
-            param($request, $hostSource, $workerSource)
-            try {
-                $request.HostProcessIds = @(& ([scriptblock]::Create($hostSource)))
-                & ([scriptblock]::Create($workerSource)) $request
-            } finally { $Error.Clear() }
-        }
-        [void]$ps.AddScript($runner.ToString(), $true).AddArgument(@{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; Cancel = $cancel }).
-            AddArgument((Get-Command Get-WtTaskHostIds).Definition).AddArgument($script:worker.ToString())
+        # 부모 조회도 배경에서 한다. 함수와 작업 본문을 스크립트 하나에 그대로 넣어 지역 범위로 돌린다(실행 공간에 남기지 않는다).
+        # 글을 코드로 바꾸는 [scriptblock]::Create는 쓰지 않는다 (AGENTS.md 「코드 규칙」 4번)
+        $runner = "param(`$request)`ntry {`nfunction Get-WtTaskHostIds {`n$((Get-Command Get-WtTaskHostIds).Definition)`n}`n" +
+            "`$request.HostProcessIds = @(Get-WtTaskHostIds)`n& {`n$($script:worker.ToString())`n} `$request`n} finally { `$Error.Clear() }"
+        [void]$ps.AddScript($runner, $true).AddArgument(@{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; Cancel = $cancel })
         $handle = $ps.BeginInvoke()
         $script:job = @{ PowerShell = $ps; Runspace = $runspace; Handle = $handle; Cancel = $cancel; Action = $Action; Started = [datetime]::UtcNow }
         $script:timer.Start()

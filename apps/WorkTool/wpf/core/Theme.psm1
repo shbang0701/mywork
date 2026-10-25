@@ -83,7 +83,7 @@ $script:fonts = @{
     # → Segoe UI(Windows 10), 한글은 맑은 고딕. 따로 설치하는 글꼴(Noto Sans KR 등)은 PC마다 있고 없고가 달라 쓰지 않는다
     UI   = 'Segoe UI Variable Text, Segoe UI, Malgun Gothic'
     Icon = 'Segoe Fluent Icons, Segoe MDL2 Assets'
-    Mono = 'Consolas, D2Coding, Malgun Gothic'
+    Mono = 'Consolas, Malgun Gothic'   # 코드 · 출력 칸. 영문은 Consolas, 한글은 맑은 고딕 (둘 다 Windows 기본)
 }
 
 # ---- 색 계산 (WPF 없이도 동작: 테스트용) ------------------------------------------------------
