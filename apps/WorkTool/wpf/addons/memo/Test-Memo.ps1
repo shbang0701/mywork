@@ -353,6 +353,32 @@ try {
     Assert-WtTest '메모 안정성: 자동 저장 뒤 목록 선택과 편집기 메모가 일치한다' ((Get-TestTabs).Current[0] -eq $two.id -and (& $memoModule { $script:ui.List.SelectedItem.Id }) -eq $two.id -and ((Get-WtMemoItems) | Where-Object id -eq $one.id).body -eq 'next draft')
     & $memoModule { param($id) Select-WtMemoItem $id } $one.id
 
+    # 데이터 폴더가 늦게 답하는 저장: 실패가 아니라 「저장하는 중」. 고친 표시를 남기고, 통로가 다 쓰면 다시 저장해 「자동 저장됨」이 된다
+    # 실제 쓰기(Write-WtDataFile) 앞에 기다림만 끼운다. 저장 통로 · 상태 바꾸기 · 다시 저장은 그대로 돈다
+    $storage = Get-Module Storage
+    $gate = New-WtTestGate
+    try {
+        & $storage { $script:testJob = $script:writeJob; $script:writeJob = { param($p, $json) [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.WaitOne(); Write-WtDataFile $p $json } }
+        Set-TestBody 0 'slow draft'
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        $savedNow = & $memoModule { Save-WtMemoNow }
+        $saveMs = $watch.ElapsedMilliseconds
+        $writingTexts = @(Get-WtTestTexts $st0)
+        $stillDirty = & $memoModule { $script:panes[0].Dirty }
+        & $storage { $script:writeJob = $script:testJob }
+        [void]$gate.Gate.Set()
+        $watch.Restart()
+        while ((Test-WtDataWriting) -and $watch.ElapsedMilliseconds -lt 5000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{ }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle)   # 통로가 미뤄 둔 알림 → 메모가 다시 저장
+        Assert-WtTest "메모 안정성: 저장이 늦으면 잠깐만 기다리고(${saveMs}ms) 실패가 아닌 「저장하는 중」, 다 쓰면 다시 저장해 「자동 저장됨」" (
+            -not $savedNow -and $saveMs -lt 1500 -and $stillDirty -and @($writingTexts | Where-Object { $_ -like '저장하는 중*' }).Count -eq 1 -and
+            -not @($writingTexts | Where-Object { $_ -like '저장하지 못했습니다*' }).Count -and -not (& $memoModule { $script:panes[0].Dirty }) -and
+            @(Get-WtTestTexts $st0 | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1 -and ((Get-WtMemoItems) | Where-Object id -eq $one.id).body -eq 'slow draft') ($writingTexts -join ' / ')
+    } finally {
+        & $storage { if ($script:testJob) { $script:writeJob = $script:testJob } }
+        Remove-WtTestGate $gate
+    }
+
     # 실패한 삭제 · 실행 취소를 여러 번 해도 배열이 먼저 바뀌지 않는다
     $held = [System.IO.File]::Open($memoPath, 'Open', 'Read', 'Read')
     & $memoModule { Remove-WtMemoCurrent; Remove-WtMemoCurrent; [void](Add-WtMemo) }

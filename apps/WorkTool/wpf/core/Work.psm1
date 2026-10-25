@@ -128,6 +128,11 @@ function Get-WtWorkSession([string]$Kind) {
   -WaitMs        시작한 뒤 이 시간까지는 기다린다. 그 안에 끝나면 -OnDone을 부르고 돌아온다
                  -OnDone 안에서 부른 쪽의 상태를 바꾸면, 부른 함수가 끝난 뒤 Wait-WtWork로 기다리는 편이 안전하다
   -Call          -Script 대신 New-WtCall로 묶은 .NET 호출 하나. 실행 공간 없이 스레드 풀에서 부른다 ($WtCancel 없음)
+  -Reserved      끝나지 않은 작업 수 한도($script:maxJobs)를 보지 않는다. 한 번에 하나씩만 도는 통로(저장 · 잠금)가 쓴다.
+                 응답 없는 읽기가 한도를 채워도 저장은 막히지 않게
+되돌릴 수 없는 일(셸 열기 · 프로세스 만들기)을 하는 코드는 그 직전에 잠금 안에서 취소를 보고 $WtCancel.Committed를 $true로 둔다:
+  [System.Threading.Monitor]::Enter($WtCancel.SyncRoot); try { if ($WtCancel.Value) { return }; $WtCancel.Committed = $true } finally { [System.Threading.Monitor]::Exit($WtCancel.SyncRoot) }
+  그러면 시간 초과 · 멈춤 때 $w.Committed로 「이미 넘겼는지」를 정확히 안다 (넘기기 전이면 끝내 하지 않는다)
 #>
 function Start-WtWork {
     param(
@@ -141,11 +146,12 @@ function Start-WtWork {
         [string]$Key = '',
         [int]$TimeoutMs = 0,
         [int]$WaitMs = 0,
-        [Delegate]$Call
+        [Delegate]$Call,
+        [switch]$Reserved
     )
     if (-not $Script -and -not $Call) { throw [System.ArgumentException]::new('-Script나 -Call을 주세요.') }
     Clear-WtWorkFinished
-    if ($script:jobs.Count -ge $script:maxJobs) {
+    if (-not $Reserved -and $script:jobs.Count -ge $script:maxJobs) {
         throw [System.InvalidOperationException]::new('응답하지 않는 작업이 많아 새 작업을 시작하지 않습니다. 네트워크 연결을 확인하고 잠시 뒤 다시 시도하세요.')
     }
     $job = New-WtWorkJob $Key
@@ -181,12 +187,19 @@ function Start-WtWork {
     $job
 }
 
+# 취소 표시를 한다. 작업 코드가 같은 잠금 안에서 「되돌릴 수 없는 일을 시작함(Committed)」을 표시하므로, 둘 중 하나만 먼저 일어난다
+function Set-WtWorkCancel($Job) {
+    $c = $Job.Cancel
+    [System.Threading.Monitor]::Enter($c.SyncRoot)
+    try { $c.Value = $true; $Job.Committed = [bool]$c.Committed } finally { [System.Threading.Monitor]::Exit($c.SyncRoot) }
+}
+
 # 작업 기록 하나
 function New-WtWorkJob([string]$Key) {
     $script:nextId++
     [pscustomobject]@{
         Id = $script:nextId; Key = $Key; State = 'running'; Result = $null; Output = @(); Error = $null; Exception = $null
-        TimedOut = $false; Stuck = $false; Stopped = $false; Finished = $false; Context = $null; OnDone = $null
+        TimedOut = $false; Stuck = $false; Stopped = $false; Finished = $false; Committed = $false; Context = $null; OnDone = $null
         TimeoutMs = 0; Watch = [System.Diagnostics.Stopwatch]::StartNew(); Cancel = [hashtable]::Synchronized(@{ Value = $false })
         Session = 'Empty'; Sta = $false; PowerShell = $null; Runspace = $null; Task = $null; Handle = $null
     }
@@ -258,7 +271,7 @@ function Update-WtWork {
         if ($j.Finished) { continue }
         if ($j.Handle.IsCompleted) { Complete-WtWorkJob $j; continue }
         if ($j.State -eq 'running' -and $j.TimeoutMs -gt 0 -and $j.Watch.ElapsedMilliseconds -ge $j.TimeoutMs) {
-            $j.State = 'timedout'; $j.TimedOut = $true; $j.Stuck = $true; $j.Cancel.Value = $true
+            $j.State = 'timedout'; $j.TimedOut = $true; $j.Stuck = $true; Set-WtWorkCancel $j
             if ($j.OnDone) { Invoke-WtWorkDone $j }
         }
     }
@@ -320,7 +333,7 @@ function Wait-WtWork {
 function Stop-WtWork([Parameter(Position = 0)][object[]]$Job) {
     foreach ($j in @($Job)) {
         if (-not $j -or $j.Finished) { continue }
-        $j.Cancel.Value = $true
+        Set-WtWorkCancel $j
         $j.Stopped = $true
         $j.OnDone = $null
         if ($j.State -eq 'running') { $j.State = 'stopped' }
@@ -360,7 +373,8 @@ function Invoke-WtWork {
         [switch]$Sta,
         [string]$Key = '',
         [Parameter(Mandatory)][int]$TimeoutMs,
-        [Delegate]$Call
+        [Delegate]$Call,
+        [switch]$Reserved
     )
     if (Test-WtWorkStuck $Key) { throw [System.TimeoutException]::new('앞서 보낸 요청이 아직 응답하지 않습니다.') }
     if ($Call) {
@@ -375,9 +389,9 @@ function Invoke-WtWork {
         if ($task.IsFaulted -or $task.IsCanceled) { throw $(if ($task.Exception) { $task.Exception.GetBaseException() } else { [System.OperationCanceledException]::new() }) }
         return , $task.Result
     }
-    $job = Start-WtWork -Script $Script -ArgumentList $ArgumentList -Functions $Functions -Session $Session -Sta:$Sta -Key $Key
+    $job = Start-WtWork -Script $Script -ArgumentList $ArgumentList -Functions $Functions -Session $Session -Sta:$Sta -Key $Key -Reserved:$Reserved
     if (-not (Wait-WtWork $job -Milliseconds $TimeoutMs)) {
-        $job.State = 'timedout'; $job.TimedOut = $true; $job.Stuck = $true; $job.Cancel.Value = $true
+        $job.State = 'timedout'; $job.TimedOut = $true; $job.Stuck = $true; Set-WtWorkCancel $job
         throw [System.TimeoutException]::new("$([Math]::Ceiling($TimeoutMs / 1000))초 안에 응답하지 않았습니다.")
     }
     if ($job.State -eq 'failed') { throw $job.Exception }
@@ -446,12 +460,18 @@ function Get-WtPathOpenAction([int]$Attributes, [string]$Path, [bool]$Reveal = $
 }
 
 # 화면 밖(STA)에서 확인하고 연다. STA 스레드라 .NET이 셸 열기용 스레드를 따로 만들지 않는다.
-# 시간이 지나 취소 표시가 붙었으면 늦게 확인돼도 열지 않는다. 검사는 이 코드를 바꿔 끼워 실제로 열지 않는다
+# 셸에 넘기기 직전에 잠금 안에서 취소(시간 초과)를 보고 「넘김(Committed)」을 표시한다. 그래서 넘기기 전에 시간이 지났으면 늦게 확인돼도 열지 않고,
+# 넘긴 뒤에 시간이 지났으면(셸이 늦게 여는 중) 화면이 그 사실대로 알린다. 셸 호출 자체는 중간에 멈출 수 없다
 $script:openWork = {
     param($path, $reveal, $openTypes)
-    $attr = [int][System.IO.FileInfo]::new($path).Attributes
+    $attr = Get-WtPathAttributes $path
     $act = Get-WtPathOpenAction $attr $path $reveal $openTypes
-    if ($act -eq 'missing' -or $WtCancel.Value) { return @{ Action = $act; Skipped = [bool]$WtCancel.Value } }
+    if ($act -eq 'missing') { return @{ Action = $act; Skipped = $false } }
+    [System.Threading.Monitor]::Enter($WtCancel.SyncRoot)
+    try {
+        if ($WtCancel.Value) { return @{ Action = $act; Skipped = $true } }
+        $WtCancel.Committed = $true
+    } finally { [System.Threading.Monitor]::Exit($WtCancel.SyncRoot) }
     if ($act -eq 'reveal') {
         $start = [System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([Environment]::GetFolderPath('Windows'), 'explorer.exe'), "/select,`"$path`"")
         $start.UseShellExecute = $false
@@ -459,19 +479,31 @@ $script:openWork = {
         $start = [System.Diagnostics.ProcessStartInfo]::new($path)
         $start.UseShellExecute = $true
     }
-    try { $p = [System.Diagnostics.Process]::Start($start) }
-    catch [System.ComponentModel.Win32Exception] {
-        # 연결된 프로그램이 없으면 Windows의 「연결 프로그램」 창으로 고르게 한다 (Invoke-Item과 같게)
-        if ($_.Exception.NativeErrorCode -ne 1155 -or $act -ne 'open') { throw }
-        $start.Verb = 'openas'
-        $p = [System.Diagnostics.Process]::Start($start)
-    }
-    if ($p) { $p.Dispose() }
+    Invoke-WtShellStart $start $act
     @{ Action = $act; Skipped = $false }
 }
 
+# 경로의 속성 (-1 = 없음). 네트워크 오류는 예외로 올린다 (화면 밖에서 부른다)
+function Get-WtPathAttributes([string]$Path) { [int][System.IO.FileInfo]::new($Path).Attributes }
+
+# 셸에 열기를 넘긴다 (화면 밖 STA에서 부른다). 검사는 이것만 바꿔 끼워 실제로 열지 않는다
+function Invoke-WtShellStart($Start, [string]$Action) {
+    try { $p = [System.Diagnostics.Process]::Start($Start) }
+    catch [System.ComponentModel.Win32Exception] {
+        # 연결된 프로그램이 없으면 Windows의 「연결 프로그램」 창으로 고르게 한다 (Invoke-Item과 같게)
+        if ($_.Exception.NativeErrorCode -ne 1155 -or $Action -ne 'open') { throw }
+        $Start.Verb = 'openas'
+        $p = [System.Diagnostics.Process]::Start($Start)
+    }
+    if ($p) { $p.Dispose() }
+}
+
 function Get-WtPathTimeoutText([string]$Path) {
-    "경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.`n$Path"
+    "경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요. 늦게 답이 와도 열지 않습니다.`n$Path"
+}
+
+function Get-WtPathLateText([string]$Path) {
+    "열기를 프로그램에 넘겼지만 응답이 늦습니다. 응답이 오면 늦게 열릴 수 있습니다.`n$Path"
 }
 
 <#
@@ -481,7 +513,8 @@ function Get-WtPathTimeoutText([string]$Path) {
   -OpenTypes   폴더와 이 확장자(소문자 '.pdf' 등)만 열고, 나머지(실행 파일 · 스크립트 등)는 탐색기에서 골라 보여 준다
   -NotFound    없을 때 알릴 글 (기본: 찾을 수 없습니다 + 경로)
 - 확인하는 동안 커서가 AppStarting(화살표 + 모래시계). 같은 경로를 확인 중에 또 누르면 겹쳐 시작하지 않는다.
-- $script:openTimeoutMs 안에 답이 없으면 기다리지 않고 알린다. 늦게 확인돼도 열지 않는다.
+- $script:openTimeoutMs 안에 답이 없으면 기다리지 않고 알린다. 셸에 넘기기 전(있는지 · 폴더인지 확인 중)이었으면 늦게 확인돼도 열지 않는다.
+  이미 셸에 넘긴 뒤였으면 셸 호출은 멈출 수 없으므로, 늦게 열릴 수 있다고 사실대로 알린다.
   같은 곳(드라이브 · 공유)에 답이 없는 확인이 남아 있으면 새로 묻지 않고 바로 알린다.
 #>
 function Open-WtPath {
@@ -492,7 +525,7 @@ function Open-WtPath {
     $key = Get-WtPathKey $Path
     if (Test-WtWorkStuck $key) { Show-WtMessage (Get-WtPathTimeoutText $Path) 'WorkTool' 'Warning'; return }
     try {
-        [void](Start-WtWork -Script $script:openWork -ArgumentList @($Path, [bool]$Reveal, [string[]]@($OpenTypes)) -Functions (Get-Command Get-WtPathOpenAction) -Sta `
+        [void](Start-WtWork -Script $script:openWork -ArgumentList @($Path, [bool]$Reveal, [string[]]@($OpenTypes)) -Functions (Get-Command Get-WtPathOpenAction, Get-WtPathAttributes, Invoke-WtShellStart) -Sta `
                 -Key $key -TimeoutMs $script:openTimeoutMs -Context @{ Open = $true; Path = $Path; NotFound = $NotFound } -OnDone { param($w) Complete-WtPathOpen $w })
     } catch {
         Show-WtMessage "경로를 열지 못했습니다.`n$Path`n$($_.Exception.Message)" 'WorkTool' 'Warning'
@@ -505,7 +538,7 @@ function Open-WtPath {
 function Complete-WtPathOpen($Job) {
     Update-WtPathCursor
     $path = $Job.Context.Path
-    if ($Job.TimedOut) { Show-WtMessage (Get-WtPathTimeoutText $path) 'WorkTool' 'Warning'; return }
+    if ($Job.TimedOut) { Show-WtMessage $(if ($Job.Committed) { Get-WtPathLateText $path } else { Get-WtPathTimeoutText $path }) 'WorkTool' 'Warning'; return }
     if ($Job.State -eq 'failed') {
         Show-WtMessage "경로를 확인하지 못했습니다. 접근 권한과 경로를 확인하세요.`n$path`n$($Job.Error)" 'WorkTool' 'Warning'
         return

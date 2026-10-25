@@ -33,6 +33,7 @@ $script:warmTimer = $null
 $script:warmEnabled = $false  # WORKTOOL_WARMUP=1인 진단 세션에서만 켠다
 $script:warmStarted = $false  # ContentRendered가 다시 와도 세션당 한 번만 예약
 $script:forceOpaque = $false  # WORKTOOL_FORCE_OPAQUE=1: 설정을 저장하지 않는 불투명 창
+$script:writingDropped = $false   # 끝낼 때 사용자가 「저장을 기다리지 않고 끝내기」를 골랐는지
 
 $script:shellXaml = @'
 <Window {NS}
@@ -474,6 +475,37 @@ function Show-WtPendingChoice([string]$Purpose, [string]$Title) {
     [string]$dialog.Window.Tag.Choice
 }
 
+# 저장 통로에 쓰는 중인 것이 남았을 때 (데이터 폴더가 늦게 답함). 창은 멈추지 않고, 저장이 끝나면 저절로 닫힌다.
+# 'done'(저장이 끝남) · 'proceed'(기다리지 않고 끝내기 · 이동) · 'cancel' 중 하나. -NoCancel이면 [취소]가 없다 (정리를 시작한 뒤)
+function Show-WtWritingChoice([string]$Purpose, [switch]$NoCancel) {
+    $exit = $Purpose -eq 'exit'
+    $dialog = New-WtModal '저장하는 중입니다'
+    $text = New-WtText "데이터 폴더에 저장하는 중입니다. 저장이 끝나면 바로 $(if ($exit) { '끝냅니다' } else { '이동합니다' })." 'T.Body'
+    $text.TextWrapping = 'Wrap'
+    [void](Add-WtChild $dialog.Body $text)
+    $state = New-WtText '' 'T.Sub'
+    [void](Add-WtChild $dialog.Body $state)
+    $go = New-WtButton $(if ($exit) { '저장을 기다리지 않고 끝내기' } else { '기다리지 않고 이동' }) -Kind Danger
+    $go.Tag = $dialog.Window
+    $go.Add_Click({ param($s, $e) $s.Tag.Tag.Choice = 'proceed'; $s.Tag.DialogResult = $true })
+    [void](Add-WtChild $dialog.Buttons $go)
+    if (-not $NoCancel) { $cancel = New-WtButton '취소'; $cancel.IsCancel = $true; [void](Add-WtChild $dialog.Buttons $cancel) }
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [TimeSpan]::FromMilliseconds(200)
+    $dialog.Window.Tag = @{ Choice = 'cancel'; Timer = $timer; State = $state }
+    $timer.Tag = $dialog.Window
+    $timer.Add_Tick({
+            param($s, $e)
+            $w = $s.Tag
+            if (-not (Test-WtDataWriting)) { $s.Stop(); $w.Tag.Choice = 'done'; $w.DialogResult = $true; return }
+            $st = Get-WtDataWriteState
+            $w.Tag.State.Text = "$(if ($st.Slow) { '응답 없음' } else { '저장하는 중' }) · $($st.Seconds)초 · 남은 저장 $($st.Count)개"
+        })
+    $timer.Start()
+    try { [void]$dialog.Window.ShowDialog() } finally { $timer.Stop() }
+    [string]$dialog.Window.Tag.Choice
+}
+
 # 저장하지 않은 내용을 저장한다. 계속해도 되면 $true.
 # -Purpose exit · switch: 저장하지 못하면 다시 시도 · 그대로 진행 · 취소를 묻는다. 막기만 하면 끄거나 옮길 방법이 없어진다.
 #          check: 묻지 않고 알린 뒤 $false (예전 데이터 가져오기처럼 덮어쓰는 작업 전)
@@ -486,6 +518,14 @@ function Save-WtPendingChanges([ValidateSet('check', 'switch', 'exit')][string]$
             try { $saved = (@(& $a.SavePending) | Select-Object -Last 1) -ne $false }
             catch { Show-WtError $_ "저장 확인: $($a.Title)" }
             if ($saved) { break }
+            # 저장 통로가 아직 쓰는 중이면(데이터 폴더가 늦게 답함) 실패로 묻지 않고, 끝날 때까지 기다리거나 기다리지 않고 진행할지 묻는다
+            if ($Purpose -ne 'check' -and (Test-WtDataWriting)) {
+                if ($script:window -and -not $script:window.IsVisible) { Show-WtMainWindow }
+                $choice = Show-WtWritingChoice $Purpose
+                if ($choice -eq 'done') { continue }        # 저장이 끝났다: 다시 저장해 본다
+                if ($choice -eq 'proceed') { $script:writingDropped = $Purpose -eq 'exit'; break }
+                return $false
+            }
             if ($Purpose -eq 'check') {
                 Show-WtMessage "$($a.Title) 화면에 저장하지 못한 내용이 있습니다. 저장 오류를 해결한 뒤 다시 시도하세요." '저장 확인' 'Warning'
                 return $false
@@ -505,12 +545,20 @@ function Save-WtPendingChanges([ValidateSet('check', 'switch', 'exit')][string]$
 # 탭의 OnExit 뒤에 남은 화면 밖 작업(응답 없는 공유 폴더 조회 등)은 기다리지 않고 모두 버린다 (core\Work.psm1)
 function Stop-WtApp {
     if (-not $script:exiting) {
+        $script:writingDropped = $false
         if (-not (Save-WtPendingChanges -Purpose exit)) { return $false }
         foreach ($a in @(Get-WtAddon -All)) {
             if ($a.OnExit) { try { [void](& $a.OnExit) } catch { Show-WtError $_ "끝내기 전 저장: $($a.Title)" } }
         }
+        # 정리 중에 시작한 저장(실행 기록 등)이 아직 쓰는 중이면 끝날 때까지 기다린다. 쓰는 중인 저장을 말없이 버리고 끝내지 않는다.
+        # 정리는 이미 했으니 취소는 없다. 창을 그냥 닫으면 다시 묻는다 (끝나거나 [기다리지 않고 끝내기]를 고를 때까지)
+        while (-not $script:writingDropped -and (Test-WtDataWriting)) {
+            if ($script:window -and -not $script:window.IsVisible) { Show-WtMainWindow }
+            if ((Show-WtWritingChoice exit -NoCancel) -eq 'proceed') { $script:writingDropped = $true }
+        }
     }
     $script:exiting = $true
+    if ($script:writingDropped) { try { Stop-WtDataWrites } catch { } }   # 사용자가 기다리지 않고 끝내기를 골랐다
     try { Stop-WtAllWork } catch { }
     if ($script:warmTimer) { $script:warmTimer.Stop() }
     try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }

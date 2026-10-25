@@ -49,7 +49,8 @@ function Set-WtSetting([string]$Key, $Value) {
     }
     $sorted = [ordered]@{}
     foreach ($k in ($next.Keys | Sort-Object)) { $sorted[$k] = $next[$k] }
-    Write-WtJsonFile (Get-WtSettingsPath) ([ordered]@{ schema = 1; values = $sorted })
+    # 데이터 폴더가 늦게 답하면 저장 통로가 끝까지 쓴다 (그동안 읽으면 이 내용이 나온다). 실패가 정해지면 예외로 올라온다
+    Write-WtJsonFile (Get-WtSettingsPath) ([ordered]@{ schema = 1; values = $sorted }) -AllowPending
     $script:values = $next
     foreach ($h in @($script:handlers)) { & $h $Key $Value }
 }

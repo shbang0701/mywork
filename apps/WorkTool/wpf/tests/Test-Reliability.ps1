@@ -46,30 +46,61 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
     Assert-WtTest '안정성: 설정 저장 실패 시 메모리 값도 유지한다' ($threw -and (Get-WtSetting 'test.mode') -eq 'edit')
     $held.Dispose(); $held = $null
 
-    # 데이터 폴더가 응답 없는 공유 폴더: 저장은 정한 시간만 기다리고 실패(IOException)로 올린다.
-    # 답 없는 쓰기가 남아 있는 동안 다른 읽기 · 쓰기는 기다리지 않고 바로 실패한다. 답이 오면 다시 저장된다
+    # 데이터 폴더가 늦게 답하는 저장 (응답 없는 공유 폴더): 실제 쓰기(Write-WtDataFile) 앞에 기다림만 끼운다. 통로 · 상태 바꾸기는 그대로 돈다.
+    # 화면은 정한 시간만 기다리고 실패로 정하지 않는다(저장 중). 통로가 끝까지 맡고, 그동안 읽으면 저장 중인 내용이 나온다
     $storage = Get-Module Storage
+    $filePath = Get-WtStorePath 'hang-test'
+    Write-WtStore -Name 'hang-test' -Items @([ordered]@{ id = 'h0' })
     $gate = New-WtTestGate
     try {
-        & $storage { param($hang) $script:testIo = $script:io.Write; $script:io.Write = $hang; $script:testTimeout = $script:ioTimeoutMs; $script:ioTimeoutMs = 300 } $wtTestHang
+        & $storage {
+            $script:testJob = $script:writeJob; $script:testSlow = $script:writeSlowMs
+            $script:writeJob = { param($p, $json) $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne(); Write-WtDataFile $p $json }
+        }
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
-        $writeError = $null; try { Write-WtStore -Name 'hang-test' -Items @() } catch { $writeError = $_.Exception }
+        $writeError = $null; try { Write-WtStore -Name 'hang-test' -Items @([ordered]@{ id = 'h1' }) } catch { $writeError = $_.Exception }
         $writeMs = $watch.ElapsedMilliseconds
+        Set-WtSetting 'test.mode' 'hang'   # 설정은 통로에 맡기고 바로 돌아온다 (앞 쓰기 뒤 차례)
+        $state = Get-WtDataWriteState
+        Assert-WtTest "안정성: 저장이 늦으면 화면은 잠깐만 기다리고(${writeMs}ms) 실패가 아닌 「저장 중」으로 올린다" (
+            $gate.Entered.WaitOne(0) -and (Test-WtSavePending $writeError) -and $writeMs -lt 1500 -and (Test-WtDataWriting) -and $state.Count -eq 2 -and -not $state.Slow)
+        Assert-WtTest '안정성: 저장 중인 파일을 읽으면 저장 중인 내용이 나오고, 표식도 다 쓴 뒤와 같다' (
+            (Get-WtStoreItems 'hang-test')[0].id -eq 'h1' -and (Get-WtSetting 'test.mode') -eq 'hang' -and (Test-WtStore 'hang-test') -and
+            [System.IO.File]::ReadAllText($filePath) -match '"h0"')
+        # 오래 걸리면(검사에서는 300ms) 「응답 없음」으로 보이지만 실패로 정하지 않는다. 같은 파일을 또 저장해도 바로 돌아온다
+        & $storage { $script:writeSlowMs = 300 }
+        Start-Sleep -Milliseconds 350; Update-WtWork
         $watch.Restart()
-        $readError = $null; try { [void](Read-WtStore 'hang-test') } catch { $readError = $_.Exception }
-        $stamp = Get-WtStoreStamp 'hang-test'
-        $settingError = $null; try { Set-WtSetting 'test.mode' 'hang' } catch { $settingError = $_.Exception }
-        $fastMs = $watch.ElapsedMilliseconds
-        Assert-WtTest "안정성: 데이터 폴더가 답하지 않으면 저장은 정한 시간만 기다리고(${writeMs}ms) 실패로 올리며, 그동안 다른 읽기 · 쓰기는 바로 실패한다(${fastMs}ms)" (
-            $writeError -is [System.IO.IOException] -and $writeError.Message -like '데이터 폴더가 응답하지 않습니다*' -and $writeMs -lt 1500 -and
-            $readError -is [System.IO.IOException] -and $settingError -is [System.IO.IOException] -and $stamp -like '*|unread-*' -and $fastMs -lt 300 -and
-            (Get-WtSetting 'test.mode') -eq 'edit')
+        $againError = $null; try { Write-WtStore -Name 'hang-test' -Items @([ordered]@{ id = 'h2' }) } catch { $againError = $_.Exception }
+        $againMs = $watch.ElapsedMilliseconds
+        $pendingStamp = Get-WtStoreStamp 'hang-test'
+        $slow = Get-WtDataWriteState
+        Assert-WtTest "안정성: 「응답 없음」이 돼도 실패로 정하지 않고, 그동안 저장은 기다리지 않는다 (${againMs}ms)" (
+            $slow.Slow -and $slow.Count -eq 3 -and (Test-WtSavePending $againError) -and $againMs -lt 150 -and (Get-WtStoreItems 'hang-test')[0].id -eq 'h2')
+        # 답이 오면 통로가 차례대로 마저 쓴다: 마지막 내용이 남고, 늦게 끝났다고 실패로 바뀌지 않는다
+        [void]$gate.Gate.Set()
+        $watch.Restart()
+        while ((Test-WtDataWriting) -and $watch.ElapsedMilliseconds -lt 5000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+        $doc = [System.IO.File]::ReadAllText($filePath) | ConvertFrom-Json
+        $settings = [System.IO.File]::ReadAllText((Get-WtSettingsPath)) | ConvertFrom-Json
+        Assert-WtTest '안정성: 답이 오면 저장 통로가 마저 써서 마지막 내용이 파일에 남는다' (
+            -not (Test-WtDataWriting) -and $doc.items[0].id -eq 'h2' -and $settings.values.'test.mode' -eq 'hang')
+        Assert-WtTest '안정성: 저장 중에 잰 표식은 다 쓴 뒤 파일에서 잰 표식과 같다 (화면이 괜히 다시 읽지 않게)' ($pendingStamp -eq (Get-WtStoreStamp 'hang-test'))
     } finally {
-        & $storage { $script:io.Write = $script:testIo; $script:ioTimeoutMs = $script:testTimeout }
+        & $storage { $script:writeJob = $script:testJob; $script:writeSlowMs = $script:testSlow }
         Remove-WtTestGate $gate
     }
-    Write-WtStore -Name 'hang-test' -Items @([ordered]@{ id = 'h1' })
-    Assert-WtTest '안정성: 답 없던 작업이 끝나면 다시 저장 · 읽기가 된다' ((Get-WtStoreItems 'hang-test')[0].id -eq 'h1')
+    # 저장은 읽기와 다른 통로다: 답 없는 읽기가 작업 수 한도를 채워도 저장은 막히지 않는다
+    $gate = New-WtTestGate
+    try {
+        $max = & (Get-Module Work) { $script:maxJobs }
+        $hung = @(for ($i = 0; $i -lt $max; $i++) { Start-WtWork $wtTestHang -Key 'path:\\wt-test\read' -OnDone { } })
+        $blocked = $null; try { [void](Start-WtWork { 1 } -OnDone { }) } catch { $blocked = $_.Exception }
+        $writeError = $null; try { Write-WtStore -Name 'hang-test' -Items @([ordered]@{ id = 'h3' }) } catch { $writeError = $_.Exception }
+        Assert-WtTest "안정성: 답 없는 읽기 ${max}개가 작업 한도를 채워도 저장은 바로 끝난다" (
+            $blocked -is [System.InvalidOperationException] -and -not $writeError -and ([System.IO.File]::ReadAllText($filePath) -match '"h3"'))
+        Stop-WtWork $hung
+    } finally { Remove-WtTestGate $gate }
 
     if (-not (Test-WtTestWpf)) { Write-Host 'SKIP 안정성 WPF/WinForms (Windows STA에서만)'; return }
 
@@ -87,7 +118,19 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
         function script:Show-WtError { param($ErrorRecord, $Action) }
         $script:testChoices = [System.Collections.Generic.Queue[string]]::new(); $script:testAsked = @()
         function script:Show-WtPendingChoice { param($Purpose, $Title) $script:testAsked += $Purpose; if ($script:testChoices.Count) { $script:testChoices.Dequeue() } else { 'cancel' } }
+        # 저장 중 창: 무엇을 물었는지 적고, 검사가 정한 대답 코드를 돌린다 (그 안에서 문을 열어 저장을 끝낼 수 있다)
+        $script:testWriting = @(); $script:testWritingAnswer = { 'cancel' }
+        function script:Show-WtWritingChoice { param($Purpose, [switch]$NoCancel) $script:testWriting += "$Purpose$(if ($NoCancel) { '!' })"; & $script:testWritingAnswer }
     }
+    $gatedWrite = { param($p, $json) $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne(); Write-WtDataFile $p $json }
+    # 문을 열고 저장 통로가 빌 때까지 거둔다. 그 뒤 'done'
+    $finishWrites = {
+        [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.Set()
+        $w = [System.Diagnostics.Stopwatch]::StartNew()
+        while ((Test-WtDataWriting) -and $w.ElapsedMilliseconds -lt 5000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+        if (Test-WtDataWriting) { 'cancel' } else { 'done' }
+    }
+    $savedMode = { ([System.IO.File]::ReadAllText((Get-WtSettingsPath)) | ConvertFrom-Json).values.'test.mode' }
     $allowed = & $shellModule { $script:frame = [pscustomobject]@{ Continue = $true }; Stop-WtApp }
     Assert-WtTest '안정성: 저장 실패는 끝낼지 묻고, [취소]면 정리 처리 전에 종료를 멈춘다' (-not $allowed -and $exitCounter.Count -eq 0 -and (& $shellModule { $script:frame.Continue }) -and (& $shellModule { $script:testAsked -join ',' }) -eq 'exit')
     $calls = $pending.Calls
@@ -113,6 +156,65 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
     $pending.Saved = $false
     $allowed = & $shellModule { $script:exiting = $false; $script:frame = [pscustomobject]@{ Continue = $true }; $script:testAsked = @(); $script:testChoices.Enqueue('proceed'); Stop-WtApp }
     Assert-WtTest '안정성: 저장하지 못해도 [끝내기]를 고르면 정리하고 끝낸다' ($allowed -and $exitCounter.Count -eq 2 -and -not (& $shellModule { $script:frame.Continue }) -and (& $shellModule { $script:testAsked -join ',' }) -eq 'exit')
+
+    # ---- 저장 통로가 아직 쓰는 중일 때 (데이터 폴더가 늦게 답함). 실제 저장 통로 · 상태 바꾸기 · 셸 흐름을 그대로 돌리고 대답 창만 바꾼다 ----
+    # 화면을 옮길 때: 「저장 중」은 실패로 묻지 않는다. 기다리는 창에서 [취소]면 머물고, 저장이 끝나면 다시 저장해 보고 옮긴다
+    $gate = New-WtTestGate
+    try {
+        & $storage { param($j) $script:writeJob = $j } $gatedWrite
+        Set-WtSetting 'test.mode' 'switch-wait'
+        $pending.Saved = $false
+        & $shellModule { $script:testAsked = @(); $script:testWriting = @(); $script:testWritingAnswer = { 'cancel' } }
+        $stayed = -not (& $shellModule { Save-WtPendingChanges -Purpose switch -Only 'test-pending' })
+        $answer = { $r = & $finishWrites; $pending.Saved = $true; $r }.GetNewClosure()
+        $moved = & $shellModule { param($a) $script:testWritingAnswer = $a; Save-WtPendingChanges -Purpose switch -Only 'test-pending' } $answer
+        Assert-WtTest '안정성: 화면을 옮길 때 저장 중이면 실패로 묻지 않고 기다리는 창을 띄운다 ([취소]면 머물고, 끝나면 다시 저장해 보고 옮긴다)' (
+            $stayed -and $moved -and (& $shellModule { $script:testAsked.Count }) -eq 0 -and (& $shellModule { $script:testWriting -join ',' }) -eq 'switch,switch' -and (& $savedMode) -eq 'switch-wait')
+    } finally {
+        & $storage { $script:writeJob = $script:testJob }
+        Remove-WtTestGate $gate
+    }
+    # 끝낼 때: 정리(OnExit) 뒤에도 저장 중인 것이 있으면 말없이 버리고 끝내지 않는다. 끝날 때까지 기다리는 창을 띄운다 (취소 없음)
+    $gate = New-WtTestGate
+    try {
+        & $storage { param($j) $script:writeJob = $j } $gatedWrite
+        Set-WtSetting 'test.mode' 'exit-wait'
+        $exits = $exitCounter.Count
+        $allowed = & $shellModule { param($a) $script:exiting = $false; $script:frame = [pscustomobject]@{ Continue = $true }; $script:testWriting = @(); $script:testWritingAnswer = $a; Stop-WtApp } $finishWrites
+        Assert-WtTest '안정성: 끝낼 때 저장 중인 것이 있으면 기다리는 창을 띄우고, 저장이 끝난 뒤에 끝낸다' (
+            $allowed -and $exitCounter.Count -eq $exits + 1 -and (& $shellModule { $script:testWriting -join ',' }) -eq 'exit!' -and (& $savedMode) -eq 'exit-wait')
+        # 그 창을 그냥 닫으면(대답 없음) 다시 묻는다. [저장을 기다리지 않고 끝내기]를 고를 때만 남은 저장을 버린다
+        & $storage { param($j) $script:writeJob = $j } $gatedWrite
+        [void]$gate.Gate.Reset()
+        Set-WtSetting 'test.mode' 'exit-drop'
+        $answers = [System.Collections.Generic.Queue[string]]::new(); $answers.Enqueue('cancel'); $answers.Enqueue('proceed')
+        $answer = { $answers.Dequeue() }.GetNewClosure()
+        $allowed = & $shellModule { param($a) $script:exiting = $false; $script:frame = [pscustomobject]@{ Continue = $true }; $script:testWriting = @(); $script:testWritingAnswer = $a; Stop-WtApp } $answer
+        Assert-WtTest '안정성: 기다리는 창을 닫으면 다시 묻고, [저장을 기다리지 않고 끝내기]를 고를 때만 남은 저장을 버리고 끝낸다' (
+            $allowed -and (& $shellModule { $script:testWriting -join ',' }) -eq 'exit!,exit!' -and -not (Test-WtDataWriting) -and (& $savedMode) -eq 'exit-wait')
+    } finally {
+        & $storage { $script:writeJob = $script:testJob }
+        Remove-WtTestGate $gate
+    }
+    # 부른 쪽이 결과를 받지 못한 저장(설정처럼 통로에 맡긴 것)이 나중에 실패로 정해지면, 조용히 잃지 않고 사용자에게 알린다
+    $gate = New-WtTestGate
+    try {
+        & $storage {
+            $script:testTold = [System.Collections.Generic.List[string]]::new()
+            function script:Show-WtMessage { param($Text, $Title, $Icon) $script:testTold.Add($Text) }
+            $script:writeJob = { param($p, $json) [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.WaitOne(); throw [System.IO.IOException]::new('검사용 쓰기 실패') }
+        }
+        Set-WtSetting 'test.mode' 'late-fail'
+        [void]$gate.Gate.Set()
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        while ((Test-WtDataWriting) -and $watch.ElapsedMilliseconds -lt 5000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+        [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{ }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle)   # 미뤄 둔 알림을 돌린다
+        $told = @(& $storage { $script:testTold })
+        Assert-WtTest '안정성: 맡겨 둔 저장이 나중에 실패로 정해지면 사용자에게 알린다' ($told.Count -eq 1 -and $told[0] -like '*settings.json*검사용 쓰기 실패*') ($told -join ' / ')
+    } finally {
+        & $storage { $script:writeJob = $script:testJob }
+        Remove-WtTestGate $gate
+    }
 
     # 끝낼 때: 탭이 남긴 화면 밖 작업이 OS 요청에서 돌아오지 않아도(응답 없는 공유 폴더) 종료 처리는 기다리지 않고 버린다.
     # 그 뒤 앱 전용 프로세스가 실제로 끝나는지는 tests\Test-Core.ps1(Exit-WtOwnProcess)과 tests\Test-Launcher.ps1이 본다

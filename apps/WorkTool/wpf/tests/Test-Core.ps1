@@ -415,7 +415,8 @@ pie
         Assert-Wt 'WPF: -OnTask가 없으면 체크 표시는 누를 수 없다' ($firstInline -is [System.Windows.Documents.Run] -and $firstInline.Text -eq [string][char]0xE739)
 
         # 파일 · 폴더 열기 (core\Work.psm1 Open-WtPath): 있는지 · 폴더인지 확인과 셸 열기 모두 화면 밖에서 한다.
-        # 여는 작업을 가짜로 바꿔 끼워 할 일만 기록하고 실제로 열지 않는다. 느린 경로는 \\srv\ 경로를 문 앞에서 멈춰 흉내 낸다
+        # 속성 읽기와 셸 호출 두 곳만 가짜로 바꾼다 (실제로 열지 않고 할 일만 기록). 여는 작업 · 취소 확인 · 넘김 표시는 그대로 돈다.
+        # 느린 경로는 \\srv\ 경로의 속성 읽기를 문 앞에서 멈춰 흉내 낸다
         Assert-Wt 'Open-WtPath: 여는 방법 (폴더 · 열 수 있는 종류는 열고, 그 밖은 탐색기에서 선택 · 없음)' (
             (Get-WtPathOpenAction 16 'C:\d' $false @('.txt')) -eq 'open' -and (Get-WtPathOpenAction 32 'C:\a.txt' $false @('.txt')) -eq 'open' -and
             (Get-WtPathOpenAction 32 'C:\run.exe' $false @('.txt')) -eq 'reveal' -and (Get-WtPathOpenAction -1 'C:\x' $false @()) -eq 'missing' -and
@@ -426,14 +427,18 @@ pie
         & $workModule {
             $script:testSaid = [System.Collections.Generic.List[string]]::new()
             function script:Show-WtMessage { param($Text, $Title, $Icon) $script:testSaid.Add("msg:$(($Text -split "`n")[0])") }
-            $script:testRealOpen = $script:openWork
-            $script:openWork = {
-                param($path, $reveal, $openTypes)
+            $script:testRealAttr = ${function:Get-WtPathAttributes}; $script:testRealShell = ${function:Invoke-WtShellStart}
+            function script:Get-WtPathAttributes([string]$Path) {
                 $t = [AppDomain]::CurrentDomain.GetData('WtTestOpen')
-                if ($path -like '\\srv\*') { $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne() }
-                $act = Get-WtPathOpenAction ([int]$t.Attr[$path]) $path $reveal $openTypes
-                if ($act -ne 'missing' -and -not $WtCancel.Value) { [void]$t.Log.Add("${act}:$path") }
-                @{ Action = $act; Skipped = [bool]$WtCancel.Value }
+                if ($Path -like '\\srv\*') { $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne() }
+                if ($t.Attr.ContainsKey($Path)) { [int]$t.Attr[$Path] } else { -1 }
+            }
+            function script:Invoke-WtShellStart($Start, [string]$Action) {
+                $t = [AppDomain]::CurrentDomain.GetData('WtTestOpen')
+                $target = if ($Action -eq 'reveal') { $Start.Arguments -replace '^/select,"(.*)"$', '$1' } else { $Start.FileName }
+                # 셸이 늦게 여는 경우: late가 들어간 경로는 문 앞에서 기다린 뒤에 「연다」
+                if ($target -like '*late*') { $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne() }
+                [void]$t.Log.Add("${Action}:$target")
             }
         }
         $fakeState = @{ BaseDir = ''; OnLink = $null; Anchors = @{} }
@@ -462,23 +467,39 @@ pie
             & $openLink '//srv/share/other.txt'
             $quick = @(& $workModule { $script:testSaid })
             Remove-WtTestGate $gate; $gate = $null
-            $timeoutText = 'msg:경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.'
+            $timeoutText = 'msg:경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요. 늦게 답이 와도 열지 않습니다.'
             Assert-Wt "WPF 파일 링크: 응답 없는 공유도 누르면 바로 돌아오고(${clickMs}ms), 같은 링크는 겹쳐 확인하지 않으며 확인 중에는 AppStarting 커서" (
                 $clickMs -lt 500 -and $pending -eq 1 -and $waitCursor -eq [System.Windows.Input.Cursors]::AppStarting) "(작업 $pending · 커서 $waitCursor)"
             Assert-Wt 'WPF 파일 링크: 시간 초과면 알리고 커서를 돌려놓으며, 같은 공유를 또 누르면 바로 알리고, 늦게 온 답으로는 열지 않는다' (
                 ($afterTimeout.Said -join '|') -eq $timeoutText -and $null -eq $afterTimeout.Cursor -and ($quick -join '|') -eq "$timeoutText|$timeoutText" -and
                 $openLog.Count -eq 0 -and (Get-WtWorkInfo).Abandoned -eq 0) "$($quick -join ' / ') · 열기 $($openLog.Count)"
 
+            # 확인은 끝나 셸에 넘겼는데 셸이 늦게 여는 경우: 「열지 않는다」고 하지 않고, 늦게 열릴 수 있다고 사실대로 알린다
+            & $workModule { $script:testSaid.Clear() }
+            $openLog.Clear()
+            $gate = New-WtTestGate
+            $lateFile = 'C:\wt\late.txt'
+            ([AppDomain]::CurrentDomain.GetData('WtTestOpen')).Attr[$lateFile] = 32
+            Open-WtPath $lateFile
+            $handed = $gate.Entered.WaitOne(5000)
+            Start-Sleep -Milliseconds 400
+            Update-WtWork
+            $lateSaid = @(& $workModule { $script:testSaid })
+            Remove-WtTestGate $gate; $gate = $null
+            Assert-Wt '열기: 셸에 넘긴 뒤 시간이 지나면 늦게 열릴 수 있다고 알리고, 실제로 늦게 열린다 (넘기기 전이면 위처럼 열지 않는다)' (
+                $handed -and ($lateSaid -join '|') -eq 'msg:열기를 프로그램에 넘겼지만 응답이 늦습니다. 응답이 오면 늦게 열릴 수 있습니다.' -and
+                (@($openLog) -join '|') -eq "open:$lateFile" -and (Get-WtWorkInfo).Abandoned -eq 0) "$($lateSaid -join ' / ') · 열기 $(@($openLog) -join '|')"
+
             # 실제 여는 작업: 없는 파일은 열지 않고 알린다 (있는 파일은 실제로 열려서 검사하지 않는다)
-            & $workModule { $script:testSaid.Clear(); $script:openTimeoutMs = 5000; $script:openWork = $script:testRealOpen }
+            . $workModule { $script:testSaid.Clear(); $script:openTimeoutMs = 5000; ${function:Get-WtPathAttributes} = $script:testRealAttr; ${function:Invoke-WtShellStart} = $script:testRealShell }   # 점 소싱: 모듈 범위에 되돌린다
             Open-WtPath (Join-Path $test.Root '없는 파일.txt') -NotFound '없는 파일'
             [void](Wait-WtWork -All -Milliseconds 10000)
             Assert-Wt 'WPF 파일 링크: 실제 확인 작업도 없는 파일은 알린다' ((@(& $workModule { $script:testSaid }) -join '|') -eq 'msg:없는 파일')
         } finally {
             if ($gate) { Remove-WtTestGate $gate }
             [AppDomain]::CurrentDomain.SetData('WtTestOpen', $null)
-            & $workModule {
-                $script:openTimeoutMs = 5000; $script:openWork = $script:testRealOpen
+            . $workModule {
+                $script:openTimeoutMs = 5000; ${function:Get-WtPathAttributes} = $script:testRealAttr; ${function:Invoke-WtShellStart} = $script:testRealShell
                 Remove-Item -LiteralPath 'Function:\Show-WtMessage' -ErrorAction SilentlyContinue
             }
         }
