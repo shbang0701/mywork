@@ -393,9 +393,10 @@ pie
             $slowCursor = [System.Windows.Input.Mouse]::OverrideCursor
             & $mdModule { $script:testSources['\\srv\share\slow.xlsx'].SetResult([System.IO.FileAttributes]::Archive); Complete-WtMdPathChecks }
             $late = & $mdModule { @{ Said = @($script:testSaid); Jobs = $script:pathJobs.Count; Timer = $script:pathTimer.IsEnabled } }
+            # 시간이 지난 확인만 남으면 타이머는 멈춘다 (끝내 답하지 않는 작업 때문에 계속 돌지 않게)
             Assert-Wt 'WPF 파일 링크: 시간 초과면 알리고 커서를 돌려놓으며, 답을 기다리는 경로를 또 누르면 바로 알린다' (
                 ($slow.Said -join '|') -eq 'msg:경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.|msg:경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.' -and
-                $slow.Jobs -eq 1 -and $slow.Probes -eq 5 -and $slow.Timer -and $null -eq $slowCursor) ($slow.Said -join '|')
+                $slow.Jobs -eq 1 -and $slow.Probes -eq 5 -and -not $slow.Timer -and $null -eq $slowCursor) ($slow.Said -join '|')
             Assert-Wt 'WPF 파일 링크: 늦게 온 답은 열지 않고 작업만 정리한다' ($late.Said.Count -eq 2 -and $late.Jobs -eq 0 -and -not $late.Timer)
 
             # 실제 확인 작업: 임시 폴더 · 없는 파일

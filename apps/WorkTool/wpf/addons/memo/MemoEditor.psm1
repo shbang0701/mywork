@@ -1251,7 +1251,7 @@ function Complete-WtMemoImePending {
                 $cut = 0
                 if ($i -ge 2 -and $box.Text.Substring($i - 2, 2) -eq "`r`n") { $cut = 2 } elseif ($i -ge 1 -and $box.Text[$i - 1] -eq "`t") { $cut = 1 }
                 if ($cut -and $box.Text.Length -gt $p.Text.Length) { $box.Select($i - $cut, $cut); $box.SelectedText = ''; $box.Select($i - $cut, 0) }
-                Complete-WtMemoSuggest $ed ([string]$p.Extra) -Box $box
+                Complete-WtMemoSuggest $ed ([string]$p.Extra) -Target $box
             }
         }
     } catch { Show-WtError $_ '메모 편집' }
@@ -1469,9 +1469,9 @@ function Get-WtMemoSuggestUi($Ed) {
     $Ed.Suggest
 }
 
-function Complete-WtMemoSuggest($Ed, [string]$Title, $Box = $null) {
+function Complete-WtMemoSuggest($Ed, [string]$Title, $Target = $null) {
     $s = $Ed.Suggest
-    $box = if ($Box) { $Box } else { $s.Box }
+    $box = if ($Target) { $Target } else { $s.Box }
     Hide-WtMemoSuggest $Ed
     if (-not $box -or -not $Title) { return }
     $ctx = Get-WtMemoSuggestContext $box
