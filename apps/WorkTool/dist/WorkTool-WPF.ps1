@@ -58,6 +58,580 @@ if ($env:WORKTOOL_HARDWARE_RENDER -ne '1') {
 }
 
 #region 모듈 (묶음 파일: build\Build-Bundle.ps1이 넣음)
+# ---- core\Work.psm1 ----
+New-Module -Name 'WorkTool.Work' -ScriptBlock {
+# 화면 밖 작업. 디스크 · 네트워크(공유 폴더)에 닿는 일과 다른 앱에 묻는 일은 화면 스레드에서 하지 않고 이 모듈로 보낸다.
+# 탭은 실행 공간 · 스레드를 직접 만들지 않고 이 모듈의 함수만 쓴다 (tests\Test-Core.ps1이 검사).
+#
+#   Start-WtWork { param($path) ... } -ArgumentList $path -OnDone { param($w) ... }
+#       화면 밖에서 PowerShell 코드를 돌린다. 끝나면 화면 스레드에서 -OnDone을 부른다 ($w.Result · $w.Error · $w.TimedOut · $w.Context).
+#   Invoke-WtWork { ... } -TimeoutMs 5000         화면 밖에서 돌리고 정한 시간까지만 기다린다 (저장처럼 결과가 바로 필요할 때)
+#   Wait-WtWork $w -Milliseconds 80               정한 시간까지만 기다린다. 로컬 경로는 이 안에 끝나서 화면이 깜빡이지 않는다
+#   Open-WtPath $path                             파일 · 폴더를 원래 프로그램 · 탐색기로 연다 (있는지 확인과 셸 열기 모두 화면 밖)
+#   Start-WtWork -Call (New-WtCall ([System.IO.File]) ReadAllText $path)
+#       .NET 메서드 하나만 부를 때는 실행 공간 없이 스레드 풀에서 부른다 (가장 빠르다. 파일 읽기 · 있는지 보기 등)
+#
+# - PowerShell 코드는 실행 공간 하나에서 새 스레드로 돈다. 정상으로 끝난 실행 공간은 상태(변수)를 지우고 다시 쓴다.
+#   끝나지 않았거나 멈춘 작업의 실행 공간은 다시 쓰지 않는다. 작업끼리 변수가 섞이지 않는다.
+#   기본은 빈 세션(언어와 .NET만, 명령 없음)이라 빠르다. Get-ChildItem 같은 명령이 필요하면 -Session Default.
+#   -Call 작업은 스레드 풀(백그라운드 스레드)에서 돌아서, 끝나지 않아도 프로세스가 끝나는 것을 붙잡지 않는다.
+# - 끝나지 않는 작업(응답 없는 공유 폴더의 OS 요청)은 기다리지 않고 버린다. 취소 · 시간 초과 · 앱 종료 모두 같다.
+#   실행 공간의 Stop · Close · Dispose는 그 작업이 끝나기를 기다리므로 끝나지 않은 작업에는 부르지 않는다.
+#   버린 작업은 끝나는 대로 치운다. 같은 키(-Key)에 시간이 지난 작업이 남아 있으면 Test-WtWorkStuck이 $true다.
+# - PowerShell은 프로세스가 끝날 때 열린 실행 공간을 모두 닫으며 그 안의 작업이 끝나기를 기다린다(PowerShell 7.6 LocalRunspace).
+#   그래서 앱 전용 프로세스는 마지막에 Exit-WtOwnProcess로 끝낸다. 버린 작업이 남아도 프로세스가 끝난다.
+#
+# 이벤트 처리기 · -OnDone은 나중에 불리므로, 만든 함수의 지역 변수 대신 $w.Context와 $script: 변수를 쓴다.
+
+$ErrorActionPreference = 'Stop'
+
+$script:jobs = [System.Collections.Generic.List[object]]::new()   # 끝나지 않은 작업 (버린 것 포함)
+$script:timer = $null
+$script:nextId = 0
+$script:maxJobs = 64       # 끝나지 않은 작업이 이만큼이면 새로 시작하지 않는다 (응답 없는 경로를 계속 눌러도 스레드가 끝없이 늘지 않게)
+$script:pollMs = 30        # 끝난 작업을 화면으로 가져오는 간격
+$script:sessions = @{}     # 세션 틀. 실행 공간을 만들 때마다 복사해 쓴다
+$script:idle = @{}         # 다시 쓸 실행 공간 (세션|아파트 → Stack). 정상으로 끝난 작업의 것만, 상태를 지운 뒤 넣는다
+$script:idleMax = 2        # 종류(세션 · 아파트)마다 남겨 둘 수. 기본 명령 세션은 메모리를 더 써서 적게 둔다
+$script:taskRun = $null    # Task.Run<T>(Func<T>) 정의. 결과 형식마다 닫은 것을 아래 표에 둔다
+$script:taskRunTyped = @{}
+
+# ---- 작업 ------------------------------------------------------------------------------------
+
+<#
+.NET 메서드 하나를 인수 없는 호출로 묶는다. Start-WtWork -Call · Invoke-WtWork -Call에 넘긴다.
+  New-WtCall ([System.IO.File]) ReadAllText $path    정적 메서드와 그 첫 인수 (글자 · 객체처럼 참조 형식인 인수 하나)
+  New-WtCall $fileInfo get_Length                    객체의 인수 없는 메서드
+#>
+function New-WtCall {
+    param([Parameter(Mandatory, Position = 0)]$Target, [Parameter(Mandatory, Position = 1)][string]$Method, [Parameter(Position = 2)]$Argument)
+    if ($Target -is [type]) {
+        $mi = $Target.GetMethod($Method, [type[]]@($Argument.GetType()))
+        $bound = $Argument
+    } else {
+        $mi = $Target.GetType().GetMethod($Method, [type[]]@())
+        $bound = $Target
+    }
+    if (-not $mi) { throw [System.MissingMethodException]::new("$Method 메서드를 찾지 못했습니다.") }
+    [Delegate]::CreateDelegate([System.Func`1].MakeGenericType($mi.ReturnType), $bound, $mi)
+}
+
+# 묶은 호출을 스레드 풀에서 시작한다 (Task.Run). 실행 공간도 PowerShell 코드도 쓰지 않는다
+function Start-WtWorkCall([Delegate]$Call) {
+    $type = $Call.Method.ReturnType
+    if (-not $script:taskRunTyped.ContainsKey($type)) {
+        if (-not $script:taskRun) {
+            $script:taskRun = [System.Threading.Tasks.Task].GetMethods() | Where-Object {
+                $_.Name -eq 'Run' -and $_.IsGenericMethodDefinition -and $_.GetParameters().Count -eq 1 -and
+                $_.GetParameters()[0].ParameterType.Name -eq 'Func`1' -and $_.GetParameters()[0].ParameterType.GetGenericArguments()[0].IsGenericParameter
+            } | Select-Object -First 1
+        }
+        $script:taskRunTyped[$type] = $script:taskRun.MakeGenericMethod($type)
+    }
+    $script:taskRunTyped[$type].Invoke($null, @($Call))
+}
+
+# 실행 공간 하나: 남겨 둔 것이 있으면 그것을, 없으면 새로 연다
+function Get-WtWorkRunspace([string]$Session, [bool]$Sta) {
+    $kind = "$Session|$(if ($Sta) { 'STA' } else { 'MTA' })"
+    $stack = $script:idle[$kind]
+    while ($stack -and $stack.Count) {
+        $rs = $stack.Pop()
+        if ($rs.RunspaceStateInfo.State -eq 'Opened' -and $rs.RunspaceAvailability -eq 'Available') { return $rs }
+        try { $rs.Dispose() } catch { }
+    }
+    $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace((Get-WtWorkSession $Session))
+    # 호출마다 새 스레드. ReuseThread는 실행 공간을 버리기 전까지 스레드를 붙잡는다
+    $rs.ThreadOptions = 'UseNewThread'
+    $rs.ApartmentState = if ($Sta) { 'STA' } else { 'MTA' }
+    try { $rs.Open() } catch { $rs.Dispose(); throw }
+    $rs
+}
+
+# 정상으로 끝난 작업의 실행 공간: 변수를 지우고 남겨 둔다 (자리가 없으면 버린다)
+function Save-WtWorkRunspace($Job) {
+    $rs = $Job.Runspace
+    $kind = "$($Job.Session)|$(if ($Job.Sta) { 'STA' } else { 'MTA' })"
+    if (-not $script:idle.ContainsKey($kind)) { $script:idle[$kind] = [System.Collections.Generic.Stack[object]]::new() }
+    $stack = $script:idle[$kind]
+    if ($stack.Count -lt $script:idleMax -and $rs.RunspaceStateInfo.State -eq 'Opened') {
+        try { $rs.ResetRunspaceState(); $stack.Push($rs); return } catch { }
+    }
+    try { $rs.Dispose() } catch { }
+}
+
+function Get-WtWorkSession([string]$Kind) {
+    if (-not $script:sessions.ContainsKey($Kind)) {
+        $iss = if ($Kind -eq 'Default') { [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault() }
+        else {
+            # 빈 세션: 명령은 하나도 넣지 않는다. 빈 세션의 기본 언어 모드(NoLanguage)는 스크립트를 못 돌려서 보통 PowerShell과 같게 둔다
+            $empty = [System.Management.Automation.Runspaces.InitialSessionState]::Create()
+            $empty.LanguageMode = 'FullLanguage'
+            $empty
+        }
+        $script:sessions[$Kind] = $iss
+    }
+    $script:sessions[$Kind]
+}
+
+<#
+화면 밖에서 PowerShell 코드를 돌린다. 기다리지 않고 바로 돌아온다. 작업 객체를 돌려준다.
+  -Script        { param(...) ... } 또는 같은 글. 마지막 출력이 결과($w.Result). 배열을 결과 하나로 주려면 , @(...)
+                 실행 공간 전역에 $WtCancel이 있다. 취소 · 시간 초과면 $WtCancel.Value가 $true (긴 작업은 사이사이 본다)
+  -ArgumentList  넘길 값들 (차례대로 param에 들어간다). 배열 하나를 넘기려면 -ArgumentList (, $array)
+  -Functions     이 코드가 부르는 함수 (Get-Command 결과). 정의를 코드 앞에 붙인다
+  -Session       Empty(기본: 언어 · .NET만, 가장 빠름) | Default(기본 명령 · 모듈)
+  -Sta           STA 스레드에서 돌린다 (셸 열기 · 클립보드 · UI Automation 일부)
+  -OnDone        { param($w) } 끝나면(성공 · 실패 · 시간 초과) 화면 스레드에서 한 번 부른다. Stop-WtWork로 멈춘 작업은 부르지 않는다
+                 $w.State: done · failed · timedout, $w.Result · $w.Error(글) · $w.Exception · $w.TimedOut · $w.Context
+  -Context       -OnDone에 그대로 넘길 값
+  -Key           같은 대상(예: 같은 공유 폴더)을 묶는 이름. 이 키로 시간이 지난 작업이 남아 있으면 Test-WtWorkStuck이 $true
+  -TimeoutMs     이 시간 안에 끝나지 않으면 기다리지 않고 timedout으로 -OnDone을 부른다 (작업은 버린다). 0이면 끝날 때까지
+  -WaitMs        시작한 뒤 이 시간까지는 기다린다. 그 안에 끝나면 -OnDone을 부르고 돌아온다
+                 -OnDone 안에서 부른 쪽의 상태를 바꾸면, 부른 함수가 끝난 뒤 Wait-WtWork로 기다리는 편이 안전하다
+  -Call          -Script 대신 New-WtCall로 묶은 .NET 호출 하나. 실행 공간 없이 스레드 풀에서 부른다 ($WtCancel 없음)
+  -Reserved      끝나지 않은 작업 수 한도($script:maxJobs)를 보지 않는다. 수가 정해진 작업만 쓴다:
+                 한 번에 하나씩 도는 통로(저장 · 잠금)와 실행 하나에 하나뿐인 정리(남은 자식 끝내기).
+                 응답 없는 읽기가 한도를 채워도 저장 · 정리는 막히지 않게
+되돌릴 수 없는 일(셸 열기 · 프로세스 만들기)을 하는 코드는 그 직전에 잠금 안에서 취소를 보고 $WtCancel.Committed를 $true로 둔다:
+  [System.Threading.Monitor]::Enter($WtCancel.SyncRoot); try { if ($WtCancel.Value) { return }; $WtCancel.Committed = $true } finally { [System.Threading.Monitor]::Exit($WtCancel.SyncRoot) }
+  그러면 시간 초과 · 멈춤 때 $w.Committed로 「이미 넘겼는지」를 정확히 안다 (넘기기 전이면 끝내 하지 않는다)
+#>
+function Start-WtWork {
+    param(
+        [Parameter(Position = 0)]$Script,
+        [object[]]$ArgumentList = @(),
+        [System.Management.Automation.CommandInfo[]]$Functions = @(),
+        [ValidateSet('Empty', 'Default')][string]$Session = 'Empty',
+        [switch]$Sta,
+        [scriptblock]$OnDone,
+        $Context = $null,
+        [string]$Key = '',
+        [int]$TimeoutMs = 0,
+        [int]$WaitMs = 0,
+        [Delegate]$Call,
+        [switch]$Reserved
+    )
+    if (-not $Script -and -not $Call) { throw [System.ArgumentException]::new('-Script나 -Call을 주세요.') }
+    Clear-WtWorkFinished
+    if (-not $Reserved -and $script:jobs.Count -ge $script:maxJobs) {
+        throw [System.InvalidOperationException]::new('응답하지 않는 작업이 많아 새 작업을 시작하지 않습니다. 네트워크 연결을 확인하고 잠시 뒤 다시 시도하세요.')
+    }
+    $job = New-WtWorkJob $Key
+    $job.Context = $Context; $job.OnDone = $OnDone; $job.TimeoutMs = $TimeoutMs; $job.Session = $Session; $job.Sta = [bool]$Sta
+    if ($Call) {
+        $job.Task = Start-WtWorkCall $Call
+        $job.Handle = $job.Task
+    } else {
+        # 함수 정의를 앞에 두고 본문은 스크립트 블록으로 감싸 넘긴 값을 그대로 param에 넣는다 (글을 코드로 바꾸는 Invoke-Expression · ScriptBlock.Create 없음)
+        $text = [System.Text.StringBuilder]::new()
+        [void]$text.Append("`$ErrorActionPreference = 'Stop'`n")
+        foreach ($f in $Functions) { [void]$text.Append("function $($f.Name) {`n$($f.Definition)`n}`n") }
+        [void]$text.Append("& {`n$(if ($Script -is [scriptblock]) { $Script.ToString() } else { [string]$Script })`n} @args`n")
+        $rs = Get-WtWorkRunspace $Session ([bool]$Sta)
+        $ps = $null
+        try {
+            $rs.SessionStateProxy.SetVariable('WtCancel', $job.Cancel)
+            $ps = [powershell]::Create()
+            $ps.Runspace = $rs
+            [void]$ps.AddScript($text.ToString(), $true)
+            foreach ($a in $ArgumentList) { [void]$ps.AddArgument($a) }
+            $job.PowerShell = $ps; $job.Runspace = $rs
+            $job.Handle = $ps.BeginInvoke()
+        } catch {
+            if ($ps) { $ps.Dispose() }
+            $rs.Dispose()
+            throw
+        }
+    }
+    $script:jobs.Add($job)
+    if ($WaitMs -gt 0) { [void](Wait-WtWork $job -Milliseconds $WaitMs) }
+    if (-not $job.Finished -and ($OnDone -or $TimeoutMs -gt 0)) { Start-WtWorkTimer }
+    $job
+}
+
+# 취소 표시를 한다. 작업 코드가 같은 잠금 안에서 「되돌릴 수 없는 일을 시작함(Committed)」을 표시하므로, 둘 중 하나만 먼저 일어난다
+function Set-WtWorkCancel($Job) {
+    $c = $Job.Cancel
+    [System.Threading.Monitor]::Enter($c.SyncRoot)
+    try { $c.Value = $true; $Job.Committed = [bool]$c.Committed } finally { [System.Threading.Monitor]::Exit($c.SyncRoot) }
+}
+
+# 작업 기록 하나
+function New-WtWorkJob([string]$Key) {
+    $script:nextId++
+    [pscustomobject]@{
+        Id = $script:nextId; Key = $Key; State = 'running'; Result = $null; Output = @(); Error = $null; Exception = $null
+        TimedOut = $false; Stuck = $false; Stopped = $false; Finished = $false; Committed = $false; Context = $null; OnDone = $null
+        TimeoutMs = 0; Watch = [System.Diagnostics.Stopwatch]::StartNew(); Cancel = [hashtable]::Synchronized(@{ Value = $false })
+        Session = 'Empty'; Sta = $false; PowerShell = $null; Runspace = $null; Task = $null; Handle = $null
+    }
+}
+
+# 끝난 작업의 결과를 거두고 실행 공간을 버린다. 처음 끝났을 때만 -OnDone을 부른다
+function Complete-WtWorkJob($Job) {
+    if ($Job.Finished) { return }
+    $Job.Finished = $true
+    [void]$script:jobs.Remove($Job)
+    $wasRunning = $Job.State -eq 'running'
+    if ($Job.Task) {
+        if ($Job.Task.IsFaulted -or $Job.Task.IsCanceled) {
+            $Job.Exception = if ($Job.Task.Exception) { $Job.Task.Exception.GetBaseException() } else { [System.OperationCanceledException]::new() }
+            $Job.Error = $Job.Exception.Message
+            if ($wasRunning) { $Job.State = 'failed' }
+        } else {
+            $Job.Result = $Job.Task.Result
+            $Job.Output = @(, $Job.Result)
+            if ($wasRunning) { $Job.State = 'done' }
+        }
+        $Job.Task = $null; $Job.Handle = $null
+    } else {
+        $reuse = $false
+        try {
+            $out = $Job.PowerShell.EndInvoke($Job.Handle)
+            $Job.Output = @($out)
+            if ($out.Count) {
+                $r = $out[$out.Count - 1]
+                # 해시 테이블 · 배열 · .NET 객체는 감싼 것을 벗긴다 (PSCustomObject는 그대로)
+                if ($null -ne $r -and $r.psobject.BaseObject -isnot [System.Management.Automation.PSCustomObject]) { $r = $r.psobject.BaseObject }
+                $Job.Result = $r
+            }
+            if ($wasRunning) { $Job.State = 'done' }
+            $reuse = $wasRunning
+        } catch {
+            $Job.Exception = Get-WtWorkException $_.Exception
+            $Job.Error = $Job.Exception.Message
+            if ($wasRunning) { $Job.State = 'failed' }
+            $reuse = $wasRunning
+        } finally {
+            try { $Job.PowerShell.Dispose() } catch { }
+            # 제때 끝난 작업의 실행 공간만 다시 쓴다 (시간이 지났거나 멈춘 작업의 것은 버린다)
+            if ($reuse) { Save-WtWorkRunspace $Job } else { try { $Job.Runspace.Dispose() } catch { } }
+            $Job.PowerShell = $null; $Job.Runspace = $null
+        }
+    }
+    if ($wasRunning -and $Job.OnDone) { Invoke-WtWorkDone $Job }
+}
+
+# 작업 안에서 난 오류의 원래 예외 (IOException 등). EndInvoke · 메서드 호출이 감싼 것을 벗긴다
+function Get-WtWorkException([Exception]$Exception) {
+    $e = $Exception.GetBaseException()
+    if ($e -is [System.Management.Automation.IContainsErrorRecord] -and $e.ErrorRecord.Exception -and
+        -not [object]::ReferenceEquals($e.ErrorRecord.Exception, $e)) { $e = $e.ErrorRecord.Exception.GetBaseException() }
+    $e
+}
+
+function Invoke-WtWorkDone($Job) {
+    try { [void](& $Job.OnDone $Job) }
+    catch {
+        try { Show-WtError $_ '화면 밖 작업 결과' } catch { Write-Warning "화면 밖 작업 결과 처리 실패: $($_.Exception.Message)" }
+    }
+}
+
+# 끝난 작업을 거두고, 시간이 지난 작업을 알린다. 화면 타이머가 부르고, 검사에서도 직접 부른다
+function Update-WtWork {
+    foreach ($j in @($script:jobs.ToArray())) {
+        if ($j.Finished) { continue }
+        if ($j.Handle.IsCompleted) { Complete-WtWorkJob $j; continue }
+        if ($j.State -eq 'running' -and $j.TimeoutMs -gt 0 -and $j.Watch.ElapsedMilliseconds -ge $j.TimeoutMs) {
+            $j.State = 'timedout'; $j.TimedOut = $true; $j.Stuck = $true; Set-WtWorkCancel $j
+            if ($j.OnDone) { Invoke-WtWorkDone $j }
+        }
+    }
+    if ($script:timer -and -not (Test-WtWorkWatched)) { $script:timer.Stop() }
+}
+
+# 타이머로 지켜볼 작업(결과를 기다리거나 시간을 재는 작업)이 남았는지
+function Test-WtWorkWatched {
+    foreach ($j in $script:jobs) { if ($j.State -eq 'running' -and ($j.OnDone -or $j.TimeoutMs -gt 0)) { return $true } }
+    $false
+}
+
+# 버린 작업 중 끝난 것을 치운다 (-OnDone은 부르지 않는다)
+function Clear-WtWorkFinished {
+    foreach ($j in @($script:jobs.ToArray())) {
+        if ($j.State -ne 'running' -and -not $j.Finished -and $j.Handle.IsCompleted) { Complete-WtWorkJob $j }
+    }
+}
+
+function Start-WtWorkTimer {
+    if (-not $script:timer) {
+        $type = 'System.Windows.Threading.DispatcherTimer' -as [type]
+        if (-not $type) { return }   # WPF가 없으면(검사) Update-WtWork · Wait-WtWork로 거둔다
+        $script:timer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::Background)
+        $script:timer.Interval = [TimeSpan]::FromMilliseconds($script:pollMs)
+        $script:timer.Add_Tick({
+                try { Update-WtWork } catch { try { Show-WtError $_ '화면 밖 작업' } catch { } }
+            })
+    }
+    if (-not $script:timer.IsEnabled) { $script:timer.Start() }
+}
+
+<#
+작업이 끝나기를 정한 시간까지만 기다린다. 그 안에 끝난 것은 거두고 -OnDone을 부른다. 모두 끝났으면 $true.
+  -All  지금 도는 작업 모두 (시간이 지나 버린 것은 빼고). 검사에서 쓴다
+#>
+function Wait-WtWork {
+    param([Parameter(Position = 0)][object[]]$Job = @(), [int]$Milliseconds = 0, [switch]$All)
+    $targets = [System.Collections.Generic.List[object]]::new()
+    if ($All) { foreach ($j in $script:jobs) { if ($j.State -eq 'running') { $targets.Add($j) } } }
+    else { foreach ($j in $Job) { if ($j) { $targets.Add($j) } } }
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    foreach ($j in $targets) {
+        if ($j.Finished -or $j.Handle.IsCompleted) { continue }
+        $left = $Milliseconds - $watch.ElapsedMilliseconds
+        if ($left -le 0) { break }
+        if ($j.Task) { [void][System.Threading.Tasks.Task]::WaitAny([System.Threading.Tasks.Task[]]@($j.Task), [int]$left) }
+        else { [void]$j.Handle.AsyncWaitHandle.WaitOne([int]$left) }
+    }
+    $finished = $true
+    foreach ($j in $targets) {
+        if (-not $j.Finished -and $j.Handle.IsCompleted) { Complete-WtWorkJob $j }
+        if (-not $j.Finished) { $finished = $false }
+    }
+    $finished
+}
+
+# 작업을 멈춘다. 기다리지 않는다: 취소 표시($WtCancel)만 하고 버린다. -OnDone은 부르지 않는다
+function Stop-WtWork([Parameter(Position = 0)][object[]]$Job) {
+    foreach ($j in @($Job)) {
+        if (-not $j -or $j.Finished) { continue }
+        Set-WtWorkCancel $j
+        $j.Stopped = $true
+        $j.OnDone = $null
+        if ($j.State -eq 'running') { $j.State = 'stopped' }
+        if ($j.Handle.IsCompleted) { Complete-WtWorkJob $j }
+    }
+}
+
+# 앱을 끝낼 때 셸이 부른다. 남은 작업을 모두 버리고 기다리지 않는다
+function Stop-WtAllWork {
+    Stop-WtWork @($script:jobs.ToArray())
+    if ($script:timer) { $script:timer.Stop() }
+    Update-WtPathCursor
+}
+
+# 이 키로 시간이 지나 버린 작업이 아직 돌고 있는지 (응답 없는 공유 폴더에 또 묻지 않으려고 본다)
+# -SlowerThanMs: 시간이 지나지 않았어도 이만큼 넘게 도는 작업이 있으면 $true (느린 곳은 기다리지 않으려고 본다)
+function Test-WtWorkStuck([string]$Key, [int]$SlowerThanMs = 0) {
+    if (-not $Key) { return $false }
+    Clear-WtWorkFinished
+    foreach ($j in $script:jobs) {
+        if ($j.Finished -or $j.Key -ne $Key) { continue }
+        if ($j.Stuck -or ($SlowerThanMs -gt 0 -and $j.Watch.ElapsedMilliseconds -ge $SlowerThanMs)) { return $true }
+    }
+    $false
+}
+
+<#
+화면 밖에서 돌리고 정한 시간까지만 기다려 결과를 돌려준다. 실패하면 작업 안의 예외를 그대로 올린다.
+시간 안에 끝나지 않으면 TimeoutException (작업은 버린다). 같은 키에 시간이 지난 작업이 남아 있으면 기다리지 않고 바로 TimeoutException.
+#>
+function Invoke-WtWork {
+    param(
+        [Parameter(Position = 0)]$Script,
+        [object[]]$ArgumentList = @(),
+        [System.Management.Automation.CommandInfo[]]$Functions = @(),
+        [ValidateSet('Empty', 'Default')][string]$Session = 'Empty',
+        [switch]$Sta,
+        [string]$Key = '',
+        [Parameter(Mandatory)][int]$TimeoutMs,
+        [Delegate]$Call,
+        [switch]$Reserved
+    )
+    if (Test-WtWorkStuck $Key) { throw [System.TimeoutException]::new('앞서 보낸 요청이 아직 응답하지 않습니다.') }
+    if ($Call) {
+        # 호출 하나는 작업 기록 없이 바로 기다린다 (가장 잦은 저장 읽기용). 시간이 지났을 때만 기록해 이 키를 「답 없음」으로 둔다
+        $task = Start-WtWorkCall $Call
+        if (-not $task.IsCompleted -and [System.Threading.Tasks.Task]::WaitAny([System.Threading.Tasks.Task[]]@($task), $TimeoutMs) -lt 0) {
+            $late = New-WtWorkJob $Key
+            $late.State = 'timedout'; $late.TimedOut = $true; $late.Stuck = $true; $late.Task = $task; $late.Handle = $task
+            $script:jobs.Add($late)
+            throw [System.TimeoutException]::new("$([Math]::Ceiling($TimeoutMs / 1000))초 안에 응답하지 않았습니다.")
+        }
+        if ($task.IsFaulted -or $task.IsCanceled) { throw $(if ($task.Exception) { $task.Exception.GetBaseException() } else { [System.OperationCanceledException]::new() }) }
+        return , $task.Result
+    }
+    $job = Start-WtWork -Script $Script -ArgumentList $ArgumentList -Functions $Functions -Session $Session -Sta:$Sta -Key $Key -Reserved:$Reserved
+    if (-not (Wait-WtWork $job -Milliseconds $TimeoutMs)) {
+        $job.State = 'timedout'; $job.TimedOut = $true; $job.Stuck = $true; Set-WtWorkCancel $job
+        throw [System.TimeoutException]::new("$([Math]::Ceiling($TimeoutMs / 1000))초 안에 응답하지 않았습니다.")
+    }
+    if ($job.State -eq 'failed') { throw $job.Exception }
+    , $job.Result
+}
+
+# 지금 상태 (검사 · 진단용): 도는 작업 · 버린 작업 수 · 타이머
+function Get-WtWorkInfo {
+    Clear-WtWorkFinished
+    [pscustomobject]@{
+        Running = @($script:jobs | Where-Object { $_.State -eq 'running' }).Count
+        Abandoned = @($script:jobs | Where-Object { $_.State -ne 'running' }).Count
+        Timer = [bool]($script:timer -and $script:timer.IsEnabled)
+    }
+}
+
+# 경로가 속한 곳(드라이브 · \\서버\공유)의 키. 같은 곳에 응답 없는 작업이 남았는지 볼 때 쓴다
+function Get-WtPathKey([string]$Path) {
+    $root = ''
+    try { $root = [System.IO.Path]::GetPathRoot($Path) } catch { }
+    'path:' + ([string]$root).TrimEnd('\', '/').ToLowerInvariant()
+}
+
+# ---- 앱 프로세스 끝내기 ----------------------------------------------------------------------
+
+# 이 프로세스가 이 스크립트만을 위해 띄운 것인지: 명령 줄이 -File <이 스크립트>이고 -NoExit가 없다
+# (사용자가 쓰던 PowerShell 창에서 바로 띄운 경우는 아니다. 그 창을 끄면 안 된다)
+function Test-WtOwnProcess([Parameter(Mandatory)][string]$ScriptPath) {
+    $argv = [Environment]::GetCommandLineArgs()
+    for ($i = 1; $i -lt $argv.Count; $i++) {
+        $a = [string]$argv[$i]
+        if ($a -match '^-(?i:noe|noex|noexi|noexit)$') { return $false }
+        if ($a -match '^-(?i:c|co|com|comm|comma|comman|command|cwa|commandwithargs|e|ec|encodedcommand)$') { return $false }
+        if ($a -match '^-(?i:f|fi|fil|file)$') {
+            if ($i + 1 -ge $argv.Count) { return $false }
+            try { return [System.IO.Path]::GetFullPath([string]$argv[$i + 1]) -ieq [System.IO.Path]::GetFullPath($ScriptPath) } catch { return $false }
+        }
+    }
+    $false
+}
+
+<#
+앱을 끝낸 뒤 진입 스크립트(Start-WorkTool.ps1)가 마지막에 부른다. 이 앱만을 위해 띄운 프로세스면 여기서 프로세스를 끝낸다.
+PowerShell은 끝날 때 열려 있는 실행 공간을 모두 닫으면서 그 안의 작업이 끝나기를 기다린다. 응답 없는 공유 폴더를 기다리는
+OS 요청은 돌아오지 않으므로, 그대로 두면 창은 닫혀도 프로세스가 남는다. 저장 · 잠금 해제 같은 정리는 모두 끝난 뒤에 부른다.
+사용자가 쓰던 PowerShell 창에서 바로 띄운 경우에는 그 창을 끄지 않게 아무것도 하지 않는다.
+#>
+function Exit-WtOwnProcess([Parameter(Mandatory)][string]$ScriptPath, [int]$ExitCode = 0) {
+    if (-not (Test-WtOwnProcess $ScriptPath)) { return }
+    [Console]::Out.Flush()
+    [System.Environment]::Exit($ExitCode)
+}
+
+# ---- 경로 열기 -------------------------------------------------------------------------------
+
+$script:openTimeoutMs = 5000   # 이 시간 안에 답이 없으면 기다리지 않고 알린다
+
+# 여는 방법 정하기 (WPF 없이): 속성(-1 = 없음) → 'open'(원래 프로그램 · 폴더는 탐색기) | 'reveal'(탐색기에서 선택) | 'missing'
+#   -Reveal: 있으면 탐색기에서 선택. -OpenTypes를 주면 폴더와 그 확장자만 열고 나머지(실행 파일 등)는 탐색기에서 선택
+function Get-WtPathOpenAction([int]$Attributes, [string]$Path, [bool]$Reveal = $false, [string[]]$OpenTypes = @()) {
+    if ($Attributes -eq -1) { return 'missing' }
+    if ($Reveal) { return 'reveal' }
+    if ($Attributes -band [int][System.IO.FileAttributes]::Directory) { return 'open' }
+    if (-not @($OpenTypes).Count) { return 'open' }
+    if (@($OpenTypes) -contains [System.IO.Path]::GetExtension($Path).ToLowerInvariant()) { 'open' } else { 'reveal' }
+}
+
+# 화면 밖(STA)에서 확인하고 연다. STA 스레드라 .NET이 셸 열기용 스레드를 따로 만들지 않는다.
+# 셸에 넘기기 직전에 잠금 안에서 취소(시간 초과)를 보고 「넘김(Committed)」을 표시한다. 그래서 넘기기 전에 시간이 지났으면 늦게 확인돼도 열지 않고,
+# 넘긴 뒤에 시간이 지났으면(셸이 늦게 여는 중) 화면이 그 사실대로 알린다. 셸 호출 자체는 중간에 멈출 수 없다
+$script:openWork = {
+    param($path, $reveal, $openTypes)
+    $attr = Get-WtPathAttributes $path
+    $act = Get-WtPathOpenAction $attr $path $reveal $openTypes
+    if ($act -eq 'missing') { return @{ Action = $act; Skipped = $false } }
+    [System.Threading.Monitor]::Enter($WtCancel.SyncRoot)
+    try {
+        if ($WtCancel.Value) { return @{ Action = $act; Skipped = $true } }
+        $WtCancel.Committed = $true
+    } finally { [System.Threading.Monitor]::Exit($WtCancel.SyncRoot) }
+    if ($act -eq 'reveal') {
+        $start = [System.Diagnostics.ProcessStartInfo]::new([System.IO.Path]::Combine([Environment]::GetFolderPath('Windows'), 'explorer.exe'), "/select,`"$path`"")
+        $start.UseShellExecute = $false
+    } else {
+        $start = [System.Diagnostics.ProcessStartInfo]::new($path)
+        $start.UseShellExecute = $true
+    }
+    Invoke-WtShellStart $start $act
+    @{ Action = $act; Skipped = $false }
+}
+
+# 경로의 속성 (-1 = 없음). 네트워크 오류는 예외로 올린다 (화면 밖에서 부른다)
+function Get-WtPathAttributes([string]$Path) { [int][System.IO.FileInfo]::new($Path).Attributes }
+
+# 셸에 열기를 넘긴다 (화면 밖 STA에서 부른다). 검사는 이것만 바꿔 끼워 실제로 열지 않는다
+function Invoke-WtShellStart($Start, [string]$Action) {
+    try { $p = [System.Diagnostics.Process]::Start($Start) }
+    catch [System.ComponentModel.Win32Exception] {
+        # 연결된 프로그램이 없으면 Windows의 「연결 프로그램」 창으로 고르게 한다 (Invoke-Item과 같게)
+        if ($_.Exception.NativeErrorCode -ne 1155 -or $Action -ne 'open') { throw }
+        $Start.Verb = 'openas'
+        $p = [System.Diagnostics.Process]::Start($Start)
+    }
+    if ($p) { $p.Dispose() }
+}
+
+function Get-WtPathTimeoutText([string]$Path) {
+    "경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요. 늦게 답이 와도 열지 않습니다.`n$Path"
+}
+
+function Get-WtPathLateText([string]$Path) {
+    "열기를 프로그램에 넘겼지만 응답이 늦습니다. 응답이 오면 늦게 열릴 수 있습니다.`n$Path"
+}
+
+<#
+파일 · 폴더를 연다. 있는지 확인과 셸 열기 모두 화면 밖에서 하므로 응답 없는 공유 폴더에서도 화면이 멈추지 않는다.
+  기본: 폴더는 탐색기로, 파일은 원래 프로그램으로 연다
+  -Reveal      탐색기에서 그 항목을 골라 보여 준다
+  -OpenTypes   폴더와 이 확장자(소문자 '.pdf' 등)만 열고, 나머지(실행 파일 · 스크립트 등)는 탐색기에서 골라 보여 준다
+  -NotFound    없을 때 알릴 글 (기본: 찾을 수 없습니다 + 경로)
+- 확인하는 동안 커서가 AppStarting(화살표 + 모래시계). 같은 경로를 확인 중에 또 누르면 겹쳐 시작하지 않는다.
+- $script:openTimeoutMs 안에 답이 없으면 기다리지 않고 알린다. 셸에 넘기기 전(있는지 · 폴더인지 확인 중)이었으면 늦게 확인돼도 열지 않는다.
+  이미 셸에 넘긴 뒤였으면 셸 호출은 멈출 수 없으므로, 늦게 열릴 수 있다고 사실대로 알린다.
+  같은 곳(드라이브 · 공유)에 답이 없는 확인이 남아 있으면 새로 묻지 않고 바로 알린다.
+#>
+function Open-WtPath {
+    param([Parameter(Mandatory)][string]$Path, [switch]$Reveal, [string[]]$OpenTypes = @(), [string]$NotFound = '')
+    foreach ($j in $script:jobs) {
+        if ($j.State -eq 'running' -and $j.Context -is [hashtable] -and $j.Context.Open -and $j.Context.Path -ieq $Path) { return }
+    }
+    $key = Get-WtPathKey $Path
+    if (Test-WtWorkStuck $key) { Show-WtMessage (Get-WtPathTimeoutText $Path) 'WorkTool' 'Warning'; return }
+    try {
+        [void](Start-WtWork -Script $script:openWork -ArgumentList @($Path, [bool]$Reveal, [string[]]@($OpenTypes)) -Functions (Get-Command Get-WtPathOpenAction, Get-WtPathAttributes, Invoke-WtShellStart) -Sta `
+                -Key $key -TimeoutMs $script:openTimeoutMs -Context @{ Open = $true; Path = $Path; NotFound = $NotFound } -OnDone { param($w) Complete-WtPathOpen $w })
+    } catch {
+        Show-WtMessage "경로를 열지 못했습니다.`n$Path`n$($_.Exception.Message)" 'WorkTool' 'Warning'
+        return
+    }
+    Update-WtPathCursor
+}
+
+# 확인 결과: 없음 · 실패 · 시간 초과만 알린다 (연 것은 원래 프로그램 · 탐색기가 보인다)
+function Complete-WtPathOpen($Job) {
+    Update-WtPathCursor
+    $path = $Job.Context.Path
+    if ($Job.TimedOut) { Show-WtMessage $(if ($Job.Committed) { Get-WtPathLateText $path } else { Get-WtPathTimeoutText $path }) 'WorkTool' 'Warning'; return }
+    if ($Job.State -eq 'failed') {
+        Show-WtMessage "경로를 확인하지 못했습니다. 접근 권한과 경로를 확인하세요.`n$path`n$($Job.Error)" 'WorkTool' 'Warning'
+        return
+    }
+    if ($Job.Result.Action -eq 'missing') {
+        Show-WtMessage $(if ($Job.Context.NotFound) { $Job.Context.NotFound } else { "찾을 수 없습니다.`n$path" })
+    }
+}
+
+# 확인 중이면 커서를 AppStarting으로, 기다리는 확인이 없으면 원래대로
+$script:pathCursor = $null   # 바꾸기 전 커서 @{ Old }
+function Update-WtPathCursor {
+    if (-not ('System.Windows.Input.Mouse' -as [type])) { return }
+    $waiting = $false
+    foreach ($j in $script:jobs) { if ($j.State -eq 'running' -and $j.Context -is [hashtable] -and $j.Context.Open) { $waiting = $true; break } }
+    $busy = [System.Windows.Input.Cursors]::AppStarting
+    if ($waiting -and -not $script:pathCursor) {
+        $script:pathCursor = @{ Old = [System.Windows.Input.Mouse]::OverrideCursor }
+        [System.Windows.Input.Mouse]::OverrideCursor = $busy
+    } elseif (-not $waiting -and $script:pathCursor) {
+        if ([object]::ReferenceEquals([System.Windows.Input.Mouse]::OverrideCursor, $busy)) { [System.Windows.Input.Mouse]::OverrideCursor = $script:pathCursor.Old }
+        $script:pathCursor = $null
+    }
+}
+
+Export-ModuleMember -Function New-WtCall, Start-WtWork, Invoke-WtWork, Wait-WtWork, Stop-WtWork, Stop-WtAllWork, Update-WtWork, Test-WtWorkStuck,
+    Get-WtWorkInfo, Get-WtPathKey, Test-WtOwnProcess, Exit-WtOwnProcess, Get-WtPathOpenAction, Open-WtPath
+} | Import-Module -Force -DisableNameChecking
+# ---- core\Work.psm1 끝 ----
+
 # ---- core\Storage.psm1 ----
 New-Module -Name 'WorkTool.Storage' -ScriptBlock {
 # 저장 담당. 기능 모듈은 파일을 직접 읽고 쓰지 않고 이 모듈만 거친다.
@@ -65,12 +639,74 @@ New-Module -Name 'WorkTool.Storage' -ScriptBlock {
 # - 저장소(store) 하나 = JSON 파일 하나. 파일마다 schema 번호를 붙여, 형식이 바뀌면 읽을 때 한 단계씩 변환한다.
 # - 쓸 때는 임시 파일에 먼저 쓰고 바꿔치기한다. 직전 파일은 .bak으로 하나 남긴다.
 # - 읽기 실패는 항상 예외로 올린다. 빈 결과로 넘기면 다음 저장에서 기존 데이터를 덮어쓰기 때문이다.
+# - 읽기는 화면 밖(core\Work.psm1)에서 하고 $script:ioTimeoutMs까지만 기다린다. 데이터 폴더가 응답 없는 공유 폴더여도 화면이 멈추지 않고
+#   읽기 실패(IOException)로 올라간다. 그 폴더에 답 없는 읽기가 남아 있으면 기다리지 않고 바로 실패한다.
+# - 쓰기는 저장 통로(Submit-WtDataWrite)가 한 번에 하나씩 들어온 차례대로 한다. 읽기 작업과 따로라 읽기가 많이 남아도 막히지 않는다.
+#   화면은 $script:writeWaitMs까지만 기다린다. 넣은 쓰기는 넣는 순간 받아들인 것이다: 통로가 파일에 쓰였다고 확인될 때까지 가지고 있고,
+#   실패하면(바로 · 시작에서 · 늦게, 모두 같은 길) 다시 시도하거나 사용자가 버리기를 고를 때까지 둔다. 그동안 그 파일을 읽으면 그 내용을 돌려준다.
+#   저장 상태는 시간이 아니라 파일마다의 버전으로 정한다(받아들인 버전 = 확인된 버전이면 저장됨, Get-WtDataWriteStatus).
+#   셸은 끝내기 전에 쓰는 중이면 끝날 때까지 기다리고(창이 멈추지 않게), 쓰지 못한 내용이 있으면 사용자에게 묻는다.
 
 $ErrorActionPreference = 'Stop'
 
 $script:appRoot = $null
 $script:dataRoot = $null
-$script:utf8 = [System.Text.UTF8Encoding]::new($false)
+$script:ioTimeoutMs = 5000       # 데이터 폴더가 이 시간 안에 답하지 않으면 기다리지 않고 오류로 올린다
+$script:legacyTimeoutMs = 3000   # 예전 데이터 위치 찾기
+$script:writeWaitMs = 400        # 저장할 때 화면이 기다리는 시간. 로컬 저장은 이 안에 끝난다. 넘으면 저장 통로가 끝까지 맡는다
+$script:writeSlowMs = 5000       # 이보다 오래 걸리는 저장은 「응답 없음」으로 보인다 (실패로 정하지는 않는다)
+$script:writeQueue = [System.Collections.Generic.List[object]]::new()   # 차례를 기다리는 쓰기 (파일마다 마지막 내용 하나)
+$script:writeCurrent = $null     # 지금 쓰는 것
+$script:writeHandlers = [System.Collections.Generic.List[scriptblock]]::new()
+
+# 여러 단계인 디스크 작업 (화면 밖 실행 공간에서 돈다. 명령 없이 .NET만 쓴다. 예전 CSV만 Import-Csv). 검사가 응답 없는 폴더를 흉내 내려고 바꿔 끼운다.
+# 메서드 하나로 끝나는 읽기 · 있는지 보기 · 폴더 만들기는 Invoke-WtDataCall로 스레드 풀에서 바로 부른다 (가장 빠르다)
+$script:io = @{
+    Lock = { param($p) [System.IO.File]::Open($p, 'OpenOrCreate', 'ReadWrite', 'None') }
+    Unlock = { param($l) $l.Dispose() }
+    Copy = { param($a, $b) [System.IO.File]::Copy($a, $b, $true) }
+    FindLegacy = {
+        param($folders)
+        foreach ($c in $folders) {
+            foreach ($f in 'memo.csv', 'schedule.csv', 'attendance.csv') {
+                if ([System.IO.Path]::Exists([System.IO.Path]::Combine($c, $f))) { return $c }
+            }
+        }
+        $null
+    }
+    ReadCsv = {
+        param($p)
+        if (-not [System.IO.Path]::Exists($p)) { return $null }
+        , @(Import-Csv -LiteralPath $p -Encoding utf8)
+    }
+}
+
+# 디스크 작업 하나($script:io의 이름)를 화면 밖에서 하고 정한 시간까지만 기다린다. 응답이 없으면 IOException.
+# $Key: 같은 곳(데이터 폴더 · 예전 데이터 위치 · 앱 폴더)끼리 묶는다. 답 없는 작업이 남은 곳은 바로 실패한다
+function Invoke-WtDataIo {
+    param(
+        [Parameter(Mandatory, Position = 0)][string]$Op,
+        [object[]]$Arguments = @(),
+        [string]$Key = 'data',
+        [int]$TimeoutMs = $script:ioTimeoutMs,
+        [ValidateSet('Empty', 'Default')][string]$Session = 'Empty',
+        [string]$Where = '데이터 폴더',
+        [switch]$Reserved
+    )
+    try { Invoke-WtWork -Script $script:io[$Op] -ArgumentList $Arguments -Key $Key -TimeoutMs $TimeoutMs -Session $Session -Reserved:$Reserved }
+    catch [System.TimeoutException] {
+        throw [System.IO.IOException]::new("${Where}가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인하세요.", $_.Exception)
+    }
+}
+
+# .NET 메서드 하나를 화면 밖(스레드 풀)에서 부르고 정한 시간까지만 기다린다. 응답이 없으면 IOException. 예: (New-WtCall ([System.IO.File]) ReadAllText $p)
+function Invoke-WtDataCall {
+    param([Parameter(Mandatory, Position = 0)][Delegate]$Call, [string]$Key = 'data', [int]$TimeoutMs = $script:ioTimeoutMs, [string]$Where = '데이터 폴더')
+    try { Invoke-WtWork -Call $Call -Key $Key -TimeoutMs $TimeoutMs }
+    catch [System.TimeoutException] {
+        throw [System.IO.IOException]::new("${Where}가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인하세요.", $_.Exception)
+    }
+}
 
 # 진입 스크립트가 자기 위치를 알려 준다. 묶음 파일이든 원본 폴더든 같은 방식으로 쓴다.
 function Set-WtAppRoot([string]$Path) {
@@ -80,83 +716,317 @@ function Set-WtAppRoot([string]$Path) {
 
 function Get-WtAppRoot { $script:appRoot }
 
-# 데이터 폴더마다 하나의 앱만 쓴다. 빈 잠금 파일은 남겨 두고 핸들만 해제한다.
+# 데이터 폴더마다 하나의 앱만 쓴다. 빈 잠금 파일은 남겨 두고 핸들만 해제한다 (Close-WtDataLock).
 function Open-WtDataLock {
-    try {
-        [System.IO.File]::Open((Join-Path (Get-WtDataRoot) '.worktool.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
-    } catch {
+    $path = Join-Path (Get-WtDataRoot) '.worktool.lock'
+    try { Invoke-WtDataIo Lock -Arguments $path -Reserved }
+    catch {
+        if ($_.Exception.InnerException -is [System.TimeoutException]) { throw }
         throw '같은 데이터 폴더를 사용하는 WorkTool이 실행 중이거나 폴더를 잠글 수 없습니다. 기존 창·트레이를 확인하세요.'
     }
+}
+
+# 잠금을 푼다. 응답 없는 공유 폴더여도 오래 기다리지 않는다 (못 풀면 앱 프로세스가 끝날 때 풀린다)
+function Close-WtDataLock($Lock) {
+    if (-not $Lock) { return }
+    try { [void](Invoke-WtDataIo Unlock -Arguments (, $Lock) -TimeoutMs 2000 -Reserved) } catch { }
 }
 
 # 데이터 폴더. 앱 폴더에 datapath.txt가 있으면 그 첫 줄의 경로, 없으면 문서\WorkTool
 function Get-WtDataRoot {
     if ($script:dataRoot) { return $script:dataRoot }
-    $path = $null
+    $line = $null
     if ($script:appRoot) {
         $override = Join-Path $script:appRoot 'datapath.txt'
-        if (Test-Path -LiteralPath $override) {
-            $line = Get-Content -LiteralPath $override -TotalCount 1 -Encoding utf8
-            if ($line -and $line.Trim()) { $path = [Environment]::ExpandEnvironmentVariables($line.Trim()) }
-        }
+        try { $line = @((Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllText $override) -Key (Get-WtPathKey $override) -Where '앱 폴더') -split "\r?\n", 2)[0] }
+        catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { $line = $null }
     }
+    $path = if ($line -and $line.Trim()) { [Environment]::ExpandEnvironmentVariables($line.Trim()) } else { $null }
     if (-not $path) {
-        $docs = [Environment]::GetFolderPath('MyDocuments')
+        # 문서 폴더가 서버로 옮겨져 있어도 여기서 확인하러 가지 않는다 (확인 · 만들기는 아래 화면 밖 작업에서)
+        $docs = [Environment]::GetFolderPath('MyDocuments', 'DoNotVerify')
         if (-not $docs) { $docs = $HOME }
         $path = Join-Path $docs 'WorkTool'
     }
-    if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
-    $script:dataRoot = (Resolve-Path -LiteralPath $path).ProviderPath
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($path)
+    [void](Invoke-WtDataCall (New-WtCall ([System.IO.Directory]) CreateDirectory $full))
+    $script:dataRoot = $full
     $script:dataRoot
 }
 
-# JSON 파일 하나를 읽는다. 없으면 $null
+# JSON 파일 하나를 읽는다. 없으면 $null. 아직 파일에 쓰이지 않은 내용(쓰는 중 · 늦게 실패해 앱이 가진 것)이 있으면
+# 디스크 대신 그것을 돌려준다. 앱이 가진 내용과 화면이 늘 같게
 function Read-WtJsonFile([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    [System.IO.File]::ReadAllText($Path, $script:utf8) | ConvertFrom-Json -Depth 20
+    $pending = Get-WtDataWritePending $Path
+    if ($pending) { return $pending.Json | ConvertFrom-Json -Depth 20 }
+    try { $text = Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllText $Path) }
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return $null }
+    $text | ConvertFrom-Json -Depth 20
 }
 
-# JSON 파일 하나를 바꿔치기로 쓴다. 직전 파일은 <파일>.bak
+<#
+JSON 파일 하나를 바꿔치기로 쓴다. 직전 파일은 <파일>.bak. 저장 통로에 넣고 $script:writeWaitMs까지만 기다린다.
+들어온 순간 받아들인 내용이다(버전을 받는다). 그 버전은 파일에 쓰였다고 확인되거나(저장됨), 실패하면 앱이 가지고 있다가
+다시 시도하거나 사용자가 버리기를 고를 때까지 둔다 — 둘 중 하나로만 끝난다. 그래서 쓰기 실패로는 예외를 올리지 않는다.
+  바로 실패 · 쓰기 시작 실패 · 늦은 실패 모두 같은 길(Set-WtDataWriteFailed)로 남는다. 실패는 한 번 알리고, 셸이 끝내기 전에 묻는다.
+  기다리는 시간은 화면이 얼마나 기다릴지만 정한다. 저장 상태(저장됨 · 쓰는 중 · 실패)는 Get-WtDataWriteStatus가 버전으로 정한다
+#>
 function Write-WtJsonFile([string]$Path, $Data) {
     $json = ConvertTo-Json -InputObject $Data -Depth 20
+    $entry = Submit-WtDataWrite $Path $json
+    Wait-WtDataWrite $entry $script:writeWaitMs
+}
+
+# ---- 저장 통로 --------------------------------------------------------------------------------
+# 파일마다 버전을 센다: 넣은 쓰기마다 버전이 하나씩 오르고, 넣은 순간 받아들인 버전(Accepted)이 된다.
+#   확인된 버전(Confirmed): 파일에 쓰였다고 확인된 가장 새 버전
+# 받아들인 버전 > 확인된 버전인데 쓰는 중인 것이 없으면, 그 내용을 실패로 남겨 둔다(Failed). 버전이 같아져야 「저장됨」이다
+
+# 실제로 쓰기 (화면 밖에서 돈다): 임시 파일에 쓰고 바꿔치기
+function Write-WtDataFile([string]$Path, [string]$Json) {
     $tmp = "$Path.tmp"
-    [System.IO.File]::WriteAllText($tmp, $json, $script:utf8)
-    if (Test-Path -LiteralPath $Path) {
-        [System.IO.File]::Replace($tmp, $Path, "$Path.bak")
-    } else {
-        Move-Item -LiteralPath $tmp -Destination $Path
+    [System.IO.File]::WriteAllText($tmp, $Json, [System.Text.UTF8Encoding]::new($false))
+    if ([System.IO.Path]::Exists($Path)) { [System.IO.File]::Replace($tmp, $Path, "$Path.bak") }
+    else { [System.IO.File]::Move($tmp, $Path) }
+}
+
+# 통로가 돌리는 코드. 검사는 쓰기 앞에 기다림만 끼워 넣는다 (Write-WtDataFile은 그대로 돈다)
+$script:writeJob = { param($p, $json) Write-WtDataFile $p $json }
+
+# 파일 하나의 기록 (버전 · 받아들인 것 · 실패로 남은 것)
+function Get-WtDataFileRecord([string]$Path) {
+    $k = $Path.ToLowerInvariant()
+    if (-not $script:writeFiles.ContainsKey($k)) {
+        $script:writeFiles[$k] = @{ Path = $Path; Version = 0; Accepted = $null; Confirmed = 0; Failed = $null; LastError = $null; Told = $false }
+    }
+    $script:writeFiles[$k]
+}
+
+# 쓰기 하나를 통로에 넣는다. 넣는 순간 받아들인 버전이 된다.
+# 같은 파일의 아직 시작하지 않은 쓰기는 새 내용으로 바꾼다 (새 내용이 앞 내용을 담고 있다)
+function Submit-WtDataWrite([string]$Path, [string]$Json) {
+    $rec = Get-WtDataFileRecord $Path
+    for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) {
+        if ($script:writeQueue[$i].Path -ieq $Path) { $script:writeQueue[$i].State = 'superseded'; $script:writeQueue.RemoveAt($i) }
+    }
+    $rec.Version++
+    $entry = @{ Path = $Path; Json = $Json; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
+    $rec.Accepted = $entry
+    $rec.Failed = $null   # 실패로 남아 있던 앞 내용은 이 내용이 담고 있다. 이 쓰기도 실패하면 이 내용이 남는다
+    $script:writeQueue.Add($entry)
+    Start-WtDataWriteNext
+    $entry
+}
+
+# 쓰는 것이 없으면 다음 차례를 시작한다. 한 번에 하나만 쓴다 (같은 임시 파일 · 바꿔치기가 겹치지 않게).
+# 시작 자체가 실패해도 늦은 실패와 같은 길로 남기고 다음 차례로 간다
+function Start-WtDataWriteNext {
+    while (-not $script:writeCurrent -and $script:writeQueue.Count) {
+        $entry = $script:writeQueue[0]
+        $script:writeQueue.RemoveAt(0)
+        $entry.State = 'writing'
+        try {
+            $script:writeCurrent = $entry
+            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile) }
+            $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Reserved `
+                -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
+        } catch {
+            $script:writeCurrent = $null
+            Set-WtDataWriteFailed $entry $_.Exception
+        }
     }
 }
+$script:writeFunctions = $null
+
+# 쓰기 하나가 끝났을 때 (화면 스레드): 성공이면 확인된 버전을 올리고, 실패면 실패로 남긴다. 그 뒤 다음 차례를 시작한다
+function Complete-WtDataWrite($Work) {
+    $entry = $Work.Context
+    if ([object]::ReferenceEquals($script:writeCurrent, $entry)) { $script:writeCurrent = $null }
+    if ($Work.State -eq 'done') {
+        $entry.State = 'done'
+        $rec = Get-WtDataFileRecord $entry.Path
+        if ($entry.Version -gt $rec.Confirmed) { $rec.Confirmed = $entry.Version }
+        Update-WtDataFileState $rec
+    } else {
+        Set-WtDataWriteFailed $entry $(if ($Work.Exception) { $Work.Exception } else { [System.IO.IOException]::new("저장하지 못했습니다. $($Work.Error)") })
+    }
+    Start-WtDataWriteNext
+}
+
+# 쓰기 실패가 지나는 단 하나의 길 (바로 실패 · 시작 실패 · 늦은 실패): 이유를 적고, 받아들인 내용을 실패로 남기고, 알린다
+function Set-WtDataWriteFailed($Entry, [Exception]$Exception) {
+    $Entry.State = 'failed'
+    $Entry.Exception = $Exception
+    $rec = Get-WtDataFileRecord $Entry.Path
+    $rec.LastError = $Exception
+    Update-WtDataFileState $rec
+}
+
+# 버전을 맞추고(실패로 남기기 · 지우기) 화면에 알린다. 실패로 남으면 저장될 때까지 한 번만 알린다
+function Update-WtDataFileState($Rec) {
+    $acc = $Rec.Accepted
+    $flying = Get-WtDataWriteFlying $Rec.Path
+    if (-not $acc -or $acc.Version -le $Rec.Confirmed) { $Rec.Failed = $null }
+    elseif ($flying -and $flying.Version -ge $acc.Version) { $Rec.Failed = $null }   # 그 내용(이나 더 새 내용)을 쓰는 중이다
+    elseif (-not $Rec.Failed -or $Rec.Failed.Version -lt $acc.Version) {
+        $Rec.Failed = @{ Path = $acc.Path; Json = $acc.Json; Version = $acc.Version
+            Exception = if ($acc.Exception) { $acc.Exception } elseif ($Rec.LastError) { $Rec.LastError } else { [System.IO.IOException]::new('저장하지 못했습니다.') } }
+    }
+    $tell = $false
+    if ($Rec.Failed) { if (-not $Rec.Told) { $tell = $true; $Rec.Told = $true } }
+    elseif (-not $flying) { $Rec.Told = $false }
+    Invoke-WtDataWriteHandlers $Rec $tell
+}
+# 이 파일을 쓰는 중이거나 차례를 기다리는 것 중 가장 새 것
+function Get-WtDataWriteFlying([string]$Path) {
+    for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) { if ($script:writeQueue[$i].Path -ieq $Path) { return $script:writeQueue[$i] } }
+    if ($script:writeCurrent -and $script:writeCurrent.Path -ieq $Path) { return $script:writeCurrent }
+    $null
+}
+
+# 이 쓰기가 끝날 때까지 정한 시간만 기다린다. 앞 차례가 이미 오래 걸리면(응답 없는 폴더) 기다리지 않는다
+function Wait-WtDataWrite($Entry, [int]$Milliseconds) {
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($Entry.State -eq 'queued' -or $Entry.State -eq 'writing') {
+        $left = $Milliseconds - $watch.ElapsedMilliseconds
+        if ($left -le 0) { break }
+        $current = $script:writeCurrent
+        if (-not $current) { break }
+        if (-not [object]::ReferenceEquals($current, $Entry) -and $current.Watch.ElapsedMilliseconds -ge $Milliseconds) { break }
+        [void](Wait-WtWork $current.Work -Milliseconds $left)
+        if (-not $current.Work.Finished) { break }
+    }
+}
+
+# 이 파일에 아직 파일에 쓰이지 않은 내용: 쓰는 중인 가장 새 것, 없으면 실패로 남은 것
+function Get-WtDataWritePending([string]$Path) {
+    $flying = Get-WtDataWriteFlying $Path
+    if ($flying) { return $flying }
+    $k = $Path.ToLowerInvariant()
+    if ($script:writeFiles.ContainsKey($k)) { return $script:writeFiles[$k].Failed }
+    $null
+}
+
+<#
+파일 하나의 저장 상태. 시간이 아니라 버전으로 정한다.
+  State: saved(받아들인 내용이 파일에 쓰였다) · writing(쓰는 중이거나 차례를 기다림) · failed(쓰지 못한 내용을 앱이 가지고 있음)
+  Message: failed일 때 이유
+#>
+function Get-WtDataWriteStatus([string]$Path) {
+    if (Get-WtDataWriteFlying $Path) { return [pscustomobject]@{ State = 'writing'; Message = '' } }
+    $k = $Path.ToLowerInvariant()
+    $failed = if ($script:writeFiles.ContainsKey($k)) { $script:writeFiles[$k].Failed } else { $null }
+    if ($failed) { return [pscustomobject]@{ State = 'failed'; Message = [string]$failed.Exception.Message } }
+    [pscustomobject]@{ State = 'saved'; Message = '' }
+}
+
+# 쓰지 못한 내용을 앱이 가지고 있는 파일들 @{ Path; Name; Message }
+function Get-WtDataUnsaved {
+    foreach ($rec in @($script:writeFiles.Values)) {
+        if ($rec.Failed -and -not (Get-WtDataWriteFlying $rec.Path)) {
+            [pscustomobject]@{ Path = $rec.Path; Name = [System.IO.Path]::GetFileName($rec.Path); Message = [string]$rec.Failed.Exception.Message }
+        }
+    }
+}
+
+# 쓰지 못한 내용을 다시 쓴다 (사용자가 [다시 시도] · Ctrl+S를 눌렀을 때). -Path가 없으면 모두. 화면은 정한 시간만 기다린다
+function Resume-WtDataWrites([string]$Path = '') {
+    $entries = foreach ($rec in @($script:writeFiles.Values)) {
+        if (-not $rec.Failed -or ($Path -and $rec.Path -ine $Path) -or (Get-WtDataWriteFlying $rec.Path)) { continue }
+        Submit-WtDataWrite $rec.Path $rec.Failed.Json
+    }
+    foreach ($e in @($entries)) { Wait-WtDataWrite $e $script:writeWaitMs }
+}
+
+# 저장 중이거나 쓰지 못한 내용이 있는지
+function Test-WtDataWriting { [bool]($script:writeCurrent -or $script:writeQueue.Count) }
+
+# 사용자가 「저장하지 않고 끝내기」를 골랐을 때만 셸이 부른다. 남은 쓰기와 쓰지 못한 내용을 버린다
+# (임시 파일에 쓰는 중이면 원래 파일은 그대로다)
+function Stop-WtDataWrites {
+    foreach ($e in $script:writeQueue) { $e.State = 'dropped' }
+    $script:writeQueue.Clear()
+    if ($script:writeCurrent) {
+        $script:writeCurrent.State = 'dropped'
+        Stop-WtWork $script:writeCurrent.Work
+        $script:writeCurrent = $null
+    }
+    foreach ($rec in @($script:writeFiles.Values)) { $rec.Failed = $null; $rec.Accepted = $null }
+}
+
+# 저장 통로 상태: 남은 수 · 「응답 없음」(지금 쓰는 것이 $script:writeSlowMs를 넘김) · 걸린 초
+function Get-WtDataWriteState {
+    $current = $script:writeCurrent
+    $ms = if ($current) { $current.Watch.ElapsedMilliseconds } else { 0 }
+    [pscustomobject]@{ Count = $script:writeQueue.Count + [int][bool]$current; Slow = $ms -ge $script:writeSlowMs; Seconds = [int][Math]::Floor($ms / 1000) }
+}
+
+# 파일 저장 상태가 바뀔 때(쓰기가 끝남 · 실패로 남음 · 다시 써서 저장됨) 부를 처리기 { param($path, $state) }.
+# $state는 Get-WtDataWriteStatus의 State. 나중에(화면 스레드가 한가할 때) 부른다
+function Register-WtDataWriteHandler([scriptblock]$Handler) { $script:writeHandlers.Add($Handler) }
+
+# 알릴 것을 모아 두고, 화면 스레드가 한가할 때 한 번에 알린다 (처리기 안에서 다시 저장해도 이 함수 안에서 겹치지 않게)
+function Invoke-WtDataWriteHandlers($Rec, [bool]$Tell) {
+    if (-not $script:writeHandlers.Count -and -not $Tell) { return }
+    $type = 'System.Windows.Threading.Dispatcher' -as [type]
+    $dispatcher = if ($type) { [System.Windows.Threading.Dispatcher]::FromThread([System.Threading.Thread]::CurrentThread) } else { $null }
+    if (-not $dispatcher) { return }
+    $script:writeNotices.Add(@{ Path = $Rec.Path; Tell = $Tell; Message = if ($Rec.Failed) { [string]$Rec.Failed.Exception.Message } else { '' } })
+    if ($script:writeNoticeQueued) { return }
+    $script:writeNoticeQueued = $true
+    [void]$dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [Action]{ Send-WtDataWriteNotices })
+}
+
+function Send-WtDataWriteNotices {
+    $script:writeNoticeQueued = $false
+    $list = @($script:writeNotices.ToArray()); $script:writeNotices.Clear()
+    foreach ($n in $list) {
+        if ($n.Tell) {
+            $name = [System.IO.Path]::GetFileName($n.Path)
+            try { Show-WtMessage "데이터 폴더에 저장하지 못했습니다 ($name).`n$($n.Message)`n`n그 내용은 앱이 가지고 있습니다. 다시 저장하거나(메모는 Ctrl+S), 끝낼 때 다시 시도할지 묻습니다." 'WorkTool' 'Warning' } catch { }
+        }
+        $state = (Get-WtDataWriteStatus $n.Path).State
+        foreach ($h in @($script:writeHandlers)) { try { [void](& $h $n.Path $state) } catch { } }
+    }
+}
+$script:writeNotices = [System.Collections.Generic.List[object]]::new()
+$script:writeNoticeQueued = $false
+$script:writeFiles = @{}
 
 function Get-WtStorePath {
     param([Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$Name)
     Join-Path (Get-WtDataRoot) "$Name.json"
 }
 
-function Test-WtStore([string]$Name) { Test-Path -LiteralPath (Get-WtStorePath $Name) }
+function Test-WtStore([string]$Name) {
+    $path = Get-WtStorePath $Name
+    if (Get-WtDataWritePending $path) { return $true }
+    Invoke-WtDataCall (New-WtCall ([System.IO.Path]) Exists $path)
+}
 
 # 데이터 폴더 안의 하위 폴더(예: 사용자가 파일을 넣어 두는 곳). -Create면 없을 때 만든다
 function Get-WtDataFolder {
     param([Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$Name, [switch]$Create)
     $path = Join-Path (Get-WtDataRoot) $Name
-    if ($Create -and -not (Test-Path -LiteralPath $path -PathType Container)) { [void][System.IO.Directory]::CreateDirectory($path) }
+    if ($Create) { [void](Invoke-WtDataCall (New-WtCall ([System.IO.Directory]) CreateDirectory $path)) }
     $path
 }
 
-# 화면에서 변경 여부를 판단하는 표식. 파일 조회와 읽고 쓰기는 이 모듈로 모은다.
+# 화면에서 변경 여부를 판단하는 표식: 내용의 크기 · 해시. 같은 크기 · 시각으로 덮어쓴 외부 변경도 놓치지 않는다.
+# 다른 프로그램(동기화 · 백신 등)이 잡고 있어 못 읽거나 데이터 폴더가 답하지 않으면 매번 다른 표식을 돌려줘, 화면이 그냥 다시 읽게 한다
+# (읽기 실패는 다시 읽을 때 알린다)
 function Get-WtStoreStamp([string]$Name) {
     $path = Get-WtStorePath $Name
-    $info = [System.IO.FileInfo]::new($path)
-    $info.Refresh()
-    if (-not $info.Exists) { return "$path|missing" }
-    # 같은 크기·시각으로 덮어쓴 외부 변경도 놓치지 않는다. JSON 해석 없이 작은 버퍼로 읽는다.
-    # 다른 프로그램(동기화 · 백신 등)이 잠깐 잡고 있어 못 읽으면 매번 다른 표식을 돌려줘, 화면이 그냥 다시 읽게 한다
-    try {
-        $stream = [System.IO.File]::OpenRead($path)
-        try { $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($stream)) }
-        finally { $stream.Dispose() }
-    } catch [System.IO.IOException], [System.UnauthorizedAccessException] { $hash = "unread-$([guid]::NewGuid().ToString('N'))" }
-    "$path|$($info.LastWriteTimeUtc.Ticks)|$($info.CreationTimeUtc.Ticks)|$($info.Length)|$hash"
+    # 저장 중인 내용은 다 쓴 뒤의 파일과 같은 표식이 되게 같은 바이트(UTF-8, BOM 없음)로 잰다
+    $pending = Get-WtDataWritePending $path
+    if ($pending) {
+        $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($pending.Json)
+        return "$path|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)))"
+    }
+    try { $bytes = Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllBytes $path) }
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return "$path|missing" }
+    catch { return "$path|unread-$([guid]::NewGuid().ToString('N'))" }
+    "$path|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
 }
 
 # 저장소 하나를 읽는다. 파일이 없으면 $null.
@@ -177,7 +1047,7 @@ function Read-WtStore {
     }
     if ($from -lt $Schema) {
         if (-not $Migrate) { throw "$Name.json을 schema $from에서 $Schema(으)로 바꾸는 방법이 없습니다." }
-        Copy-Item -LiteralPath $path -Destination "$path.schema$from.bak" -Force
+        [void](Invoke-WtDataIo Copy -Arguments $path, "$path.schema$from.bak")
         while ($from -lt $Schema) {
             $doc = & $Migrate $doc $from
             $from++
@@ -215,7 +1085,8 @@ function New-WtId { [guid]::NewGuid().ToString('N').Substring(0, 12) }
 
 # ---- 예전(WinForms) WorkTool 데이터 ----------------------------------------------------------
 
-# 예전 데이터 폴더를 찾는다. 설정에 적은 위치 → 이 파일 옆 data → 한 단계 위 data 순서
+# 예전 데이터 폴더를 찾는다. 설정에 적은 위치 → 이 파일 옆 data → 한 단계 위 data 순서.
+# 설정한 위치가 응답하지 않으면 못 찾은 것으로 본다 (화면이 기다리지 않게)
 function Find-WtLegacyFolder {
     $candidates = [System.Collections.Generic.List[string]]::new()
     $custom = Get-WtSetting 'legacy.path'
@@ -224,22 +1095,20 @@ function Find-WtLegacyFolder {
         $candidates.Add((Join-Path $script:appRoot 'data'))
         $candidates.Add((Join-Path (Split-Path $script:appRoot -Parent) 'data'))
     }
-    foreach ($c in $candidates) {
-        foreach ($f in 'memo.csv', 'schedule.csv', 'attendance.csv') {
-            if (Test-Path -LiteralPath (Join-Path $c $f)) { return (Resolve-Path -LiteralPath $c).ProviderPath }
-        }
-    }
-    $null
+    $full = [System.Collections.Generic.List[string]]::new()
+    foreach ($c in $candidates) { try { $full.Add($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($c)) } catch { } }
+    if (-not $full.Count) { return $null }
+    try { Invoke-WtDataIo FindLegacy -Arguments (, $full.ToArray()) -Key 'legacy' -TimeoutMs $script:legacyTimeoutMs -Where '예전 데이터 위치' }
+    catch { $null }
 }
 
 # 예전 CSV 하나를 읽는다. 파일이 없으면 $null (빈 파일이면 빈 배열)
 function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
-    $path = Join-Path $Folder "$Name.csv"
-    if (-not (Test-Path -LiteralPath $path)) { return $null }
-    , @(Import-Csv -LiteralPath $path -Encoding utf8)
+    Invoke-WtDataIo ReadCsv -Arguments (Join-Path $Folder "$Name.csv") -Key 'legacy' -Where '예전 데이터 위치' -Session Default
 }
 
-Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
+Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
+    Test-WtDataWriting, Get-WtDataWriteState, Get-WtDataWriteStatus, Get-WtDataUnsaved, Resume-WtDataWrites, Register-WtDataWriteHandler, Stop-WtDataWrites,
     Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
     Find-WtLegacyFolder, Import-WtLegacyCsv
 } | Import-Module -Force -DisableNameChecking
@@ -298,6 +1167,7 @@ function Set-WtSetting([string]$Key, $Value) {
     }
     $sorted = [ordered]@{}
     foreach ($k in ($next.Keys | Sort-Object)) { $sorted[$k] = $next[$k] }
+    # 저장 통로가 이 내용을 맡는다. 쓰지 못해도 버리지 않고 가지고 있다가(다시 읽어도 나온다) 끝내기 전에 셸이 묻는다
     Write-WtJsonFile (Get-WtSettingsPath) ([ordered]@{ schema = 1; values = $sorted })
     $script:values = $next
     foreach ($h in @($script:handlers)) { & $h $Key $Value }
@@ -2393,18 +3263,16 @@ $script:openable = @('.md', '.txt', '.log', '.csv', '.tsv', '.json', '.xml', '.y
     '.xlsx', '.xls', '.xlsm', '.docx', '.doc', '.pptx', '.ppt', '.vsdx', '.vsd', '.htm', '.html', '.zip')
 $script:imageExt = @('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.ico', '.webp')
 
-# 파일 링크를 열기 전 경로 확인 (있는지 · 폴더인지). 화면 밖(.NET 작업)에서 하고 타이머로 결과를 받는다
-$script:pathJobs = [System.Collections.Generic.List[object]]::new()
-$script:pathTimer = $null
-$script:pathTimeoutMs = 5000   # 이 시간 안에 답이 없으면 기다리지 않고 알린다
-$script:pathMaxJobs = 8        # 답이 없는 확인이 이만큼 남아 있으면 새로 시작하지 않는다
-$script:pathCursor = $null     # 확인 중 커서를 바꾸기 전 값 (@{ Old })
-# 확인 작업 만들기: 경로 → 끝나면 파일 속성(없으면 -1)을 주는 Task. 검사가 느린 경로를 흉내 내려고 바꿔 끼운다
-$script:pathProbe = {
-    param($path)
-    $info = [System.IO.FileInfo]::new($path)
-    [System.Threading.Tasks.Task[System.IO.FileAttributes]]::Run([Func[System.IO.FileAttributes]]$info.get_Attributes)
-}
+# 그림은 화면 밖(core\Work.psm1)에서 읽고, 읽은 바이트로 화면에서 그린다. 응답 없는 공유 폴더의 그림도 그리기를 멈추지 않는다
+$script:imageWaitMs = 150        # 그리기를 끝내기 전에 그림을 기다리는 시간. 로컬 그림은 이 안에 읽혀 자리가 바뀌지 않는다
+$script:imageTimeoutMs = 10000   # 이 시간 안에 못 읽으면 「응답하지 않음」으로 둔다
+$script:imageMaxBytes = 64MB     # 이보다 큰 그림 파일은 그리지 않는다
+$script:imageParallel = 6        # 한 번에 읽는 그림 수. 나머지는 차례를 기다린다 (그림이 많은 글도 스레드가 한꺼번에 늘지 않게)
+$script:imageQueue = [System.Collections.Generic.List[object]]::new()   # 읽을 차례를 기다리는 그림 자리
+$script:imageActive = [System.Collections.Generic.List[object]]::new()  # 읽고 있는 그림 작업
+$script:imageSlowKeys = [System.Collections.Generic.HashSet[string]]::new()   # 기다리는 시간 안에 못 읽은 곳(드라이브 · 공유). 다음 그리기에서는 기다리지 않는다
+# 그림 하나 읽기: .NET 호출 하나라서 스레드 풀에서 바로 부른다 (없으면 FileNotFound). 검사가 느린 경로를 흉내 내려고 바꿔 끼운다 (경로 → New-WtCall)
+$script:imageCall = { param($path) New-WtCall ([System.IO.File]) ReadAllBytes $path }
 
 # ---- 등록 -------------------------------------------------------------------------------------
 
@@ -3014,6 +3882,7 @@ function New-WtMarkdownView {
     $v.Tag = @{
         Text = ''; BaseDir = $BaseDir; OnLink = $OnLink; OnTask = $OnTask; Strict = [bool]$StrictLineBreaks
         Anchors = @{}; Remeasure = $false; Error = $null; ListDepth = 0
+        Images = [System.Collections.Generic.List[object]]::new()   # 이번에 그리면서 읽기 시작한 그림 (끝내기 전에 잠깐 기다린다)
     }
     for ($i = $script:views.Count - 1; $i -ge 0; $i--) { if (-not $script:views[$i].IsAlive) { $script:views.RemoveAt($i) } }
     $script:views.Add([System.WeakReference]::new($v))
@@ -3048,7 +3917,63 @@ function Set-WtMarkdownText {
         $raw.Inlines.Add((New-WtMdRun $st.Text))
         $doc.Blocks.Add($raw)
     }
+    Wait-WtMdImages $st
     $View.Document = $doc
+}
+
+# 이번에 그리면서 읽기 시작한 그림을 모두 합쳐 $script:imageWaitMs까지만 기다린다. 그 안에 읽힌 그림은 처음 배치 전에 들어가서
+# 자리가 바뀌지 않는다. 못 읽은 그림은 그 자리에 이름을 두고, 다 읽히면 그때 그린다. 이미 느린 곳(공유)의 그림은 기다리지 않는다
+function Wait-WtMdImages($St) {
+    if ($null -eq $St.Images -or -not $St.Images.Count) { return }
+    $boxes = @($St.Images)
+    $St.Images.Clear()
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        # 앞 그림이 끝나면 차례를 기다리던 그림이 이어서 시작하므로 매번 다시 모은다
+        $done = [System.Collections.Generic.List[object]]::new()
+        $waitFor = $null
+        foreach ($b in $boxes) {
+            $w = $b.Tag.Work
+            if (-not $w -or $w.Finished) { continue }
+            if ($w.Handle.IsCompleted) { $done.Add($w) }
+            elseif (-not $waitFor -and -not $script:imageSlowKeys.Contains($w.Key)) { $waitFor = $w }
+        }
+        if ($done.Count) { [void](Wait-WtWork $done.ToArray() -Milliseconds 1); continue }
+        $left = $script:imageWaitMs - $watch.ElapsedMilliseconds
+        if ($left -le 0 -or -not $waitFor) { break }
+        [void](Wait-WtWork $waitFor -Milliseconds $left)
+    }
+    foreach ($b in $boxes) {
+        $w = $b.Tag.Work
+        if ($w -and -not $w.Finished) { [void]$script:imageSlowKeys.Add($w.Key) }
+        if (-not $b.Child) { Set-WtMdImageNote $b 'loading' }   # 아직 못 읽은 그림 (읽기 전 자리는 비워 두었다)
+    }
+}
+
+# 차례를 기다리는 그림을 읽기 시작한다 (한 번에 $script:imageParallel개까지)
+function Start-WtMdImageReads {
+    # 끝났거나 시간이 지나 버린 작업은 자리를 차지하지 않는다 (같은 곳의 다음 그림은 아래에서 바로 「응답 없음」)
+    for ($i = $script:imageActive.Count - 1; $i -ge 0; $i--) {
+        if ($script:imageActive[$i].Finished -or $script:imageActive[$i].State -ne 'running') { $script:imageActive.RemoveAt($i) }
+    }
+    while ($script:imageActive.Count -lt $script:imageParallel -and $script:imageQueue.Count) {
+        $box = $script:imageQueue[0]
+        $script:imageQueue.RemoveAt(0)
+        $key = Get-WtPathKey $box.Tag.Path
+        if (Test-WtWorkStuck $key) { Set-WtMdImageNote $box 'slow'; continue }
+        try {
+            $box.Tag.Work = Start-WtWork -Call (& $script:imageCall $box.Tag.Path) -Key $key -TimeoutMs $script:imageTimeoutMs -Context $box `
+                -OnDone { param($w) Complete-WtMdImageRead $w }
+            $script:imageActive.Add($box.Tag.Work)
+        } catch { Set-WtMdImageNote $box 'error' $_.Exception.Message }
+    }
+}
+
+function Complete-WtMdImageRead($Work) {
+    if ($Work.State -eq 'done') { [void]$script:imageSlowKeys.Remove($Work.Key) }
+    try { Set-WtMdImageResult $Work }
+    catch { Set-WtMdImageNote $Work.Context 'error' $_.Exception.Message }
+    finally { Start-WtMdImageReads }
 }
 
 # 단위 하나를 Section 하나로 그린다 (Section.Tag = 단위). 보기의 상태(링크 처리 등)를 같이 쓴다.
@@ -3071,7 +3996,7 @@ function New-WtMarkdownUnitSection {
             return $sec
         }
         $st.ListDepth = [int]$Unit.Depth
-        try { Add-WtMdBlock $sec.Blocks $model $st } finally { $st.ListDepth = 0 }
+        try { Add-WtMdBlock $sec.Blocks $model $st } finally { $st.ListDepth = 0; Wait-WtMdImages $st }
         if ($Unit.Kind -eq 'list-item') {
             # 항목마다 따로 그린 목록을 이어 붙여 하나처럼 보이게: 들여쓰기 = 목록 안쪽 여백 × 깊이, 항목 사이 = 항목 아래 여백
             $list = $sec.Blocks.FirstBlock
@@ -3330,7 +4255,7 @@ function New-WtMdHyperlink($Link, $St) {
 그 밖에는 -OnLink를 먼저 부르고, 처리하지 않았으면 기본 동작:
   url  http · https · mailto만 기본 브라우저 · 메일 프로그램으로 연다
   file 폴더는 탐색기로, 문서 · 그림은 기본 프로그램으로 연다. 실행 파일 · 스크립트는 열지 않고 탐색기에서 그 파일을 보여 준다
-       있는지 · 폴더인지는 화면 밖에서 확인한다 (Start-WtMdPathCheck). 응답 없는 공유 폴더에서도 화면이 멈추지 않는다
+       있는지 · 폴더인지 확인과 열기는 화면 밖에서 한다 (core\Work.psm1 Open-WtPath). 응답 없는 공유 폴더에서도 화면이 멈추지 않는다
   wiki 연결할 곳을 모른다고 알린다 (메모 · 문서 화면이 -OnLink로 처리한다)
 #>
 function Invoke-WtMarkdownLink($St, $Link) {
@@ -3352,7 +4277,7 @@ function Invoke-WtMarkdownLink($St, $Link) {
         'file' {
             $path = Resolve-WtMdPath $Link.Target $St.BaseDir
             if (-not $path) { Show-WtMessage "파일을 찾지 못했습니다.`n$($Link.Target)"; return }
-            Start-WtMdPathCheck $path $Link.Target
+            Open-WtPath $path -OpenTypes $script:openable -NotFound "파일을 찾지 못했습니다.`n$($Link.Target)"
         }
         'wiki' { Show-WtMessage "연결된 문서를 찾지 못했습니다: $($Link.Target)" }
     }
@@ -3384,110 +4309,78 @@ function Test-WtMdFolderLike([string]$Path) {
 }
 
 <#
-파일 링크의 경로(있는지 · 폴더인지)를 화면 밖에서 확인하고, 끝나면 Invoke-WtMdPathResult로 연다.
-응답 없는 공유 폴더 · 끊긴 네트워크 드라이브에서도 화면이 멈추지 않는다. 로컬 드라이브도 끊긴 네트워크 드라이브일 수 있어서 모두 이 길로 간다.
-- 실행 공간 대신 .NET 작업(Task)으로 확인한다. 실행 공간은 응답 없는 OS 호출 중이면 Close · Dispose를 해도 앱 프로세스가 끝나지 않는다.
-  작업은 PowerShell 없이 스레드 풀(백그라운드 스레드)에서 돌아서, 끝나지 않은 채 남아도 프로세스를 붙잡지 않는다.
-- 확인하는 동안 커서는 AppStarting(화살표 + 모래시계). 기다리는 동안에도 앱은 쓸 수 있다.
-- 같은 경로를 확인 중에 또 누르면 겹쳐 시작하지 않는다. $script:pathTimeoutMs 안에 답이 없으면 기다리지 않고 알린다.
+로컬 그림 파일이면 그림 자리(Border)를, 아니면 $null (웹 주소의 그림은 내려받지 않는다).
+그리는 중에 디스크 · 네트워크를 건드리지 않는다: 파일은 화면 밖에서 읽고(Start-WtMdImageReads), 읽히면 자리에 그림을 넣는다.
+읽는 동안 · 없을 때 · 응답이 없을 때는 자리에 그림 아이콘과 이름을 두고, 마우스를 올리면 이유가 보인다.
+같은 곳(드라이브 · 공유)에 답 없는 그림이 남아 있으면 다시 묻지 않고 「응답하지 않음」으로 둔다.
 #>
-function Start-WtMdPathCheck([string]$Path, [string]$Target) {
-    $key = $Path.ToLowerInvariant()
-    # 시간이 지난 뒤에 끝난 확인은 여기서 치운다 (타이머는 기다리는 확인이 없으면 멈춰 있다)
-    foreach ($job in @($script:pathJobs.ToArray())) { if ($job.TimedOut -and $job.Task.IsCompleted) { [void]$script:pathJobs.Remove($job) } }
-    $same = @($script:pathJobs | Where-Object { $_.Key -eq $key })
-    if (@($same | Where-Object { -not $_.TimedOut }).Count) { return }
-    # 앞서 시간이 지난 확인이 아직 답을 기다리면, 또 기다리지 않고 바로 알린다
-    if ($same.Count) { Show-WtMessage (Get-WtMdPathTimeoutText $Path) 'WorkTool' 'Warning'; return }
-    if ($script:pathJobs.Count -ge $script:pathMaxJobs) {
-        Show-WtMessage "응답하지 않는 경로가 많아 지금은 열지 않습니다. 네트워크 연결을 확인하고 잠시 뒤 다시 누르세요.`n$Path" 'WorkTool' 'Warning'
-        return
-    }
-    try { $task = & $script:pathProbe $Path | Select-Object -Last 1 }
-    catch { Show-WtMessage "경로를 확인하지 못했습니다. 경로가 맞는지 확인하세요.`n$Path`n$($_.Exception.Message)" 'WorkTool' 'Warning'; return }
-    $script:pathJobs.Add(@{ Key = $key; Path = $Path; Target = $Target; Task = $task; Watch = [System.Diagnostics.Stopwatch]::StartNew(); TimedOut = $false })
-    Update-WtMdPathCursor
-    if (-not $script:pathTimer) { $script:pathTimer = New-WtPollTimer { Complete-WtMdPathChecks } }
-    $script:pathTimer.Start()
-}
-
-function Get-WtMdPathTimeoutText([string]$Path) {
-    "경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 다시 누르세요.`n$Path"
-}
-
-# 타이머가 부른다: 끝난 확인은 목록에서 빼고 열고, 시간이 지난 확인은 알린다 (작업은 끝날 때까지 목록에 남아 겹쳐 시작하지 않게 한다)
-function Complete-WtMdPathChecks {
-    $done = [System.Collections.Generic.List[object]]::new()
-    foreach ($job in @($script:pathJobs.ToArray())) {
-        if ($job.Task.IsCompleted) {
-            [void]$script:pathJobs.Remove($job)
-            if (-not $job.TimedOut) { $done.Add($job) }   # 시간이 지난 확인은 이미 알렸으므로 결과를 버린다
-        } elseif (-not $job.TimedOut -and $job.Watch.ElapsedMilliseconds -ge $script:pathTimeoutMs) {
-            $job.TimedOut = $true
-            $done.Add($job)
-        }
-    }
-    Update-WtMdPathCursor
-    # 기다리는 확인이 없으면 멈춘다. 시간이 지난 확인이 끝내 답하지 않아도 타이머가 계속 돌지 않게
-    if (-not @($script:pathJobs | Where-Object { -not $_.TimedOut }).Count -and $script:pathTimer) { $script:pathTimer.Stop() }
-    # 알림 창이 떠 있는 동안에도 타이머가 돌 수 있으므로, 목록을 다 정리한 뒤에 연다
-    foreach ($job in $done) {
-        try { Invoke-WtMdPathResult $job } catch { Show-WtError $_ '링크 열기' }
-    }
-}
-
-# 확인 결과대로 연다: 폴더 → 탐색기, 열 수 있는 종류 → 기본 프로그램, 그 밖 → 탐색기에서 선택, 없음 → 알림
-function Invoke-WtMdPathResult($Job) {
-    $path = $Job.Path
-    if ($Job.TimedOut) { Show-WtMessage (Get-WtMdPathTimeoutText $path) 'WorkTool' 'Warning'; return }
-    if ($Job.Task.IsFaulted -or $Job.Task.IsCanceled) {
-        $why = if ($Job.Task.Exception) { $Job.Task.Exception.GetBaseException().Message } else { '' }
-        Show-WtMessage "경로를 확인하지 못했습니다. 접근 권한과 경로를 확인하세요.`n$path`n$why" 'WorkTool' 'Warning'
-        return
-    }
-    $attr = [int]$Job.Task.Result
-    if ($attr -eq -1) { Show-WtMessage "파일을 찾지 못했습니다.`n$($Job.Target)"; return }
-    if ($attr -band [int][System.IO.FileAttributes]::Directory) { Invoke-Item -LiteralPath $path; return }
-    if ($script:openable -contains [System.IO.Path]::GetExtension($path).ToLowerInvariant()) { Invoke-Item -LiteralPath $path; return }
-    Start-Process explorer.exe -ArgumentList "/select,`"$path`""
-}
-
-# 확인 중이면 커서를 AppStarting으로, 기다리는 확인이 없으면 원래대로
-function Update-WtMdPathCursor {
-    $waiting = @($script:pathJobs | Where-Object { -not $_.TimedOut }).Count -gt 0
-    $busy = [System.Windows.Input.Cursors]::AppStarting
-    if ($waiting -and -not $script:pathCursor) {
-        $script:pathCursor = @{ Old = [System.Windows.Input.Mouse]::OverrideCursor }
-        [System.Windows.Input.Mouse]::OverrideCursor = $busy
-    } elseif (-not $waiting -and $script:pathCursor) {
-        if ([object]::ReferenceEquals([System.Windows.Input.Mouse]::OverrideCursor, $busy)) { [System.Windows.Input.Mouse]::OverrideCursor = $script:pathCursor.Old }
-        $script:pathCursor = $null
-    }
-}
-
-# 로컬 그림 파일이면 Image 요소, 아니면 $null (웹 주소의 그림은 내려받지 않는다)
 function New-WtMdImage($X, $St, [switch]$Inline) {
     if ((Get-WtMdLinkKind $X.Url) -ne 'file') { return $null }
     $path = Resolve-WtMdPath ([uri]::UnescapeDataString($X.Url)) $St.BaseDir
-    if (-not $path -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    if (-not $path) { return $null }
     if ($script:imageExt -notcontains [System.IO.Path]::GetExtension($path).ToLowerInvariant()) { return $null }
+    $box = [System.Windows.Controls.Border]::new()
+    $box.HorizontalAlignment = 'Left'
+    $box.Tag = @{ X = $X; Inline = [bool]$Inline; Path = $path; Work = $null }
+    $script:imageQueue.Add($box)
+    Start-WtMdImageReads
+    # 그리기 끝에 잠깐 기다릴 그림으로 둔다. 그 안에 읽히면 「읽는 중」 자리를 만들지 않는다 (Wait-WtMdImages)
+    if ($null -ne $St.Images) { $St.Images.Add($box) } elseif (-not $box.Child) { Set-WtMdImageNote $box 'loading' }
+    $box
+}
+
+# 그림을 다 읽었을 때 (화면 스레드): 읽은 바이트로 그림을 만들어 자리에 넣는다
+function Set-WtMdImageResult($Work) {
+    $box = $Work.Context
+    if ($Work.State -ne 'done') {
+        $state = if ($Work.TimedOut) { 'slow' }
+        elseif ($Work.Exception -is [System.IO.FileNotFoundException] -or $Work.Exception -is [System.IO.DirectoryNotFoundException]) { 'missing' }
+        else { 'error' }
+        Set-WtMdImageNote $box $state $(if ($state -eq 'error') { $Work.Error })
+        return
+    }
+    if (([byte[]]$Work.Result).Length -gt $script:imageMaxBytes) { Set-WtMdImageNote $box 'large'; return }
     try {
         $bmp = [System.Windows.Media.Imaging.BitmapImage]::new()
         $bmp.BeginInit()
-        $bmp.CacheOption = 'OnLoad'   # 파일을 잡고 있지 않게 바로 읽는다
-        $bmp.UriSource = [uri]$path
+        $bmp.CacheOption = 'OnLoad'
+        $bmp.StreamSource = [System.IO.MemoryStream]::new([byte[]]$Work.Result, $false)
         $bmp.EndInit()
         $bmp.Freeze()
-    } catch { return $null }
+    } catch { Set-WtMdImageNote $box 'error' $_.Exception.Message; return }
+    $x = $box.Tag.X
     $img = [System.Windows.Controls.Image]::new()
     $img.Source = $bmp
     $img.Stretch = 'Uniform'
     $img.StretchDirection = 'DownOnly'
     $img.HorizontalAlignment = 'Left'
-    $img.MaxWidth = if ($X.Width) { $X.Width } else { $bmp.PixelWidth }
-    if ($Inline -and -not $X.Width) { $img.MaxHeight = 240 }
-    if ($X.Alt) { $img.ToolTip = $X.Alt }
-    $img
+    $img.MaxWidth = if ($x.Width) { $x.Width } else { $bmp.PixelWidth }
+    if ($box.Tag.Inline -and -not $x.Width) { $img.MaxHeight = 240 }
+    if ($x.Alt) { $img.ToolTip = $x.Alt }
+    $box.ToolTip = $null
+    $box.Child = $img
+}
+
+# 그림 대신 보일 이름: 그림 아이콘 + 대체 글(없으면 경로). 마우스를 올리면 상태가 보인다
+function Set-WtMdImageNote($Box, [string]$State, [string]$Detail = '') {
+    $x = $Box.Tag.X
+    $path = $Box.Tag.Path
+    $t = [System.Windows.Controls.TextBlock]::new()
+    $t.TextWrapping = 'Wrap'
+    Set-WtResource $t 'Foreground' 'B.SubText'
+    $icon = [System.Windows.Documents.Run]::new([string][char]0xE91B)
+    Set-WtResource $icon 'FontFamily' 'Font.Icon'
+    $t.Inlines.Add($icon)
+    $t.Inlines.Add([System.Windows.Documents.Run]::new(" $(if ($x.Alt) { $x.Alt } else { $x.Url })"))
+    $why = switch ($State) {
+        'loading' { '그림을 읽는 중입니다' }
+        'missing' { '그림 파일을 찾지 못했습니다' }
+        'slow' { '그림 경로가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인하세요' }
+        'large' { "그림 파일이 너무 커서($([int]($script:imageMaxBytes / 1MB))MB 넘음) 보여 주지 않습니다" }
+        default { '그림을 읽지 못했습니다' }
+    }
+    $Box.ToolTip = (@($why, $Detail, $path) | Where-Object { $_ }) -join "`n"
+    $Box.Child = $t
 }
 
 function New-WtMdList($B, $St, [bool]$Nested) {
@@ -5326,7 +6219,7 @@ function New-WtDataCard {
     Set-WtResource $path 'FontFamily' 'Font.Mono'
     $open = New-WtButton '폴더 열기' -Icon 0xE8B7
     $open.Tag = $root
-    $open.Add_Click({ param($s, $e) Invoke-Item -LiteralPath ([string]$s.Tag) })
+    $open.Add_Click({ param($s, $e) Open-WtPath ([string]$s.Tag) })
     $box = New-WtStack Vertical 6
     [void](Add-WtChild $box $path)
     [void](Add-WtChild $box $open)
@@ -5495,6 +6388,7 @@ $script:warmTimer = $null
 $script:warmEnabled = $false  # WORKTOOL_WARMUP=1인 진단 세션에서만 켠다
 $script:warmStarted = $false  # ContentRendered가 다시 와도 세션당 한 번만 예약
 $script:forceOpaque = $false  # WORKTOOL_FORCE_OPAQUE=1: 설정을 저장하지 않는 불투명 창
+$script:writingDropped = $false   # 끝낼 때 사용자가 「저장을 기다리지 않고 끝내기」를 골랐는지
 
 $script:shellXaml = @'
 <Window {NS}
@@ -5915,24 +6809,58 @@ function Show-WtMainWindow {
 }
 
 # 저장하지 못한 내용이 있을 때 묻는다. 'retry'(다시 시도) · 'proceed'(그대로 끝내기 · 이동) · 'cancel' 중 하나를 돌려준다.
-function Show-WtPendingChoice([string]$Purpose, [string]$Title) {
+# -Text: 기본 문구 대신 보일 글. -NoCancel: [취소]가 없다 (정리를 시작한 뒤)
+function Show-WtPendingChoice([string]$Purpose, [string]$Title, [string]$Text = '', [switch]$NoCancel) {
     $exit = $Purpose -eq 'exit'
     $dialog = New-WtModal $(if ($exit) { '저장하지 않고 끝낼까요?' } else { '저장하지 않고 이동할까요?' })
-    $text = if ($exit) { "$Title 화면에서 저장하지 못한 내용은 끝내면 사라집니다." }
+    $message = if ($Text) { $Text }
+    elseif ($exit) { "$Title 화면에서 저장하지 못한 내용은 끝내면 사라집니다." }
     else { "$Title 화면에서 저장하지 못한 내용은 그 화면에 그대로 남습니다." }
-    [void](Add-WtChild $dialog.Body (New-WtText $text))
+    $body = New-WtText $message
+    $body.TextWrapping = 'Wrap'
+    [void](Add-WtChild $dialog.Body $body)
     $retry = New-WtButton '다시 시도' -Kind Primary; $retry.IsDefault = $true
     $go = if ($exit) { New-WtButton '끝내기' -Kind Danger } else { New-WtButton '이동' }
-    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
     $dialog.Window.Tag = @{ Choice = 'cancel'; Focus = $retry }
     foreach ($pair in @(@($retry, 'retry'), @($go, 'proceed'))) {
         $pair[0].Tag = @{ Window = $dialog.Window; Choice = $pair[1] }
         $pair[0].Add_Click({ param($s, $e) $s.Tag.Window.Tag.Choice = $s.Tag.Choice; $s.Tag.Window.DialogResult = $true })
         [void](Add-WtChild $dialog.Buttons $pair[0])
     }
-    [void](Add-WtChild $dialog.Buttons $cancel)
+    if (-not $NoCancel) { $cancel = New-WtButton '취소'; $cancel.IsCancel = $true; [void](Add-WtChild $dialog.Buttons $cancel) }
     $dialog.Window.Add_ContentRendered({ param($s, $e) [void]$s.Tag.Focus.Focus() })
     [void]$dialog.Window.ShowDialog()
+    [string]$dialog.Window.Tag.Choice
+}
+
+# 저장 통로에 쓰는 중인 것이 남았을 때 (데이터 폴더가 늦게 답함). 창은 멈추지 않고, 저장이 끝나면 저절로 닫힌다.
+# 'done'(저장이 끝남) · 'proceed'(기다리지 않고 끝내기 · 이동) · 'cancel' 중 하나. -NoCancel이면 [취소]가 없다 (정리를 시작한 뒤)
+function Show-WtWritingChoice([string]$Purpose, [switch]$NoCancel) {
+    $exit = $Purpose -eq 'exit'
+    $dialog = New-WtModal '저장하는 중입니다'
+    $text = New-WtText "데이터 폴더에 저장하는 중입니다. 저장이 끝나면 바로 $(if ($exit) { '끝냅니다' } else { '이동합니다' })." 'T.Body'
+    $text.TextWrapping = 'Wrap'
+    [void](Add-WtChild $dialog.Body $text)
+    $state = New-WtText '' 'T.Sub'
+    [void](Add-WtChild $dialog.Body $state)
+    $go = New-WtButton $(if ($exit) { '저장을 기다리지 않고 끝내기' } else { '기다리지 않고 이동' }) -Kind Danger
+    $go.Tag = $dialog.Window
+    $go.Add_Click({ param($s, $e) $s.Tag.Tag.Choice = 'proceed'; $s.Tag.DialogResult = $true })
+    [void](Add-WtChild $dialog.Buttons $go)
+    if (-not $NoCancel) { $cancel = New-WtButton '취소'; $cancel.IsCancel = $true; [void](Add-WtChild $dialog.Buttons $cancel) }
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [TimeSpan]::FromMilliseconds(200)
+    $dialog.Window.Tag = @{ Choice = 'cancel'; Timer = $timer; State = $state }
+    $timer.Tag = $dialog.Window
+    $timer.Add_Tick({
+            param($s, $e)
+            $w = $s.Tag
+            if (-not (Test-WtDataWriting)) { $s.Stop(); $w.Tag.Choice = 'done'; $w.DialogResult = $true; return }
+            $st = Get-WtDataWriteState
+            $w.Tag.State.Text = "$(if ($st.Slow) { '응답 없음' } else { '저장하는 중' }) · $($st.Seconds)초 · 남은 저장 $($st.Count)개"
+        })
+    $timer.Start()
+    try { [void]$dialog.Window.ShowDialog() } finally { $timer.Stop() }
     [string]$dialog.Window.Tag.Choice
 }
 
@@ -5960,18 +6888,58 @@ function Save-WtPendingChanges([ValidateSet('check', 'switch', 'exit')][string]$
             return $false
         }
     }
+    # 저장 통로에 쓰지 못하고 남은 내용(데이터 폴더가 늦게 실패함)이 있으면, 덮어쓰는 작업 전에는 멈춘다 (끝낼 때는 Confirm-WtDataWrites가 묻는다)
+    if ($Purpose -eq 'check' -and @(Get-WtDataUnsaved).Count) {
+        Show-WtMessage "데이터 폴더에 저장하지 못한 내용이 있습니다 ($((@(Get-WtDataUnsaved) | ForEach-Object Name) -join ', ')). 다시 저장한 뒤 시도하세요." '저장 확인' 'Warning'
+        return $false
+    }
+    $true
+}
+
+<#
+끝내기 전에 저장 통로를 확인한다. 아직 파일에 쓰이지 않은 내용을 말없이 버리고 끝내지 않는다.
+  쓰는 중이면: 끝날 때까지 기다리는 창 (창은 멈추지 않고, 다 쓰면 저절로 닫힌다)
+  쓰지 못하고 남은 내용이 있으면: [다시 시도] · [끝내기] · [취소]
+사용자가 버리기를 고르면 $script:writingDropped. 계속해도 되면 $true, [취소]면 $false.
+-NoCancel: 정리(OnExit)를 시작한 뒤라 취소가 없다. 창을 그냥 닫으면 다시 묻는다
+#>
+function Confirm-WtDataWrites([switch]$NoCancel) {
+    while (-not $script:writingDropped) {
+        if (Test-WtDataWriting) {
+            if ($script:window -and -not $script:window.IsVisible) { Show-WtMainWindow }
+            $choice = Show-WtWritingChoice exit -NoCancel:$NoCancel
+            if ($choice -eq 'proceed') { $script:writingDropped = $true; break }
+            if ($choice -eq 'cancel' -and -not $NoCancel) { return $false }
+            continue
+        }
+        $left = @(Get-WtDataUnsaved)
+        if (-not $left.Count) { break }
+        if ($script:window -and -not $script:window.IsVisible) { Show-WtMainWindow }
+        $text = "데이터 폴더에 저장하지 못한 내용이 있습니다 ($(($left | ForEach-Object Name) -join ', ')).`n$($left[0].Message)`n`n끝내면 이 내용은 사라집니다."
+        $choice = Show-WtPendingChoice exit '데이터 폴더' -Text $text -NoCancel:$NoCancel
+        if ($choice -eq 'retry') { Resume-WtDataWrites; continue }
+        if ($choice -eq 'proceed') { $script:writingDropped = $true; break }
+        if (-not $NoCancel) { return $false }
+    }
     $true
 }
 
 # 저장을 확인한 뒤에만(또는 저장하지 않고 끝내기를 고른 뒤에만) 트레이·타이머를 정리하고 메시지 돌리기를 멈춘다.
+# 탭의 OnExit 뒤에 남은 화면 밖 작업(응답 없는 공유 폴더 조회 등)은 기다리지 않고 모두 버린다 (core\Work.psm1)
 function Stop-WtApp {
     if (-not $script:exiting) {
+        $script:writingDropped = $false
         if (-not (Save-WtPendingChanges -Purpose exit)) { return $false }
+        if (-not (Confirm-WtDataWrites)) { return $false }
         foreach ($a in @(Get-WtAddon -All)) {
             if ($a.OnExit) { try { [void](& $a.OnExit) } catch { Show-WtError $_ "끝내기 전 저장: $($a.Title)" } }
         }
+        # 정리 중에 시작한 저장(실행 기록 등)도 같다. 정리는 이미 했으니 취소는 없다
+        [void](Confirm-WtDataWrites -NoCancel)
     }
     $script:exiting = $true
+    if ($script:writingDropped) { try { Stop-WtDataWrites } catch { } }   # 사용자가 기다리지 않고 끝내기를 골랐다
+    try { Stop-WtAllWork } catch { }
     if ($script:warmTimer) { $script:warmTimer.Stop() }
     try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
     try { if ($script:icon) { $script:icon.Dispose() } } catch { }
@@ -6169,7 +7137,7 @@ function Start-WtApp {
         try {
             if ($script:notify) { $script:notify.Visible = $false; $script:notify.Dispose() }
             if ($script:icon) { $script:icon.Dispose() }
-        } finally { $dataLock.Dispose() }
+        } finally { Close-WtDataLock $dataLock }
     }
 }
 
@@ -6182,7 +7150,7 @@ Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update
 # ---- addons\active-tasks\ActiveTasks.psm1 ----
 New-Module -Name 'WorkTool.addon.active-tasks' -ScriptBlock {
 # 활성 작업. 창/탭 제목은 메모리에만 두고, 새로 고침 설정만 Settings를 통해 저장한다.
-# 수집/닫기는 별도 MTA runspace에서 Windows 기본 UI Automation으로 처리한다.
+# 수집/닫기는 화면 밖 작업(core\Work.psm1, 호출마다 새 MTA 실행 공간)에서 Windows 기본 UI Automation으로 처리한다.
 $ErrorActionPreference = 'Stop'
 $script:ui = @{}
 $script:items = @()
@@ -6192,7 +7160,6 @@ $script:listKey = $null
 $script:visible = @()
 $script:expanded = @{}
 $script:job = $null
-$script:workerRunspace = $null
 $script:timer = $null
 $script:paused = $false
 $script:next = [datetime]::MaxValue
@@ -6488,40 +7455,31 @@ $script:worker = {
 
 function Get-WtTaskWorker { $script:worker }
 
+# 수집 · 닫기 하나는 화면 밖 작업 하나(core\Work.psm1)다. 호출마다 새 실행 공간 · 새 스레드이고, 끝나면 버린다.
+# 응답 없는 프로그램을 기다리는 중에 앱을 끄면 기다리지 않고 버린다.
 function Start-WtTaskJob([string]$Action, [object[]]$Targets = @()) {
     if ($script:job) { return }
     $cancel = [hashtable]::Synchronized(@{ Value = $false })
-    $ps = $null
-    try {
-        if (-not $script:workerRunspace -or $script:workerRunspace.RunspaceStateInfo.State -ne 'Opened') {
-            if ($script:workerRunspace) { $script:workerRunspace.Dispose(); $script:workerRunspace = $null }
-            $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
-            # 실행 공간은 재사용하되 호출마다 새 스레드다. ReuseThread로 남는 실행 스레드를 만들지 않는다.
-            $runspace.ApartmentState = 'MTA'; $runspace.ThreadOptions = 'UseNewThread'
-            try { $runspace.Open(); $script:workerRunspace = $runspace } catch { $runspace.Dispose(); throw }
-        }
-        $runspace = $script:workerRunspace
-        $ps = [powershell]::Create(); $ps.Runspace = $runspace
-        # 부모 조회도 배경에서 한다. 함수와 작업 본문을 스크립트 하나에 그대로 넣어 지역 범위로 돌린다(실행 공간에 남기지 않는다).
-        # 글을 코드로 바꾸는 [scriptblock]::Create는 쓰지 않는다 (AGENTS.md 「코드 규칙」 4번)
-        $runner = "param(`$request)`ntry {`nfunction Get-WtTaskHostIds {`n$((Get-Command Get-WtTaskHostIds).Definition)`n}`n" +
-            "`$request.HostProcessIds = @(Get-WtTaskHostIds)`n& {`n$($script:worker.ToString())`n} `$request`n} finally { `$Error.Clear() }"
-        [void]$ps.AddScript($runner, $true).AddArgument(@{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; Cancel = $cancel })
-        $handle = $ps.BeginInvoke()
-        $script:job = @{ PowerShell = $ps; Runspace = $runspace; Handle = $handle; Cancel = $cancel; Action = $Action; Started = [datetime]::UtcNow }
-        $script:timer.Start()
-        Update-WtTaskStatus
-    } catch { if ($ps) { $ps.Dispose() }; throw }
+    # 부모 조회도 배경에서 한다. 함수와 작업 본문을 스크립트 하나에 그대로 넣어 지역 범위로 돌린다.
+    # 글을 코드로 바꾸는 [scriptblock]::Create는 쓰지 않는다 (AGENTS.md 「코드 규칙」 4번)
+    $runner = "param(`$request)`ntry {`nfunction Get-WtTaskHostIds {`n$((Get-Command Get-WtTaskHostIds).Definition)`n}`n" +
+        "`$request.HostProcessIds = @(Get-WtTaskHostIds)`n& {`n$($script:worker.ToString())`n} `$request`n} finally { `$Error.Clear() }"
+    $request = @{ Action = $Action; Targets = $Targets; SelfProcessId = $PID; Cancel = $cancel }
+    $work = Start-WtWork -Script $runner -ArgumentList (, $request) -Session Default -OnDone { param($w) Complete-WtTaskJob $w }
+    $script:job = @{ Work = $work; Cancel = $cancel; Action = $Action; Started = [datetime]::UtcNow }
+    $script:timer.Start()
+    Update-WtTaskStatus
 }
 
-function Complete-WtTaskJob {
-    if (-not $script:job -or -not $script:job.Handle.IsCompleted) { return }
+# 작업이 끝났을 때 (화면 스레드, core\Work.psm1이 부른다)
+function Complete-WtTaskJob($Work) {
+    if (-not $script:job -or -not [object]::ReferenceEquals($script:job.Work, $Work)) { return }
     $job = $script:job; $script:job = $null
     $scanNext = $false
     try {
-        $output = @($job.PowerShell.EndInvoke($job.Handle))
-        if (-not $output.Count -or $output[-1] -isnot [System.Collections.IDictionary]) { throw ($job.PowerShell.Streams.Error | Select-Object -First 1) }
-        $result = $output[-1]
+        if ($Work.State -ne 'done') { throw $(if ($Work.Exception) { $Work.Exception } else { '작업을 완료하지 못했습니다.' }) }
+        if ($Work.Result -isnot [System.Collections.IDictionary]) { throw '작업 결과가 없습니다.' }
+        $result = $Work.Result
         if ($job.Action -eq 'scan') {
             if (-not $result.Canceled) {
                 Set-WtTaskSnapshot @($result.Items)
@@ -6537,14 +7495,13 @@ function Complete-WtTaskJob {
             $scanNext = $true
         }
     } catch { $script:lastError = '작업을 완료하지 못했습니다. 다시 시도하세요.'; $script:ui.Status.ToolTip = $_.Exception.Message }
-    finally { $job.PowerShell.Dispose() }
     $option = Get-WtTaskRefresh; $script:next = [datetime]::UtcNow.AddMinutes($option.minutes)
     Update-WtTaskStatus
     if ($scanNext) { Start-WtTaskJob 'scan' }
 }
 
 function Invoke-WtTaskTick {
-    Complete-WtTaskJob
+    Update-WtWork   # 끝난 작업을 지금 거둔다 (보통은 core\Work.psm1의 타이머가 먼저 거둔다)
     if (-not $script:ui.Count) { return }
     # 숨겨진 화면에서도 실행 중인 결과는 회수한다. 완료 뒤에는 다음에 보일 때까지 멈춘다.
     if (-not $script:ui.Root.IsVisible -and -not $script:job) { $script:timer.Stop(); return }
@@ -6555,16 +7512,13 @@ function Invoke-WtTaskTick {
     if ($script:job -and ([datetime]::UtcNow - $script:job.Started).TotalSeconds -gt 10) { $script:ui.Status.Text = '응답을 기다리는 중입니다. 취소하면 다음 항목부터 중단합니다.' }
 }
 
+# 끝낼 때: 남은 수집 · 닫기는 취소 표시만 하고 기다리지 않고 버린다 (응답 없는 프로그램이 돌려주지 않을 수 있다)
 function Stop-WtTasks {
     if ($script:timer) { $script:timer.Stop(); $script:timer = $null }
-    $runspace = $script:workerRunspace; $script:workerRunspace = $null
     if ($script:job) {
         $job = $script:job; $script:job = $null; $job.Cancel.Value = $true
-        if ($job.Handle.IsCompleted) { $job.PowerShell.Dispose(); $job.Runspace.Dispose() }
-        else { [void]$job.PowerShell.BeginStop($null, $null); $job.Runspace.CloseAsync() }
-        $runspace = $null
+        Stop-WtWork $job.Work
     }
-    if ($runspace) { $runspace.Dispose() }
 }
 
 function Update-WtTaskStatus {
@@ -7044,7 +7998,8 @@ $script:entries = @()
 $script:selecting = $false   # 코드로 트리를 고르는 중
 $script:jobs = [System.Collections.Generic.List[object]]::new()
 $script:pending = [ordered]@{}
-$script:pollTimer = $null
+$script:folderWaitMs = 80    # 폴더를 열 때 결과를 기다리는 시간. 로컬 폴더는 이 안에 끝나서 「불러오는 중」이 깜빡이지 않는다
+$script:workerFunctions = $null   # 조회 작업에 넣을 함수 (처음 쓸 때 한 번 찾는다)
 $script:filterTimer = $null
 $script:stopping = $false
 $script:treeGeneration = 0
@@ -7190,6 +8145,7 @@ function Find-WtDocEntry([object[]]$Entries, [string]$Query) {
 
 # ---- 열기 ------------------------------------------------------------------------------------
 
+# 여는 것 · 탐색기에서 보여 주는 것은 확인까지 화면 밖에서 한다 (core\Work.psm1 Open-WtPath). 응답 없는 공유 폴더여도 화면이 멈추지 않는다
 function Open-WtDocEntry($Entry) {
     if (-not $Entry) { return }
     if ($Entry.Missing) { Show-WtMessage "찾을 수 없습니다. 옮기거나 지웠으면 즐겨찾기에서 빼세요.`n$($Entry.Path)"; return }
@@ -7198,13 +8154,10 @@ function Open-WtDocEntry($Entry) {
     if ($script:runnable -contains $ext) {
         if (-not (Confirm-WtYesNo "'$($Entry.Name)'은(는) 실행되는 파일입니다. 실행할까요?")) { return }
     }
-    try { Invoke-Item -LiteralPath $Entry.Path } catch { Show-WtError $_ '파일 열기' }
+    Open-WtPath $Entry.Path -NotFound "찾을 수 없습니다. 옮기거나 지웠으면 새로 고침하세요.`n$($Entry.Path)"
 }
 
-function Show-WtDocInExplorer([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { Show-WtMessage "찾을 수 없습니다.`n$Path"; return }
-    Start-Process explorer.exe -ArgumentList "/select,`"$Path`""
-}
+function Show-WtDocInExplorer([string]$Path) { Open-WtPath $Path -Reveal }
 
 function Copy-WtDocPath([string]$Path) {
     try { [System.Windows.Clipboard]::SetText($Path) } catch { Show-WtMessage '클립보드를 다른 프로그램이 쓰고 있어서 복사하지 못했습니다. 다시 누르세요.' 'WorkTool' 'Warning'; return }
@@ -7235,8 +8188,6 @@ function Start-WtDocRequest([string]$Key, [string]$Action, [string]$Path = '', $
     $request = @{ Action = $Action; Path = $Path; Pins = @(Get-WtSetting 'docs.pins'); Cancel = [hashtable]::Synchronized(@{ Value = $false }) }
     if ($Key -eq 'home') { $request.Pins = @($request.Pins | Select-Object -First 6) }
     $script:pending[$Key] = @{ Key = $Key; Request = $request; Context = $Context; Generation = $script:treeGeneration }
-    if (-not $script:pollTimer) { $script:pollTimer = New-WtPollTimer { Complete-WtDocJobs } }
-    $script:pollTimer.Start()
     Start-WtDocJobs
     $true
 }
@@ -7250,44 +8201,47 @@ function Test-WtDocJobSlot([string]$Key) {
     @($active | Where-Object { $_.Key -notin 'folder', 'home' }).Count -lt 2
 }
 
+# 조회 하나는 화면 밖 작업 하나(core\Work.psm1)다. 끝나면 Complete-WtDocJob이 화면 스레드에서 결과를 넣는다
 function Start-WtDocJobs {
     if ($script:stopping) { return }
     $keys = @(@('folder', 'home') | Where-Object { $script:pending.Contains($_) }) + @($script:pending.Keys | Where-Object { $_ -notin 'folder', 'home' })
     foreach ($key in $keys) {
         if (-not $script:pending.Contains($key) -or -not (Test-WtDocJobSlot $key)) { continue }
         $job = $script:pending[$key]; $script:pending.Remove($key)
-        $state = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
-        foreach ($name in 'Get-WtDocKind', 'Get-WtDocIcon', 'Format-WtDocSize', 'New-WtDocEntry', 'Get-WtDocEntries', 'Get-WtDocSubfolders', 'Get-WtDocPinEntries') {
-            $state.Commands.Add([System.Management.Automation.Runspaces.SessionStateFunctionEntry]::new($name, (Get-Command $name).Definition))
+        $script:jobs.Add($job)
+        if (-not $script:workerFunctions) {
+            $script:workerFunctions = @(Get-Command Get-WtDocKind, Get-WtDocIcon, Format-WtDocSize, New-WtDocEntry, Get-WtDocEntries, Get-WtDocSubfolders, Get-WtDocPinEntries)
         }
-        $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($state)
-        # 작업마다 새 스레드. ReuseThread는 실행 공간을 버리기 전까지 스레드가 남아, 끝낼 때 응답 없는 조회가 있으면 앱 프로세스가 끝나지 않는다
-        $runspace.ApartmentState = 'MTA'; $runspace.ThreadOptions = 'UseNewThread'
-        $ps = [powershell]::Create()
         try {
-            $runspace.Open(); $ps.Runspace = $runspace
-            [void]$ps.AddScript($script:worker.ToString()).AddArgument($job.Request).AddArgument($script:kinds).AddArgument($script:kindIcons)
-            $job.PowerShell = $ps; $job.Runspace = $runspace; $job.Handle = $ps.BeginInvoke()
-            $script:jobs.Add($job)
+            $job.Work = Start-WtWork -Script $script:worker -ArgumentList $job.Request, $script:kinds, $script:kindIcons -Session Default -Context $job `
+                -Functions $script:workerFunctions -OnDone { param($w) Complete-WtDocJob $w }
         } catch {
-            $ps.Dispose(); $runspace.Dispose()
+            [void]$script:jobs.Remove($job)
             Set-WtDocResult $job @{ Items = @(); Error = $_.Exception.Message }
         }
     }
 }
 
+function Complete-WtDocJob($Work) {
+    $job = $Work.Context
+    [void]$script:jobs.Remove($job)
+    $result = if ($Work.State -eq 'done' -and $Work.Result) { $Work.Result }
+    else { @{ Items = @(); Error = $(if ($Work.Error) { $Work.Error } else { '조회가 취소되었거나 완료되지 않았습니다.' }) } }
+    try { if (-not $script:stopping -and -not $job.Request.Cancel.Value) { Set-WtDocResult $job $result } }
+    finally { Start-WtDocJobs }
+}
+
+# 끝난 조회를 지금 거둔다 (검사에서 부른다. 앱에서는 core\Work.psm1의 타이머가 거둔다)
 function Complete-WtDocJobs {
-    foreach ($job in @($script:jobs.ToArray())) {
-        if (-not $job.Handle.IsCompleted) { continue }
-        try {
-            $output = @($job.PowerShell.EndInvoke($job.Handle))
-            $result = if ($output.Count) { $output[-1] } else { @{ Items = @(); Error = '조회가 취소되었거나 완료되지 않았습니다.' } }
-        } catch { $result = @{ Items = @(); Error = $_.Exception.Message } }
-        finally { $job.PowerShell.Dispose(); $job.Runspace.Dispose(); [void]$script:jobs.Remove($job) }
-        if (-not $script:stopping -and -not $job.Request.Cancel.Value) { Set-WtDocResult $job $result }
-    }
+    Update-WtWork
     Start-WtDocJobs
-    if (-not $script:jobs.Count -and -not $script:pending.Count -and $script:pollTimer) { $script:pollTimer.Stop() }
+}
+
+# 지금 폴더 조회를 잠깐 기다린다. 화면을 다 꾸린 뒤에 부른다 (결과를 넣는 처리기가 화면을 바꾸므로)
+function Wait-WtDocJob([string]$Key) {
+    $job = $null
+    foreach ($j in $script:jobs) { if ($j.Key -eq $Key -and $j.Work -and -not $j.Request.Cancel.Value) { $job = $j } }
+    if ($job) { [void](Wait-WtWork $job.Work -Milliseconds $script:folderWaitMs) }
 }
 
 function Set-WtDocResult($Job, $Result) {
@@ -7368,21 +8322,18 @@ function Complete-WtDocTreeBatch {
     Request-WtDocTreeBatch
 }
 
+# 끝낼 때: 남은 조회는 기다리지 않고 버린다. 응답 없는 공유 폴더의 OS 요청은 돌아오지 않을 수 있기 때문이다
 function Stop-WtDocs {
     $script:stopping = $true
     $script:pending.Clear()
     $script:treeBatches.Clear()
-    foreach ($job in $script:jobs) {
+    foreach ($job in @($script:jobs)) {
         $job.Request.Cancel.Value = $true
         $job.Context = $null
-        if (-not $job.Handle.IsCompleted) {
-            # 응답 없는 OS 호출 중에는 멈추기 · 닫기가 실패할 수 있다. 끝낼 때 오류 창을 띄우지 않는다
-            try { [void]$job.PowerShell.BeginStop($null, $null) } catch { }
-            try { $job.Runspace.CloseAsync() } catch { }
-        }
+        Stop-WtWork $job.Work
     }
+    $script:jobs.Clear()
     if ($script:filterTimer) { $script:filterTimer.Stop() }
-    Complete-WtDocJobs
 }
 
 function Cancel-WtDocFolder {
@@ -7493,6 +8444,7 @@ function Show-WtDocFolder([string]$Path, [switch]$SelectTree, [string]$Fallback 
     $script:ui.Up.IsEnabled = $Path -and $Path -ne '*' -and -not (@(Get-WtDocRoots) | Where-Object { $_.TrimEnd('\') -ieq $Path.TrimEnd('\') })
     Update-WtDocList
     if ($SelectTree) { Select-WtDocTreePath $Path }
+    Wait-WtDocJob 'folder'
 }
 
 function Update-WtDocList {
@@ -7608,7 +8560,7 @@ function New-WtDocsView {
     $refresh = New-WtButton '' -Kind Icon -Icon 0xE72C -ToolTip '새로 고침 (F5)'
     $refresh.Add_Click({ Show-WtDocFolder $script:current })
     $openFolder = New-WtButton '탐색기에서 열기' -Kind Link -Icon 0xE838
-    $openFolder.Add_Click({ if ($script:current -and $script:current -ne '*') { Invoke-Item -LiteralPath $script:current } })
+    $openFolder.Add_Click({ if ($script:current -and $script:current -ne '*') { Open-WtPath $script:current } })
     foreach ($b in @($openFolder, $refresh)) { [System.Windows.Controls.DockPanel]::SetDock($b, 'Right'); [void]$top.Children.Add($b) }
     $pathText = New-WtText '' 'T.Strong'
     $pathText.TextWrapping = 'NoWrap'
@@ -7762,6 +8714,7 @@ function New-WtDocsHomeCard {
     [void](Add-WtChild $col (New-WtText '불러오는 중…' 'T.Sub'))
     $card.Child = $col
     [void](Start-WtDocRequest 'home' 'pins' '' $col)
+    Wait-WtDocJob 'home'
     $card
 }
 
@@ -8034,7 +8987,7 @@ function Save-WtMemoTabs {
     try { $null = Set-WtSetting 'memo.tabs' $value } catch { }   # 설정을 못 남겨도 메모 쓰기는 막지 않는다
 }
 
-# 저장 상태 표시 (칸마다): saved · dirty · error · ''(숨김)
+# 저장 상태 표시 (칸마다): saved · dirty · writing · error · ''(숨김)
 function Set-WtMemoStatus($Pane, [string]$State, [string]$Detail = '') {
     $s = $Pane.Status
     $m = if ($Pane.Current) { Get-WtMemoById $Pane.Current.Id } else { $null }
@@ -8056,6 +9009,12 @@ function Set-WtMemoStatus($Pane, [string]$State, [string]$Detail = '') {
         'error' {
             $s.Content = New-WtButtonContent "저장하지 못했습니다. $Detail" 0xE783
             Set-WtResource $s 'Foreground' 'B.Danger'
+            $s.Visibility = 'Visible'
+        }
+        'writing' {
+            # 실패가 아니다: 데이터 폴더가 늦게 답해 저장 통로가 이어서 쓰는 중. 파일에 쓰이면 「자동 저장됨」이 된다 (Update-WtMemoSaveStatus)
+            $s.Content = New-WtButtonContent '저장하는 중 · 데이터 폴더가 늦게 답합니다' 0xE895
+            Set-WtResource $s 'Foreground' 'B.Warn'
             $s.Visibility = 'Visible'
         }
         default { $s.Visibility = 'Collapsed' }
@@ -8093,7 +9052,7 @@ function Show-WtMemoPane($Pane) {
     $Pane.EmptyQuick.IsEnabled = [bool]$script:items.Count
     $Pane.EmptyQuick.ToolTip = if ($script:items.Count) { '빠른 이동 (Ctrl+O)' } else { '메모가 없습니다' }
     Update-WtMemoPaneMode $Pane
-    Set-WtMemoStatus $Pane $(if ($m) { 'saved' } else { '' })
+    if ($m) { $look = Get-WtMemoSaveLook; Set-WtMemoStatus $Pane $look[0] $look[1] } else { Set-WtMemoStatus $Pane '' }
 }
 
 # 저장한 뒤 칸의 제목 · 날짜를 고치고, 다른 칸에서 저장해 글이 달라졌으면 다시 불러온다 (커서 · 스크롤 유지)
@@ -8631,11 +9590,36 @@ function Restore-WtMemoTabs {
 
 # ---- 저장 -------------------------------------------------------------------------------------
 
-# 고친 칸을 모두 바로 저장한다. 저장 시각 · 탭 제목 · 목록도 고친다. 실패하면 $false (고친 표시는 남긴다)
-function Save-WtMemoNow {
+# 저장 표시: 시간이 아니라 저장 통로의 memo.json 상태(받아들인 내용이 파일에 쓰였는지)로 정한다. @(상태, 설명)
+function Get-WtMemoSaveLook {
+    $st = Get-WtDataWriteStatus (Get-WtStorePath 'memo')
+    switch ($st.State) {
+        'writing' { @('writing', '') }
+        'failed' { @('error', "$($st.Message) Ctrl+S로 다시 저장합니다.") }
+        default { @('saved', '') }
+    }
+}
+
+# 고친 칸이 없는 칸의 저장 표시를 저장 통로 상태에 맞춘다
+function Update-WtMemoSaveStatus {
+    if (-not $script:ui.Count) { return }
+    $look = Get-WtMemoSaveLook
+    foreach ($p in $script:panes) { if ($p.Current -and -not $p.Dirty) { Set-WtMemoStatus $p $look[0] $look[1] } }
+}
+
+# 고친 칸을 모두 바로 저장한다. 저장 시각 · 탭 제목 · 목록도 고친다. 편집 중인 메모를 찾지 못하면 $false (고친 표시는 남긴다).
+# 쓰는 중이거나 쓰지 못해도 저장 통로가 이 내용을 가지고 있으므로 $true다 (표시: 「저장하는 중」 → 「자동 저장됨」, 또는 「저장하지 못했습니다」).
+# -Retry(Ctrl+S): 고친 칸이 없어도, 늦게 실패해 앱이 가지고 있는 메모 내용이 있으면 다시 써 본다
+function Save-WtMemoNow([switch]$Retry) {
     if ($script:saveTimer) { $script:saveTimer.Stop() }
     $dirty = @($script:panes | Where-Object { $_.Dirty })
-    if (-not $dirty.Count) { return $true }
+    if (-not $dirty.Count) {
+        if ($Retry -and (Get-WtDataWriteStatus (Get-WtStorePath 'memo')).State -eq 'failed') {
+            try { Resume-WtDataWrites (Get-WtStorePath 'memo') } catch { }
+            Update-WtMemoSaveStatus
+        }
+        return $true
+    }
     # 같은 메모를 두 칸에서 고쳤으면 포커스가 있는 칸의 글을 마지막에 써서 그 글이 남게 한다
     $activePane = Get-WtMemoActivePane
     $ordered = @($dirty | Where-Object { -not [object]::ReferenceEquals($_, $activePane) }) + @($dirty | Where-Object { [object]::ReferenceEquals($_, $activePane) })
@@ -8658,10 +9642,11 @@ function Save-WtMemoNow {
     $script:items = @(Get-WtMemoSorted $next)
     $script:viewStamp = Get-WtMemoViewStamp
     # 같은 메모를 연 다른 칸은 글을 다시 불러온다 (그 칸은 포커스가 없어 고치는 중이 아님)
+    $look = Get-WtMemoSaveLook
     foreach ($p in $script:panes) {
         if (-not $p.Current -or -not $byId.Contains([string]$p.Current.Id)) { continue }
         Update-WtMemoPaneContent $p
-        Set-WtMemoStatus $p 'saved'
+        Set-WtMemoStatus $p $look[0] $look[1]
     }
     Update-WtMemoTabTexts
     Update-WtMemoList -KeepCurrent
@@ -8940,7 +9925,7 @@ function Invoke-WtMemoKey([System.Windows.Input.Key]$Key, [System.Windows.Input.
     if (-not $ctrl -or $alt) { return $false }
     switch ($name) {
         'N' { if ($shift) { return $false }; [void](Add-WtMemo -Edit); return $true }
-        'S' { [void](Save-WtMemoNow); return $true }
+        'S' { [void](Save-WtMemoNow -Retry); return $true }
         'W' { Close-WtMemoCurrentTab; return $true }
         'Tab' { Select-WtMemoNextTab $(if ($shift) { -1 } else { 1 }); return $true }
         'T' { if (-not $shift) { return $false }; Restore-WtMemoClosedTab; return $true }
@@ -9275,6 +10260,12 @@ function New-WtMemoMarkdownHelpCard {
     [void](Add-WtChild $col $script:helpRaw)
     $card.Child = $col
     $card
+}
+
+# memo.json의 저장 상태가 바뀌면(쓰임 · 실패로 남음) 칸의 표시만 고친다. 다시 저장하지 않는다 (내용은 저장 통로가 가지고 있다)
+Register-WtDataWriteHandler {
+    param($path, $state)
+    if ($script:ui.Count -and $path -ieq (Get-WtStorePath 'memo')) { Update-WtMemoSaveStatus }
 }
 
 Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Order 40 -WarmUp Full `
@@ -12301,7 +13292,8 @@ New-Module -Name 'WorkTool.addon.workflows' -ScriptBlock {
 # 업무 탭: 스크립트 폴더의 PowerShell 스크립트를 폼으로 실행하고 기록한다. 설계는 docs/plans/workflows-design.md
 # - 스크립트는 실행하지 않고 구문만 읽어서 목록 · 폼을 만든다 (Read-WtFlowScript). param 하나 = 폼 칸 하나.
 # - 실행은 별도 pwsh 프로세스로 한다. 앱 안: 창 없이 출력을 받아 보여 줌 · 콘솔 창: 보이는 창에서 -NoExit.
-#   출력은 UI 타이머에서 완료된 읽기만 꺼낸다 (다른 스레드에서 PowerShell 코드를 돌리지 않는다).
+#   출력은 화면 밖 작업이 퍼 와서 큐에 넣고, UI 타이머는 큐에 쌓인 것만 꺼낸다.
+# - 스크립트 폴더 · 파일은 공유 폴더일 수 있어서 찾기 · 읽기 · 프로세스 시작은 화면 밖(core\Work.psm1)에서 하고 잠깐만 기다린다.
 # - 저장소 workflows.json(저장한 업무) · workflow-runs.json(실행 기록, 최근 100건). 설정 workflows.roots(더한 스크립트 폴더)
 #   · workflows.hiddenRoots(목록에서 뺀 기본 폴더). 기본 폴더는 데이터 폴더의 scripts와 앱 옆 scripts (Get-WtFlowDefaultRoots)
 # 단축키(업무 화면 안): F5 스크립트 목록 새로 고침
@@ -12335,6 +13327,45 @@ Register-WtSettingDefault 'workflows.hiddenRoots' @()   # 사용자가 목록에
 Register-WtSettingDefault 'workflows.help' $true  # 오른쪽 설명 패널을 펼침
 $script:defaultRoots = $null # 기본 스크립트 폴더 (Get-WtFlowDefaultRoots, 앱 · 데이터 폴더가 같으면 다시 찾지 않음)
 $script:madeRoot = $null     # 이번에 만든(있는지 본) 데이터 폴더의 scripts
+# 스크립트 폴더 · 파일은 공유 폴더일 수 있어서 화면 밖(core\Work.psm1)에서 읽는다. 로컬 폴더는 기다리는 시간 안에 끝나 바로 보인다
+$script:scans = @{}          # 스크립트 폴더(비교용 키) → 마지막 찾기 결과 @{ Root; Missing; Scripts; State = ok · loading · slow · error; Error }
+$script:flowFiles = @{}      # 저장한 업무의 스크립트 경로 → 있는지 ($null = 확인 중)
+$script:scanWaitMs = 300     # 목록을 그리기 전에 기다리는 시간
+$script:scanTimeoutMs = 10000   # 이 시간 안에 답이 없는 폴더는 「응답 없음」
+$script:readWaitMs = 500     # 스크립트를 고를 때 읽기를 기다리는 시간
+$script:readTimeoutMs = 10000
+$script:startWaitMs = 1000   # [실행]할 때 프로세스 시작을 기다리는 시간 (작업 폴더가 공유 폴더일 수 있다)
+$script:startTimeoutMs = 15000
+$script:startFunctions = $null   # 시작 작업에 넣을 함수 (처음 쓸 때 한 번 찾는다)
+$script:defaultsWaitMs = 1000   # 앱 옆 예제 스크립트 폴더 찾기
+$script:scanWaiting = $false # 목록을 그리기 전 기다리는 중 (그사이 끝난 찾기는 따로 다시 그리지 않는다)
+$script:scanFunctions = $null   # 찾기 작업에 넣을 함수 (처음 쓸 때 한 번 찾는다)
+$script:redrawQueued = $false
+$script:rescanQueued = $false
+$script:readSeq = 0          # 고른 스크립트 읽기 차례 (늦게 온 읽기 결과를 버린다)
+$script:selection = $null    # 지금 고른 것의 수명 @{ Key = 'script:경로' | 'flow:id'; Edits = 고치던 칸 값; Mode = 사용자가 고른 실행 방식 } (Enter-WtFlowSelection)
+$script:starting = $null     # 화면 밖에서 시작 중인 실행 @{ Work; Cancelled; ... }
+# 화면 밖에서 돌리는 코드 (검사가 응답 없는 폴더를 흉내 내려고 바꿔 끼운다)
+$script:scanWork = { param($root, $max) @(Find-WtFlowScripts @($root) $max)[0] }   # 스크립트 폴더 하나 찾기
+$script:defaultsWork = {                                                             # 앱 옆 예제 스크립트 폴더 찾기 (Get-WtFlowDefaultRoots)
+    param($app)
+    $dir = $app
+    for ($i = 0; $i -le 3 -and $dir; $i++) {
+        $candidate = [System.IO.Path]::Combine($dir, 'scripts')
+        if ([System.IO.Directory]::Exists($candidate) -and ($i -eq 0 -or [System.IO.File]::Exists([System.IO.Path]::Combine($candidate, '_template.ps1')))) { return $candidate }
+        $dir = [System.IO.Path]::GetDirectoryName($dir)
+    }
+    $null
+}
+$script:readCall = { param($path) New-WtCall ([System.IO.File]) ReadAllText $path }  # 스크립트 글 읽기 (.NET 호출 하나 → New-WtCall)
+$script:startWork = { param($start, $owner) Start-WtFlowChild $start $owner }       # 프로세스 시작 (작업 폴더 = 스크립트 폴더)
+$script:reapWork = {                                                                # 끝난 스크립트가 남긴 자식 찾아 끝내기 (Stop-WtFlowProcess)
+    param($parentId, $since)
+    foreach ($c in @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $parentId" -ErrorAction Stop)) {
+        if ($c.CreationDate -lt $since) { continue }
+        try { $child = [System.Diagnostics.Process]::GetProcessById([int]$c.ProcessId); $child.Kill($true); $child.Dispose() } catch { }
+    }
+}
 
 # ---- 스크립트 읽기 (WPF 없이) -------------------------------------------------------------------
 
@@ -12408,16 +13439,26 @@ function ConvertTo-WtFlowField($Param, $HelpInfo, $Tokens) {
     [pscustomobject]$field
 }
 
-# 스크립트 하나를 읽는다. 실행하지 않고 구문만 본다. 못 읽거나 실행할 수 없으면 Error에 이유
+# 스크립트 하나를 읽는다. 실행하지 않고 구문만 본다. 못 읽거나 실행할 수 없으면 Error에 이유.
+# 화면에서는 파일 읽기만 화면 밖에서 하고(Request-WtFlowScript) 구문은 ConvertTo-WtFlowInfo로 본다. 스크립트 폴더가 응답 없는 공유 폴더일 수 있다
 function Read-WtFlowScript([string]$Path) {
-    $info = [pscustomobject]@{
-        Path = $Path; Name = [System.IO.Path]::GetFileNameWithoutExtension($Path)
-        Synopsis = ''; Description = ''; Examples = @(); Notes = ''
-        Fields = @(); Skipped = @(); WhatIf = $false; Console = $false; NeedsConsole = @(); Error = ''; Warning = ''
-    }
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { $info.Error = '스크립트 파일이 없습니다.'; return $info }
+    try { $text = [System.IO.File]::ReadAllText($Path) }
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return New-WtFlowMissingInfo $Path }
+    catch { return New-WtFlowInfo $Path "스크립트를 읽지 못했습니다: $($_.Exception.Message)" }
+    ConvertTo-WtFlowInfo $Path $text
+}
+
+function New-WtFlowMissingInfo([string]$Path) {
+    $info = New-WtFlowInfo $Path '스크립트 파일이 없습니다.'
+    $info.Missing = $true
+    $info
+}
+
+# 스크립트 글 → 스크립트 정보 (디스크를 보지 않는다)
+function ConvertTo-WtFlowInfo([string]$Path, [string]$Text) {
+    $info = New-WtFlowInfo $Path
     $tokens = $null; $parseErrors = $null
-    try { $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$parseErrors) }
+    try { $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, $Path, [ref]$tokens, [ref]$parseErrors) }
     catch { $info.Error = "스크립트를 읽지 못했습니다: $($_.Exception.Message)"; return $info }
     if ($parseErrors.Count) {
         $info.Error = "구문 오류 ($($parseErrors[0].Extent.StartLineNumber)번째 줄): $($parseErrors[0].Message)"
@@ -12445,17 +13486,50 @@ function Read-WtFlowScript([string]$Path) {
     $info
 }
 
-# 스크립트 폴더에서 .ps1을 찾는다 (하위 폴더 3단계까지, 이름이 _로 시작하면 뺀다). 없는 폴더도 표시하려고 돌려준다
-function Find-WtFlowScripts([string[]]$Roots) {
+# 스크립트 정보의 빈 틀. Loading: 화면 밖에서 읽는 중 · Missing: 파일이 없음
+function New-WtFlowInfo([string]$Path, [string]$Why = '', [switch]$Loading) {
+    [pscustomobject]@{
+        Path = $Path; Name = [System.IO.Path]::GetFileNameWithoutExtension($Path)
+        Synopsis = ''; Description = ''; Examples = @(); Notes = ''
+        Fields = @(); Skipped = @(); WhatIf = $false; Console = $false; NeedsConsole = @(); Error = $Why; Warning = ''
+        Missing = $false; Loading = [bool]$Loading
+    }
+}
+
+# 스크립트 폴더에서 .ps1을 찾는다 (하위 폴더 3단계까지, 이름이 _로 시작하면 뺀다). 없는 폴더도 표시하려고 돌려준다.
+# Get-ChildItem -Recurse -Depth 3과 같게 찾되 .NET만 써서 빠르다 (명령 없는 화면 밖 세션에서도 돈다):
+# 숨김 항목은 빼고, 열 수 없는 폴더는 건너뛰며, 정션 · 링크 폴더 안으로는 들어가지 않는다(돌고 도는 폴더를 막는다). 경로 순으로 정렬한다.
+# 화면에서는 폴더마다 화면 밖 작업으로 부른다 (Start-WtFlowScans)
+function Find-WtFlowScripts([string[]]$Roots, [int]$Max = 1000) {
     foreach ($root in $Roots) {
-        if (-not (Test-Path -LiteralPath $root -PathType Container)) { [pscustomobject]@{ Root = $root; Missing = $true; Scripts = @() }; continue }
-        $files = @(Get-ChildItem -LiteralPath $root -Filter '*.ps1' -File -Recurse -Depth 3 -ErrorAction SilentlyContinue |
-                Where-Object { $_.Extension -eq '.ps1' -and $_.Name -notlike '_*' } | Sort-Object FullName | Select-Object -First $script:maxScripts)
-        $found = foreach ($f in $files) {
-            $rel = [System.IO.Path]::GetRelativePath($root, $f.DirectoryName)
-            [pscustomobject]@{ Path = $f.FullName; Name = $f.BaseName; Folder = $(if ($rel -eq '.') { '' } else { $rel }) }
+        if (-not [System.IO.Directory]::Exists($root)) { [pscustomobject]@{ Root = $root; Missing = $true; Scripts = @() }; continue }
+        $options = [System.IO.EnumerationOptions]::new()
+        $options.IgnoreInaccessible = $true
+        $options.AttributesToSkip = [System.IO.FileAttributes]::Hidden
+        $paths = [System.Collections.Generic.List[string]]::new()
+        $level = [System.Collections.Generic.List[string]]::new()
+        $level.Add($root)
+        for ($depth = 0; $depth -le 3 -and $level.Count; $depth++) {
+            $next = [System.Collections.Generic.List[string]]::new()
+            foreach ($dir in $level) {
+                try {
+                    foreach ($e in [System.IO.DirectoryInfo]::new($dir).EnumerateFileSystemInfos('*', $options)) {
+                        if ($e -is [System.IO.DirectoryInfo]) {
+                            if (-not ($e.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { $next.Add($e.FullName) }
+                        } elseif ($e.Extension -eq '.ps1' -and -not $e.Name.StartsWith('_')) { $paths.Add($e.FullName) }
+                    }
+                } catch { }
+            }
+            $level = $next
         }
-        [pscustomobject]@{ Root = $root; Missing = $false; Scripts = @($found) }
+        $paths.Sort([System.StringComparer]::CurrentCultureIgnoreCase)
+        $found = [System.Collections.Generic.List[object]]::new()
+        foreach ($p in $paths) {
+            if ($found.Count -ge $Max) { break }
+            $rel = [System.IO.Path]::GetRelativePath($root, [System.IO.Path]::GetDirectoryName($p))
+            $found.Add([pscustomobject]@{ Path = $p; Name = [System.IO.Path]::GetFileNameWithoutExtension($p); Folder = $(if ($rel -eq '.') { '' } else { $rel }) })
+        }
+        [pscustomobject]@{ Root = $root; Missing = $false; Scripts = $found.ToArray() }
     }
 }
 
@@ -12571,7 +13645,7 @@ function New-WtFlowStartInfo($Info, [hashtable]$Values, [ValidateSet('app', 'con
 
 # ---- 실행 상태 (WPF 없이) -----------------------------------------------------------------------
 
-# 출력 퍼 오기: 별도 실행 공간(MTA)에서 표준 출력 · 오류 통로를 쉬지 않고 읽어 큐에 넣는다.
+# 출력 퍼 오기: 화면 밖 작업(core\Work.psm1)에서 표준 출력 · 오류 통로를 쉬지 않고 읽어 큐에 넣는다.
 # 화면 타이머가 읽으면 그 사이 통로(4KB)가 차서 스크립트가 기다리므로, 읽기는 화면과 떼어 둔다 (문서 탭의 조회와 같은 방식).
 # 큐에는 @(통로 번호, 글자 덩어리)를 넣고, 통로가 끝나면 @(번호, $null)을 넣는다. 읽기를 오래 기다리지 않고 0.2초마다 그만둘지 본다
 $script:pumpWork = {
@@ -12596,24 +13670,42 @@ $script:pumpWork = {
     }
 }
 
-# 앱 안 실행을 시작한다. 입력은 바로 닫아서, 입력을 기다리는 스크립트도 멈추지 않고 오류로 끝나게 한다
-function Start-WtFlowProcess($StartInfo, $Record) {
-    $p = [System.Diagnostics.Process]::Start($StartInfo)
+<#
+프로세스를 만든다 (화면 밖에서 부른다). 만든 프로세스는 화면이 넘겨받을 때까지 $Owner가 가지고 있다.
+만들자마자 잠금 안에서 $Owner에 넣고 멈춤 표시를 본다: 이미 멈췄으면(취소 · 앱 종료) 만든 쪽이 바로 끝낸다.
+화면 쪽은 같은 잠금 안에서 멈춤 표시를 하고 $Owner의 프로세스를 끝내므로, 어느 순서로 일어나도 넘겨받지 않은 자식이 남지 않는다 (Stop-WtFlowStarting)
+#>
+function Start-WtFlowChild($Start, $Owner) {
+    $p = [System.Diagnostics.Process]::Start($Start)
+    if (-not $p) { return $null }
+    [System.Threading.Monitor]::Enter($Owner.SyncRoot)
+    try { $Owner.Process = $p; $stopped = [bool]$Owner.Stopped } finally { [System.Threading.Monitor]::Exit($Owner.SyncRoot) }
+    if ($stopped) { try { $p.Kill($true) } catch { }; return $null }
+    $p
+}
+
+# 시작 중인 실행을 멈춘다 (화면 스레드): 멈춤 표시를 하고, 이미 만들어졌는데 아직 넘겨받지 않은 자식은 끝낸다
+function Stop-WtFlowStarting($Ctx) {
+    $owner = $Ctx.Owner
+    [System.Threading.Monitor]::Enter($owner.SyncRoot)
+    try { $owner.Stopped = $true; $p = $owner.Process; $taken = [bool]$owner.Taken } finally { [System.Threading.Monitor]::Exit($owner.SyncRoot) }
+    $Ctx.Cancelled = $true
+    if ($p -and -not $taken) { try { $p.Kill($true) } catch { } }
+}
+
+# 앱 안 실행을 시작한다. 입력은 바로 닫아서, 입력을 기다리는 스크립트도 멈추지 않고 오류로 끝나게 한다.
+# -Process: 화면 밖에서 이미 시작한 프로세스 (Invoke-WtFlowRun). 없으면 여기서 시작한다
+function Start-WtFlowProcess($StartInfo, $Record, [System.Diagnostics.Process]$Process) {
+    $p = if ($Process) { $Process } else { [System.Diagnostics.Process]::Start($StartInfo) }
     $p.StandardInput.Close()
     $enc = Get-WtFlowEncoding
     $readers = @(foreach ($stream in @($p.StandardOutput.BaseStream, $p.StandardError.BaseStream)) { [System.IO.StreamReader]::new($stream, $enc, $false, 65536) })
     $queue = [System.Collections.Concurrent.ConcurrentQueue[object]]::new()
     $stop = [hashtable]::Synchronized(@{ Value = $false })
-    $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
-    $rs.ApartmentState = 'MTA'
-    $rs.ThreadOptions = 'UseNewThread'   # ReuseThread는 실행 공간을 버리기 전까지 스레드가 남아 앱 프로세스가 끝나지 않는다
-    $rs.Open()
-    $ps = [powershell]::Create()
-    $ps.Runspace = $rs
-    [void]$ps.AddScript($script:pumpWork.ToString()).AddArgument($readers).AddArgument($queue).AddArgument($stop)
+    $pump = Start-WtWork -Script $script:pumpWork -ArgumentList @($readers, $queue, $stop)
     [pscustomobject]@{
         Process = $p; Id = $p.Id; Record = $Record; Started = Get-Date; ExitedAt = $null; Cancelled = $false; Stopped = $false
-        Readers = $readers; Queue = $queue; Stop = $stop; Shell = $ps; Runspace = $rs; Async = $ps.BeginInvoke()
+        Readers = $readers; Queue = $queue; Stop = $stop; Pump = $pump
         Partial = @('', ''); Open = @($true, $true)
         Lines = [System.Collections.Generic.List[string]]::new()
     }
@@ -12666,12 +13758,11 @@ function Complete-WtFlowRun($Run) {
     $rec.status = $status
     $rec.exitCode = $code
     $rec.tail = @($Run.Lines | Select-Object -Last $script:tailLines)
-    # 퍼 오기를 멈추고 실행 공간을 버린 뒤 읽기 통로를 닫는다. 퍼 오기는 0.2초마다 그만둘지 보므로 오래 기다리지 않는다.
-    # 남은 자식이 통로를 붙잡고 있어도 통로가 끝나기를 기다리지는 않는다
+    # 퍼 오기를 멈춘 뒤 읽기 통로를 닫는다. 퍼 오기는 0.2초마다 그만둘지 보므로 오래 기다리지 않는다.
+    # 그래도 끝나지 않으면 기다리지 않고 버린다. 남은 자식이 통로를 붙잡고 있어도 통로가 끝나기를 기다리지는 않는다
     $Run.Stop.Value = $true
-    try { [void]$Run.Async.AsyncWaitHandle.WaitOne(2000) } catch { }
-    try { $Run.Shell.Dispose() } catch { }
-    try { $Run.Runspace.Dispose() } catch { }
+    try { [void](Wait-WtWork $Run.Pump -Milliseconds 2000) } catch { }
+    Stop-WtWork $Run.Pump
     foreach ($r in $Run.Readers) { try { $r.Dispose() } catch { } }
     try { $Run.Process.Dispose() } catch { }
     try { Save-WtFlowRun $rec } catch { $Run | Add-Member -NotePropertyName SaveError -NotePropertyValue $_.Exception.Message -Force }
@@ -12679,7 +13770,8 @@ function Complete-WtFlowRun($Run) {
 }
 
 # 실행 중인 것을 끝낸다 (자식 프로세스까지). 이때 스크립트의 finally는 돌지 않을 수 있다.
-# 스크립트는 이미 끝났는데 남은 자식이 출력을 붙잡고 있으면, 그 자식을 찾아 끝낸다 (이 실행이 시작한 뒤에 생긴 것만)
+# 스크립트는 이미 끝났는데 남은 자식이 출력을 붙잡고 있으면, 그 자식을 찾아 끝낸다 (이 실행이 시작한 뒤에 생긴 것만).
+# 자식 찾기(WMI)는 화면 밖에서 한다: 화면 · 종료가 그 호출에 막히지 않게. 끝낼 때는 Stop-WtFlows가 정한 시간만 기다린다 ($Run.Reaper)
 function Stop-WtFlowProcess($Run) {
     $exited = $true
     try { $exited = $Run.Process.HasExited } catch { }
@@ -12687,11 +13779,11 @@ function Stop-WtFlowProcess($Run) {
         try { $Run.Process.Kill($true) } catch { }
         return
     }
+    if ($Run.PSObject.Properties['Reaper'] -and $Run.Reaper -and -not $Run.Reaper.Finished) { return }   # 이미 찾는 중
     try {
-        foreach ($c in @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($Run.Id)" -ErrorAction Stop)) {
-            if ($c.CreationDate -lt $Run.Started.AddSeconds(-1)) { continue }
-            try { $child = [System.Diagnostics.Process]::GetProcessById([int]$c.ProcessId); $child.Kill($true); $child.Dispose() } catch { }
-        }
+        # 정리 작업은 끝나지 않은 작업 수 한도와 따로 둔다 (-Reserved): 응답 없는 조회가 한도를 채워도 남은 자식은 끝낸다
+        $reaper = Start-WtWork -Script $script:reapWork -ArgumentList $Run.Id, $Run.Started.AddSeconds(-1) -Session Default -TimeoutMs 10000 -Reserved
+        $Run | Add-Member -NotePropertyName Reaper -NotePropertyValue $reaper -Force
     } catch { }
 }
 
@@ -12704,6 +13796,7 @@ function Get-WtFlows {
     $items | Sort-Object { [string]$_.title }
 }
 
+# 데이터 폴더가 늦게 답하면 저장 통로가 끝까지 쓴다 (그동안 읽으면 저장한 내용이 나온다)
 function Save-WtFlows([object[]]$Items) { Write-WtStore -Name 'workflows' -Schema $script:schema -Items @($Items) }
 
 function New-WtFlow([string]$Title, [string]$ScriptPath, [hashtable]$Values, [string]$Mode) {
@@ -12792,25 +13885,37 @@ function Test-WtFlowPathIn([string]$Path, $List) {
 # - 내 스크립트: 데이터 폴더의 scripts (기본 문서\WorkTool\scripts). 여기에 .ps1을 복사해 넣으면 바로 보인다
 # - 예제 스크립트: 앱 파일 옆 scripts (개인 PC zip을 푼 곳). 저장소 원본으로 띄우면 앱 폴더 위로 3단계 안의
 #   scripts 중 _template.ps1이 있는 것 (저장소 맨 위 scripts/). 엉뚱한 scripts 폴더를 잡지 않게 표식 파일을 본다
+# 앱 폴더를 보는 일은 화면 밖에서 하고 잠깐만 기다린다. 답이 없으면(앱을 응답 없는 공유 폴더에 둔 경우) 예제 스크립트는 빼고 다음에 다시 찾는다
 function Get-WtFlowDefaultRoots {
     $app = Get-WtAppRoot
     $data = Get-WtDataFolder 'scripts'
     $key = "$app|$data"
     if ($script:defaultRoots -and $script:defaultRoots.Key -ceq $key) { return $script:defaultRoots.Items }
-    $items = [System.Collections.Generic.List[object]]::new()
-    $items.Add([pscustomobject]@{ Path = $data; Label = '내 스크립트'; Data = $true })
-    $dir = $app
-    for ($i = 0; $i -le 3 -and $dir; $i++) {
-        $candidate = Join-Path $dir 'scripts'
-        if ((Test-Path -LiteralPath $candidate -PathType Container) -and
-            ($i -eq 0 -or (Test-Path -LiteralPath (Join-Path $candidate '_template.ps1') -PathType Leaf))) {
-            if (-not (Test-WtFlowPathIn $candidate $data)) { $items.Add([pscustomobject]@{ Path = $candidate; Label = '예제 스크립트'; Data = $false }) }
-            break
-        }
-        $dir = Split-Path $dir -Parent
+    $found = $null; $known = $true
+    if ($app) {
+        try { $found = Invoke-WtWork -Script $script:defaultsWork -Key (Get-WtPathKey $app) -TimeoutMs $script:defaultsWaitMs -ArgumentList $app }
+        catch { $known = $false }
     }
-    $script:defaultRoots = @{ Key = $key; Items = $items.ToArray() }
-    $script:defaultRoots.Items
+    $items = @(New-WtFlowDefaultItems $data $found)
+    if ($known) { $script:defaultRoots = @{ Key = $key; Items = $items; Found = [string]$found } }
+    $items
+}
+
+function New-WtFlowDefaultItems([string]$Data, [string]$Found) {
+    [pscustomobject]@{ Path = $Data; Label = '내 스크립트'; Data = $true }
+    if ($Found -and -not (Test-WtFlowPathIn $Found $Data)) { [pscustomobject]@{ Path = $Found; Label = '예제 스크립트'; Data = $false } }
+}
+
+# 앞서 찾은 기본 폴더가 있으면 그것으로 바로 그리고, 화면 밖에서 다시 찾아 달라졌을 때만 목록을 다시 만든다
+# (탭에 들어올 때마다 다시 찾는다: 앱 옆에 scripts를 나중에 넣어도 보이게)
+function Start-WtFlowDefaultsCheck {
+    $cached = $script:defaultRoots
+    $app = Get-WtAppRoot
+    if (-not $cached -or -not $app) { return }   # 처음에는 Get-WtFlowDefaultRoots가 바로 찾는다
+    try {
+        [void](Start-WtWork -Script $script:defaultsWork -ArgumentList $app -Key (Get-WtPathKey $app) -TimeoutMs $script:defaultsWaitMs -Context $cached `
+                -OnDone { param($w) if ($w.State -eq 'done' -and [object]::ReferenceEquals($script:defaultRoots, $w.Context) -and [string]$w.Result -ne $w.Context.Found) { Request-WtFlowTreeRedraw -Rescan } })
+    } catch { }
 }
 
 # 목록에 보이는 스크립트 폴더: 기본 폴더(뺀 것 제외) → [폴더 추가]한 폴더. 같은 폴더는 한 번만
@@ -12819,8 +13924,10 @@ function Get-WtFlowRoots {
     $list = [System.Collections.Generic.List[string]]::new()
     foreach ($d in @(Get-WtFlowDefaultRoots)) {
         if (Test-WtFlowPathIn $d.Path $hidden) { continue }
-        # 데이터 폴더의 scripts는 없으면 만든다. 사용자가 그 폴더를 찾아 파일만 넣으면 되게
-        if ($d.Data -and $script:madeRoot -cne $d.Path) { [void](Get-WtDataFolder 'scripts' -Create); $script:madeRoot = $d.Path }
+        # 데이터 폴더의 scripts는 없으면 만든다. 사용자가 그 폴더를 찾아 파일만 넣으면 되게 (못 만들면 목록에 「폴더 없음」으로 보인다)
+        if ($d.Data -and $script:madeRoot -cne $d.Path) {
+            try { [void](Get-WtDataFolder 'scripts' -Create); $script:madeRoot = $d.Path } catch { }
+        }
         $list.Add($d.Path)
     }
     foreach ($r in @(Get-WtSetting 'workflows.roots' | Where-Object { $_ })) {
@@ -12882,18 +13989,104 @@ function New-WtFlowTreeItem([string]$Label, [int]$Icon, $Tag, [string]$ToolTip, 
     $item
 }
 
-# 왼쪽 목록: 저장한 업무 + 스크립트 폴더별 스크립트. 지금 고른 것을 다시 고른다
+# 왼쪽 목록: 저장한 업무 + 스크립트 폴더별 스크립트. 들어올 때 · F5마다 디스크를 다시 본다.
+# 디스크는 화면 밖에서 폴더마다 보고 잠깐만 기다린 뒤 그린다. 늦게 끝난 폴더는 끝날 때 다시 그린다 (응답 없는 공유 폴더여도 화면이 멈추지 않는다)
 function Update-WtFlowTree {
+    Start-WtFlowDefaultsCheck   # 들어올 때 · F5마다 기본 폴더를 다시 찾는다 (앱 옆에 scripts를 나중에 넣어도 보이게)
+    $flows = @(Get-WtFlows)
+    $works = @(Start-WtFlowScans @(Get-WtFlowRoots) $flows)
+    if ($works.Count) {
+        # 로컬 폴더는 이 안에 끝나서 바로 그린다. 그사이 끝난 찾기는 따로 다시 그리지 않는다
+        $script:scanWaiting = $true
+        try { [void](Wait-WtWork $works -Milliseconds $script:scanWaitMs) } finally { $script:scanWaiting = $false }
+    }
+    Show-WtFlowTree $flows
+}
+
+# 스크립트 폴더 하나의 찾기 상태. 다시 찾는 동안(loading)에도 앞서 찾은 스크립트는 그대로 보인다(Prev)
+function New-WtFlowScan([string]$Root, [string]$State, $Prev) {
+    @{ Root = $Root; State = $State; Missing = $false; Scripts = $(if ($Prev) { @($Prev.Scripts) } else { @() }); Prev = [bool]$Prev; Error = $null; Work = $null }
+}
+
+# 폴더마다 화면 밖에서 스크립트를 찾고, 저장한 업무의 스크립트가 있는지 본다. 기다릴 작업들을 돌려준다.
+# 이미 찾는 중인 폴더는 다시 시작하지 않고, 답 없는 곳(같은 드라이브 · 공유)에는 새로 묻지 않는다 (「응답 없음」)
+function Start-WtFlowScans([string[]]$Roots, [object[]]$Flows) {
+    foreach ($root in $Roots) {
+        $k = ConvertTo-WtFlowPathKey $root
+        $old = $script:scans[$k]
+        if ($old -and $old.State -eq 'loading') { if ($old.Work) { $old.Work }; continue }
+        $prev = if ($old -and ($old.State -eq 'ok' -or $old.Prev)) { $old } else { $null }
+        $ioKey = Get-WtPathKey $root
+        if (Test-WtWorkStuck $ioKey) { $script:scans[$k] = New-WtFlowScan $root 'slow' $prev; continue }
+        $scan = New-WtFlowScan $root 'loading' $prev
+        $script:scans[$k] = $scan
+        if (-not $script:scanFunctions) { $script:scanFunctions = @(Get-Command Find-WtFlowScripts) }
+        try {
+            $scan.Work = Start-WtWork -Functions $script:scanFunctions -ArgumentList $root, $script:maxScripts `
+                -Key $ioKey -TimeoutMs $script:scanTimeoutMs -Context $k -OnDone { param($w) Set-WtFlowScan $w } -Script $script:scanWork
+            $scan.Work
+        } catch { $scan.State = 'error'; $scan.Error = $_.Exception.Message }
+    }
+    $paths = @($Flows | ForEach-Object { [string]$_.script } | Where-Object { $_ } | Sort-Object -Unique)
+    if ($paths.Count -and -not (Test-WtWorkStuck 'flow-files')) {
+        try {
+            $script:flowFilesWork = Start-WtWork -ArgumentList (, [string[]]$paths) -Key 'flow-files' -TimeoutMs $script:scanTimeoutMs `
+                -OnDone { param($w) Set-WtFlowFiles $w } -Script {
+                param($paths)
+                $found = @{}
+                foreach ($p in $paths) { $found[$p] = [System.IO.File]::Exists($p) }
+                $found
+            }
+            $script:flowFilesWork
+        } catch { }
+    }
+}
+
+# 폴더 하나를 다 찾았을 때 (화면 스레드). 더 새 찾기가 있으면 버린다
+function Set-WtFlowScan($Work) {
+    $scan = $script:scans[[string]$Work.Context]
+    if (-not $scan -or -not [object]::ReferenceEquals($scan.Work, $Work)) { return }
+    if ($Work.State -eq 'done' -and $Work.Result) {
+        $scan.State = 'ok'; $scan.Missing = [bool]$Work.Result.Missing; $scan.Scripts = @($Work.Result.Scripts); $scan.Prev = $false
+    } elseif ($Work.TimedOut) { $scan.State = 'slow' }
+    else { $scan.State = 'error'; $scan.Error = $Work.Error }
+    Request-WtFlowTreeRedraw
+}
+
+function Set-WtFlowFiles($Work) {
+    if (-not [object]::ReferenceEquals($script:flowFilesWork, $Work) -or $Work.State -ne 'done' -or $Work.Result -isnot [hashtable]) { return }
+    foreach ($p in $Work.Result.Keys) { $script:flowFiles[$p] = [bool]$Work.Result[$p] }
+    Request-WtFlowTreeRedraw
+}
+
+# 늦게 끝난 찾기를 목록에 넣는다. 여러 개가 끝나도 한 번만 다시 그린다.
+# -Rescan: 기본 폴더가 바뀌었으니 다시 찾아서 그린다
+function Request-WtFlowTreeRedraw([switch]$Rescan) {
+    if ($Rescan) { $script:defaultRoots = $null; $script:rescanQueued = $true }
+    if (($script:scanWaiting -and -not $Rescan) -or $script:redrawQueued -or -not $script:ui.Count) { return }
+    $script:redrawQueued = $true
+    [void]$script:ui.Tree.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [Action]{
+            $script:redrawQueued = $false
+            $rescan = $script:rescanQueued; $script:rescanQueued = $false
+            try { if ($rescan) { Update-WtFlowTree } else { Show-WtFlowTree } } catch { Show-WtError $_ '업무 목록' }
+        })
+}
+
+# 왼쪽 목록을 지금 찾은 결과로 그린다 (디스크는 보지 않는다). 지금 고른 것을 다시 고른다
+function Show-WtFlowTree([object[]]$Items = @(Get-WtFlows)) {
+    if (-not $script:ui.Count) { return }
     $tree = $script:ui.Tree
     $keep = if ($script:flow) { "flow:$($script:flow.id)" } elseif ($script:info) { "script:$($script:info.Path)" } else { '' }
-    # 다른 탭에 다녀와도 고치던 칸 값과 실행 방식은 그대로 둔다
-    $carry = if ($keep -and $script:fields.Count) { @{ Key = $keep; Values = (Get-WtFlowFormValues); Mode = (Get-WtFlowMode) } } else { $null }
     if ($script:pendingFlow) { $keep = "flow:$($script:pendingFlow)"; $script:pendingFlow = $null }
-    $script:defaultRoots = $null   # 들어올 때 · F5마다 기본 폴더를 다시 찾는다 (앱 옆에 scripts를 나중에 넣어도 보이게)
-    $flows = @(Get-WtFlows)
-    $groups = @(Find-WtFlowScripts (Get-WtFlowRoots))
+    $flows = @($Items)
+    $groups = @(foreach ($root in @(Get-WtFlowRoots)) {
+            $s = $script:scans[(ConvertTo-WtFlowPathKey $root)]
+            if (-not $s) { $s = New-WtFlowScan $root 'loading' $null }
+            $state = if ($s.State -eq 'loading' -and $s.Prev) { 'ok' } else { $s.State }
+            [pscustomobject]@{ Root = $root; Missing = [bool]$s.Missing; Scripts = @($s.Scripts); State = $state; Error = $s.Error }
+        })
     $missingPaths = @{}
-    foreach ($f in $flows) { $missingPaths[[string]$f.script] = -not (Test-Path -LiteralPath ([string]$f.script) -PathType Leaf) }
+    foreach ($f in $flows) { $missingPaths[[string]$f.script] = $script:flowFiles[[string]$f.script] -eq $false }
     $key = ConvertTo-Json -Compress -Depth 10 -InputObject @($flows, $groups, $missingPaths, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
     $script:filling = $true
     try {
@@ -12937,8 +14130,20 @@ function Update-WtFlowTree {
                     $parentName = Split-Path (Split-Path $group.Root -Parent) -Leaf
                     if ($parentName) { $rootName = "$parentName\$rootName" }
                 }
-                $label = if ($group.Missing) { "$rootName · 폴더 없음" } else { $rootName }
+                $label = switch ($group.State) {
+                    'loading' { "$rootName · 읽는 중…" }
+                    'slow' { "$rootName · 응답 없음" }
+                    'error' { "$rootName · 읽지 못함" }
+                    default { if ($group.Missing) { "$rootName · 폴더 없음" } else { $rootName } }
+                }
                 $rootNode = New-WtFlowTreeItem $label 0xE8B7 @{ Kind = 'root'; Path = $group.Root } $group.Root
+                if ($group.State -in 'slow', 'error') {
+                    $why = if ($group.State -eq 'slow') { "폴더가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 F5를 누르세요: $($group.Root)" }
+                    else { "폴더를 읽지 못했습니다: $($group.Error)" }
+                    $hint = New-WtFlowTreeItem $(if ($group.State -eq 'slow') { '응답하지 않는 폴더' } else { '읽지 못한 폴더' }) 0xE946 @{ Kind = 'hint' } $why -Muted
+                    $hint.Focusable = $false
+                    [void]$rootNode.Items.Add($hint)
+                }
                 $folders = @{}
                 foreach ($s in $group.Scripts) {
                     $parent = $rootNode
@@ -12953,7 +14158,7 @@ function Update-WtFlowTree {
                     [void]$parent.Items.Add($node)
                     if ($keep -eq "script:$($s.Path)") { $found = $node }
                 }
-                if (-not $group.Missing -and -not $group.Scripts.Count) {
+                if ($group.State -eq 'ok' -and -not $group.Missing -and -not $group.Scripts.Count) {
                     $hint = New-WtFlowTreeItem '.ps1 파일 없음' 0xE946 @{ Kind = 'hint' } "이 폴더에 .ps1 파일을 넣고 F5를 누르면 여기에 보입니다: $($group.Root)" -Muted
                     $hint.Focusable = $false
                     [void]$rootNode.Items.Add($hint)
@@ -12964,15 +14169,11 @@ function Update-WtFlowTree {
         if ($found) { $found.IsSelected = $true; $found.BringIntoView() }
         $script:ui.RemoveRoot.IsEnabled = $false   # 다시 만든 목록에서는 고른 폴더가 없다
     } finally { $script:filling = $false }
-    if ($found) {
-        Select-WtFlowNode $found.Tag -Reuse
-        if ($carry -and $carry.Key -eq $keep) {
-            Set-WtFlowFormValues $carry.Values
-            foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq $carry.Mode) }
-        }
-    } elseif ($keep) { Clear-WtFlowSelection }
-    else { Update-WtFlowCenter -Reuse }
     $script:treeKey = $key
+    # 다시 고르면 같은 수명이라 고치던 칸 값과 실행 방식은 그대로 둔다 (다른 탭에 다녀오거나 늦게 끝난 폴더 찾기로 다시 그려도)
+    if ($found) { Select-WtFlowNode $found.Tag -Reuse }
+    elseif ($keep) { Clear-WtFlowSelection }
+    else { Update-WtFlowCenter -Reuse }
 }
 
 function Add-WtFlowRoot {
@@ -12998,6 +14199,8 @@ function Remove-WtFlowRoot {
 # ---- 화면: 고른 것 · 폼 -------------------------------------------------------------------------
 
 function Clear-WtFlowSelection {
+    $script:selection = $null   # 고른 것의 수명을 끝낸다: 아직 오는 중인 읽기 결과는 넣지 않는다
+    $script:readSeq++
     $script:info = $null
     $script:flow = $null
     $script:fields = @()
@@ -13016,24 +14219,88 @@ function Reset-WtFlowOutput([string]$Key) {
     $script:outputKey = $null
 }
 
+<#
+고른 것의 수명. 사용자가 다른 것을 고르거나, 선택을 비우거나(업무 삭제 포함), 화면을 새로 만들면 수명이 끝난다.
+늦게 온 읽기 결과는 같은 수명일 때만 넣는다. 고치던 칸 값은 일회성 요청이 아니라 이 수명(Edits)에 둔다.
+  -Keep: 같은 것을 다시 고른 것(목록을 다시 그림 · 탭에 다시 들어옴)이면 수명을 이어 가고 지금 칸 값을 남긴다
+#>
+function Enter-WtFlowSelection([string]$Key, [bool]$Keep) {
+    if ($Keep -and $script:selection -and $script:selection.Key -ceq $Key) { Save-WtFlowEdits; return }
+    $script:selection = @{ Key = $Key; Edits = $null; Mode = $null }
+}
+
+# 지금 폼의 칸 값을 고른 것의 수명에 남긴다. 폼이 「읽는 중」이거나 칸이 없으면 앞서 남긴 값을 그대로 둔다.
+# 실행 방식은 사용자가 바꾸는 순간 수명에 남는다 (Set-WtFlowModeChoice). 칸 수 · 읽는 중과 상관없다
+function Save-WtFlowEdits {
+    $sel = $script:selection
+    if (-not $sel -or -not $script:fields.Count -or -not $script:info -or $script:info.Loading) { return }
+    $sel.Edits = @{ Values = (Get-WtFlowFormValues) }
+}
+
+# 사용자가 실행 방식을 바꿨을 때: 고른 것의 수명에 바로 남긴다 (화면이 단추를 맞추는 중이면 사용자가 고른 것이 아니다)
+function Set-WtFlowModeChoice([string]$Value) {
+    if (-not $script:modeSync -and $script:selection) { $script:selection.Mode = $Value }
+}
+
+# 실행 방식 단추를 맞춘다 (사용자가 고른 것으로 남기지 않는다)
+function Set-WtFlowModeButtons([string]$Mode) {
+    $script:modeSync = $true
+    try { foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq $Mode) } } finally { $script:modeSync = $false }
+}
+
 function Select-WtFlowNode($Tag, [switch]$Reuse) {
     $script:ui.RemoveRoot.IsEnabled = ($Tag.Kind -eq 'root')
     if ($Tag.Kind -eq 'script') { Reset-WtFlowOutput "script:$($Tag.Path)" }
     elseif ($Tag.Kind -eq 'flow') { Reset-WtFlowOutput "flow:$($Tag.Id)" }
     switch ($Tag.Kind) {
         'script' {
+            Enter-WtFlowSelection "script:$($Tag.Path)" ([bool]$Reuse)
             $script:flow = $null
-            $script:info = Read-WtFlowScript $Tag.Path
-            Update-WtFlowCenter -Reuse:$Reuse
+            Request-WtFlowScript $Tag.Path -Reuse:$Reuse
         }
         'flow' {
             $f = Get-WtFlows | Where-Object { $_.id -eq $Tag.Id } | Select-Object -First 1
             if (-not $f) { Clear-WtFlowSelection; return }
+            Enter-WtFlowSelection "flow:$($Tag.Id)" ([bool]$Reuse)
             $script:flow = $f
-            $script:info = Read-WtFlowScript ([string]$f.script)
-            Update-WtFlowCenter -Reuse:$Reuse
+            Request-WtFlowScript ([string]$f.script) -Reuse:$Reuse
         }
     }
+}
+
+# 고른 스크립트를 화면 밖에서 읽는다 (구문만, 실행하지 않음). 잠깐 기다려 그 안에 읽히면 바로 폼을 그리고,
+# 아니면 「읽는 중」을 보였다가 읽히면 그린다. 그사이 다른 것을 고르면 늦게 온 결과는 버린다
+function Request-WtFlowScript([string]$Path, [switch]$Reuse) {
+    $script:readSeq++
+    $ctx = @{ Seq = $script:readSeq; Path = $Path; Reuse = [bool]$Reuse; Life = $script:selection }
+    $ioKey = Get-WtPathKey $Path
+    if (Test-WtWorkStuck $ioKey) { Set-WtFlowScriptInfo $ctx (New-WtFlowInfo $Path (Get-WtFlowSlowText)); return }
+    try {
+        $w = Start-WtWork -Call (& $script:readCall $Path) -Key $ioKey -TimeoutMs $script:readTimeoutMs -Context $ctx -OnDone { param($w) Complete-WtFlowScriptRead $w }
+    } catch { Set-WtFlowScriptInfo $ctx (New-WtFlowInfo $Path "스크립트를 읽지 못했습니다: $($_.Exception.Message)"); return }
+    if (-not (Wait-WtWork $w -Milliseconds $script:readWaitMs)) { Set-WtFlowScriptInfo $ctx (New-WtFlowInfo $Path '스크립트를 읽는 중입니다…' -Loading) -Waiting }
+}
+
+function Get-WtFlowSlowText { '스크립트 폴더가 응답하지 않습니다. 네트워크 연결이나 공유 폴더를 확인한 뒤 F5를 누르세요.' }
+
+function Complete-WtFlowScriptRead($Work) {
+    $ctx = $Work.Context
+    $info = if ($Work.State -eq 'done') { ConvertTo-WtFlowInfo $ctx.Path ([string]$Work.Result) }
+    elseif ($Work.TimedOut) { New-WtFlowInfo $ctx.Path (Get-WtFlowSlowText) }
+    elseif ($Work.Exception -is [System.IO.FileNotFoundException] -or $Work.Exception -is [System.IO.DirectoryNotFoundException]) { New-WtFlowMissingInfo $ctx.Path }
+    else { New-WtFlowInfo $ctx.Path "스크립트를 읽지 못했습니다: $($Work.Error)" }
+    Set-WtFlowScriptInfo $ctx $info
+}
+
+# 읽은 스크립트를 가운데에 그린다. 그사이 다른 것을 골랐거나 선택을 비웠으면(수명이 끝남) 버린다.
+# -Waiting: 읽는 중 표시. 고치던 칸 값(수명의 Edits)은 읽힌 뒤 폼에 다시 넣는다
+function Set-WtFlowScriptInfo($Ctx, $Info, [switch]$Waiting) {
+    if ($Ctx.Seq -ne $script:readSeq -or -not $Ctx.Life -or -not [object]::ReferenceEquals($Ctx.Life, $script:selection)) { return }
+    $script:info = $Info
+    Update-WtFlowCenter -Reuse:$Ctx.Reuse
+    $edits = $Ctx.Life.Edits
+    if ($Waiting -or -not $edits -or $Info.Error) { return }
+    Set-WtFlowFormValues $edits.Values
 }
 
 # 가운데 · 오른쪽을 고른 것에 맞춘다
@@ -13041,7 +14308,7 @@ function Update-WtFlowCenter([switch]$Reuse) {
     $u = $script:ui
     if (-not $u.Count) { return }
     $hasFlows = @(Get-WtFlows).Count -gt 0
-    $key = ConvertTo-Json -Compress -Depth 10 -InputObject @($script:info, $script:flow, @(Get-WtFlowRoots), $hasFlows, [bool]$script:run, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
+    $key = ConvertTo-Json -Compress -Depth 10 -InputObject @($script:info, $script:flow, @(Get-WtFlowRoots), $hasFlows, (Test-WtFlowBusy), (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
     if ($Reuse -and $script:centerKey -ceq $key) {
         foreach ($entry in $script:fields) { Set-WtFlowFieldError $entry '' }
         Update-WtFlowCommands; Update-WtFlowHelp; return
@@ -13054,10 +14321,10 @@ function Update-WtFlowCenter([switch]$Reuse) {
         $u.Sub.Text = if ($hasRoots -or $hasFlows) { '왼쪽에서 스크립트나 저장한 업무를 고르세요.' } else { '스크립트 폴더를 더하면 그 안의 스크립트를 폼으로 실행합니다.' }
         Set-WtResource $u.Sub 'Foreground' 'B.SubText'
         $u.Title.ToolTip = $null
-        $u.Empty.Visibility = if ($hasRoots -or $script:run) { 'Collapsed' } else { 'Visible' }
+        $u.Empty.Visibility = if ($hasRoots -or (Test-WtFlowBusy)) { 'Collapsed' } else { 'Visible' }
         foreach ($x in @($u.SaveFlow, $u.DeleteFlow, $u.Repick)) { $x.Visibility = 'Collapsed' }
         # 실행 중에는 고른 것이 없어져도 [취소]와 출력은 계속 보인다
-        $keep = if ($script:run) { 'Visible' } else { 'Collapsed' }
+        $keep = if (Test-WtFlowBusy) { 'Visible' } else { 'Collapsed' }
         $u.Commands.Visibility = $keep
         $u.OutArea.Visibility = $keep
         Update-WtFlowCommands
@@ -13073,9 +14340,9 @@ function Update-WtFlowCenter([switch]$Reuse) {
     $u.Title.Text = if ($script:flow) { [string]$script:flow.title } else { $info.Name }
     $u.Title.ToolTip = $info.Path
     $u.Sub.Text = if ($info.Error) { $info.Error } elseif ($info.Synopsis) { $info.Synopsis } else { $info.Warning }
-    if ($info.Error) { Set-WtResource $u.Sub 'Foreground' 'B.Danger' } else { Set-WtResource $u.Sub 'Foreground' 'B.SubText' }
+    if ($info.Error -and -not $info.Loading) { Set-WtResource $u.Sub 'Foreground' 'B.Danger' } else { Set-WtResource $u.Sub 'Foreground' 'B.SubText' }
     $values = if ($script:flow) { ConvertTo-WtFlowValues $script:flow.values } else { @{} }
-    if ($script:flow) {
+    if ($script:flow -and -not $info.Loading) {
         $stale = @(Get-WtFlowStaleNames $info $values)
         if ($stale.Count) {
             $note = New-WtText "스크립트에 없는 값 $($stale.Count)개는 넘기지 않습니다: $($stale -join ', ')" 'T.Sub'
@@ -13107,13 +14374,14 @@ function Update-WtFlowCenter([switch]$Reuse) {
         $skip.TextWrapping = 'Wrap'
         [void](Add-WtChild $u.Form $skip)
     }
-    # 실행 방식: 업무에 저장한 것 → 스크립트가 정한 것(.NOTES의 WorkTool: 콘솔, 폼에 못 넣는 필수 값) → 앱 안
-    $mode = if ($script:flow -and $script:flow.mode) { [string]$script:flow.mode } elseif ($info.Console -or $info.NeedsConsole.Count) { 'console' } else { 'app' }
-    foreach ($rb in $u.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq $mode) }
+    # 실행 방식: 이번에 고른 것에서 사용자가 바꾼 것 → 업무에 저장한 것 → 스크립트가 정한 것(.NOTES의 WorkTool: 콘솔, 폼에 못 넣는 필수 값) → 앱 안
+    $mode = if ($script:selection -and $script:selection.Mode) { [string]$script:selection.Mode }
+    elseif ($script:flow -and $script:flow.mode) { [string]$script:flow.mode } elseif ($info.Console -or $info.NeedsConsole.Count) { 'console' } else { 'app' }
+    Set-WtFlowModeButtons $mode
     $u.SaveFlow.Content = New-WtButtonContent $(if ($script:flow) { '업무 저장' } else { '업무로 저장' }) 0xE74E
     $u.SaveFlow.ToolTip = if ($script:flow) { '지금 값과 실행 방식을 이 업무에 저장합니다' } else { '지금 값과 실행 방식을 업무로 저장해 왼쪽 목록에 둡니다' }
     $u.DeleteFlow.Visibility = if ($script:flow) { 'Visible' } else { 'Collapsed' }
-    $u.Repick.Visibility = if ($script:flow -and -not (Test-Path -LiteralPath $info.Path -PathType Leaf)) { 'Visible' } else { 'Collapsed' }
+    $u.Repick.Visibility = if ($script:flow -and $info.Missing) { 'Visible' } else { 'Collapsed' }
     Update-WtFlowCommands
     Update-WtFlowHelp
     $script:centerKey = $key
@@ -13196,18 +14464,25 @@ function Set-WtFlowFieldError($Entry, $Message) {
     [System.Windows.Automation.AutomationProperties]::SetHelpText($Entry.Input, [string]$Message)
 }
 
+# 선택 창의 처음 폴더가 있는지 화면 밖에서 잠깐만 본다. 답이 없으면(응답 없는 공유 폴더) 처음 폴더를 넘기지 않는다.
+# 넘기면 선택 창이 열리면서 그 폴더를 기다리느라 멈춘다. 창 안에서 사용자가 공유 폴더로 옮겨 가는 것은 Windows 선택 창이 처리한다
+function Test-WtFlowFolder([string]$Path) {
+    if (-not $Path) { return $false }
+    try { [bool](Invoke-WtWork -Key (Get-WtPathKey $Path) -TimeoutMs 1500 -ArgumentList $Path -Script { param($p) [System.IO.Directory]::Exists($p) }) }
+    catch { $false }
+}
+
 function Select-WtFlowPath($TextBox, [string]$Kind) {
     if ($Kind -eq 'folder') {
         $dlg = [System.Windows.Forms.FolderBrowserDialog]::new()
-        if ($TextBox.Text -and (Test-Path -LiteralPath $TextBox.Text -PathType Container)) { $dlg.SelectedPath = $TextBox.Text }
+        if (Test-WtFlowFolder $TextBox.Text) { $dlg.SelectedPath = $TextBox.Text }
         if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $TextBox.Text = $dlg.SelectedPath }
         return
     }
     $dlg = [Microsoft.Win32.OpenFileDialog]::new()
-    if ($TextBox.Text) {
-        $dir = Split-Path $TextBox.Text -Parent
-        if ($dir -and (Test-Path -LiteralPath $dir -PathType Container)) { $dlg.InitialDirectory = $dir }
-    } elseif ($script:info) { $dlg.InitialDirectory = Split-Path $script:info.Path -Parent }
+    $dir = ''
+    try { $dir = if ($TextBox.Text) { Split-Path $TextBox.Text -Parent } elseif ($script:info) { Split-Path $script:info.Path -Parent } } catch { }
+    if (Test-WtFlowFolder $dir) { $dlg.InitialDirectory = $dir }
     if ($dlg.ShowDialog()) { $TextBox.Text = $dlg.FileName }
 }
 
@@ -13247,7 +14522,7 @@ function Set-WtFlowFormValues([hashtable]$Values) {
 function Update-WtFlowCommands {
     $u = $script:ui
     if (-not $u.Count) { return }
-    $running = [bool]$script:run
+    $running = Test-WtFlowBusy
     $app = (Get-WtFlowMode) -eq 'app'
     # 앱 안 실행은 한 번에 하나. 콘솔 창은 따로 도는 창이라 앱 안 실행 중에도 띄울 수 있다
     $why = if (-not $script:info) { '스크립트를 먼저 고르세요' }
@@ -13280,7 +14555,7 @@ function Set-WtFlowNote([string]$Text, [switch]$Undo) {
 function Invoke-WtFlowRun([switch]$WhatIf) {
     if (-not $script:info -or $script:info.Error) { return }
     $mode = Get-WtFlowMode
-    if ($mode -eq 'app' -and ($script:run -or $script:info.NeedsConsole.Count)) { return }
+    if ($mode -eq 'app' -and ((Test-WtFlowBusy) -or $script:info.NeedsConsole.Count)) { return }
     $values = Get-WtFlowFormValues
     $problems = Test-WtFlowValues $script:info $values
     $first = $null
@@ -13293,40 +14568,103 @@ function Invoke-WtFlowRun([switch]$WhatIf) {
     $title = if ($script:flow) { [string]$script:flow.title } else { '' }
     $flowId = if ($script:flow) { [string]$script:flow.id } else { '' }
     $record = New-WtFlowRecord $script:info $values $mode ([bool]$WhatIf) $title $flowId
+    # 프로세스는 화면 밖에서 시작한다. 작업 폴더(스크립트 폴더)가 응답 없는 공유 폴더면 시작 자체가 기다린다.
+    # 시작을 기다리는 사이 [취소] · 앱 종료로 취소 표시가 붙으면, 늦게 시작된 프로세스는 그 자리에서 끝낸다
+    $ctx = @{
+        Mode = $mode; Record = $record; Name = $script:info.Name; WhatIf = [bool]$WhatIf; Cancelled = $false; Work = $null
+        OutputKey = $(if ($script:flow) { "flow:$($script:flow.id)" } else { "script:$($script:info.Path)" })
+        Owner = [hashtable]::Synchronized(@{ Process = $null; Stopped = $false; Taken = $false })   # 화면이 넘겨받기 전까지 만든 프로세스를 가진다
+    }
+    if (-not $script:startFunctions) { $script:startFunctions = @(Get-Command Start-WtFlowChild) }
     try {
         $start = New-WtFlowStartInfo $script:info $values $mode -WhatIf:$WhatIf
-        if ($mode -eq 'console') {
-            $p = [System.Diagnostics.Process]::Start($start)
-            if ($p) { $script:consoles.Add(@{ Process = $p; Record = $record }) }
-            $note = "콘솔 창을 띄웠습니다: $($script:info.Name). 그 창에서 끝내고 닫으세요."
-            try { Save-WtFlowRun $record } catch { $note += " (실행 기록은 저장하지 못했습니다: $($_.Exception.Message))" }
-            Set-WtFlowNote $note
-            Start-WtFlowTimer
-            Update-WtFlowHelp
-            return
-        }
-        $script:run = Start-WtFlowProcess $start $record
+        $ctx.Work = Start-WtWork -ArgumentList @($start, $ctx.Owner) -Functions $script:startFunctions -Sta:($mode -eq 'console') -Key (Get-WtPathKey $start.WorkingDirectory) `
+            -TimeoutMs $script:startTimeoutMs -Context $ctx -OnDone { param($w) Complete-WtFlowStart $w } -Script $script:startWork
     } catch {
         Set-WtFlowNote "실행하지 못했습니다: $($_.Exception.Message)"
         return
     }
+    if ($mode -eq 'app') { $script:starting = $ctx }
+    if (-not (Wait-WtWork $ctx.Work -Milliseconds $script:startWaitMs)) {
+        Set-WtFlowNote '스크립트를 시작하는 중입니다… (스크립트 폴더의 응답을 기다립니다)'
+        Update-WtFlowCommands
+    }
+}
+
+# 프로세스 시작이 끝났을 때 (화면 스레드). 앱 안 실행이면 출력 받기를 시작하고, 콘솔 창이면 기록만 한다
+function Complete-WtFlowStart($Work) {
+    $ctx = $Work.Context
+    if ([object]::ReferenceEquals($script:starting, $ctx)) { $script:starting = $null }
+    $p = if ($Work.State -eq 'done') { $Work.Result } else { $null }
+    if ($Work.State -ne 'done') {
+        # 시간 초과 · 실패: 취소와 같은 길로 멈춘다. 그 뒤 늦게 만들어지는 프로세스는 만든 쪽이 끝내고, 이미 만들어진 것은 여기서 끝낸다
+        $wasCancelled = [bool]$ctx.Cancelled
+        Stop-WtFlowStarting $ctx
+        $ctx.Cancelled = $wasCancelled   # 사용자가 먼저 취소했으면 취소로 알린다
+    } else {
+        # 넘겨받는다. 그 사이 멈췄으면(같은 잠금 안에서 확인) 넘겨받지 않고 끝낸다
+        $owner = $ctx.Owner
+        [System.Threading.Monitor]::Enter($owner.SyncRoot)
+        try { if (-not $owner.Stopped) { $owner.Taken = $true } else { $ctx.Cancelled = $true } } finally { [System.Threading.Monitor]::Exit($owner.SyncRoot) }
+    }
+    if ($ctx.Cancelled) {
+        if ($p) { try { $p.Kill($true) } catch { }; $p.Dispose() }
+        Set-WtFlowNote '실행을 취소했습니다.'
+        Update-WtFlowCommands
+        return
+    }
+    if ($Work.State -ne 'done' -or (-not $p -and $ctx.Mode -eq 'app')) {
+        $why = if ($Work.TimedOut) { Get-WtFlowSlowText } elseif ($Work.Error) { $Work.Error } else { '프로세스를 시작하지 못했습니다.' }
+        Set-WtFlowNote "실행하지 못했습니다: $why"
+        Update-WtFlowCommands
+        return
+    }
+    if ($ctx.Mode -eq 'console') {
+        if ($p) { $script:consoles.Add(@{ Process = $p; Record = $ctx.Record }) }
+        $note = "콘솔 창을 띄웠습니다: $($ctx.Name). 그 창에서 끝내고 닫으세요."
+        try { Save-WtFlowRun $ctx.Record } catch { $note += " (실행 기록은 저장하지 못했습니다: $($_.Exception.Message))" }
+        Set-WtFlowNote $note
+        Start-WtFlowTimer
+        Update-WtFlowHelp
+        return
+    }
+    try { $script:run = Start-WtFlowProcess $null $ctx.Record -Process $p }
+    catch {
+        try { $p.Kill($true) } catch { }
+        Set-WtFlowNote "실행하지 못했습니다: $($_.Exception.Message)"
+        Update-WtFlowCommands
+        return
+    }
     $u = $script:ui
-    $script:outputKey = if ($script:flow) { "flow:$($script:flow.id)" } else { "script:$($script:info.Path)" }
+    $script:outputKey = $ctx.OutputKey
     $script:shown = 1
-    $u.Output.Clear()
-    $head = "▶ $($script:info.Name)$(if ($WhatIf) { ' (미리보기)' }) · $((Get-Date).ToString('HH:mm:ss')) 시작"
-    $u.Output.AppendText($head)
-    $u.OutputHint.Visibility = 'Collapsed'
-    $u.Status.Visibility = 'Visible'
-    $u.Busy.Visibility = 'Visible'
-    $u.RunStatus.Child = $null
-    $u.Elapsed.Text = '실행 중 · 0초'
+    if ($u.Count) {
+        $u.Output.Clear()
+        $head = "▶ $($ctx.Name)$(if ($ctx.WhatIf) { ' (미리보기)' }) · $((Get-Date).ToString('HH:mm:ss')) 시작"
+        $u.Output.AppendText($head)
+        $u.OutputHint.Visibility = 'Collapsed'
+        $u.Status.Visibility = 'Visible'
+        $u.Busy.Visibility = 'Visible'
+        $u.RunStatus.Child = $null
+        $u.Elapsed.Text = '실행 중 · 0초'
+    }
     Set-WtFlowNote ''
     Update-WtFlowCommands
     Start-WtFlowTimer
 }
 
+# 앱 안 실행이 돌거나 시작하는 중인지 (앱 안 실행은 한 번에 하나)
+function Test-WtFlowBusy { [bool]$script:run -or [bool]$script:starting }
+
 function Stop-WtFlowRun {
+    if ($script:starting) {
+        # 아직 시작 중: 기다리지 않는다. 이미 만들어졌으면 지금 끝내고, 늦게 만들어지면 만든 쪽이 끝낸다 (Start-WtFlowChild)
+        Stop-WtFlowStarting $script:starting
+        $script:starting = $null
+        Set-WtFlowNote '실행을 취소했습니다.'
+        Update-WtFlowCommands
+        return
+    }
     if (-not $script:run) { return }
     $script:run.Cancelled = $true
     Stop-WtFlowProcess $script:run
@@ -13767,7 +15105,7 @@ function New-WtFlowsView {
     $preview.Add_Click({ Invoke-WtFlowRun -WhatIf })
     $cancel = New-WtButton '취소' -Icon 0xE711
     $cancel.Add_Click({ Stop-WtFlowRun })
-    $mode = New-WtSegmented @(@('app', '앱 안에서'), @('console', '콘솔 창에서')) 'app' 'WtFlowMode' { param($value) Update-WtFlowCommands }
+    $mode = New-WtSegmented @(@('app', '앱 안에서'), @('console', '콘솔 창에서')) 'app' 'WtFlowMode' { param($value) Set-WtFlowModeChoice $value; Update-WtFlowCommands }
     $mode.ToolTip = '앱 안: 출력을 아래 칸에 보여 줍니다 · 콘솔 창: 자기 화면이 있거나 키 입력을 받는 스크립트'
     foreach ($b in @($runButton, $preview, $cancel, $mode)) {
         [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($b, $true)
@@ -13888,6 +15226,9 @@ function New-WtFlowsView {
     }
     $script:helpNarrow = $false
     $script:helpOverlay = $false
+    # 화면을 새로 만들면 고른 것의 수명도 끝난다 (오는 중인 읽기 결과는 새 화면에 넣지 않는다)
+    $script:selection = $null
+    $script:readSeq++
     $page.Root
 }
 
@@ -13923,12 +15264,19 @@ function New-WtFlowsHomeCard {
 # 앱을 끄면 앱 안 실행은 멈춘다 (창 없는 프로세스를 남기지 않는다). 콘솔 창은 따로 도는 창이라 그대로 둔다
 function Stop-WtFlows {
     if ($script:timer) { $script:timer.Stop() }
+    if ($script:starting) {
+        # 아직 시작 중인 실행: 기다리지 않고 버린다. 이미 만들어진 자식은 지금 끝내고, 늦게 만들어지면 만든 쪽이 끝낸다
+        Stop-WtFlowStarting $script:starting
+        Stop-WtWork $script:starting.Work
+        $script:starting = $null
+    }
     if ($script:run) {
         $done = $script:run
         $script:run = $null
         $done.Stopped = $true
         Stop-WtFlowProcess $done
         try { [void]$done.Process.WaitForExit(2000) } catch { }
+        if ($done.PSObject.Properties['Reaper'] -and $done.Reaper) { [void](Wait-WtWork $done.Reaper -Milliseconds 2000) }   # 남은 자식 끝내기를 잠깐만 기다린다
         try { [void](Read-WtFlowOutput $done) } catch { }
         try { [void](Complete-WtFlowRun $done) } catch { }
     }
@@ -13967,3 +15315,7 @@ Export-ModuleMember -Function Read-WtFlowScript, Find-WtFlowScripts, Test-WtFlow
         [System.Windows.Media.RenderOptions]::ProcessRenderMode = $previousRenderMode
     }
 }
+
+# 이 앱만을 위해 띄운 프로세스(-File로 이 파일을 실행)면 여기서 프로세스를 끝낸다. 응답 없는 공유 폴더를 기다리다
+# 버린 작업이 남아도 창을 닫으면 프로세스가 끝나게 하려는 것이다 (core\Work.psm1의 Exit-WtOwnProcess). 정리는 위에서 모두 끝났다
+if (Get-Command Exit-WtOwnProcess -ErrorAction SilentlyContinue) { Exit-WtOwnProcess -ScriptPath $PSCommandPath }
