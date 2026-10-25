@@ -233,7 +233,10 @@ function Add-WtMdUnitsOf($Units, $B, $Ctx, [int]$Depth, [int]$ListId = 0) {
         'YamlFrontMatterBlock' { 'props' }
         default { 'raw' }
     }
-    $Units.Add((New-WtMdUnit $kind $range[0] $range[1] $(if ($kind -eq 'raw') { $null } else { $B }) $Ctx $Depth))
+    # $(if …) · $x = if …로 넘기면 Markdig 블록(자식 목록)이 펼쳐진다. 변수에 바로 넣는다
+    $md = $null
+    if ($kind -ne 'raw') { $md = $B }
+    $Units.Add((New-WtMdUnit $kind $range[0] $range[1] $md $Ctx $Depth))
 }
 
 # 목록 항목 하나 = 단위 하나. 안쪽 목록이 항목 끝에만 있으면 따로 나눠 Depth+1로, 아니면 항목 통째로

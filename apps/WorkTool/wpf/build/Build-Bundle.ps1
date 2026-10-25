@@ -46,9 +46,14 @@ $blocks = [System.Collections.Generic.List[string]]::new()
 foreach ($name in $core) {
     $blocks.Add((Get-ModuleBlock "WorkTool.$name" (Join-Path $src 'core' "$name.psm1") "core\$name.psm1"))
 }
-foreach ($file in (Get-ChildItem (Join-Path $src 'addons') -Filter '*.psm1' -Recurse | Sort-Object FullName)) {
+$addonFiles = @(Get-ChildItem (Join-Path $src 'addons') -Filter '*.psm1' -Recurse | Sort-Object FullName)
+foreach ($file in $addonFiles) {
     $rel = [System.IO.Path]::GetRelativePath($src, $file.FullName).Replace('/', '\')
-    $blocks.Add((Get-ModuleBlock "WorkTool.addon.$($file.Directory.Name)" $file.FullName $rel))
+    # 탭 폴더에 모듈이 여럿이면(메모: Memo · MemoEditor · MemoText) 이름이 겹치지 않게 파일 이름을 붙인다.
+    # 같은 이름으로 Import-Module -Force를 하면 앞 모듈이 빠질 수 있다
+    $siblings = @($addonFiles | Where-Object { $_.DirectoryName -eq $file.DirectoryName }).Count
+    $name = if ($siblings -gt 1) { "WorkTool.addon.$($file.Directory.Name).$($file.BaseName)" } else { "WorkTool.addon.$($file.Directory.Name)" }
+    $blocks.Add((Get-ModuleBlock $name $file.FullName $rel))
 }
 $bundled = "#region 모듈 (묶음 파일: build\Build-Bundle.ps1이 넣음)`n" + ($blocks -join "`n`n") + "`n#endregion"
 $text = $entry.Substring(0, $region.Index) + $bundled + $entry.Substring($region.Index + $region.Length)

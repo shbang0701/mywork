@@ -169,11 +169,13 @@ try {
     Assert-WtTest 'WPF 메모 탭: Ctrl+Tab은 끝에서 처음으로 돌고, Ctrl+Shift+Tab은 거꾸로' ($first -eq 'mb' -and (Get-TestTabs).Current[0] -eq 'ma')
     $kept = & $memoModule {
         $p = $script:panes[0]
-        $null = Set-WtMemoEditorState $p.Editor @{ Caret = 5; Scroll = 0 }
+        $null = Set-WtMemoEditorState $p.Editor @{ Line = 0; Col = 2; Scroll = 0 }
+        $before = Get-WtMemoEditorState $p.Editor
         [void](Select-WtMemoTab $p $p.Tabs[0]); [void](Select-WtMemoTab $p $p.Tabs[2])
-        (Get-WtMemoEditorState $p.Editor).Caret
+        $after = Get-WtMemoEditorState $p.Editor
+        @($before.Line, $before.Col, $after.Line, $after.Col)
     }
-    Assert-WtTest 'WPF 메모 탭: 탭을 오가도 편집기 커서를 돌려놓는다' ($kept -eq 5) "$kept"
+    Assert-WtTest 'WPF 메모 탭: 탭을 오가도 편집기 커서(줄 · 칸)를 돌려놓는다' ($kept[1] -gt 0 -and $kept[0] -eq $kept[2] -and $kept[1] -eq $kept[3]) "$($kept -join ',')"
     $menuItems = & $memoModule { @($script:panes[0].Current.Button.ContextMenu.Items | ForEach-Object { "$($_.Header)|$($_.InputGestureText)" }) }
     Assert-WtTest 'WPF 메모 탭: 우클릭 메뉴(닫기 · 다른 탭 닫기 · 오른쪽에 나눠 열기)와 단축키 표시' (($menuItems -join ';') -eq '닫기|Ctrl+W;다른 탭 닫기|;오른쪽에 나눠 열기|Ctrl+\') ($menuItems -join ';')
 

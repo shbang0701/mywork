@@ -1443,7 +1443,14 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Order 40 -WarmUp Full 
         @('Ctrl + W', '탭 닫기'), @('Ctrl + Shift + T', '닫은 탭 다시 열기'), @('Ctrl + Tab / Ctrl + Shift + Tab', '다음 / 이전 탭'),
         @('Ctrl + \', '오른쪽에 나눠 열기 (나눴으면 다른 칸으로)'), @('Alt + ← / Alt + →', '뒤로 / 앞으로 (링크 · 빠른 이동으로 간 메모)'),
         @('Ctrl + E', '편집 / 읽기'), @('Ctrl + /', '편집 / 원문'), @('Ctrl + Shift + F', '목록 검색칸으로'),
-        @('Ctrl + 클릭 · 가운데 클릭', '목록 · 링크를 새 탭에서 열기')) `
+        @('Ctrl + 클릭 · 가운데 클릭', '목록 · 링크를 새 탭에서 열기'),
+        @('Ctrl + B / Ctrl + I', '굵게 / 기울임 (다시 누르면 풀기)'), @('Ctrl + K', '링크 만들기'), @('Alt + Shift + 5', '취소선'),
+        @('` (글을 고르고)', '코드로 감싸기 (여러 줄이면 코드 블록)'), @('```', '줄 맨 앞에 치면 닫는 ``` 를 자동으로'),
+        @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)'), @('Enter', '목록 · 할 일 이어 쓰기 (빈 항목에서 Enter = 목록 끝)'),
+        @('Tab / Shift + Tab', '목록 들여쓰기 / 내어쓰기'), @('Ctrl + L', '할 일 체크박스 넣기 · 완료 / 해제'),
+        @('Alt + ↑ / Alt + ↓', '줄 옮기기'), @('Ctrl + F / Ctrl + H / F3', '찾기 / 바꾸기 / 다음 찾기'),
+        @('Ctrl + Z / Ctrl + Y', '실행 취소 / 다시 실행'), @('Ctrl + Shift + V', '바꾸지 않고 붙여넣기'),
+        @('붙여넣기', '글을 고르고 URL을 붙이면 링크, 파일 경로는 경로 링크로'), @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크')) `
     -HelpCard { New-WtMemoMarkdownHelpCard }
 
 Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Find-WtMemo, Format-WtMemoTime, Import-WtMemoLegacy,

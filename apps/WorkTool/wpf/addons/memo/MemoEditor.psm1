@@ -329,20 +329,31 @@ function Set-WtMemoEditorFocus($Ed, [switch]$End) {
     }
 }
 
+# 상태 = @{ Line; Col; Scroll } (커서 줄 · 칸은 0부터, 모드와 상관없이 같은 뜻)
 function Get-WtMemoEditorState($Ed) {
     $sv = Get-WtMemoScroller $(if ($Ed.Mode -eq 'live') { $Ed.Live } elseif ($Ed.Mode -eq 'read') { $Ed.View } else { $Ed.Source })
-    $caret = if ($Ed.Mode -eq 'source') { $Ed.Source.CaretIndex } else { $null }
     if ($Ed.Mode -eq 'live' -and $Ed.Island) { $Ed.Caret = Get-WtMemoIslandCaret $Ed }
-    @{ Caret = $caret; Line = $Ed.Caret.Line; Col = $Ed.Caret.Col; Scroll = $(if ($sv) { $sv.VerticalOffset } else { 0 }) }
+    if ($Ed.Mode -eq 'source') {
+        $b = $Ed.Source
+        $parts = @($b.Text.Substring(0, $b.CaretIndex) -split "\r?\n")
+        $Ed.Caret = @{ Line = $parts.Count - 1; Col = $parts[$parts.Count - 1].Length }
+    }
+    @{ Line = $Ed.Caret.Line; Col = $Ed.Caret.Col; Scroll = $(if ($sv) { $sv.VerticalOffset } else { 0 }) }
 }
 
 function Set-WtMemoEditorState($Ed, $State) {
     if (-not $State) { return }
     if ($null -ne $State.Line) {
-        $line = [Math]::Max(0, [Math]::Min([int]$State.Line, $Ed.Lines.Count - 1))
-        $Ed.Caret = @{ Line = $line; Col = [Math]::Max(0, [Math]::Min([int]$State.Col, $Ed.Lines[$line].Length)) }
+        $lines = if ($Ed.Mode -eq 'source') { @($Ed.Source.Text -split "\r?\n") } else { @($Ed.Lines) }
+        $line = [Math]::Max(0, [Math]::Min([int]$State.Line, $lines.Count - 1))
+        $Ed.Caret = @{ Line = $line; Col = [Math]::Max(0, [Math]::Min([int]$State.Col, $lines[$line].Length)) }
+        if ($Ed.Mode -eq 'source') {
+            $nl = if ($Ed.Source.Text.Contains("`r`n")) { 2 } else { 1 }
+            $idx = 0
+            for ($i = 0; $i -lt $line; $i++) { $idx += $lines[$i].Length + $nl }
+            $Ed.Source.CaretIndex = $idx + $Ed.Caret.Col
+        }
     }
-    if ($Ed.Mode -eq 'source' -and $null -ne $State.Caret) { $Ed.Source.CaretIndex = [Math]::Min([int]$State.Caret, $Ed.Source.Text.Length) }
     $target = if ($Ed.Mode -eq 'live') { $Ed.Live } elseif ($Ed.Mode -eq 'read') { $Ed.View } else { $Ed.Source }
     $target.UpdateLayout()
     $sv = Get-WtMemoScroller $target
@@ -1293,9 +1304,9 @@ function Complete-WtMemoSuggest($Ed, [string]$Title) {
 
 function Invoke-WtMemoSuggestKey($S, $E) {
     $ed = $S.Tag
-    $s = $ed.Suggest
-    if (-not $s -or -not $s.Popup.IsOpen -or $s.Box -ne $S) { return }
-    $list = $s.List
+    $sg = $ed.Suggest   # $s로 쓰면 매개변수 $S(입력칸)와 같은 변수가 된다
+    if (-not $sg -or -not $sg.Popup.IsOpen -or $sg.Box -ne $S) { return }
+    $list = $sg.List
     $n = $list.Items.Count
     switch ($E.Key) {
         'Down' { $list.SelectedIndex = ($list.SelectedIndex + 1) % $n; $list.ScrollIntoView($list.SelectedItem); $E.Handled = $true }
