@@ -1007,6 +1007,110 @@ pie
         $k3 = (Test-WtKeyOwned 'Ctrl+B' $deep) -and (Test-WtKeyOwned 'Ctrl+I' $deep) -and -not (Test-WtKeyOwned 'Ctrl+B' $null)
         Assert-Wt 'WPF 단축키 넘기기: 등록한 칸 · 그 안에서만 셸이 키를 넘긴다' ($k1 -and $k2 -and $k3) "($k1 · $k2 · $k3)"
 
+        # 창 짜임은 가짜 등록·가짜 보조 칸으로만 본다. 실제 탭은 아래 탭 모아 보기/각 탭 검사에서 맡는다.
+        $shellChecks = & (Get-Module Shell) {
+            $saved = @{ Window = $script:window; Ui = $script:ui; Current = $script:current; Views = $script:views
+                Buttons = $script:navButtons; Groups = $script:navGroups; Collapsed = Get-WtSetting 'nav.collapsed' }
+            $savedAddons = & (Get-Module Addons) { ,$script:addons.ToArray() }
+            try {
+                & (Get-Module Addons) { $script:addons.Clear() }
+                Register-WtAddon -Id 'shell-late' -Title '뒤' -Group '첫 묶음' -Order 30 -Badge { $null } -NewView { New-WtText '빈 화면' }
+                Register-WtAddon -Id 'shell-dot' -Title '점' -Group '다음 묶음' -Order 20 -Badge { 'dot' } -BadgeToolTip '가짜 점' -NewView { New-WtText '점 화면' }
+                Register-WtAddon -Id 'shell-count' -Title '수' -Group '첫 묶음' -Order 10 -Badge { 7 } -NewView {
+                    New-WtSidePanel -Content (New-WtText '보조 내용') -Key 'test.shell.side' -Title '보조' -Width 308
+                }
+                Register-WtAddon -Id 'shell-error' -Title '실패' -Group '다음 묶음' -Order 40 -Badge { throw '배지 실패' } -NewView { New-WtText '계속 열림' }
+                $script:window = ConvertFrom-WtXaml $script:shellXaml
+                $script:window.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
+                $script:window.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+                $script:ui = Get-WtNamedElements $script:window $script:shellXaml
+                $script:current = $null; $script:views = @{}
+                Set-WtSetting 'nav.collapsed' $false
+                Update-WtNav
+                $groups = (@(Get-WtNavGroups) | ForEach-Object { "$($_.Name):$($_.Items.Id -join ',')" }) -join ';'
+                $badge = $script:navButtons
+                $badgeOk = $badge['shell-count'].Value -ceq '7' -and $badge['shell-dot'].Value -ceq 'dot' -and
+                    $null -eq $badge['shell-late'].Value -and $null -eq $badge['shell-error'].Value -and $badge['shell-count'].Count.Visibility -eq 'Visible' -and
+                    $badge['shell-dot'].Dot.Visibility -eq 'Visible' -and $badge['shell-dot'].Dot.ToolTip -eq '가짜 점'
+                Select-WtPage 'shell-error'
+                $failureIsolated = $script:current -eq 'shell-error' -and $badge['shell-count'].Value -eq '7'
+                Start-WtNavBadgeTimer
+                $minute = $script:badgeTimer.IsEnabled -and $script:badgeTimer.Interval.TotalSeconds -eq 60
+                $script:badgeTimer.Stop()
+                Switch-WtCollapsed
+                $collapsedNav = $script:ui.NavBorder.Width -eq 48 -and $script:ui.FooterPanel.Orientation -eq 'Vertical' -and
+                    $badge['shell-dot'].IconDot.Visibility -eq 'Visible' -and $badge['shell-count'].Count.Visibility -eq 'Collapsed' -and
+                    $badge['shell-count'].Button.ToolTip -eq '수' -and @($script:navGroups | Where-Object Visibility -ne 'Collapsed').Count -eq 0
+                Switch-WtCollapsed
+                $expandedNav = $script:ui.NavBorder.Width -eq 200 -and $script:ui.FooterPanel.Orientation -eq 'Horizontal' -and
+                    $script:ui.HelpButton.Width -eq 32 -and $script:ui.HelpButton.Margin.Right -eq 8
+                Select-WtPage 'shell-count'
+                $panel = @(Get-WtSidePanels $script:ui.PageHost.Content)[0]
+                $cycle = @(foreach ($n in 1..4) { Switch-WtPanelCycle; "$([bool](Get-WtSetting 'nav.collapsed'))/$($panel.Collapsed)" }) -join ','
+                # 실제 접기 단추·열기 단추도 같은 저장 통로를 쓴다.
+                $panel.Collapse.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+                $savedClosed = [bool](Get-WtSetting 'test.shell.side') -and $panel.Root.Width -eq 28 -and $panel.Rail.Visibility -eq 'Visible'
+                $copy = New-WtSidePanel -Content (New-WtText '다시 만듦') -Key 'test.shell.side' -Title '복원'
+                $restored = $copy.Width -eq 28
+                $panel.Open.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+                $opened = -not [bool](Get-WtSetting 'test.shell.side') -and $panel.Root.Width -eq 308
+                Select-WtPage 'shell-late'
+                $onlyNav = @(foreach ($n in 1..2) { Switch-WtPanelCycle; [bool](Get-WtSetting 'nav.collapsed') }) -join ','
+                $script:window.Width = 1100
+                $small = New-WtSidePanel -Content (New-WtText '좁은 창') -Key 'test.shell.narrow' -Title '좁은 보조' -Width 280
+                $smallPanel = @(Get-WtSidePanels $small)[0]
+                $narrowStart = $small.Width -eq 28 -and $smallPanel.Collapsed -and -not [bool](Get-WtSetting 'test.shell.narrow')
+                Set-WtSidePanelCollapsed $smallPanel $false
+                $hostGrid = [System.Windows.Controls.Grid]::new()
+                $hostGrid.ColumnDefinitions.Add([System.Windows.Controls.ColumnDefinition]::new())
+                $auto = [System.Windows.Controls.ColumnDefinition]::new(); $auto.Width = [System.Windows.GridLength]::Auto
+                $hostGrid.ColumnDefinitions.Add($auto)
+                $main = [System.Windows.Controls.Border]::new()
+                [void]$hostGrid.Children.Add($main)
+                [System.Windows.Controls.Grid]::SetColumn($small, 1); [void]$hostGrid.Children.Add($small)
+                $hostGrid.Measure([System.Windows.Size]::new(600,300)); $hostGrid.Arrange([System.Windows.Rect]::new(0,0,600,300))
+                $overlay = $small.Width -eq 28 -and $smallPanel.Expanded.ActualWidth -eq 280 -and $main.ActualWidth -eq 572 -and
+                    $smallPanel.Expanded.TranslatePoint([System.Windows.Point]::new(0,0), $small).X -eq -252 -and $null -eq $smallPanel.Expanded.Effect
+                Set-WtSidePanelCollapsed $smallPanel $true
+                $script:window.Width = 1280; Update-WtSidePanel $smallPanel
+                $wideRestore = $small.Width -eq 28 -and $smallPanel.Collapsed
+                Set-WtSidePanelCollapsed $smallPanel $false
+                $script:window.Width = 1100; Update-WtSidePanel $smallPanel
+                $script:window.Width = 1280; Update-WtSidePanel $smallPanel
+                $wideRestore = $wideRestore -and -not $smallPanel.Collapsed -and $small.Width -eq 280
+                $left = New-WtSidePanel -Content (New-WtText '목록') -Side Left -Key 'test.shell.left' -Title '목록' -Width 220 -Independent
+                $leftPanel = @(Get-WtSidePanels $left)[0]
+                $leftOk = $left.Width -eq 220 -and $leftPanel.CollapseGlyph.Text -eq [string][char]0xE76B -and
+                    [System.Windows.Controls.DockPanel]::GetDock($leftPanel.Collapse) -eq 'Right' -and $leftPanel.Independent
+                # 화면을 바꾼 직후에도 배지를 다시 평가한다.
+                $badge['shell-count'].Addon.Badge = { 0 }
+                Select-WtPage 'shell-dot'
+                $refresh = $badge['shell-count'].Value -ceq '0'
+                $reserved = [System.Windows.Controls.TextBox]::new()
+                Register-WtKeyOwner $reserved 'Ctrl+B','Ctrl+Shift+B'
+                [pscustomobject]@{ Groups = $groups; Badge = $badgeOk; Isolated = $failureIsolated; Minute = $minute; Refresh = $refresh
+                    CollapsedNav = $collapsedNav; ExpandedNav = $expandedNav; Cycle = $cycle; OnlyNav = $onlyNav
+                    Saved = $savedClosed -and $restored -and $opened; Narrow = $narrowStart; Overlay = $overlay; Restore = $wideRestore; Left = $leftOk
+                    Reserved = -not (Test-WtKeyOwned 'Ctrl+Shift+B' $reserved) -and (Test-WtKeyOwned 'Ctrl+B' $reserved)
+                    Chrome = $script:window.MinWidth -eq 1024 -and $script:window.MinHeight -eq 640 -and $script:ui.TitleBar.Height -eq 32 }
+            } finally {
+                if ($script:badgeTimer) { $script:badgeTimer.Stop() }
+                & (Get-Module Addons) { param($items) $script:addons.Clear(); foreach ($item in $items) { $script:addons.Add($item) } } $savedAddons
+                $script:window = $saved.Window; $script:ui = $saved.Ui; $script:current = $saved.Current; $script:views = $saved.Views
+                $script:navButtons = $saved.Buttons; $script:navGroups = $saved.Groups
+                Set-WtSetting 'nav.collapsed' $saved.Collapsed
+            }
+        }
+        Assert-Wt '창 짜임: 묶음·순서가 등록대로' ($shellChecks.Groups -eq '첫 묶음:shell-count,shell-late;다음 묶음:shell-dot,shell-error') $shellChecks.Groups
+        Assert-Wt '창 짜임: 숫자·점·없음·배지 실패 격리' ($shellChecks.Badge -and $shellChecks.Isolated)
+        Assert-Wt '창 짜임: 탭 이동 때 재평가·분 타이머' ($shellChecks.Refresh -and $shellChecks.Minute)
+        Assert-Wt '창 짜임: 메뉴 200/48·툴팁·아래 아이콘 가로/세로' ($shellChecks.CollapsedNav -and $shellChecks.ExpandedNav)
+        Assert-Wt '창 짜임: 보조 칸 접기·설정 저장·다시 만들기' $shellChecks.Saved
+        Assert-Wt '창 짜임: Ctrl+Shift+B 네 단계·없는 칸 건너뛰기' ($shellChecks.Cycle -eq 'False/True,True/True,False/True,False/False' -and $shellChecks.OnlyNav -eq 'True,False') "$($shellChecks.Cycle) / $($shellChecks.OnlyNav)"
+        Assert-Wt '창 짜임: 1200 미만 레일 시작·겹쳐 열기·늘리면 저장 상태' ($shellChecks.Narrow -and $shellChecks.Overlay -and $shellChecks.Restore) "$($shellChecks.Narrow)/$($shellChecks.Overlay)/$($shellChecks.Restore)"
+        Assert-Wt '창 짜임: 왼쪽 보조 칸·독립 접기' $shellChecks.Left
+        Assert-Wt '창 짜임: 최소 크기·타이틀바·예약 단축키' ($shellChecks.Chrome -and $shellChecks.Reserved)
+
         # 도움말: 탭이 등록한 설명 · 카드를 모은다. 카드 하나가 실패해도 도움말은 연다
         Register-WtAddon -Id 'test-help' -Title '도움' -Order 50 -NewView { } -Help '가짜 탭 설명' -HelpCard { New-WtText '가짜 카드' 'T.Body' }
         Register-WtAddon -Id 'test-broken' -Title '고장' -Order 60 -NewView { } -HelpCard { throw '일부러 낸 오류' }

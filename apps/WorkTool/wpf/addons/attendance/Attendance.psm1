@@ -199,7 +199,9 @@ function New-WtAttendanceHomeCard {
     $card
 }
 
-Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Order 30 -WarmUp Full `
+Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -Order 30 -WarmUp Full `
+    -Badge { $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }; if (-not @($data.Entries | Where-Object { $_.State -eq 'ok' -and $_.Kind -eq 'work' -and $_.HasTime -and $_.StartDate -eq [datetime]::Today }).Count) { 'dot' } } `
+    -BadgeToolTip '오늘 안 찍음' `
     -NewView { New-WtAttendanceView } `
     -Refresh { param($view) Update-WtAttendanceView } `
     -HomeCard { New-WtAttendanceHomeCard } `

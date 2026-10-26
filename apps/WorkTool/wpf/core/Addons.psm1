@@ -12,6 +12,9 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   Title        메뉴에 보이는 이름
   Icon         Segoe 아이콘 글꼴 글자 코드 (예: 0xE70B)
   Order        메뉴 순서 (작을수록 위)
+  Group        메뉴 묶음 이름. 순서대로 처음 만난 묶음부터 그린다 (선택)
+  Badge        { } → 숫자(개수), 'dot'(점), $null(없음). 실패하면 배지만 숨긴다 (선택)
+  BadgeToolTip 점의 뜻을 보여 주는 툴팁 (선택)
   Required     $true면 설정에서 끌 수 없음 (홈)
   NewView      { } → 화면 요소를 돌려준다. 처음 열 때 한 번 부른다.
   Refresh      { param($view) } → 화면을 열 때마다 부른다 (선택)
@@ -34,6 +37,9 @@ function Register-WtAddon {
         [Parameter(Mandatory)][string]$Title,
         [int]$Icon = 0xE10C,
         [int]$Order = 100,
+        [string]$Group = '',
+        [scriptblock]$Badge,
+        [string]$BadgeToolTip = '',
         [switch]$Required,
         [Parameter(Mandatory)][scriptblock]$NewView,
         [scriptblock]$Refresh,
@@ -57,7 +63,7 @@ function Register-WtAddon {
         if ($script:addons[$i].Id -eq $Id) { $script:addons.RemoveAt($i) }
     }
     $script:addons.Add(@{
-            Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Required = [bool]$Required
+            Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Group = $Group; Badge = $Badge; BadgeToolTip = $BadgeToolTip; Required = [bool]$Required
             NewView = $NewView; Refresh = $Refresh; HomeCard = $HomeCard; CalendarItems = $CalendarItems; ImportLegacy = $ImportLegacy; OnExit = $OnExit
             Description = $Description
             SavePending = $SavePending; WarmUp = $WarmUp

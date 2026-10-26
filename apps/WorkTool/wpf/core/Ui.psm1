@@ -8,7 +8,30 @@ $script:ns = 'xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" 
 
 # 스타일 모음. 색은 Style.Triggers에서 바꾼다 (템플릿 트리거로 바꾸면 BasedOn 스타일에서 덮어쓸 수 없어서).
 $script:stylesXaml = @'
-<ResourceDictionary {NS}>
+<ResourceDictionary {NS} xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+  <!-- 창 짜임 전용 치수: 디자인 2판 6·8절. Theme의 공통 토큰과 분리한다. -->
+  <sys:Double x:Key="F.Chrome.Height">32</sys:Double>
+  <sys:Double x:Key="F.Nav.Width">200</sys:Double>
+  <sys:Double x:Key="F.Nav.CollapsedWidth">48</sys:Double>
+  <sys:Double x:Key="F.SidePanel.RailWidth">28</sys:Double>
+  <sys:Double x:Key="F.SidePanel.Breakpoint">1200</sys:Double>
+  <Style x:Key="Shell.Window" TargetType="Window">
+    <Setter Property="Width" Value="1280"/><Setter Property="Height" Value="800"/>
+    <Setter Property="MinWidth" Value="1024"/><Setter Property="MinHeight" Value="640"/>
+  </Style>
+  <Style x:Key="Shell.Brand" TargetType="Border">
+    <Setter Property="Width" Value="16"/><Setter Property="Height" Value="16"/>
+    <Setter Property="CornerRadius" Value="4"/><Setter Property="Margin" Value="12,0,0,0"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+    <Setter Property="Background" Value="{DynamicResource B.Accent}"/>
+  </Style>
+  <Style x:Key="Shell.BrandLetter" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="10"/><Setter Property="FontWeight" Value="Bold"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.OnAccent}"/>
+    <Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/>
+  </Style>
 
   <!-- 키보드 포커스: 바깥 2 + 안쪽 1, 요소에서 1 띄움. 행은 안쪽에 그린다. -->
   <Style x:Key="Focus.Outside" TargetType="Control">
@@ -235,6 +258,73 @@ $script:stylesXaml = @'
       </Trigger>
     </Style.Triggers>
   </Style>
+  <Style x:Key="Btn.Canvas" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Canvas}"/></Trigger>
+      <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Canvas}"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Btn.NavFooter" TargetType="Button" BasedOn="{StaticResource Btn.Canvas}">
+    <Setter Property="Width" Value="32"/><Setter Property="Height" Value="32"/>
+  </Style>
+  <Style x:Key="T.NavGroup" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
+    <Setter Property="Height" Value="24"/><Setter Property="Margin" Value="12,0,0,0"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+  </Style>
+  <Style x:Key="T.NavCount" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+    <Setter Property="HorizontalAlignment" Value="Right"/>
+    <Setter Property="TextWrapping" Value="NoWrap"/>
+  </Style>
+  <Style x:Key="T.NavIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
+  </Style>
+  <Style x:Key="T.NavGroup.Next" TargetType="TextBlock" BasedOn="{StaticResource T.NavGroup}">
+    <Setter Property="Margin" Value="12,12,0,0"/>
+  </Style>
+  <Style x:Key="Nav.Dot" TargetType="Ellipse">
+    <Setter Property="Width" Value="6"/><Setter Property="Height" Value="6"/>
+    <Setter Property="Fill" Value="{DynamicResource B.Status.Warning.Icon}"/>
+    <Setter Property="VerticalAlignment" Value="Center"/><Setter Property="HorizontalAlignment" Value="Right"/>
+    <Setter Property="Visibility" Value="Collapsed"/>
+  </Style>
+  <DataTemplate x:Key="Shell.NavItem">
+    <Grid>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <Grid Width="16" Height="16" VerticalAlignment="Center">
+        <TextBlock x:Name="Icon" Style="{DynamicResource T.NavIcon}"/>
+        <Ellipse x:Name="IconDot" Style="{DynamicResource Nav.Dot}" VerticalAlignment="Top" Margin="0,-4,-4,0"/>
+      </Grid>
+      <TextBlock x:Name="Label" Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+      <TextBlock x:Name="Count" Grid.Column="2" Style="{DynamicResource T.NavCount}"/>
+      <Ellipse x:Name="Dot" Grid.Column="2" Style="{DynamicResource Nav.Dot}"/>
+    </Grid>
+  </DataTemplate>
+  <DataTemplate x:Key="Shell.SidePanel">
+    <Grid Panel.ZIndex="1">
+      <Border x:Name="Expanded" Background="{DynamicResource B.Bg.Surface}" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1,0,0,0">
+        <DockPanel>
+          <DockPanel x:Name="Header" DockPanel.Dock="Top" Height="{DynamicResource F.Height.PanelHeader}" LastChildFill="True">
+            <Button x:Name="Collapse" DockPanel.Dock="Left" Style="{DynamicResource Btn.Icon}" VerticalAlignment="Center">
+              <TextBlock x:Name="CollapseGlyph" Style="{DynamicResource T.Icon}"/>
+            </Button>
+            <TextBlock x:Name="Title" Style="{DynamicResource T.Strong}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+          </DockPanel>
+          <ContentControl x:Name="Content" Focusable="False"/>
+        </DockPanel>
+      </Border>
+      <Border x:Name="Rail" Width="{DynamicResource F.SidePanel.RailWidth}" Background="{DynamicResource B.Bg.Canvas}" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1,0,0,0">
+        <Grid Height="{DynamicResource F.Height.PanelHeader}" VerticalAlignment="Top">
+          <Button x:Name="Open" Style="{DynamicResource Btn.Canvas}" VerticalAlignment="Center">
+            <TextBlock x:Name="OpenGlyph" Style="{DynamicResource T.Icon}"/>
+          </Button>
+        </Grid>
+      </Border>
+    </Grid>
+  </DataTemplate>
   <Style x:Key="Btn.Close" TargetType="Button" BasedOn="{StaticResource Btn.Chrome}">
 
 
@@ -246,12 +336,13 @@ $script:stylesXaml = @'
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Height" Value="{DynamicResource F.Height.Control}"/>
-    <Setter Property="Margin" Value="0,2"/>
+    <Setter Property="Margin" Value="0"/>
+    <Setter Property="Padding" Value="12,0,8,0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
       <Grid>
-        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="12,0"><ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/></Border>
+        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}"><ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/></Border>
         <Border x:Name="SelectedBar" Width="3" Height="16" CornerRadius="1.5" Background="{DynamicResource B.Accent}" HorizontalAlignment="Left" VerticalAlignment="Center" Visibility="Collapsed"/>
       </Grid>
       <ControlTemplate.Triggers><Trigger Property="IsChecked" Value="True"><Setter TargetName="SelectedBar" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
@@ -1507,6 +1598,73 @@ $script:stylesXaml = @'
 $script:styles = $null
 
 # 스타일 사전 (처음 부를 때 한 번 만든다)
+# 창 짜임 XAML도 공통 UI에서만 모양을 정한다. 이벤트와 상태는 Shell이 맡는다.
+function Get-WtShellXaml {
+@'
+<Window {NS}
+    Title="WorkTool" Style="{DynamicResource Shell.Window}"
+    WindowStartupLocation="CenterScreen" WindowStyle="None" AllowsTransparency="True" ResizeMode="CanResize"
+    Background="Transparent" UseLayoutRounding="True" SnapsToDevicePixels="True"
+    TextOptions.TextFormattingMode="Ideal"
+    FontFamily="{DynamicResource Font.UI}" FontSize="{DynamicResource F.Body}" Foreground="{DynamicResource B.Text}">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="32" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
+  <Border Background="{DynamicResource B.Bg.Canvas}">
+    <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <DockPanel x:Name="TitleBar" Height="{DynamicResource F.Chrome.Height}" Background="{DynamicResource B.Bg.Canvas}">
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <Button x:Name="MinButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최소화" AutomationProperties.Name="최소화">
+            <TextBlock Text="&#xE921;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+          </Button>
+          <Button x:Name="MaxButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최대화" AutomationProperties.Name="최대화">
+            <TextBlock x:Name="MaxGlyph" Text="&#xE922;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+          </Button>
+          <Button x:Name="CloseButton" Style="{DynamicResource Btn.Close}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="닫기" AutomationProperties.Name="닫기">
+            <TextBlock Text="&#xE8BB;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+          </Button>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal">
+          <Border x:Name="BrandLogo" Style="{DynamicResource Shell.Brand}"><TextBlock Text="W" Style="{DynamicResource Shell.BrandLetter}"/></Border>
+          <TextBlock Text="WorkTool" Style="{DynamicResource T.Sub}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+        </StackPanel>
+      </DockPanel>
+      <Grid Grid.Row="1">
+        <Grid.ColumnDefinitions><ColumnDefinition x:Name="NavColumn" Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <Border x:Name="NavBorder" Width="{DynamicResource F.Nav.Width}" Background="{DynamicResource B.Bg.Canvas}" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="0,0,1,0">
+          <DockPanel>
+            <Grid DockPanel.Dock="Top" Height="40">
+              <Button x:Name="CollapseButton" Style="{DynamicResource Btn.Canvas}" HorizontalAlignment="Left" Margin="12,0,0,0" ToolTip="메뉴 접기/펼치기 (Ctrl+B)" AutomationProperties.Name="메뉴 접기/펼치기">
+                <TextBlock Text="&#xE700;" Style="{DynamicResource T.Icon}"/>
+              </Button>
+            </Grid>
+            <StackPanel x:Name="FooterPanel" DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Left" Margin="12,8,0,12">
+              <Button x:Name="HelpButton" Style="{DynamicResource Btn.NavFooter}" ToolTip="도움말" AutomationProperties.Name="도움말" Margin="0,0,8,0">
+                <TextBlock Text="&#xE897;" Style="{DynamicResource T.Icon}"/>
+              </Button>
+              <Button x:Name="SettingsButton" Style="{DynamicResource Btn.NavFooter}" ToolTip="설정" AutomationProperties.Name="설정">
+                <TextBlock Text="&#xE713;" Style="{DynamicResource T.Icon}"/>
+              </Button>
+            </StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+              <StackPanel x:Name="NavPanel" Margin="8,0,7,0"/>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+        <Grid Grid.Column="1">
+          <ContentControl x:Name="WarmHost" Focusable="False" Visibility="Hidden" IsHitTestVisible="False"/>
+          <ContentControl x:Name="PageHost" Focusable="False"/>
+        </Grid>
+      </Grid>
+      <Border Grid.Row="2" Height="{DynamicResource F.Height.StatusBar}" Background="{DynamicResource B.Bg.Canvas}" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="0,1,0,0"/>
+      <Border x:Name="Frame" Grid.RowSpan="3" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
+    </Grid>
+  </Border>
+</Window>
+'@
+}
+
 function Get-WtStyleDictionary {
     if (-not $script:styles) {
         foreach ($targetType in [System.Windows.FrameworkElement], [System.Windows.FrameworkContentElement]) {
@@ -1963,3 +2121,41 @@ Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGri
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
     New-WtStatTile, New-WtPageHeader, New-WtPage, New-WtListRow, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
+
+# 상태에 따른 치수·배치만 바꾼다. 저장·단축키 판단은 Shell이 한다.
+function Set-WtNavLayout($Ui, $Items, $Groups, [bool]$Collapsed) {
+    $styles = Get-WtStyleDictionary
+    $Ui.NavBorder.Width = $styles[$(if ($Collapsed) { 'F.Nav.CollapsedWidth' } else { 'F.Nav.Width' })]
+    $vis = if ($Collapsed) { 'Collapsed' } else { 'Visible' }
+    foreach ($group in $Groups) { $group.Visibility = $vis }
+    foreach ($item in $Items) {
+        $item.Label.Visibility = $vis
+        $item.Button.Padding = if ($Collapsed) { [System.Windows.Thickness]::new(8,0,8,0) } else { [System.Windows.Thickness]::new(12,0,8,0) }
+        $item.Count.Visibility = if (-not $Collapsed -and $null -ne $item.Value -and $item.Value -ne 'dot') { 'Visible' } else { 'Collapsed' }
+        $item.Dot.Visibility = if (-not $Collapsed -and $item.Value -eq 'dot') { 'Visible' } else { 'Collapsed' }
+        $item.IconDot.Visibility = if ($Collapsed -and $item.Value -eq 'dot') { 'Visible' } else { 'Collapsed' }
+    }
+    $Ui.FooterPanel.Orientation = if ($Collapsed) { 'Vertical' } else { 'Horizontal' }
+    $Ui.FooterPanel.Margin = if ($Collapsed) { [System.Windows.Thickness]::new(8,8,0,12) } else { [System.Windows.Thickness]::new(12,8,0,12) }
+    $Ui.HelpButton.Margin = if ($Collapsed) { [System.Windows.Thickness]::new(0,0,0,4) } else { [System.Windows.Thickness]::new(0,0,8,0) }
+    $Ui.CollapseButton.Margin = if ($Collapsed) { [System.Windows.Thickness]::new(10,0,0,0) } else { [System.Windows.Thickness]::new(12,0,0,0) }
+}
+
+function Set-WtSidePanelLayout($Panel, [bool]$Collapsed, [bool]$Narrow) {
+    $railWidth = (Get-WtStyleDictionary)['F.SidePanel.RailWidth']
+    $Panel.Root.Width = if ($Collapsed -or $Narrow) { $railWidth } else { $Panel.Width }
+    $Panel.Root.HorizontalAlignment = $Panel.Side
+    $Panel.Expanded.Width = $Panel.Width
+    $Panel.Expanded.HorizontalAlignment = $Panel.Side
+    $Panel.Rail.HorizontalAlignment = $Panel.Side
+    $Panel.Expanded.Visibility = if ($Collapsed) { 'Collapsed' } else { 'Visible' }
+    $Panel.Rail.Visibility = if ($Collapsed) { 'Visible' } else { 'Collapsed' }
+    $edge = if ($Panel.Side -eq 'Right') { [System.Windows.Thickness]::new(1,0,0,0) } else { [System.Windows.Thickness]::new(0,0,1,0) }
+    $Panel.Expanded.BorderThickness = $edge
+    $Panel.Rail.BorderThickness = $edge
+    [System.Windows.Controls.DockPanel]::SetDock($Panel.Collapse, $(if ($Panel.Side -eq 'Right') { 'Left' } else { 'Right' }))
+    $Panel.CollapseGlyph.Text = [string][char]$(if ($Panel.Side -eq 'Right') { 0xE76C } else { 0xE76B })
+    $Panel.OpenGlyph.Text = [string][char]$(if ($Panel.Side -eq 'Right') { 0xE76B } else { 0xE76C })
+}
+
+Export-ModuleMember -Function Get-WtShellXaml, Set-WtNavLayout, Set-WtSidePanelLayout

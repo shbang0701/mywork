@@ -164,7 +164,8 @@ function New-WtScheduleHomeCards {
     $script:homeCards
 }
 
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Order 20 -WarmUp Full `
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full `
+    -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; @(Get-WtScheduleOccurrences $data.Entries ([datetime]::Today) ([datetime]::Today)).Count } `
     -NewView { New-WtScheduleView } `
     -Refresh { param($view) Update-WtScheduleView } `
     -HomeCard { New-WtScheduleHomeCards } `

@@ -51,7 +51,7 @@ $script:colorAliases = @{
     'Callout.Gray' = 'Status.Neutral.Text'; 'Callout.GrayBg' = 'Status.Neutral.Bg'
     'Code.Bg' = 'Bg.Subtle'; 'Code.Comment' = 'Text.Tertiary'
     'Code.Number' = 'Text.Primary'; 'Code.Type' = 'Text.Primary'; 'Code.Attr' = 'Text.Primary'
-    'Code.Inserted' = 'Text.Primary'; 'Code.Deleted' = 'Text.Primary'
+    'Code.Inserted' = 'Status.Success.Text'; 'Code.Deleted' = 'Status.Error.Text'
     'Dia.NodeBg' = 'Bg.Subtle'; 'Dia.NodeLine' = 'Border.Control'; 'Dia.Line' = 'Text.Secondary'
     'Dia.GroupBg' = 'Bg.Subtle'; 'Dia.GroupLine' = 'Border.Strong'
     'Dia.NoteBg' = 'Status.Warning.Bg'; 'Dia.NoteLine' = 'Status.Warning.Icon'
