@@ -159,6 +159,8 @@ WorkTool을 띄운 터미널(Windows Terminal · PowerShell 창 · VS Code 등)�
 
 Obsidian과 비슷하게 씁니다. 단축키 전체는 도움말(F1) → 「단축키」에 있습니다.
 
+메모 데이터·검색 로직은 `addons/memo/MemoData.psm1`에 있습니다. `memo.json`은 schema 1 그대로 폴더·고정·보관 칸을 더하며, 최근 열기는 `memo-state.json`, 저장한 보기는 `memo-views.json`에 따로 둡니다. 모르는 칸과 옛 제목·본문을 보존하고 저장소 핸들로 저장합니다. 검색식·칩은 같은 조건 트리를 쓰며 메모리 색인을 갱신합니다. 이번 단계는 데이터 로직만 연결했으며 화면은 기존 그대로입니다. 형식·함수·검사는 [메모 데이터 · 검색 설계](../../../docs/plans/memo-design.md)에 있습니다.
+
 **보기 세 가지** (오른쪽 위 나눔 버튼, 모든 칸에 같이 적용)
 
 | 보기 | 하는 일 | 단축키 |

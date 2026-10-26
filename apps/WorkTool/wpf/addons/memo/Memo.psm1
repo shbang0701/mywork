@@ -11,6 +11,7 @@
 $ErrorActionPreference = 'Stop'
 
 $script:schema = 1
+$script:memoStore = $null   # 읽은 원자료/버전. 저장 뒤에는 새 핸들로 바꾼다 (MemoData.psm1).
 $script:items = @()
 $script:panes = [System.Collections.Generic.List[hashtable]]::new()   # 칸. 칸 = @{ Tabs; Current; Dirty; Loading; Editor; 화면 요소 … }
 $script:active = 0           # 포커스가 있는 칸 번호
@@ -34,9 +35,20 @@ Register-WtSettingDefault 'memo.tabs' $null
 
 # ---- 데이터 (WPF 없이) -------------------------------------------------------------------------
 
-function Get-WtMemoItems { Get-WtStoreItems -Name 'memo' -Schema $script:schema }
+function Get-WtMemoItems {
+    $script:memoStore = Open-WtMemoStore
+    if ($script:memoStore.State -notin 'ok', 'missing') { throw $script:memoStore.Error }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($item in $script:memoStore.Items) {
+        $id = Get-WtField $item 'id'
+        if ($id -is [string] -and $id -and $seen.Add($id) -and -not (Test-WtDeleted $item)) { $item }
+    }
+}
 
-function Save-WtMemoItems([object[]]$Items) { Write-WtStore -Name 'memo' -Schema $script:schema -Items @($Items) }
+function Save-WtMemoItems([object[]]$Items) {
+    if (-not $script:memoStore) { $script:memoStore = Open-WtMemoStore }
+    $script:memoStore = Save-WtMemoDataItems -Store $script:memoStore -Items @($Items)
+}
 
 # 최근 고친 순서
 function Get-WtMemoSorted([object[]]$Items) {
@@ -61,7 +73,9 @@ function Format-WtMemoTime([string]$Stamp) {
     Format-WtDate $t "M'/'d"
 }
 
-function Get-WtMemoStamp([datetime]$When) { $When.ToString('yyyy-MM-dd HH:mm:ss') }
+function Get-WtMemoStamp([datetime]$When) {
+    Get-WtStamp ([DateTimeOffset]::new($When).ToOffset([timespan]::FromHours(9)))
+}
 
 function New-WtMemo([datetime]$When = (Get-Date)) {
     $now = Get-WtMemoStamp $When
@@ -87,11 +101,11 @@ function Get-WtMemoTags([string]$Body) {
 # 메모 하나의 제목 · 본문을 바꾼다. 제목이 비면 저장 시각을 제목으로 쓴다 (예전 WorkTool과 같음)
 function Set-WtMemoContent($Memo, [string]$Title, [string]$Body, [datetime]$When = (Get-Date)) {
     $t = $Title.Trim()
-    if (-not $t) { $t = $When.ToString('yyyy-MM-dd HH:mm') }
+    if (-not $t) { $t = $When.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
     $Memo.title = $t
     $Memo.body = $Body
     $Memo | Add-Member -NotePropertyName tags -NotePropertyValue @(Get-WtMemoTags $Body) -Force   # 예전 데이터엔 tags가 없을 수 있다
-    $Memo.updated = Get-WtMemoStamp $When
+    Set-WtItemEdited $Memo (Get-WtMemoStamp $When)
     $Memo
 }
 
@@ -124,7 +138,7 @@ function Import-WtMemoLegacy([string]$Folder) {
             updated = [string]$r.Updated
         }
     }
-    Write-WtStore -Name 'memo' -Schema $script:schema -Items @($items) -Extra @{ importedFrom = $Folder }
+    $script:memoStore = Save-WtMemoDataItems -Store (Open-WtMemoStore) -Items @($items) -Extra @{ importedFrom = $Folder }
     @($items).Count
 }
 
@@ -833,7 +847,7 @@ function Save-WtMemoNow([switch]$Retry) {
     foreach ($p in $ordered) {
         $m = if ($p.Current) { Get-WtMemoById $p.Current.Id } else { $null }
         if (-not $m) { Set-WtMemoStatus $p 'error' '편집 중인 메모를 찾을 수 없습니다.'; return $false }
-        $candidate = if ($byId.Contains([string]$m.id)) { $byId[[string]$m.id] } else { $m.PSObject.Copy() }
+        $candidate = if ($byId.Contains([string]$m.id)) { $byId[[string]$m.id] } else { Copy-WtItem $m }
         [void](Set-WtMemoContent $candidate $p.TitleBox.Text (Get-WtMemoEditorText $p.Editor))
         $byId[[string]$m.id] = $candidate
     }
@@ -1507,5 +1521,5 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
         @('붙여넣기', '글을 고르고 URL을 붙이면 링크, 파일 경로는 경로 링크로'), @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크')) `
     -HelpCard { New-WtMemoMarkdownHelpCard }
 
-Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Find-WtMemo, Format-WtMemoTime, Import-WtMemoLegacy,
+Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Format-WtMemoTime, Import-WtMemoLegacy,
     New-WtMemo, Get-WtMemoTags, Set-WtMemoContent, Save-WtMemoItems
