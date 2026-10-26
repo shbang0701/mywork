@@ -16,6 +16,8 @@
       legacy-same.csv id와 내용까지 같은 두 줄 (재확인 반례)
       v1-raw-items.json  items 안의 목록 · 빈 목록 · null · 글 항목
       v2-edge-float.json 1e-30 · 1.0000000000000002 · 10.0 · 꺼진 알람(before null)
+      v2-routine.json weekly · hourly · workdaysOnly · 모르는 freq (schedule schema 2 그대로)
+      routine-log-v1.json 체크 원자료 · 푼 표시 · 오래된 증적 (별도 schema 1)
     기대 값(회차 목록 등)은 여기에 못 박아 둔다. 규칙을 바꿔 값이 바뀌면 이 파일을 일부러 고쳐야 한다.
 
 .EXAMPLE
@@ -492,6 +494,169 @@ try {
     $resetItem = @($r.Store.Items | Where-Object id -ceq $resetId)[0]
     Assert-WtTest '일정 회차 Reset: skip · changes 예외를 모두 지우고 원래 회차 되돌림' ($r.Success -and @($resetItem.repeat.skip).Count -eq 0 -and
         @($resetItem.repeat.changes.PSObject.Properties).Count -eq 0 -and @(Get-WtScheduleOccurrences @((ConvertFrom-WtScheduleItem $resetItem)) (& $d '2026-11-09') (& $d '2026-11-09')).Count -eq 1) $r.Reason
+
+    # ---- 3a 루틴: 고정 자료 · 경계 · 증적 (화면 없음) ----
+    $test = New-WtTestData 'schedule-routine'; $tests.Add($test)
+    Copy-WtTestFixture 'v2-routine.json'
+    [IO.File]::Copy((Join-Path $fixtures 'routine-log-v1.json'), (Get-WtStorePath 'routine-log'))
+    $at = '2026-10-27T12:00:00+09:00'
+    $data = Get-WtScheduleData
+    $oldOccurrences = @(Get-WtScheduleOccurrences $data.Entries (& $d '2026-10-27') (& $d '2026-11-03'))
+    $oldAlarms = Get-WtScheduleAlarms -Entries $data.Entries -Now $at -Previous '2026-10-27T08:00:00+09:00'
+    Assert-WtTest '루틴 호환: 옛 일정 해석기는 같은 schema 2의 routine을 읽기 전용 · 계산/알람 제외' ($data.Store.Schema -eq 2 -and
+        ($data.Entries.State -join ',') -ceq 'readonly,readonly,readonly,readonly' -and -not $oldOccurrences.Count -and -not $oldAlarms.Alarms.Count)
+    $slots = @(Get-WtRoutineSlots -Date '2026-10-27' -Now $at)
+    $hourly = @($slots | Where-Object { $_.Routine.Id -ceq 'routine-hour' })
+    Assert-WtTest '루틴 차례: 주중 7개 · hourly 09/11/13/15/17 · to 미포함 · 다음은 13시' ($slots.Count -eq 7 -and
+        ($hourly.Slot -join ',') -ceq '2026-10-27T09:00,2026-10-27T11:00,2026-10-27T13:00,2026-10-27T15:00,2026-10-27T17:00' -and
+        (@($hourly | Where-Object Next).Slot -join ',') -ceq '2026-10-27T13:00') ($hourly.Slot -join ',')
+    Assert-WtTest '루틴 체크 읽기: 살아 있는 2개만 Done · 푼 기록은 미완료 · DoneAt 원문' (@($slots | Where-Object Done).Count -eq 2 -and
+        @($slots | Where-Object { $_.Routine.Id -ceq 'routine-week' })[0].DoneAt -ceq '2026-10-27T09:01:00+09:00' -and
+        -not @($slots | Where-Object { $_.Routine.Id -ceq 'routine-work' })[0].Done)
+    $equalNow = @(Get-WtRoutineSlots -Date '2026-10-27' -Now '2026-10-27T13:00:00+09:00' | Where-Object Next)
+    $endNow = @(Get-WtRoutineSlots -Date '2026-10-27' -Now '2026-10-27T18:00:00+09:00' | Where-Object Next)
+    Assert-WtTest '루틴 다음 차례: 지금과 같은 차례 제외 · 구간 끝이면 없음' ($equalNow.Count -eq 1 -and $equalNow[0].Slot -ceq '2026-10-27T15:00' -and -not $endNow.Count)
+    Assert-WtTest '루틴 시작 전날: 차례 없음' (@(Get-WtRoutineSlots -Date '2026-10-26' -Now $at).Count -eq 0)
+    $weekend = @(Get-WtRoutineSlots -Date '2026-10-31' -Now $at)
+    Assert-WtTest '루틴 주말: weekly와 workdaysOnly 제외 · 일반 hourly는 남음' ($weekend.Count -eq 5 -and @($weekend | Where-Object { $_.Routine.Id -cne 'routine-hour' }).Count -eq 0)
+    foreach ($kind in 'public', 'company', 'personal') {
+        $holiday = Set-WtHolidayDate (Get-WtHolidayData).Store '2026-10-28' $kind -At $at
+        $offSlots = @(Get-WtRoutineSlots -Date '2026-10-28' -Now $at)
+        Assert-WtTest "루틴 휴무일($kind): workdaysOnly만 제외 · 보통 weekly는 남음" ($holiday.Success -and $offSlots.Count -eq 6 -and
+            @($offSlots | Where-Object { $_.Routine.Id -ceq 'routine-work' }).Count -eq 0 -and @($offSlots | Where-Object { $_.Routine.Id -ceq 'routine-week' }).Count -eq 1)
+    }
+    Register-WtCalendarSource 'routine-test-leave' {
+        param([datetime]$From, [datetime]$To)
+        [pscustomobject]@{ Date = ConvertFrom-WtDateText '2026-10-29'; Kind = 'leave'; Style = 'Att.Leave'; Text = '휴가 시험'; AllDay = $true; Time = $null; Id = 'fake-leave' }
+    }
+    try {
+        $leaveSlots = @(Get-WtRoutineSlots -Date '2026-10-29' -Now $at)
+        $leaveCheck = Set-WtRoutineCheck -Routine 'routine-work' -Slot '2026-10-29' -Done $true -At $at
+        Assert-WtTest '루틴 휴가: 코어 달력 등록 목록으로 workdaysOnly 제외 · 그 차례 체크 거부' ($leaveSlots.Count -eq 6 -and
+            @($leaveSlots | Where-Object { $_.Routine.Id -ceq 'routine-work' }).Count -eq 0 -and -not $leaveCheck.Success -and $leaveCheck.Reason)
+    } finally { Register-WtCalendarSource 'routine-test-leave' $null }
+    $thread = [Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture; $oldUiCulture = $thread.CurrentUICulture
+    $snapshots = @()
+    try {
+        foreach ($culture in 'ko-KR', 'en-US', 'th-TH', 'ar-SA', 'ja-JP') {
+            $thread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($culture); $thread.CurrentUICulture = $thread.CurrentCulture
+            $snapshots += (@(Get-WtRoutineSlots -Date '2026-10-27' -Now $at | ForEach-Object { $_.Routine.Id + '@' + $_.Slot }) -join ',')
+        }
+    } finally { $thread.CurrentCulture = $oldCulture; $thread.CurrentUICulture = $oldUiCulture }
+    $expectedRoutine = 'routine-week@2026-10-27,routine-hour@2026-10-27T09:00,routine-hour@2026-10-27T11:00,routine-hour@2026-10-27T13:00,routine-hour@2026-10-27T15:00,routine-hour@2026-10-27T17:00,routine-work@2026-10-27'
+    Assert-WtTest '루틴 문화권 5개: 그레고리력 · 요일 · slot 키가 고정 기대값과 같음' (@($snapshots | Where-Object { $_ -cne $expectedRoutine }).Count -eq 0) ($snapshots -join "`n")
+    $scheduleBefore = [IO.File]::ReadAllText((Get-WtStorePath 'schedule'))
+    $r = Set-WtRoutineCheck -Routine 'routine-hour' -Slot '2026-10-27T09:00' -Done $true -At $at
+    $checkId = $r.Id; $created = @($r.Store.Items | Where-Object id -ceq $checkId)[0].created; $priorLog = $r.Store
+    Assert-WtTest '루틴 새 체크: id 12자리 · rev 0 · 앱 시각 +09:00 · 원래 핸들 불변' ($r.Success -and $checkId -cmatch '^[a-f0-9]{12}$' -and
+        @($r.Store.Items | Where-Object id -ceq $checkId)[0].rev -eq 0 -and $created -ceq $at)
+    $r = Set-WtRoutineCheck -Routine 'routine-hour' -Slot '2026-10-27T09:00' -Done $false -Store $r.Store -At '2026-10-27T12:01:00+09:00'
+    $undone = @($r.Store.Items | Where-Object id -ceq $checkId)[0]
+    Assert-WtTest '루틴 체크 풀기: 행 삭제 없이 deleted · at/created 보존 · rev 1 · 옛 핸들 불변' ($r.Success -and $undone.deleted -ceq '2026-10-27T12:01:00+09:00' -and
+        $undone.at -ceq $at -and $undone.created -ceq $created -and $undone.rev -eq 1 -and -not (Test-WtDeleted @($priorLog.Items | Where-Object id -ceq $checkId)[0]))
+    $r = Set-WtRoutineCheck -Routine 'routine-hour' -Slot '2026-10-27T09:00' -Done $true -Store $r.Store -At '2026-10-27T12:02:00+09:00'
+    $checked = @($r.Store.Items | Where-Object id -ceq $checkId)[0]
+    Assert-WtTest '루틴 다시 체크: 같은 행/id · deleted null · at 갱신 · created 유지 · rev 2' ($r.Success -and $r.Id -ceq $checkId -and $r.Store.Items.Count -eq 5 -and
+        $null -eq $checked.deleted -and $checked.at -ceq '2026-10-27T12:02:00+09:00' -and $checked.created -ceq $created -and $checked.rev -eq 2)
+    $history = @(Get-WtRoutineHistory -From '2026-01-01' -To '2026-10-27' -Store $r.Store)
+    $dailyHistory = @(Get-WtRoutineHistory -From '2026-10-27' -To '2026-10-27' -Routine 'routine-work' -Store $r.Store)
+    Assert-WtTest '루틴 기록: slot 날짜 양끝 포함 · 루틴별 · 지운 체크/오래된 증적도 포함 · 일정 바이트 불변' ($history.Count -eq 5 -and $dailyHistory.Count -eq 1 -and
+        (Test-WtDeleted $dailyHistory[0]) -and @($history | Where-Object id -ceq 'check-evidence').Count -eq 1 -and [IO.File]::ReadAllText((Get-WtStorePath 'schedule')) -ceq $scheduleBefore)
+    $history[0].at = '바깥에서 고침'
+    Assert-WtTest '루틴 기록 조회: 돌려준 복사본 편집은 핸들을 바꾸지 않음' ($r.Store.Items[0].at -ceq '2026-10-27T09:01:00+09:00')
+    $logBefore = [IO.File]::ReadAllText((Get-WtStorePath 'routine-log'))
+    foreach ($slot in '2026-10-27T10:00', '2026-10-27T18:00', '2026-10-26T09:00', '2026-02-30T09:00', '2026-10-27') {
+        $bad = Set-WtRoutineCheck -Routine 'routine-hour' -Slot $slot -Done $true -At $at
+        Assert-WtTest "루틴 없는 차례 거부: $slot · 기록 그대로" (-not $bad.Success -and $bad.Reason -and [IO.File]::ReadAllText((Get-WtStorePath 'routine-log')) -ceq $logBefore)
+    }
+    $unknownOriginal = Get-WtTestJson (Read-WtTestDoc).items[3]
+    $badEdit = Save-WtRoutine (Open-WtScheduleStore) @{ title = '고치지 못함' } -Id 'routine-future' -At $at
+    $badDelete = Set-WtRoutineDeleted -Id 'routine-future' -At $at
+    $badCheck = Set-WtRoutineCheck -Routine 'routine-future' -Slot '2026-10-27' -Done $true -At $at
+    Assert-WtTest '루틴 모르는 freq: 편집/지우기/체크 거부 · 계산 제외 · 원문 유지' (-not $badEdit.Success -and -not $badDelete.Success -and -not $badCheck.Success -and
+        $unknownOriginal -ceq (Get-WtTestJson (Read-WtTestDoc).items[3]) -and @($slots | Where-Object { $_.Routine.Id -ceq 'routine-future' }).Count -eq 0)
+    $r = Save-WtRoutine (Open-WtScheduleStore) @{ title = '평일 점검 수정' } -Id 'routine-week' -At $at
+    $saved = Read-WtTestDoc
+    Assert-WtTest '루틴 저장 왕복: 제목은 같은 id/rev 1 · schema 2 · 맨 위/항목/start/routine/end/alarms의 모르는 칸 보존' ($r.Success -and $r.Id -ceq 'routine-week' -and
+        $saved.schema -eq 2 -and $saved.items[0].rev -eq 1 -and ($saved.futureTop.keep -join ',') -ceq '원문,7' -and $saved.items[0].futureItem -ceq '보존' -and
+        $saved.items[0].start.futureStart -ceq '보존' -and $saved.items[0].routine.futureRule.keep -and $saved.items[0].end.futureEnd -ceq '해석하지 않고 보존' -and $saved.items[0].alarms[0].futureAlarm)
+    $priorSchedule = $r.Store
+    $r = Save-WtRoutine $r.Store @{ routine = @{ days = @(2, 4) } } -Id 'routine-week' -At $at
+    $newRoutineId = $r.Id
+    $oldRoutine = @($r.Store.Items | Where-Object id -ceq 'routine-week')[0]; $newRoutine = @($r.Store.Items | Where-Object id -ceq $newRoutineId)[0]
+    Assert-WtTest '루틴 규칙 변경: 첫 회차부터 새 id/계열 · 옛 루틴 지운 표시 · split 출처 · 옛 기록 바이트 그대로' ($r.Success -and $newRoutineId -cne 'routine-week' -and
+        (Test-WtDeleted $oldRoutine) -and $newRoutine.rev -eq 0 -and $newRoutine.origin.from -ceq 'split' -and $newRoutine.origin.id -ceq 'routine-week' -and
+        $newRoutine.routine.futureRule.keep -and $priorSchedule.Items.Count -eq 4 -and [IO.File]::ReadAllText((Get-WtStorePath 'routine-log')) -ceq $logBefore)
+    $staleError = $null; try { [void](Save-WtRoutine $priorSchedule @{ title = '낡은 편집' } -Id 'routine-hour' -At $at) } catch { $staleError = $_.Exception.Message }
+    Assert-WtTest '루틴 저장: 낡은 일정 핸들은 예외 · 앞 저장 유지' ($staleError -like '*바뀌었습니다*' -and (Read-WtTestDoc).items.Count -eq 5) $staleError
+    $newSlots = @(Get-WtRoutineSlots -Date '2026-10-27' -Now $at)
+    $oldHistory = @(Get-WtRoutineHistory -From '2026-10-27' -To '2026-10-27' -Routine 'routine-week')
+    Assert-WtTest '루틴 새 계열: 옛 id 차례 없음 · 새 id 미체크 · 옛 기록은 옛 id로 조회' (@($newSlots | Where-Object { $_.Routine.Id -ceq 'routine-week' }).Count -eq 0 -and
+        @($newSlots | Where-Object { $_.Routine.Id -ceq $newRoutineId }).Count -eq 1 -and -not @($newSlots | Where-Object { $_.Routine.Id -ceq $newRoutineId })[0].Done -and $oldHistory.Count -eq 1)
+    $r = Set-WtRoutineDeleted -Id 'routine-hour' -Deleted $true -At $at
+    $gone = @(Get-WtRoutineSlots -Date '2026-10-27' -Now $at | Where-Object { $_.Routine.Id -ceq 'routine-hour' })
+    $hourHistory = @(Get-WtRoutineHistory -From '2026-10-27' -To '2026-10-27' -Routine 'routine-hour')
+    $bad = Set-WtRoutineCheck -Routine 'routine-hour' -Slot '2026-10-27T11:00' -Done $true -At $at
+    Assert-WtTest '루틴 지우기: 차례/새 체크 제외 · 과거 체크 2개 유지 · 기록 파일 불변' ($r.Success -and -not $gone.Count -and -not $bad.Success -and
+        $hourHistory.Count -eq 2 -and [IO.File]::ReadAllText((Get-WtStorePath 'routine-log')) -ceq $logBefore)
+    $expired = Set-WtRoutineDeleted -Id 'routine-hour' -Deleted $false -At '2027-01-25T12:00:00+09:00'
+    $restore = Set-WtRoutineDeleted -Id 'routine-hour' -Deleted $false -At '2027-01-24T12:00:00+09:00'
+    Assert-WtTest '루틴 보존 규칙: 89일 되살림 · 정확히 90일 거부' ($restore.Success -and -not $expired.Success -and $expired.Reason)
+    $r = Set-WtRoutineCheck -Routine 'routine-work' -Slot '2026-10-27' -Done $true -At $at
+    $savedLog = [IO.File]::ReadAllText((Get-WtStorePath 'routine-log')) | ConvertFrom-Json -Depth 20 -DateKind String
+    Assert-WtTest '루틴 기록 저장 왕복: schema 1 · 맨 위/체크의 모르는 칸 · 오래된 살아 있는 증적 보존' ($r.Success -and $r.Id -ceq 'check-undone' -and
+        $savedLog.schema -eq 1 -and $savedLog.futureTop.keep -and $savedLog.items[0].futureCheck.keep -ceq '보존' -and @($savedLog.items | Where-Object id -ceq 'check-evidence').Count -eq 1)
+    $staleLog = $r.Store
+    $r = Set-WtRoutineCheck -Routine 'routine-work' -Slot '2026-10-27' -Done $false -Store $r.Store -At $at
+    $staleError = $null; try { [void](Set-WtRoutineCheck -Routine 'routine-work' -Slot '2026-10-27' -Done $true -Store $staleLog -At $at) } catch { $staleError = $_.Exception.Message }
+    Assert-WtTest '루틴 체크: 낡은 로그 핸들은 예외 · 앞의 지운 표시 유지' ($staleError -like '*바뀌었습니다*' -and
+        (Test-WtDeleted @($r.Store.Items | Where-Object id -ceq 'check-undone')[0])) $staleError
+
+    $test = New-WtTestData 'schedule-routine-new'; $tests.Add($test)
+    $r = New-WtRoutine -Title '긴 간격' -Freq hourly -Every 12 -At $at
+    $id = $r.Id; $raw = $r.Store.Items[0]
+    Assert-WtTest '루틴 생성: KST 오늘부터 · hourly 구간은 만들 때 설정 복사 · end/alarms/계산 값 저장 안 함' ($r.Success -and $raw.start.date -ceq '2026-10-27' -and
+        $raw.routine.from -ceq '09:00' -and $raw.routine.to -ceq '18:00' -and $raw.PSObject.Properties.Name -cnotcontains 'end' -and
+        $raw.PSObject.Properties.Name -cnotcontains 'alarms' -and $raw.PSObject.Properties.Name -cnotcontains 'slots')
+    # 이 시험 전용 데이터 폴더의 설정만 바꾼다. 실제 설정에는 닿지 않는다.
+    $hours = Get-WtWorkHours; $hours['work.start'] = '08:00'; $hours['work.end'] = '19:00'; Set-WtWorkHours $hours
+    $longSlots = @(Get-WtRoutineSlots -Date '2026-10-27' -Now $at)
+    Assert-WtTest '루틴 긴 간격: 구간보다 every가 크면 from 하나 · 나중 설정 변경은 기존 루틴에 영향 없음' ($longSlots.Count -eq 1 -and $longSlots[0].Slot -ceq '2026-10-27T09:00')
+    $r = New-WtRoutine -Title '끝 제외' -Freq hourly -Every 1 -From '09:00' -To '11:00' -Start '2026-10-28' -At $at
+    $edgeId = $r.Id
+    $edges = @(Get-WtRoutineSlots -Date '2026-10-28' -Now $at | Where-Object { $_.Routine.Id -ceq $edgeId })
+    Assert-WtTest '루틴 hourly: to 정각 미포함 · 시작 날짜 지정' ($r.Success -and ($edges.Slot -join ',') -ceq '2026-10-28T09:00,2026-10-28T10:00')
+    $r = New-WtRoutine -Title '일요일' -Freq weekly -Days @(7) -Start '2026-10-27' -At $at
+    $sundayId = $r.Id
+    $sunday = @(Get-WtRoutineSlots -Date '2026-11-01' -Now $at | Where-Object { $_.Routine.Id -ceq $sundayId })
+    Assert-WtTest '루틴 weekly 요일은 work.days와 독립 · 월=1/일=7 · workdaysOnly 기본 false' ($r.Success -and $sunday.Count -eq 1 -and $sunday[0].Slot -ceq '2026-11-01' -and -not $sunday[0].Next)
+    foreach ($badPatch in @(@{ routine = @{ every = 0 } }, @{ routine = @{ every = 13 } }, @{ routine = @{ every = 1.5 } }, @{ routine = @{ from = '18:00'; to = '09:00' } })) {
+        $bad = Save-WtRoutine (Open-WtScheduleStore) $badPatch -Id $id -At $at
+        Assert-WtTest '루틴 잘못된 간격/구간은 결과로 거부' (-not $bad.Success -and $bad.Reason)
+    }
+    $badDays = New-WtRoutine -Title '틀린 요일' -Freq weekly -Days @(0, 8) -At $at
+    Assert-WtTest '루틴 잘못된 요일 거부' (-not $badDays.Success -and $badDays.Reason)
+    $r = Save-WtRoutine (Open-WtScheduleStore) @{ routine = @{ freq = 'daily' } } -Id $sundayId -At $at
+    $dailyId = $r.Id; $dailyRaw = @($r.Store.Items | Where-Object id -ceq $dailyId)[0]
+    Assert-WtTest '루틴 빈도 변경: 새 계열 · daily에는 days/every/from/to 없음' ($r.Success -and $dailyId -cne $sundayId -and
+        @($dailyRaw.routine.PSObject.Properties.Name | Where-Object { $_ -cin 'days', 'every', 'from', 'to' }).Count -eq 0)
+    $r = Set-WtRoutineCheck -Routine $dailyId -Slot '2026-10-27' -Done $true -At $at
+    $r = Set-WtRoutineCheck -Routine $dailyId -Slot '2026-10-27' -Done $false -Store $r.Store -At $at
+    $expiredCheck = Set-WtRoutineCheck -Routine $dailyId -Slot '2026-10-27' -Done $true -Store $r.Store -At '2027-01-25T12:00:00+09:00'
+    Assert-WtTest '루틴 푼 체크도 공통 90일 되살리기 제한 적용' (-not $expiredCheck.Success -and $expiredCheck.Reason)
+    $retainedId = $r.Id
+    $r = Set-WtRoutineCheck -Routine $dailyId -Slot '2026-10-28' -Done $true -Store $r.Store -At '2027-01-26T12:00:00+09:00'
+    $tombstone = @($r.Store.Items | Where-Object id -ceq $retainedId)[0]
+    Assert-WtTest '루틴 공통 보존: 지운 지 90일 넘은 로그는 id/deleted만 · 살아 있는 체크는 남김' ($r.Success -and
+        ($tombstone.PSObject.Properties.Name -join ',') -ceq 'id,deleted' -and $r.Store.Items.Count -eq 2)
+    $refused = '{ "schema": 2, "items": [] }'
+    [IO.File]::WriteAllText((Get-WtStorePath 'routine-log'), $refused, [Text.UTF8Encoding]::new($false))
+    $refusedStore = Open-WtStore -Name 'routine-log' -Schema 1
+    $refusedError = $null; try { [void](Set-WtRoutineCheck -Routine $dailyId -Slot '2026-10-27' -Done $true -Store $refusedStore -At $at) } catch { $refusedError = $_.Exception.Message }
+    $historyError = $null; try { [void](Get-WtRoutineHistory -From '2026-10-27' -To '2026-10-28') } catch { $historyError = $_.Exception.Message }
+    $slotsError = $null; try { [void](Get-WtRoutineSlots -Date '2026-10-27' -Now $at) } catch { $slotsError = $_.Exception.Message }
+    Assert-WtTest '루틴 못 읽는 로그: 쓰기/기록/차례 조회 모두 오류 · 원본 불변' ($refusedStore.State -ceq 'error' -and $refusedError -and $historyError -and $slotsError -and
+        [IO.File]::ReadAllText((Get-WtStorePath 'routine-log')) -ceq $refused)
 
     if (Test-WtTestWpf) {
         $test = New-WtTestData 'schedule-view'; $tests.Add($test)

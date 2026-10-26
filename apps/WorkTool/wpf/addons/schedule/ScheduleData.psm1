@@ -822,7 +822,276 @@ function Save-WtScheduleAlarms($Store, [object[]]$Alarms, [string]$At = (Get-WtS
     [pscustomobject]@{ Success = $true; Reason = ''; Store = $next }
 }
 
+# ---- 루틴 (schedule schema 2 · routine-log schema 1, 화면 없음) --------------------------------
+
+# 기존 일정 해석기는 routine을 계속 읽기 전용으로 본다. 루틴만 이 해석기로 따로 읽는다.
+function ConvertFrom-WtRoutineItem($Item) {
+    $e = [pscustomobject]@{ Id = ''; Title = ''; Item = $Item; State = 'ok'; Problem = ''; Start = $null
+        Freq = ''; Days = @(); Every = $null; From = $null; To = $null; WorkdaysOnly = $false }
+    if (-not (Test-WtRecordObject $Item)) { $e.State = 'broken'; $e.Problem = '항목 모양이 틀렸습니다'; return $e }
+    $e.Id = [string](Get-WtField $Item 'id'); $e.Title = [string](Get-WtField $Item 'title')
+    if (Test-WtDeleted $Item) { $e.State = 'deleted'; return $e }
+    $rule = Get-WtField $Item 'routine'
+    $e.Freq = [string](Get-WtField $rule 'freq')
+    if ((Get-WtField $Item 'kind') -cne 'routine' -or ((Test-WtRecordObject $rule) -and $e.Freq -cnotin 'daily', 'weekly', 'hourly')) {
+        $e.State = 'readonly'; $e.Problem = '새 버전의 루틴 종류 · 빈도입니다'; return $e
+    }
+    $e.Start = ConvertFrom-WtDateText ([string](Get-WtField (Get-WtField $Item 'start') 'date'))
+    $problem = Get-WtRecordProblem $Item
+    if (-not $problem -and (-not $e.Id -or -not $e.Start -or -not (Test-WtRecordObject $rule))) { $problem = '루틴 id · 시작 날짜 · 규칙을 확인하세요' }
+    $only = Get-WtField $rule 'workdaysOnly'
+    if ($null -ne $only) {
+        if ($only -isnot [bool]) { $problem = 'workdaysOnly는 참거짓이어야 합니다' } else { $e.WorkdaysOnly = $only }
+    }
+    if ($e.Freq -ceq 'weekly') {
+        $days = Get-WtField $rule 'days'
+        if ($days -isnot [array] -or $days.Count -eq 0) { $problem = '고른 요일 목록이 필요합니다' }
+        else {
+            foreach ($day in $days) {
+                $whole = ConvertFrom-WtWhole $day 1 7
+                if ($null -eq $whole) { $problem = '요일은 월=1부터 일=7까지 정수입니다'; break }
+                $e.Days += [int]$whole
+            }
+        }
+    }
+    if ($e.Freq -ceq 'hourly') {
+        $e.Every = ConvertFrom-WtWhole (Get-WtField $rule 'every') 1 12
+        $e.From = ConvertFrom-WtTimeText ([string](Get-WtField $rule 'from'))
+        $e.To = ConvertFrom-WtTimeText ([string](Get-WtField $rule 'to'))
+        if ($null -eq $e.Every -or $null -eq $e.From -or $null -eq $e.To -or $e.From -ge $e.To) { $problem = '시간 간격(1~12) · 같은 날의 시작/끝 시각을 확인하세요' }
+    }
+    if ($problem) { $e.State = 'broken'; $e.Problem = $problem }
+    $e
+}
+
+function ConvertFrom-WtRoutineDate($Value) {
+    if ($Value -is [datetime]) { return ConvertFrom-WtDateText (ConvertTo-WtDateText $Value) }
+    ConvertFrom-WtDateText ([string]$Value)
+}
+
+function Get-WtRoutineStamp([string]$At) {
+    $stamp = ConvertFrom-WtStamp $At
+    if ($null -ne $stamp) { Get-WtStamp ($stamp.ToOffset([timespan]::FromHours(9))) }
+}
+
+function Get-WtRoutineEntries($Store) {
+    if ($Store.State -notin 'ok', 'missing') { throw "schedule.json은 읽지 못했습니다. ($($Store.Error))" }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($item in $Store.Items) {
+        # 다른 kind와 id가 겹친 경우도 편집 · 계산에 쓰지 않는다.
+        $id = [string](Get-WtField $item 'id')
+        $duplicate = $id -and -not $seen.Add($id)
+        if ((Get-WtField $item 'kind') -cne 'routine') { continue }
+        $entry = ConvertFrom-WtRoutineItem $item
+        if ($duplicate -and $entry.State -ne 'deleted') { $entry.State = 'broken'; $entry.Problem = 'id가 앞 항목과 겹칩니다' }
+        $entry
+    }
+}
+
+# work.days와 휴무일은 코어에서, 휴가는 코어 달력 출처에서 묻는다. 다른 탭 함수는 부르지 않는다.
+function Test-WtRoutineDayOff([datetime]$Date) {
+    $day = (([int]$Date.DayOfWeek + 6) % 7) + 1
+    if ($day -notin @(Get-WtSetting 'work.days')) { return $true }
+    $holiday = Get-WtHolidayData
+    if ($holiday.Error) { throw $holiday.Error }
+    if ((Get-WtHolidayDates $Date $Date).Contains((ConvertTo-WtDateText $Date))) { return $true }
+    $calendar = Get-WtCalendarItems $Date $Date -Exclude @('schedule')
+    if (-not $calendar.Success) { throw ($calendar.Errors.Reason -join '; ') }
+    @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' }).Count -gt 0
+}
+
+function Get-WtRoutineSlotKeys($Entry, [datetime]$Date) {
+    if ($Entry.State -ne 'ok' -or $Date -lt $Entry.Start) { return }
+    if ($Entry.Freq -ceq 'weekly' -and ((([int]$Date.DayOfWeek + 6) % 7) + 1) -notin $Entry.Days) { return }
+    if ($Entry.WorkdaysOnly -and (Test-WtRoutineDayOff $Date)) { return }
+    $dateText = ConvertTo-WtDateText $Date
+    if ($Entry.Freq -cne 'hourly') { $dateText; return }
+    for ($minute = [int]$Entry.From.TotalMinutes; $minute -lt $Entry.To.TotalMinutes; $minute += [int]$Entry.Every * 60) {
+        $dateText + 'T' + $Date.AddMinutes($minute).ToString('HH:mm', $script:inv)
+    }
+}
+
+function Get-WtRoutineRuleKey($Entry) {
+    @($Entry.Start.Ticks, $Entry.Freq, (@($Entry.Days | Sort-Object -Unique) -join ','), $Entry.Every,
+        $Entry.From, $Entry.To, $Entry.WorkdaysOnly) -join '|'
+}
+
+# Store 생략은 지금 핸들. 결과 Success/Reason/Id/Store와 낡은 핸들 예외는 2a 편집 함수와 같다.
+function New-WtRoutine {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Title, [Parameter(Mandatory)][string]$Freq,
+        [object[]]$Days, $Every, [string]$From, [string]$To, [switch]$WorkdaysOnly, $Start, $Store,
+        [string]$At = (Get-WtStamp))
+    if ($null -eq $Store) { $Store = Open-WtScheduleStore }
+    $stamp = Get-WtRoutineStamp $At
+    $date = if ($null -eq $Start) { if ($stamp) { ConvertTo-WtDateText (ConvertFrom-WtStamp $stamp).Date } } else { $parsed = ConvertFrom-WtRoutineDate $Start; if ($parsed) { ConvertTo-WtDateText $parsed } }
+    $rule = [ordered]@{ freq = $Freq }
+    if ($Freq -ceq 'weekly') { $rule.days = @($Days) }
+    if ($Freq -ceq 'hourly') {
+        $rule.every = $Every
+        $rule.from = if ($PSBoundParameters.ContainsKey('From')) { $From } else { [string](Get-WtSetting 'work.start') }
+        $rule.to = if ($PSBoundParameters.ContainsKey('To')) { $To } else { [string](Get-WtSetting 'work.end') }
+    }
+    if ($WorkdaysOnly) { $rule.workdaysOnly = $true }
+    if (($PSBoundParameters.ContainsKey('Days') -and $Freq -cne 'weekly') -or
+        (($PSBoundParameters.ContainsKey('Every') -or $PSBoundParameters.ContainsKey('From') -or $PSBoundParameters.ContainsKey('To')) -and $Freq -cne 'hourly')) {
+        return [pscustomobject]@{ Success = $false; Reason = '빈도에 맞는 요일 · 시간 칸만 적으세요'; Id = ''; Store = $Store }
+    }
+    Save-WtRoutine -Store $Store -Patch @{ title = $Title; start = @{ date = $date }; routine = $rule } -At $At
+}
+
+# Patch는 title/start/routine. 규칙 변경은 기존 편집의 기본값처럼 첫 회차부터 나눈다(옛 계열 지운 표시).
+function Save-WtRoutine($Store, $Patch, [string]$Id, [string]$At = (Get-WtStamp)) {
+    if ($null -eq $Store) { $Store = Open-WtScheduleStore }
+    $fail = [pscustomobject]@{ Success = $false; Reason = ''; Id = $Id; Store = $Store }
+    $stamp = Get-WtRoutineStamp $At
+    if ($Store.Name -cne 'schedule' -or -not $stamp -or -not (Test-WtRecordObject $Patch)) { $fail.Reason = '일정 핸들 · 앱 시각 · 바꿀 칸을 확인하세요'; return $fail }
+    if (@(Get-WtSchPairs $Patch | Where-Object { $_.Name -cnotin 'title', 'start', 'routine' }).Count) { $fail.Reason = '편집할 수 없는 칸입니다'; return $fail }
+    $edit = Get-WtRecordEdit $Store $Id
+    if (-not $edit.Success) { $fail.Reason = $edit.Reason; return $fail }
+    $old = $null
+    if ($Id) {
+        $old = ConvertFrom-WtRoutineItem (Copy-WtItem $edit.Item)
+        if ($old.State -in 'readonly', 'deleted') { $fail.Reason = '읽기 전용 · 지운 루틴은 편집할 수 없습니다'; return $fail }
+    } else {
+        $edit.Item = [pscustomobject][ordered]@{ id = New-WtId; kind = 'routine'; title = ''; start = $null; routine = $null
+            created = $stamp; updated = $stamp; rev = 0; deleted = $null }
+    }
+    Merge-WtRecordPatch $edit.Item $Patch
+    # 빈도를 바꿀 때만 옛 빈도의 알려진 칸을 비운다. 모르는 칸은 깊은 복사에 그대로 남는다.
+    $newRule = Get-WtField $edit.Item 'routine'
+    if ($old -and (Test-WtRecordObject $newRule) -and $old.Freq -cne [string](Get-WtField $newRule 'freq')) {
+        $keep = switch -CaseSensitive ([string](Get-WtField $newRule 'freq')) { weekly { @('days') }; hourly { @('every', 'from', 'to') }; default { @() } }
+        foreach ($field in 'days', 'every', 'from', 'to') { if ($field -cnotin $keep) { $newRule.PSObject.Properties.Remove($field) } }
+    }
+    Set-WtField $edit.Item 'title' ([string](Get-WtField $edit.Item 'title'))
+    $entry = ConvertFrom-WtRoutineItem $edit.Item
+    if ($entry.State -ne 'ok') { $fail.Reason = $entry.Problem; return $fail }
+    if ($old -and (Get-WtRoutineRuleKey $old) -cne (Get-WtRoutineRuleKey $entry)) {
+        if ($old.State -ne 'ok') { $fail.Reason = '정상인 루틴만 나눌 수 있습니다'; return $fail }
+        $previous = Copy-WtItem $old.Item
+        $reason = Set-WtRecordDeleted $previous $true $stamp
+        if ($reason) { $fail.Reason = $reason; return $fail }
+        $edit.Items[$edit.Index] = $previous
+        Set-WtField $edit.Item 'id' (New-WtId)
+        Set-WtField $edit.Item 'origin' ([pscustomobject]@{ from = 'split'; id = $Id; at = $stamp })
+        Set-WtField $edit.Item 'created' $stamp; Set-WtField $edit.Item 'updated' $stamp; Set-WtField $edit.Item 'rev' 0
+        $edit.Items += , $edit.Item
+    } elseif ($Id) { Set-WtItemEdited $edit.Item $stamp }
+    else { $edit.Items += , $edit.Item }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $stamp))
+    $script:cache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $edit.Item.id; Store = $next }
+}
+
+function Set-WtRoutineDeleted($Store, [string]$Id, [bool]$Deleted = $true, [string]$At = (Get-WtStamp)) {
+    if ($null -eq $Store) { $Store = Open-WtScheduleStore }
+    $edit = Get-WtRecordEdit $Store $Id
+    $reason = $edit.Reason; $stamp = Get-WtRoutineStamp $At
+    if ($Store.Name -cne 'schedule' -or -not $Id -or -not $stamp) { $reason = '일정 핸들 · id · 앱 시각을 확인하세요' }
+    if (-not $reason -and (ConvertFrom-WtRoutineItem $edit.Item).State -eq 'readonly') { $reason = '읽기 전용 항목입니다' }
+    if (-not $reason) { $reason = Set-WtRecordDeleted $edit.Item $Deleted $stamp }
+    if (-not $reason -and -not $Deleted -and (ConvertFrom-WtRoutineItem $edit.Item).State -ne 'ok') { $reason = '내용을 복구할 수 없는 루틴입니다' }
+    if ($reason) { return [pscustomobject]@{ Success = $false; Reason = $reason; Id = $Id; Store = $Store } }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $stamp))
+    $script:cache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $Id; Store = $next }
+}
+
+function Read-WtRoutineSlot([string]$Slot) {
+    if ($Slot -cmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2})?$') {
+        $date = ConvertFrom-WtDateText $Slot.Substring(0, 10)
+        if ($date -and ($Slot.Length -eq 10 -or $null -ne (ConvertFrom-WtTimeText $Slot.Substring(11)))) { return $date }
+    }
+    $null
+}
+
+function Test-WtRoutineLogItem($Item) {
+    (Test-WtRecordObject $Item) -and (Get-WtField $Item 'id') -is [string] -and [bool]$Item.id -and
+        (Get-WtField $Item 'routine') -is [string] -and [bool]$Item.routine -and
+        $null -ne (Read-WtRoutineSlot ([string](Get-WtField $Item 'slot'))) -and
+        $null -ne (ConvertFrom-WtStamp ([string](Get-WtField $Item 'at'))) -and -not (Get-WtRecordProblem $Item)
+}
+
+# Date는 yyyy-MM-dd 또는 datetime. Now는 시험/화면의 같은 시각을 고정할 때만 넘긴다.
+function Get-WtRoutineSlots($Date, [string]$Now = (Get-WtStamp)) {
+    $day = ConvertFrom-WtRoutineDate $Date; $stamp = Get-WtRoutineStamp $Now
+    if (-not $day -or -not $stamp) { throw '날짜 · 앱 시각을 확인하세요' }
+    $entries = @(Get-WtRoutineEntries (Get-WtScheduleData).Store)
+    $log = Open-WtStore -Name 'routine-log' -Schema 1
+    if ($log.State -notin 'ok', 'missing') { throw "routine-log.json은 읽지 못했습니다. ($($log.Error))" }
+    $nowDate = (ConvertFrom-WtStamp $stamp).DateTime
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $done = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    foreach ($item in $log.Items) {
+        $id = [string](Get-WtField $item 'id')
+        if (-not $id -or -not $seen.Add($id) -or (Test-WtDeleted $item) -or -not (Test-WtRoutineLogItem $item)) { continue }
+        # 글 길이를 앞에 써서 id 안의 구분 글자와 충돌하지 않는다.
+        $key = $item.routine.Length.ToString($script:inv) + ':' + $item.routine + $item.slot
+        if (-not $done.ContainsKey($key)) { $done.Add($key, $item) }
+    }
+    foreach ($entry in $entries) {
+        $nextFound = $false
+        foreach ($slot in @(Get-WtRoutineSlotKeys $entry $day)) {
+            $key = $entry.Id.Length.ToString($script:inv) + ':' + $entry.Id + $slot
+            $record = if ($done.ContainsKey($key)) { $done[$key] } else { $null }
+            $isNext = $false
+            if ($entry.Freq -ceq 'hourly' -and -not $nextFound) {
+                $time = ConvertFrom-WtTimeText $slot.Substring(11)
+                if ($day.Add($time) -gt $nowDate) { $isNext = $true; $nextFound = $true }
+            }
+            [pscustomobject]@{ Routine = [pscustomobject]@{ Id = $entry.Id; Title = $entry.Title }; Slot = $slot
+                Done = $null -ne $record; DoneAt = $(if ($record) { $record.at } else { $null }); Next = $isNext }
+        }
+    }
+}
+
+# Store는 쓰는 routine-log 핸들. 일정은 현재 저장소에서 읽어 차례가 실제 있는지 확인한다.
+function Set-WtRoutineCheck([string]$Routine, [string]$Slot, [bool]$Done, $Store, [string]$At = (Get-WtStamp)) {
+    if ($null -eq $Store) { $Store = Open-WtStore -Name 'routine-log' -Schema 1 }
+    $fail = [pscustomobject]@{ Success = $false; Reason = ''; Id = ''; Store = $Store }
+    $stamp = Get-WtRoutineStamp $At; $day = Read-WtRoutineSlot $Slot
+    if ($Store.Name -cne 'routine-log' -or -not $stamp -or -not $day -or -not $Routine) { $fail.Reason = '기록 핸들 · 앱 시각 · 루틴 · 차례 키를 확인하세요'; return $fail }
+    $edit = Get-WtRecordEdit $Store ''
+    $entries = @(Get-WtRoutineEntries (Get-WtScheduleData).Store | Where-Object { $_.Id -ceq $Routine })
+    if ($entries.Count -ne 1 -or $Slot -cnotin @(Get-WtRoutineSlotKeys $entries[0] $day)) { $fail.Reason = '루틴에 없는 차례입니다'; return $fail }
+    $matches = @($edit.Items | Where-Object { (Get-WtField $_ 'routine') -ceq $Routine -and (Get-WtField $_ 'slot') -ceq $Slot })
+    if ($matches.Count -gt 1) { $fail.Reason = '같은 루틴 · 차례 기록이 겹칩니다'; return $fail }
+    $id = ''
+    if ($matches.Count) {
+        $item = $matches[0]; $id = [string]$item.id
+        if (-not (Test-WtRoutineLogItem $item) -or @($edit.Items | Where-Object { (Get-WtField $_ 'id') -ceq $id }).Count -ne 1) { $fail.Reason = '체크 기록의 형식 · id를 확인하세요'; return $fail }
+        if ($Done) {
+            if (Test-WtDeleted $item) {
+                $reason = Set-WtRecordDeleted $item $false $stamp
+                if ($reason) { $fail.Reason = $reason; return $fail }
+            } else { Set-WtItemEdited $item $stamp }
+            Set-WtField $item 'at' $stamp
+        } elseif (-not (Test-WtDeleted $item)) { [void](Set-WtRecordDeleted $item $true $stamp) }
+        else { return [pscustomobject]@{ Success = $true; Reason = ''; Id = $id; Store = $Store } }
+    } elseif ($Done) {
+        $id = New-WtId
+        $edit.Items += , [pscustomobject][ordered]@{ id = $id; routine = $Routine; slot = $Slot; at = $stamp; deleted = $null
+            created = $stamp; updated = $stamp; rev = 0 }
+    } else { return [pscustomobject]@{ Success = $true; Reason = ''; Id = ''; Store = $Store } }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $stamp))
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $id; Store = $next }
+}
+
+# slot의 날짜로 양끝 포함. 지운 기록도, 지운 루틴의 기록도 원자료 그대로 돌려준다.
+function Get-WtRoutineHistory($From, $To, [string]$Routine, $Store) {
+    $first = ConvertFrom-WtRoutineDate $From; $last = ConvertFrom-WtRoutineDate $To
+    if (-not $first -or -not $last -or $first -gt $last) { throw '날짜 범위를 확인하세요' }
+    if ($null -eq $Store) { $Store = Open-WtStore -Name 'routine-log' -Schema 1 }
+    if ($Store.Name -cne 'routine-log' -or $Store.State -notin 'ok', 'missing') { throw "체크 기록을 읽지 못했습니다. ($($Store.Error))" }
+    foreach ($item in $Store.Items) {
+        $date = Read-WtRoutineSlot ([string](Get-WtField $item 'slot'))
+        if ($date -and $date -ge $first -and $date -le $last -and (-not $Routine -or (Get-WtField $item 'routine') -ceq $Routine)) { Copy-WtItem $item }
+    }
+}
+
 Export-ModuleMember -Function Open-WtScheduleStore, Save-WtScheduleItems, Get-WtScheduleData, ConvertFrom-WtScheduleItem,
     Get-WtRepeatDates, Get-WtScheduleOccurrences, Get-WtScheduleDays, ConvertFrom-WtScheduleRow, Update-WtScheduleSchema,
     Import-WtScheduleLegacy, Get-WtScheduleLastImport, Save-WtScheduleItem, Set-WtScheduleDeleted, Set-WtScheduleOccurrence,
-    Open-WtScheduleAlarmStore, Get-WtScheduleAlarms, Save-WtScheduleAlarms
+    Open-WtScheduleAlarmStore, Get-WtScheduleAlarms, Save-WtScheduleAlarms,
+    New-WtRoutine, Save-WtRoutine, Set-WtRoutineDeleted, Get-WtRoutineSlots, Set-WtRoutineCheck, Get-WtRoutineHistory

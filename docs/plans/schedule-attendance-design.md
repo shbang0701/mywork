@@ -514,3 +514,76 @@ schema와 고정 시험 자료는 그대로입니다. 편집 함수는 먼저 �
 - 일정(3 + 자료 10): `addons/schedule/ScheduleData.psm1`(새) · `Schedule.psm1` · `Test-Schedule.ps1` · `fixtures/` 10개
 - 근태(3 + 자료 5): `addons/attendance/AttendanceData.psm1`(새) · `Attendance.psm1` · `Test-Attendance.ps1` · `fixtures/` 5개
 - 문서(2): 이 문서 · 저장소 루트 `README.md`
+
+## 11. 루틴 — 3a (데이터 · 로직, 화면 없음)
+
+### 11.1 형식
+
+루틴은 `schedule.json`의 새 `kind: "routine"` 항목입니다. **schedule schema는 2 그대로**입니다. 루틴을 모르는 일정 해석기는 읽기 전용으로 두고 일정 목록 · 반복 계산 · 알람에서 뺍니다. 루틴 해석기만 아래 규칙으로 차례를 계산합니다. 모르는 `freq`는 항목 전체를 읽기 전용으로 두고 계산에서 뺍니다. 모르는 칸은 1.2대로 보존합니다.
+
+- 공통 칸: `id` · `kind` · `title` · `start` · `routine` · `created` · `updated` · `rev` · `deleted`. id · 날짜 · 앱 시각 · 지운 표시 · 보존 · 핸들은 1장의 규칙 그대로입니다.
+- `start`: `{ "date": "2026-10-27" }`. 이날부터 차례가 생깁니다. `end` · `alarms`는 루틴에서 쓰지 않고, 이미 있으면 해석하지 않고 보존합니다.
+- `routine.freq`: `daily`(매일) · `weekly`(고른 요일) · `hourly`(N시간마다).
+- `routine.days`: `weekly`에서 필수인 정수 배열입니다. 월=1 … 일=7입니다. `daily`에는 없습니다. `work.days`와 별개로 루틴이 직접 가진 요일입니다.
+- `routine.every`: `hourly`에서 필수인 1~12 정수(시간)입니다.
+- `routine.from` · `routine.to`: `hourly`의 같은 날 구간, `HH:mm`입니다. `from < to`여야 합니다. 만들 때 생략하면 그때의 `work.start` · `work.end`를 복사해 저장합니다. 나중에 설정을 바꿔도 기존 루틴은 바뀌지 않습니다. `daily` · `weekly`에는 없습니다.
+- `routine.workdaysOnly`: 선택인 bool, 기본 `false`입니다. `true`면 `work.days` 밖 요일 · 휴무일 · 휴가에는 차례가 없습니다. 휴무일은 코어 `Calendar.psm1`의 함수로, 휴가는 코어 달력 등록 목록(6.1)으로 묻습니다. 다른 탭 함수를 직접 부르지 않습니다. 읽기 실패는 계산 오류로 알립니다.
+
+평일 루틴 예시(가짜 값):
+
+```json
+{
+  "id": "routine-week", "kind": "routine", "title": "평일 점검",
+  "start": { "date": "2026-10-27" },
+  "routine": { "freq": "weekly", "days": [1, 2, 3, 4, 5] },
+  "created": "2026-10-27T08:00:00+09:00", "updated": "2026-10-27T08:00:00+09:00",
+  "rev": 0, "deleted": null
+}
+```
+
+시간 간격 루틴 예시(가짜 값):
+
+```json
+{
+  "id": "routine-hour", "kind": "routine", "title": "두 시간마다 확인",
+  "start": { "date": "2026-10-27" },
+  "routine": { "freq": "hourly", "every": 2, "from": "09:00", "to": "18:00", "workdaysOnly": true },
+  "created": "2026-10-27T08:00:00+09:00", "updated": "2026-10-27T08:00:00+09:00",
+  "rev": 0, "deleted": null
+}
+```
+
+### 11.2 차례 계산과 편집
+
+- 차례는 날짜마다 원자료에서 계산합니다. 차례 목록 · Done · Next · 연속 달성 일수(streak)는 저장하지 않습니다.
+- 시작일 전 · 지운 루틴 · 읽기 전용 · 고칠 항목에는 차례가 없습니다. `daily`는 매일, `weekly`는 고른 요일에 날짜 키 하나(`2026-10-27`)가 생깁니다.
+- `hourly`는 `from`부터 `every`시간 간격으로 **`to` 미만**까지입니다. 09:00 · 2시간 · 18:00이면 09 · 11 · 13 · 15 · 17시입니다. 간격이 구간보다 길면 `from` 하나입니다. 키는 `2026-10-27T14:00`처럼 시간대 없는 벽시계입니다.
+- `Next`는 각 hourly 루틴에서 현재 KST 시각 **이후** 첫 차례에만 `true`입니다. 지금과 같은 차례는 제외합니다. `daily` · `weekly`에서는 `false`입니다. 화면이 다음 차례만 고를 수 있도록 계산 함수는 그날 전체 차례를 돌려줍니다.
+- 제목만 바꾸면 같은 id입니다. 시작 날짜 · 빈도 · 요일 · 간격 · 구간 · `workdaysOnly`가 바뀌면 2.3대로 새 id의 계열로 나눕니다. 이 함수는 기존 편집의 기본값처럼 **첫 회차부터** 바꿉니다. 따라서 옛 계열은 지운 표시, 새 계열은 `origin = { from: "split", id: "<옛 id>", at }`입니다. 중간 날짜부터 나누는 입력은 없습니다. 옛 체크 기록은 옛 id에 그대로 남습니다.
+
+### 11.3 체크 기록 — `routine-log.json` (schema 1)
+
+새 저장소 이름은 `routine-log`입니다. 파일의 공통 틀은 `{ schema: 1, saved, items: [...] }`이고, 원자료만 덧붙이기 중심으로 저장합니다. 항목 하나의 칸은 다음과 같습니다.
+
+- `id`: 1.5의 기록 id입니다.
+- `routine`: 루틴 id입니다. 대소문자를 가려 비교합니다.
+- `slot`: `daily` · `weekly`는 `2026-10-27`, `hourly`는 `2026-10-27T14:00`입니다. 그레고리력 · InvariantCulture로 읽고 씁니다.
+- `at`: 마지막으로 체크한 순간, `2026-10-27T14:01:00+09:00` 같은 앱 시각입니다.
+- `deleted`: 체크를 풀면 앱 시각을 넣습니다. 행을 지우지 않습니다. `created` · `updated` · `rev`는 1장의 규칙 그대로입니다.
+
+같은 루틴 · 같은 slot의 살아 있는 기록은 하나입니다. 다시 체크하면 같은 기록의 지운 표시를 풀고 `at`만 새 체크 시각으로 갱신하며 `created`는 유지합니다. 사람이 바꿀 때 `rev`와 `updated`도 갱신합니다. 없는 slot · 지운 루틴 · 모르는 빈도의 체크는 이유를 돌려주고 저장하지 않습니다. 겹친 기록은 어느 것이 맞는지 추측하지 않고 체크 변경을 거부합니다.
+
+루틴을 지워도 기록 파일은 건드리지 않습니다. 살아 있는 체크 기록은 오래됐어도 보존합니다. **체크를 푼 기록**에는 1.5의 공통 보존 규칙이 적용됩니다(90일 안 되살리기, 90일이 지난 뒤 저장할 때 `{ id, deleted }`만 남기기). 증적 조회는 slot 날짜의 양끝을 포함하며, 지운 루틴의 기록과 아직 내용이 남은 지운 체크 기록도 돌려줍니다.
+
+### 11.4 호출 약속과 검사
+
+공개 함수는 모두 `addons/schedule/ScheduleData.psm1`에 있습니다. 쓰기는 `Open-WtStore` · `Save-WtStore` 핸들만 사용합니다. 편집 결과는 9.1과 같은 `{ Success, Reason, Id, Store }`입니다. `Store` 생략은 현재 저장소를 열고, 넘겼으면 그 핸들에서 복사한 목록을 편집합니다. 성공 결과의 새 핸들을 다음 저장에 사용합니다. 읽기 거부 · 낡은 핸들 예외는 1.9대로 올립니다. `At` 생략은 지금이며 저장할 앱 시각은 KST로 맞춥니다.
+
+- `New-WtRoutine -Title -Freq [-Days] [-Every] [-From] [-To] [-WorkdaysOnly] [-Start] [-Store] [-At]`: 새 루틴입니다. `Start` 생략은 KST 오늘입니다. `Store`는 schedule 핸들입니다.
+- `Save-WtRoutine Store Patch [-Id] [-At]`: `title/start/routine` 중 적은 칸만 깊게 고칩니다. `Id`가 있으면 편집, 없으면 새 항목입니다. 규칙 변경은 11.2대로 나눕니다. 빈도를 바꾸면 옛 빈도에만 쓰던 알려진 칸은 빼고 모르는 칸은 보존합니다.
+- `Set-WtRoutineDeleted [-Store] -Id -Deleted <bool> [-At]`: 루틴 지우기 · 90일 안 되살리기입니다. 기록 저장소는 바꾸지 않습니다.
+- `Get-WtRoutineSlots -Date [-Now]`: 그날 차례 목록입니다. 각 항목은 `Routine = { Id, Title }` · `Slot` · `Done`(bool) · `DoneAt` · `Next`(bool)입니다. `Now`는 시간대 붙은 앱 시각입니다. 읽지 못한 저장소를 빈 목록으로 숨기지 않고 오류를 올립니다.
+- `Set-WtRoutineCheck -Routine -Slot -Done <bool> [-Store] [-At]`: 차례가 실제 있는지 확인하고 체크합니다. 여기의 `Store`는 routine-log 핸들입니다. 기록 없는 차례의 체크 풀기는 저장 없는 성공입니다.
+- `Get-WtRoutineHistory -From -To [-Routine] [-Store]`: slot 날짜 범위의 원자료 복사본 목록입니다. `Store`는 routine-log 핸들입니다. 날짜 입력은 `yyyy-MM-dd` 또는 `datetime`입니다.
+
+새 고정 자료는 `addons/schedule/fixtures/v2-routine.json` · `routine-log-v1.json`입니다. 기존 고정 자료는 고치지 않습니다. `Test-Schedule.ps1`은 옛 해석기 호환 · 주말/휴무일/휴가 · hourly 끝 제외/긴 간격 · 시작 전날 · 계열 분리/기록 유지 · 체크 왕복/없는 차례 거부 · 모르는 빈도/칸 보존 · 문화권 5개 · 보존/핸들 거부를 검사합니다. 전체 검사는 `tests/Test-Core.ps1`로 확인합니다.
