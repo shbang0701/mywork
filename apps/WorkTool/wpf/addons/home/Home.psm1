@@ -55,6 +55,6 @@ function Update-WtHomeView {
 
 Register-WtAddon -Id 'home' -Title '홈' -Icon 0xE80F -Group '일과' -Order 0 -Required `
     -NewView { New-WtHomeView } `
-    -Refresh { param($view) Update-WtHomeView }
+    -Refresh { param($view) Update-WtHomeView } -Help '오늘 일정과 탭별 요약을 보여 줍니다.'
 
 Export-ModuleMember -Function @()

@@ -170,6 +170,6 @@ Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Or
     -Refresh { param($view) Update-WtScheduleView } `
     -HomeCard { New-WtScheduleHomeCards } `
     -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } `
-    -Help '일정은 보기만 합니다. 편집과 알람은 2단계에서 옮깁니다.'
+    -Help '달력에서 일정과 반복 일정을 확인합니다.'
 
 Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel

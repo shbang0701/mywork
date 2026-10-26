@@ -211,6 +211,6 @@ Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -
         Get-WtAttendanceCalendarItems $From $To $data.Entries
     } `
     -ImportLegacy { param($folder) Import-WtAttendanceLegacy $folder } `
-    -Help '근태는 보기만 합니다. 기록 · 지금 출근은 2단계에서 옮깁니다.'
+    -Help '월별 출퇴근 기록과 근무시간을 확인합니다.'
 
 Export-ModuleMember -Function Format-WtHours, Format-WtDays, Test-WtAttInMonth

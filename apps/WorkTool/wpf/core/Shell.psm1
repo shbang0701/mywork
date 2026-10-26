@@ -760,6 +760,7 @@ function Start-WtApp {
     # X(닫기)는 앱을 끝낸다. 설정에서 '트레이로 숨기기'를 켜면 트레이로 숨기고, 끄는 건 트레이 아이콘 우클릭 → 종료
     $w.Add_Closing({
             param($s, $e)
+            if (-not $script:exiting -and (Close-WtFirstWorkSetup -UseDefaults)) { $e.Cancel = $true; return }
             if ($script:exiting) { return }
             if (-not [bool](Get-WtSetting 'window.closeToTray')) { $e.Cancel = -not (Stop-WtApp); return }
             $e.Cancel = $true
@@ -774,6 +775,7 @@ function Start-WtApp {
     $w.Add_PreviewKeyDown({
             param($s, $e)
             try {
+                if (Invoke-WtWorkSetupKey $e) { return }
                 $ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
                 $key = if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }
                 $shift = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0
@@ -832,6 +834,7 @@ function Start-WtApp {
     [void]$w.Activate()
     $first = @(Get-WtAddon)[0]
     if ($first) { Select-WtPage $first.Id } else { Select-WtPage '_settings' }
+    Show-WtFirstWorkSetup $w $(if ($first) { $first.Id } else { '_settings' })
     if (-not $script:exiting) { [System.Windows.Threading.Dispatcher]::PushFrame($script:frame) }
     } finally {
         if ($script:badgeTimer) { $script:badgeTimer.Stop() }

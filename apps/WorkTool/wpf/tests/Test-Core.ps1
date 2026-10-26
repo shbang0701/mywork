@@ -466,6 +466,49 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Initialize-WtSettings
     Assert-Wt '배열 설정을 다시 읽는다' (@(Get-WtSetting 'addons.disabled') -contains 'test-b')
 
+    # 업무시간은 다섯 값을 함께 검사하고, 기본값도 명시적으로 저장한다.
+    $settingsBeforeHours = Read-WtJsonFile (Get-WtSettingsPath)
+    $defaultHours = Get-WtWorkHours
+    Assert-Wt '업무시간 기본값: 월~금 · 09:00~18:00 · 점심 12:00~13:00' (
+        ($defaultHours['work.days'] -join ',') -ceq '1,2,3,4,5' -and $defaultHours['work.start'] -ceq '09:00' -and
+        $defaultHours['work.end'] -ceq '18:00' -and $defaultHours['work.lunchStart'] -ceq '12:00' -and $defaultHours['work.lunchEnd'] -ceq '13:00')
+    Assert-Wt '첫 설정: 기본값을 읽기만 하면 계속 필요하다' (Test-WtWorkSetupRequired)
+    foreach ($bad in @(
+        @('work.start', '9:00', 'work.start'), @('work.end', '08:00', 'work.end'),
+        @('work.lunchStart', '08:00', 'work.lunchStart'), @('work.lunchEnd', '19:00', 'work.lunchEnd'),
+        @('work.days', @(), 'work.days'), @('work.end', '09:00', 'work.end'),
+        @('work.lunchEnd', '12:00', 'work.lunchEnd'), @('work.days', @(1, 8), 'work.days'),
+        @('work.days', @('1'), 'work.days'), @('work.start', '24:00', 'work.start'))) {
+        $before = Get-Content -LiteralPath (Get-WtSettingsPath) -Raw
+        $candidate = $defaultHours.Clone(); $candidate[$bad[0]] = $bad[1]
+        $errors = Get-WtWorkHoursErrors $candidate
+        $refused = $false; $singleRefused = $false
+        try { Set-WtWorkHours $candidate } catch [System.ArgumentException] { $refused = $true }
+        try { Set-WtSetting $bad[0] $bad[1] } catch [System.ArgumentException] { $singleRefused = $true }
+        Assert-Wt "업무시간 저장 거부: $($bad[0])=$(ConvertTo-Json -InputObject $bad[1] -Compress)" (
+            $refused -and $singleRefused -and $errors.Contains($bad[2]) -and
+            (Get-Content -LiteralPath (Get-WtSettingsPath) -Raw) -ceq $before -and (Test-WtWorkSetupRequired))
+    }
+    Set-WtWorkHours $defaultHours
+    Initialize-WtSettings
+    $savedHours = Read-WtJsonFile (Get-WtSettingsPath)
+    Assert-Wt '첫 설정: 기본값으로 저장해도 work.start가 남고 다시 묻지 않는다' (
+        -not (Test-WtWorkSetupRequired) -and $savedHours.values.'work.start' -ceq '09:00' -and
+        @($savedHours.values.PSObject.Properties.Name | Where-Object { $_ -like 'work.*' }).Count -eq 5)
+    $shiftHours = @{ 'work.days' = @(6, 7); 'work.start' = '06:00'; 'work.end' = '14:00'; 'work.lunchStart' = '10:00'; 'work.lunchEnd' = '11:00' }
+    Set-WtWorkHours $shiftHours
+    Initialize-WtSettings
+    Assert-Wt '업무시간: 이동한 시간대와 주말 근무를 한 번에 저장 · 다시 읽기' (
+        (Get-WtSetting 'work.start') -ceq '06:00' -and ((Get-WtSetting 'work.days') -join ',') -ceq '6,7')
+    Set-WtSetting 'work.days' @(7)
+    Initialize-WtSettings
+    Set-WtSetting 'work.end' '15:00'
+    $oneDay = Get-WtWorkHours
+    Assert-Wt '업무시간: 요일 하나도 배열로 다시 읽고 다른 시각을 변경한다' (
+        $oneDay['work.days'] -is [array] -and $oneDay['work.days'].Count -eq 1 -and $oneDay['work.days'][0] -eq 7 -and $oneDay['work.end'] -ceq '15:00')
+    Write-WtJsonFile (Get-WtSettingsPath) $settingsBeforeHours
+    Initialize-WtSettings
+
     # ---- 탭 목록 (가짜 탭) ----
     Register-WtAddon -Id 'test-b' -Title '나' -Order 20 -NewView { }
     Register-WtAddon -Id 'test-a' -Title '가' -Order 10 -NewView { }
@@ -804,6 +847,24 @@ flowchart LR
         foreach ($choice in $themeChoices) { $choice.IsChecked = $true }
         Assert-Wt 'WPF 2판: 설정의 강조색 선택이 새 키·현재 사전에 반영' ((Get-WtSetting 'theme.accent') -ceq 'gray' -and $v2Theme['B.Accent'].Color.ToString() -ceq '#FF56606D')
         Set-WtSetting 'theme.accent' 'blue'
+        $settingsView = New-WtSettingsPage
+        $helpView = New-WtHelpPage
+        $settingsTabs = $settingsView.Children[1]
+        $helpTabs = $helpView.Children[1]
+        Assert-Wt '설정 하위 탭 넷: 일반 · 업무시간 · 탭 · 데이터' (
+            $settingsTabs -is [System.Windows.Controls.TabControl] -and ($settingsTabs.Items.Header -join ',') -ceq '일반,업무시간,탭,데이터')
+        Assert-Wt '도움말 하위 탭 셋: 단축키 · 탭 · 정보' (
+            $helpTabs -is [System.Windows.Controls.TabControl] -and ($helpTabs.Items.Header -join ',') -ceq '단축키,탭,정보')
+        $settingsView.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
+        $settingsView.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+        $settingsView.Measure([System.Windows.Size]::new(1048, 600))
+        $settingsView.Arrange([System.Windows.Rect]::new(0, 0, 1048, 600))
+        Assert-Wt '설정 하위 탭: 공통 Tab 스타일 · 높이 36 · 선택 위 선 2' (
+            $settingsTabs.Items[0].MinHeight -eq 36 -and $settingsTabs.Items[0].Template -eq (Get-WtStyleDictionary)['Tab'].Setters.Where({ $_.Property.Name -eq 'Template' })[0].Value)
+        $helpTexts = @(Get-WtTestTexts $helpView)
+        Assert-Wt '도움말: 키 · 하는 일 두 열 · Ctrl+Shift+B · 앱 이름과 데이터 폴더' (
+            $helpTexts -contains '키' -and $helpTexts -contains '하는 일' -and $helpTexts -contains 'Ctrl + Shift + B' -and
+            $helpTexts -contains 'WorkTool' -and $helpTexts -contains (Get-WtDataRoot))
         $v2Source = [System.IO.File]::ReadAllText((Join-Path $root 'core/Ui.psm1')) + [System.IO.File]::ReadAllText((Join-Path $root 'core/Theme.psm1'))
         Assert-Wt 'WPF 2판: 효과·그라데이션·애니메이션·둥근 안쪽 Clip 없음' ($v2Source -notmatch 'DropShadowEffect|BlurEffect|(?:Linear|Radial)GradientBrush|<Storyboard|<(?:Double|Color|Thickness|Object)Animation[ >]|ClipToBounds="True"|<[^>]*\.Clip>')
 
@@ -898,7 +959,8 @@ pie
             $said = @(& $workModule { $script:testSaid })
             Assert-Wt 'WPF 파일 링크: 확인 결과대로 열기 (파일 · 폴더 · 실행 파일은 탐색기에서 선택 · 없음은 알림)' (
                 (@($openLog | Sort-Object) -join '|') -eq 'open:C:\wt\a.txt|open:C:\wt\dir|reveal:C:\wt\run.exe' -and ($said -join '|') -eq 'msg:파일을 찾지 못했습니다.') "$(@($openLog) -join '|') / $($said -join '|')"
-            Assert-Wt 'WPF 파일 링크: 끝나면 작업 · 커서를 정리한다' ((Get-WtWorkInfo).Running -eq 0 -and $null -eq [System.Windows.Input.Mouse]::OverrideCursor)
+            Assert-Wt 'WPF 파일 링크: 끝나면 작업 · 커서를 정리한다' ((Get-WtWorkInfo).Running -eq 0 -and $null -eq [System.Windows.Input.Mouse]::OverrideCursor) (
+                & $workModule { ($script:jobs | ForEach-Object { "작업 $($_.Id): $($_.Key) / $($_.State) / $($_.Context.Path) / 완료=$($_.Handle.IsCompleted)" }) -join '; ' })
 
             # 응답 없는 공유: 같은 경로는 겹쳐 확인하지 않고, 확인 중에는 AppStarting 커서. 시간이 지나면 알리고 커서를 돌려놓으며,
             # 같은 공유를 또 누르면 새로 묻지 않고 바로 알린다. 늦게 온 답으로는 열지 않는다
@@ -1088,10 +1150,53 @@ pie
                 $refresh = $badge['shell-count'].Value -ceq '0'
                 $reserved = [System.Windows.Controls.TextBox]::new()
                 Register-WtKeyOwner $reserved 'Ctrl+B','Ctrl+Shift+B'
+                $hoursSnapshot = Read-WtJsonFile (Get-WtSettingsPath)
+                try {
+                    $missingWorkStart = [ordered]@{ schema = 1; values = @{ 'work.end' = '18:00' } }
+                    Write-WtJsonFile (Get-WtSettingsPath) $missingWorkStart
+                    Initialize-WtSettings
+                    Show-WtFirstWorkSetup $script:window 'shell-late'
+                    $firstSetup = & (Get-Module Pages) { $script:firstWorkSetup }
+                    $shown = $null -ne $firstSetup -and $firstSetup.Grid.Children.Contains($firstSetup.Overlay) -and
+                        $firstSetup.Form.Boxes['work.start'].Text -ceq '09:00'
+                    $firstSetup.Form.Boxes['work.end'].Text = '08:00'
+                    $firstSetup.Form.Start.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+                    $invalid = (Test-WtWorkSetupRequired) -and $firstSetup.Form.Errors['work.end'].Text -ceq '끝 시각은 시작 시각보다 늦어야 합니다.' -and
+                        [System.Windows.Controls.Validation]::GetHasError($firstSetup.Form.Boxes['work.end'])
+                    $firstSetup.Form.Boxes['work.end'].Text = '18:00'
+                    $firstSetup.Form.Boxes['work.start'].Text = '08:30'
+                    $firstSetup.Form.Start.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+                    Initialize-WtSettings
+                    $started = -not (Test-WtWorkSetupRequired) -and (Get-WtSetting 'work.start') -ceq '08:30' -and $script:current -ceq 'shell-late' -and
+                        -not $firstSetup.Grid.Children.Contains($firstSetup.Overlay)
+                    Show-WtFirstWorkSetup $script:window 'shell-late'
+                    $onlyMissing = $null -eq (& (Get-Module Pages) { $script:firstWorkSetup })
+                    Write-WtJsonFile (Get-WtSettingsPath) $missingWorkStart
+                    Initialize-WtSettings
+                    Show-WtFirstWorkSetup $script:window 'shell-late'
+                    $escSetup = & (Get-Module Pages) { $script:firstWorkSetup }
+                    $escSetup.Form.Boxes['work.start'].Text = '07:00'
+                    $escapeEvent = [pscustomobject]@{ Key = 'Escape'; Handled = $false }
+                    $escaped = Invoke-WtWorkSetupKey $escapeEvent
+                    Initialize-WtSettings
+                    $escaped = $escaped -and $escapeEvent.Handled -and -not (Test-WtWorkSetupRequired) -and
+                        (Get-WtSetting 'work.start') -ceq '09:00' -and $script:current -ceq 'shell-late'
+                    Write-WtJsonFile (Get-WtSettingsPath) $missingWorkStart
+                    Initialize-WtSettings
+                    Show-WtFirstWorkSetup $script:window 'shell-late'
+                    $closed = Close-WtFirstWorkSetup -UseDefaults
+                    Initialize-WtSettings
+                    $closed = $closed -and -not (Test-WtWorkSetupRequired) -and (Get-WtSetting 'work.start') -ceq '09:00'
+                } finally {
+                    [void](Close-WtFirstWorkSetup -UseDefaults)
+                    Write-WtJsonFile (Get-WtSettingsPath) $hoursSnapshot
+                    Initialize-WtSettings
+                }
                 [pscustomobject]@{ Groups = $groups; Badge = $badgeOk; Isolated = $failureIsolated; Minute = $minute; Refresh = $refresh
                     CollapsedNav = $collapsedNav; ExpandedNav = $expandedNav; Cycle = $cycle; OnlyNav = $onlyNav
                     Saved = $savedClosed -and $restored -and $opened; Narrow = $narrowStart; Overlay = $overlay; Restore = $wideRestore; Left = $leftOk
                     Reserved = -not (Test-WtKeyOwned 'Ctrl+Shift+B' $reserved) -and (Test-WtKeyOwned 'Ctrl+B' $reserved)
+                    FirstShown = $shown; FirstInvalid = $invalid; FirstStarted = $started; FirstOnlyMissing = $onlyMissing; FirstEscaped = $escaped; FirstClosed = $closed
                     Chrome = $script:window.MinWidth -eq 1024 -and $script:window.MinHeight -eq 640 -and $script:ui.TitleBar.Height -eq 32 }
             } finally {
                 if ($script:badgeTimer) { $script:badgeTimer.Stop() }
@@ -1110,6 +1215,11 @@ pie
         Assert-Wt '창 짜임: 1200 미만 레일 시작·겹쳐 열기·늘리면 저장 상태' ($shellChecks.Narrow -and $shellChecks.Overlay -and $shellChecks.Restore) "$($shellChecks.Narrow)/$($shellChecks.Overlay)/$($shellChecks.Restore)"
         Assert-Wt '창 짜임: 왼쪽 보조 칸·독립 접기' $shellChecks.Left
         Assert-Wt '창 짜임: 최소 크기·타이틀바·예약 단축키' ($shellChecks.Chrome -and $shellChecks.Reserved)
+        Assert-Wt '첫 설정: work.start가 없을 때만 창 안에 기본값 입력을 연다' ($shellChecks.FirstShown -and $shellChecks.FirstOnlyMissing)
+        Assert-Wt '첫 설정: 잘못된 시각은 칸 아래 오류 · 저장 거부' $shellChecks.FirstInvalid
+        Assert-Wt '첫 설정: 시작은 입력값 저장 · 홈 복귀 · 다시 묻지 않음' $shellChecks.FirstStarted
+        Assert-Wt '첫 설정: Esc는 기본값 저장 · 홈 복귀 · 다시 묻지 않음' $shellChecks.FirstEscaped
+        Assert-Wt '첫 설정: 닫기도 기본값 저장 · 다시 묻지 않음' $shellChecks.FirstClosed
 
         # 도움말: 탭이 등록한 설명 · 카드를 모은다. 카드 하나가 실패해도 도움말은 연다
         Register-WtAddon -Id 'test-help' -Title '도움' -Order 50 -NewView { } -Help '가짜 탭 설명' -HelpCard { New-WtText '가짜 카드' 'T.Body' }

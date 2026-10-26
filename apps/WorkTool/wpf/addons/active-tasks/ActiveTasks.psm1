@@ -616,9 +616,10 @@ Register-WtAddon -Id 'active-tasks' -Title '활성 작업' -Icon 0xE7C4 -Group '
     -Badge { @($script:items).Count } `
     -NewView { New-WtActiveTasksView } -Refresh { param($view) Start-WtTaskJob 'scan' } -OnExit { Stop-WtTasks } `
     -Help @(
-        '활성 작업은 열린 창과 Chrome·Edge·웨일 탭을 모아 보고 선택한 항목을 닫습니다. 새로 고침 버튼을 우클릭하면 수동·자동을 고를 수 있고, 자동은 분 단위 간격을 설정합니다.'
-        '자동 갱신은 활성 작업 탭을 보는 동안만 동작합니다. 읽기 제한 항목은 원래 프로그램에서 확인하세요. 닫을 때 저장 확인도 원래 프로그램에서 처리합니다.') `
-    -Shortcuts @(@('F5', '새로 고침'), @('Ctrl + F', '이름으로 거르기'), @('Shift + F10', '새로 고침 버튼의 수동/자동 메뉴'))
+        '열린 창과 브라우저 탭을 모아 봅니다.'
+        '선택한 항목을 닫습니다.'
+        '새로 고침 메뉴에서 자동 간격을 정합니다.') `
+    -Shortcuts @(@('F5', '새로 고침'), @('Ctrl + F', '이름으로 필터링'), @('Shift + F10', '새로 고침 수동 / 자동 메뉴'))
 
 Export-ModuleMember -Function ConvertTo-WtTaskMinutes, Get-WtTaskRefresh, Set-WtTaskRefresh, Test-WtTaskAutoDue,
     Find-WtTaskItems, Get-WtTaskCheckState, Get-WtTaskWorker, Get-WtTaskHostIds

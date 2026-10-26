@@ -737,8 +737,8 @@ Register-WtAddon -Id 'docs' -Title '문서' -Icon 0xE8B7 -Group '작업' -Order 
     -Refresh { param($view) Update-WtDocsView } `
     -HomeCard { New-WtDocsHomeCard } `
     -OnExit { Stop-WtDocs } `
-    -Help '문서는 고른 폴더의 파일을 보고 원래 프로그램으로 엽니다. 파일 내용은 읽거나 옮기지 않습니다.' `
-    -Shortcuts @(@('Enter', '고른 파일 열기 · 폴더 들어가기'), @('Alt + ↑', '위 폴더'), @('F5', '새로 고침'), @('Ctrl + F', '이름으로 거르기'))
+    -Help '폴더의 파일을 원래 프로그램으로 엽니다.' `
+    -Shortcuts @(@('Enter', '고른 파일 열기 · 폴더 들어가기'), @('Alt + ↑', '위 폴더'), @('F5', '새로 고침'), @('Ctrl + F', '이름으로 필터링'))
 
 Export-ModuleMember -Function Get-WtDocKind, Format-WtDocSize, Get-WtDocEntries, Get-WtDocSubfolders, Get-WtDocPinEntries,
     Test-WtDocPinned, Switch-WtDocPin, Get-WtDocRoots, Get-WtDocChain, Find-WtDocEntry, Format-WtDocPathLabel

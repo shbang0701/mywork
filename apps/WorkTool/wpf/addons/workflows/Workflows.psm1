@@ -1998,7 +1998,7 @@ Register-WtAddon -Id 'workflows' -Title '업무' -Icon 0xE756 -Group '작업' -O
     -Refresh { param($view) Update-WtFlowsView } `
     -HomeCard { New-WtFlowsHomeCard } `
     -OnExit { Stop-WtFlows } `
-    -Help '업무는 스크립트 폴더의 PowerShell 스크립트를 폼으로 실행합니다. 스크립트의 param이 입력 칸이 되고, 자주 쓰는 값은 [업무로 저장]해 두고 다시 씁니다. 「내 스크립트」(데이터 폴더의 scripts)는 처음부터 목록에 있어서, 그 폴더에 .ps1을 넣으면 바로 보입니다.' `
+    -Help @('PowerShell 스크립트를 입력 폼으로 실행합니다.', '입력값을 업무로 저장해 다시 씁니다.') `
     -Shortcuts (, @('F5', '스크립트 목록 새로 고침'))
 
 Export-ModuleMember -Function Read-WtFlowScript, Find-WtFlowScripts, Test-WtFlowValues, Get-WtFlowArgs, Get-WtFlowStaleNames,
