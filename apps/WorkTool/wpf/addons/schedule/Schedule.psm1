@@ -6,6 +6,8 @@ $ErrorActionPreference = 'Stop'
 
 $script:list = $null
 $script:inv = [System.Globalization.CultureInfo]::InvariantCulture
+$script:homeTimer = $null
+$script:homeTimeline = $null
 
 function Format-WtAlarm($Minutes) {
     if ($null -eq $Minutes -or "$Minutes" -eq '') { return $null }
@@ -129,46 +131,56 @@ function Update-WtScheduleView {
 
 function New-WtScheduleHomeCards {
     $data = Get-WtScheduleData
-    $key = @($data.Stamp, [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
-    if ($script:homeKey -ceq $key -and $script:homeCards -and -not @($script:homeCards | Where-Object Parent).Count) { return $script:homeCards }
-    $days = Get-WtScheduleDays $data.Entries ([datetime]::Today) 8
-    $today = @($days[0])
+    $today = [datetime]::Today
+    $items = @(foreach ($occurrence in @(Get-WtScheduleOccurrences $data.Entries $today $today)) {
+        $when = if ($occurrence.AllDay) { '하루 종일' } else { $occurrence.Start.ToString('HH:mm', $script:inv) + '–' + $(if ($occurrence.End) { $occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) }
+        $details = @($occurrence.Title, $when)
+        $repeatText = Get-WtRepeatLabel $occurrence.Entry.Repeat
+        if ($repeatText) { $details += $repeatText }
+        foreach ($alarm in @($occurrence.Alarms)) { $details += Format-WtAlarm $alarm }
+        [pscustomobject]@{ Id = $occurrence.Entry.Id; Title = $occurrence.Title; Start = $occurrence.Start; End = $occurrence.End
+            AllDay = $occurrence.AllDay; Alarm = @($occurrence.Alarms).Count -gt 0; ToolTip = (@($details | Where-Object { $_ }) -join "`n") }
+    })
+    if ($script:homeTimer) { $script:homeTimer.Stop() }
+    $timeline = New-WtTimeline -Items $items -Date $today -Page 'schedule' -ErrorText $data.Error
+    $script:homeTimeline = $timeline.Timeline
+    $script:homeTimer = [System.Windows.Threading.DispatcherTimer]::new()
+    $script:homeTimer.Interval = [timespan]::FromMinutes(1)
+    $script:homeTimer.Add_Tick({ Update-WtTimelineNow $script:homeTimeline })
+    $timeline.Card.Add_Loaded({ if ($script:homeTimer) { Update-WtTimelineNow $script:homeTimeline; $script:homeTimer.Start() } })
+    $timeline.Card.Add_Unloaded({ if ($script:homeTimer) { $script:homeTimer.Stop() } })
+    $timeline.Card
+}
 
-    $c1 = New-WtCard
-    $col = New-WtStack Vertical
-    [void](Add-WtChild $col (New-WtCardHeader '오늘 일정' "$($today.Count)" '일정 열기' 'schedule'))
-    if ($data.Error) { [void](Add-WtChild $col (New-WtTag '일정 파일을 읽지 못했습니다' 'WarnBg' 'Warn')) }
-    foreach ($o in $today) { [void](Add-WtChild $col (New-WtScheduleRow $o '' ([datetime]::Today))) }
-    if (-not $today.Count -and -not $data.Error) { [void](Add-WtChild $col (New-WtText '오늘은 일정이 없습니다.' 'T.Sub')) }
-    $c1.Child = $col
-
-    $c2 = New-WtCard
-    $col = New-WtStack Vertical
-    [void](Add-WtChild $col (New-WtCardHeader '다가오는 7일'))
-    $n = 0
-    for ($i = 1; $i -le 7; $i++) {
-        $day = [datetime]::Today.AddDays($i)
-        foreach ($o in $days[$i]) {
-            # 매일 · 평일 반복과 앞날부터 이어진 일정은 오늘 카드에서만 (같은 줄이 날마다 되풀이되지 않게)
-            $rule = $o.Entry.Repeat
-            if ($rule -and ($rule.Freq -eq 'daily' -or ($rule.Freq -eq 'weekly' -and $rule.Days.Count -ge 5))) { continue }
-            if ($o.Start.Date -lt $day) { continue }
-            [void](Add-WtChild $col (New-WtScheduleRow $o (Format-WtDate $day "M'/'d (ddd)") $day))
-            $n++
+# 기존 14일 목록만 선택·스크롤한다. 날짜만 받거나 목록 밖이면 탭만 연다.
+function Open-WtScheduleArgs($OpenArgs) {
+    if (-not $OpenArgs.Id -or -not $script:list) { return }
+    $data = Get-WtScheduleData
+    $days = Get-WtScheduleDays $data.Entries ([datetime]::Today) 14
+    $rowIndex = 1; $chosen = $null
+    for ($i = 0; $i -lt 14; $i++) {
+        foreach ($occurrence in $days[$i]) {
+            $row = $script:list.Children[$rowIndex++]
+            $matches = $occurrence.Entry.Id -ceq [string]$OpenArgs.Id -and
+                (-not $OpenArgs.Date -or ([datetime]$OpenArgs.Date).Date -eq [datetime]::Today.AddDays($i))
+            if ($matches) { $chosen = $row }
         }
     }
-    if (-not $n) { [void](Add-WtChild $col (New-WtText '다가오는 일정이 없습니다.' 'T.Sub')) }
-    $c2.Child = $col
-
-    $script:homeCards = @($c1, $c2); $script:homeKey = $key
-    $script:homeCards
+    if ($chosen) {
+        foreach ($row in @($script:list.Children | Select-Object -Skip 1 | Where-Object { $_ -is [System.Windows.Controls.Border] })) {
+            Set-WtTargetRowSelected $row ([object]::ReferenceEquals($row, $chosen))
+        }
+        $chosen.BringIntoView()
+    }
 }
 
 Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full `
     -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; @(Get-WtScheduleOccurrences $data.Entries ([datetime]::Today) ([datetime]::Today)).Count } `
     -NewView { New-WtScheduleView } `
     -Refresh { param($view) Update-WtScheduleView } `
-    -HomeCard { New-WtScheduleHomeCards } `
+    -HomeCard { New-WtScheduleHomeCards } -HomeSlot main -HomeOrder 10 -CalendarHost `
+    -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } `
+    -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } `
     -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } `
     -Help '달력에서 일정과 반복 일정을 확인합니다.'
 

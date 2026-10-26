@@ -101,6 +101,16 @@ function Select-WtPage([string]$Id) {
 }
 
 # 데이터를 다시 가져온 뒤 현재 화면을 갱신한다. 숨긴 화면도 재진입할 때 갱신한다.
+function Open-WtPage {
+    param([Parameter(Mandatory)][string]$Id, [hashtable]$Args = @{})
+    $addon = Get-WtAddon | Where-Object { $_.Id -ceq $Id } | Select-Object -First 1
+    if (-not $addon) { return }
+    Select-WtPage $Id
+    if ($script:current -ceq $Id -and $addon.OnOpen) {
+        try { [void](& $addon.OnOpen $Args) } catch { Write-Warning "항목 열기: $($_.Exception.Message)" }
+    }
+}
+
 function Reset-WtViews {
     if (-not (Save-WtPendingChanges)) { return }
     if ($script:current) {
@@ -847,6 +857,6 @@ function Start-WtApp {
     }
 }
 
-Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Register-WtKeyOwner, Test-WtKeyOwned,
+Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Register-WtKeyOwner, Test-WtKeyOwned,
     New-WtSidePanel, Switch-WtPanelCycle, Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp

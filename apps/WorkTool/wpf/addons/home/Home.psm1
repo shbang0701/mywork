@@ -1,60 +1,42 @@
-# 홈 탭. 다른 탭이 등록한 홈 카드(HomeCard)를 모아서 두 줄로 보여 준다.
-# 탭을 더하면 그 탭의 카드도 여기에 저절로 나온다. 홈은 다른 탭의 데이터를 직접 읽지 않는다.
-
+# 홈은 등록 목록만 모은다. 다른 탭 함수나 저장소를 직접 부르지 않는다.
 $ErrorActionPreference = 'Stop'
-
-$script:dateText = $null
-$script:columns = $null
+$script:layout = $null
+$script:month = [datetime]::new([datetime]::Today.Year, [datetime]::Today.Month, 1)
 
 function New-WtHomeView {
-    $page = New-WtPage
-    # 머리글: 날짜(열 때마다 새로 씀) + 제목
-    $header = New-WtStack Vertical 4
-    $header.Margin = [System.Windows.Thickness]::new(0, 0, 0, 4)
-    $script:dateText = New-WtText '' 'T.Sub'
-    [void](Add-WtChild $header $script:dateText)
-    [void](Add-WtChild $header (New-WtText '오늘' 'T.Title'))
-    [void](Add-WtChild $page.Panel $header)
+    $script:layout = New-WtHomeLayout
+    $script:layout.Root
+}
 
-    $grid = [System.Windows.Controls.Grid]::new()
-    $script:columns = @()
-    for ($i = 0; $i -lt 2; $i++) {
-        $cd = [System.Windows.Controls.ColumnDefinition]::new()
-        $cd.Width = [System.Windows.GridLength]::new(1, 'Star')
-        $grid.ColumnDefinitions.Add($cd)
-        $col = New-WtStack Vertical 16
-        $col.Margin = [System.Windows.Thickness]::new($(if ($i -eq 0) { 0 } else { 8 }), 0, $(if ($i -eq 0) { 8 } else { 0 }), 0)
-        [System.Windows.Controls.Grid]::SetColumn($col, $i)
-        [void]$grid.Children.Add($col)
-        $script:columns += $col
+function New-WtHomeCalendar {
+    $first = [datetime]::new($script:month.Year, $script:month.Month, 1)
+    $start = $first.AddDays(-[int]$first.DayOfWeek)
+    $calendar = Get-WtCalendarItems -From $start -To $start.AddDays(41)
+    New-WtMiniCalendar -Month $first -Calendar $calendar -OnMonth {
+        param($Month)
+        $script:month = $Month
+        Update-WtHomeView
     }
-    [void](Add-WtChild $page.Panel $grid)
-    $page.Root
 }
 
 function Update-WtHomeView {
-    $script:dateText.Text = Format-WtDate (Get-Date) 'yyyy년 M월 d일 dddd'
-    foreach ($c in $script:columns) { $c.Children.Clear() }
-    $cards = [System.Collections.Generic.List[object]]::new()
-    foreach ($a in @(Get-WtAddon)) {
-        if (-not $a.HomeCard -or $a.Id -eq 'home') { continue }
+    $script:layout.Main.Children.Clear(); $script:layout.Side.Children.Clear()
+    $cards = @(
+        [pscustomobject]@{ Id = 'home-shortcuts'; HomeSlot = 'main'; HomeOrder = 20; HomeCard = { New-WtShortcutCard @(Get-WtShortcuts) -OnChange { Update-WtHomeView } } }
+        [pscustomobject]@{ Id = 'home-calendar'; HomeSlot = 'side'; HomeOrder = 10; HomeCard = { New-WtHomeCalendar } }
+    ) + @(Get-WtHomeCards)
+    foreach ($card in @($cards | Sort-Object HomeSlot, HomeOrder, Id)) {
+        $column = if ($card.HomeSlot -eq 'side') { $script:layout.Side } else { $script:layout.Main }
         try {
-            foreach ($el in @(& $a.HomeCard)) { if ($el -is [System.Windows.UIElement]) { $cards.Add($el) } }
-        } catch {
-            $cards.Add((New-WtText "$($a.Title) 카드를 만들지 못했습니다: $($_.Exception.Message)" 'T.Sub'))
-        }
-    }
-    # 왼쪽 · 오른쪽에 번갈아 놓는다
-    for ($i = 0; $i -lt $cards.Count; $i++) {
-        [void](Add-WtChild $script:columns[$i % 2] $cards[$i])
-    }
-    if (-not $cards.Count) {
-        [void](Add-WtChild $script:columns[0] (New-WtText '홈에 보여 줄 카드가 없습니다.' 'T.Sub'))
+            foreach ($element in @(& $card.HomeCard)) {
+                if ($element -is [System.Windows.UIElement]) { [void](Add-WtChild $column $element) }
+            }
+        } catch { Write-Warning "홈 카드: $($_.Exception.Message)" }
     }
 }
 
 Register-WtAddon -Id 'home' -Title '홈' -Icon 0xE80F -Group '일과' -Order 0 -Required `
     -NewView { New-WtHomeView } `
-    -Refresh { param($view) Update-WtHomeView } -Help '오늘 일정과 탭별 요약을 보여 줍니다.'
+    -Refresh { param($view) Update-WtHomeView } -Help '오늘 일정과 바로 가기, 작은 달력을 보여 줍니다.'
 
 Export-ModuleMember -Function @()

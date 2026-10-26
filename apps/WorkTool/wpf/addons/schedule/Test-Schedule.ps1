@@ -514,7 +514,19 @@ try {
         & $module { $script:testFirst = $script:body.Children[0]; $script:viewKey = '어제'; Update-WtScheduleView }
         Assert-WtTest '일정 화면: 날짜 키가 바뀌면 다시 만든다' (& $module { -not [object]::ReferenceEquals($script:testFirst, $script:body.Children[0]) })
         $cards = @(& $module { New-WtScheduleHomeCards })
-        Assert-WtTest '일정 화면: 홈 카드 둘' ($cards.Count -eq 2 -and @(Get-WtTestTexts $cards[0] | Where-Object { $_ -like '오늘 일정*' }).Count -eq 1)
+        Assert-WtTest '일정 화면: 오늘 시간 막대 한 장 · main 10 · 달력 주인' ($cards.Count -eq 1 -and @(Get-WtTestTexts $cards[0] | Where-Object { $_ -like '오늘 일정*' }).Count -eq 1 -and
+            (Get-WtAddon -Id schedule).HomeSlot -ceq 'main' -and (Get-WtAddon -Id schedule).HomeOrder -eq 10 -and (Get-WtAddon -Id schedule).CalendarHost)
+        $todayText = ConvertTo-WtDateText ([datetime]::Today)
+        $jump = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '홈 선택 시험'; start = @{ date = $todayText; time = '10:00' }; end = @{ date = $todayText; time = '11:00' } }
+        & $module { Update-WtScheduleView }
+        & (Get-WtAddon -Id schedule).OnOpen @{ Date = [datetime]::Today; Id = $jump.Id }
+        $selectedTitle = & $module { @($script:list.Children | Where-Object { $_ -is [System.Windows.Controls.Border] } | ForEach-Object { (Get-WtVisualChild $_ ([System.Windows.Controls.DockPanel])).Children } | Where-Object { $_ -is [System.Windows.Controls.TextBlock] -and [System.Windows.Automation.AutomationProperties]::GetItemStatus($_) -ceq '선택됨' }) }
+        Assert-WtTest '일정 열기: 인자의 Id/Date가 기존 목록 줄을 선택한다' ($selectedTitle.Count -eq 1 -and $selectedTitle[0].Text -ceq '홈 선택 시험')
+        $selectedRow = $selectedTitle[0].Parent.Parent.Parent
+        Assert-WtTest '일정 열기: 선택 막대 3×16 · 줄 배치와 구분선 유지' ($selectedRow.Child.Children[1].Width -eq 3 -and $selectedRow.Child.Children[1].Height -eq 16 -and $selectedRow.BorderThickness.Left -eq 0 -and $selectedRow.BorderThickness.Bottom -eq 1)
+        & (Get-WtAddon -Id schedule).OnOpen @{ Date = [datetime]::Today.AddDays(-30); Id = '없는 일정' }
+        & (Get-WtAddon -Id schedule).OnOpen @{ Date = [datetime]::Today.AddDays(30) }
+        Assert-WtTest '일정 열기: 목록 밖 Id · Date만 받으면 기존 화면 유지' ([System.Windows.Automation.AutomationProperties]::GetItemStatus($selectedTitle[0]) -ceq '선택됨')
         [System.IO.File]::WriteAllText((Get-WtStorePath 'schedule'), '{ "schema": 3, "items": [] }', [System.Text.UTF8Encoding]::new($false))
         & $module { Update-WtScheduleView }
         $texts = @(Get-WtTestTexts $view)

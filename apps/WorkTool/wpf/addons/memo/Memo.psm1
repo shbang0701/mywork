@@ -611,11 +611,16 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
     Update-WtMemoTabStyles
     Sync-WtMemoListSelection
     Save-WtMemoTabs
+    Add-WtUse -Page 'memo' -Key $Id -Title (Get-WtMemoTitle $Id) -Sub '메모' -Icon 0xE70B
     $true
 }
 
 function Select-WtMemoTab($Pane, $Tab) {
-    if ([object]::ReferenceEquals($Pane.Current, $Tab)) { Set-WtMemoActivePane $Pane; return $true }
+    if ([object]::ReferenceEquals($Pane.Current, $Tab)) {
+        Set-WtMemoActivePane $Pane
+        Add-WtUse -Page 'memo' -Key $Tab.Id -Title (Get-WtMemoTitle $Tab.Id) -Sub '메모' -Icon 0xE70B
+        return $true
+    }
     if (-not (Save-WtMemoNow)) { return $false }
     Save-WtMemoPaneState $Pane
     $Pane.Current = $Tab
@@ -624,6 +629,7 @@ function Select-WtMemoTab($Pane, $Tab) {
     Update-WtMemoTabStyles
     Sync-WtMemoListSelection
     Save-WtMemoTabs
+    Add-WtUse -Page 'memo' -Key $Tab.Id -Title (Get-WtMemoTitle $Tab.Id) -Sub '메모' -Icon 0xE70B
     $true
 }
 
@@ -1229,7 +1235,7 @@ function New-WtMemoView {
                 $e.Handled = $true
             }
         })
-    $listMenu = New-WtContextMenu
+    $listMenu = New-WtHomePinContextMenu
     foreach ($spec in @(@('tab', '새 탭에서 열기', 'Ctrl+클릭'), @('side', '오른쪽에 열기', ''))) {
         $mi = [System.Windows.Controls.MenuItem]::new()
         $mi.Header = $spec[1]
@@ -1239,12 +1245,21 @@ function New-WtMemoView {
         [void]$listMenu.Items.Add($mi)
     }
     $list.ContextMenu = $listMenu
+    $homePin = [System.Windows.Controls.MenuItem]::new()
+    $homePin.Header = '홈에 고정'
+    $homePin.Add_Click({
+            param($s, $e)
+            $memoId = [string]$s.Parent.Tag
+            Set-WtHomePin -Page 'memo' -Key $memoId -Title (Get-WtMemoTitle $memoId) -Sub '메모' -Icon 0xE70B -Pinned:(-not (Test-WtHomePin -Page 'memo' -Key $memoId))
+        })
+    [void]$listMenu.Items.Add($homePin)
     $list.Add_ContextMenuOpening({
             param($s, $e)
             $memoId = if ($script:listMenuId) { $script:listMenuId } elseif ($s.SelectedItem) { [string]$s.SelectedItem.Id } else { '' }
             $script:listMenuId = ''
             if (-not $memoId) { $e.Handled = $true; return }
             $s.ContextMenu.Tag = $memoId
+            $s.ContextMenu.Items[$s.ContextMenu.Items.Count - 1].Header = if (Test-WtHomePin -Page 'memo' -Key $memoId) { '홈 고정 해제' } else { '홈에 고정' }
         })
     [void]$ldock.Children.Add($list)
     $left.Child = $ldock
@@ -1471,7 +1486,8 @@ Register-WtDataWriteHandler {
 Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 40 -WarmUp Full `
     -NewView { New-WtMemoView } `
     -Refresh { param($view) Update-WtMemoView } `
-    -HomeCard { New-WtMemoHomeCard } `
+    -OnOpen { param($OpenArgs) if ($OpenArgs.Key -and (Get-WtMemoById ([string]$OpenArgs.Key))) { $script:ui.Search.Text = ''; [void](Open-WtMemo ([string]$OpenArgs.Key)) } } `
+    -ShortcutExists { param($Key) @((Get-WtMemoItems) | Where-Object { $_.id -ceq $Key -and -not $_.deleted }).Count -gt 0 } `
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
     -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
     -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; if ($script:saveTimer) { $script:saveTimer.Stop() }; if ($script:undoTimer) { $script:undoTimer.Stop() } } `

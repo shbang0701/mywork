@@ -213,6 +213,16 @@ try {
 
     # ---- 지운 메모의 탭은 모든 칸에서 닫힌다 ----
     & $memoModule { [void](Open-WtMemo 'ma' 'tab'); [void](Open-WtMemo 'mb' 'tab') }
+    $beforeUse = (@(Get-WtShortcuts -Max 200) | Where-Object { $_.Page -ceq 'memo' -and $_.Key -ceq 'ma' }).Count
+    & (Get-WtAddon -Id memo).OnOpen @{ Key = 'ma' }
+    Assert-WtTest '메모: 바로 가기 인자로 열기 · 연 횟수 한 번 · 옛 홈 카드 제거' ((& $memoModule { Get-WtMemoCurrentId }) -ceq 'ma' -and
+        (@(Get-WtShortcuts -Max 200) | Where-Object { $_.Page -ceq 'memo' -and $_.Key -ceq 'ma' }).Count -eq $beforeUse + 1 -and -not (Get-WtAddon -Id memo).HomeCard)
+    & $memoModule {
+        $m = $script:ui.List.ContextMenu; $m.Tag = 'ma'
+        $m.Items[$m.Items.Count - 1].RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.MenuItem]::ClickEvent))
+        [void](Open-WtMemo 'mb')
+    }
+    Assert-WtTest '메모: 목록 홈 고정 메뉴' (Test-WtHomePin -Page memo -Key ma)
     Send-TestListClick 'mc' Right
     $menuState = & $memoModule { [pscustomobject]@{ MenuId = $script:listMenuId; Current = $script:panes[0].Current.Id } }
     & $memoModule { $script:listMenuId = ''; $m = $script:ui.List.ContextMenu; $m.Tag = 'mb'; $m.Items[1].RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.MenuItem]::ClickEvent)) }

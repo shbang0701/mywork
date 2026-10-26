@@ -18,7 +18,11 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   Required     $true면 설정에서 끌 수 없음 (홈)
   NewView      { } → 화면 요소를 돌려준다. 처음 열 때 한 번 부른다.
   Refresh      { param($view) } → 화면을 열 때마다 부른다 (선택)
+  OnOpen       { param($OpenArgs) } → Open-WtPage로 옮긴 뒤 인자를 받는다 (선택)
+  ShortcutExists { param($Key) } → 바로 가기 대상이 남아 있으면 $true (선택)
   HomeCard     { } → 홈에 놓을 카드 요소(여러 개 가능)를 돌려준다 (선택)
+  HomeSlot     main(기본) · side. HomeOrder가 작을수록 먼저 놓는다
+  CalendarHost 작은 달력 날짜를 열 탭 표시 (선택)
   ImportLegacy { param($folder) } → 예전 WorkTool data 폴더에서 이 탭 데이터를 가져와 저장한다. 가져온 개수를 돌려준다 (선택)
   OnExit       { } → 끝내기 직전(SavePending 확인 뒤) 타이머·조회 등 실행 자원을 정리한다 (선택)
   SavePending  { } → 이 화면을 떠날 때 · 끝낼 때 저장. 실패하면 $false를 돌려준다.
@@ -43,7 +47,12 @@ function Register-WtAddon {
         [switch]$Required,
         [Parameter(Mandatory)][scriptblock]$NewView,
         [scriptblock]$Refresh,
+        [scriptblock]$OnOpen,
+        [scriptblock]$ShortcutExists,
         [scriptblock]$HomeCard,
+        [ValidateSet('main', 'side')][string]$HomeSlot = 'main',
+        [int]$HomeOrder = 100,
+        [switch]$CalendarHost,
         [scriptblock]$CalendarItems,
         [scriptblock]$ImportLegacy,
         [scriptblock]$OnExit,
@@ -64,13 +73,35 @@ function Register-WtAddon {
     }
     $script:addons.Add(@{
             Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Group = $Group; Badge = $Badge; BadgeToolTip = $BadgeToolTip; Required = [bool]$Required
-            NewView = $NewView; Refresh = $Refresh; HomeCard = $HomeCard; CalendarItems = $CalendarItems; ImportLegacy = $ImportLegacy; OnExit = $OnExit
+            NewView = $NewView; Refresh = $Refresh; OnOpen = $OnOpen; ShortcutExists = $ShortcutExists
+            HomeCard = $HomeCard; HomeSlot = $HomeSlot; HomeOrder = $HomeOrder; CalendarHost = [bool]$CalendarHost
+            CalendarItems = $CalendarItems; ImportLegacy = $ImportLegacy; OnExit = $OnExit
             Description = $Description
             SavePending = $SavePending; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
         })
     # 같은 탭을 다시 등록하면서 표시 함수를 뺐으면 옛 등록도 없앤다.
     Register-WtCalendarSource -Id "addon:$Id" -Page $Id -CalendarItems $CalendarItems
+}
+
+function Get-WtHomeCards {
+    Get-WtAddon | Where-Object HomeCard | Sort-Object HomeSlot, HomeOrder, Id
+}
+
+function Get-WtCalendarHost {
+    Get-WtAddon | Where-Object CalendarHost | Select-Object -First 1
+}
+
+# 달력 출처의 의미(탭 이름 아님)와 업무시간으로 표시만 계산한다. 근무 기록은 쉬는 날보다 우선한다.
+function Get-WtCalendarMark([datetime]$Date, [object[]]$Items) {
+    $dayItems = @($Items | Where-Object { $_.Date.Date -eq $Date.Date })
+    $off = [int]$Date.DayOfWeek -notin @(Get-WtSetting 'work.days') -or
+        @($dayItems | Where-Object { $_.Kind -cin @('public', 'company', 'personal', 'leave') }).Count -gt 0
+    $work = @($dayItems | Where-Object { $_.Kind -cin @('work', 'overtime', 'trip') })
+    $inside = @($work | Where-Object { -not $_.AllDay -and $_.Time -ge (Get-WtSetting 'work.start') -and $_.Time -lt (Get-WtSetting 'work.end') }).Count -gt 0
+    [pscustomobject]@{ DayOff = $off; Glyph = $(if ($work.Count) { 0xE73E } elseif ($off) { 0xE711 } else { 0 })
+        Brush = $(if ($work.Count) { if ($inside) { 'B.Status.Success.Icon' } else { 'B.Text.Tertiary' } } else { 'B.Status.Error.Icon' })
+        ToolTip = (@($dayItems | ForEach-Object Text | Where-Object { $_ }) -join "`n") }
 }
 
 # 순서대로 돌려준다. -All이 없으면 설정에서 끈 탭은 뺀다.
@@ -127,4 +158,4 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
         Items = $sorted; Days = $days.ToArray(); Errors = $errors.ToArray() }
 }
 
-Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems
+Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark

@@ -325,6 +325,7 @@ try {
         $texts = @(Get-WtTestTexts $view)
         Assert-WtTest '근태 화면: 저장이 바뀌면 다시 들어올 때 반영하고, 고칠 항목을 보여 준다' ($texts -contains '외부에서 바꾼 기록' -and @($texts | Where-Object { $_ -like '고칠 항목*' }).Count -eq 1)
         $card = & $module { New-WtAttendanceHomeCard }
+        Assert-WtTest '근태: 기존 홈 카드 등록 제거' (-not (Get-WtAddon -Id attendance).HomeCard)
         Assert-WtTest '근태 화면: 홈 카드' (@(Get-WtTestTexts $card | Where-Object { $_ -like '근태 · *' }).Count -eq 1)
         [System.IO.File]::WriteAllText((Get-WtStorePath 'holidays'), '{ "schema": 9, "items": [] }', [System.Text.UTF8Encoding]::new($false))
         & $module { Update-WtAttendanceView }

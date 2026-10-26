@@ -204,7 +204,6 @@ Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -
     -BadgeToolTip '오늘 안 찍음' `
     -NewView { New-WtAttendanceView } `
     -Refresh { param($view) Update-WtAttendanceView } `
-    -HomeCard { New-WtAttendanceHomeCard } `
     -CalendarItems { param([datetime]$From, [datetime]$To)
         $data = Get-WtAttendanceData
         if ($data.Error) { throw $data.Error }

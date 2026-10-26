@@ -547,6 +547,61 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Set-WtSetting 'addons.disabled' @()
     Register-WtAddon -Id 'test-calendar-bad' -Title '가짜 실패' -NewView { }
 
+    # ---- 연 기록 · 홈 자리 (가짜 탭) ----
+    Register-WtAddon -Id 'test-links' -Title '출처' -NewView { } -ShortcutExists { param($Key) $Key -cne 'gone' } -HomeCard { } -HomeSlot main -HomeOrder 10
+    Register-WtAddon -Id 'test-side' -Title '옆' -NewView { } -HomeCard { } -HomeSlot side -HomeOrder 20 -CalendarHost
+    Register-WtAddon -Id 'test-main' -Title '뒤' -NewView { } -HomeCard { } -HomeSlot main -HomeOrder 30
+    Assert-Wt '홈 카드: 자리별 순서 · 달력 주인 등록' ((@(Get-WtHomeCards).Id -join ',') -ceq 'test-links,test-main,test-side' -and (Get-WtCalendarHost).Id -ceq 'test-side')
+    function New-WtTestShortcut([string]$Key, [string]$Title, [object[]]$Uses, [bool]$Pinned = $false, $Order = $null) {
+        [pscustomobject]@{ id = $Key; page = 'test-links'; key = $Key; title = $Title; sub = ''; icon = 0xE8A5; uses = @($Uses); pinned = $Pinned; pinOrder = $Order; future = @{ keep = '보존' } }
+    }
+    $scNow = [DateTimeOffset]::Now
+    $scRecent = Get-WtStamp $scNow.AddMinutes(-1); $scEarlier = Get-WtStamp $scNow.AddDays(-1); $scOld = Get-WtStamp $scNow.AddDays(-31)
+    $scItems = @(
+        (New-WtTestShortcut 'many' '많음' @($scRecent, $scEarlier, $scEarlier)),
+        (New-WtTestShortcut 'recent' '최근' @($scRecent, $scEarlier)),
+        (New-WtTestShortcut 'z' '나' @($scEarlier, $scEarlier)), (New-WtTestShortcut 'a' '가' @($scEarlier, $scEarlier)),
+        (New-WtTestShortcut 'pin-second' '가 고정' @() $true 2), (New-WtTestShortcut 'pin-first' '나 고정' @() $true 1),
+        (New-WtTestShortcut 'old' '지난 기록' @($scOld)), (New-WtTestShortcut 'gone' '없어진 항목' @($scRecent))
+    )
+    $scItems += ,$null; $scItems += ,@('모르는', '목록'); $scItems += ,@()
+    [void](Save-WtStore (Open-WtStore 'shortcuts' 1) $scItems -Extra @{ futureTop = @{ keep = 7 } })
+    $ranked = @(Get-WtShortcuts)
+    Assert-Wt '바로 가기: 고정 → 횟수 → 최근 → 제목 · 30일 밖/없어진 항목 제외' (($ranked.Key -join ',') -ceq 'pin-first,pin-second,many,recent,a,z' -and $ranked[2].Count -eq 3) ($ranked.Key -join ',')
+    Set-WtSetting 'addons.disabled' @('test-links')
+    Assert-Wt '바로 가기: 꺼진 탭 제외 · 저장 유지' (@(Get-WtShortcuts).Count -eq 0 -and (Open-WtStore 'shortcuts' 1).Items.Count -eq 11)
+    Set-WtSetting 'addons.disabled' @()
+    Add-WtUse -Page test-links -Key many -Title '많음' -Sub '시험'
+    $scRound = Open-WtStore 'shortcuts' 1
+    Assert-Wt '바로 가기 왕복: 모르는 맨 위/항목 칸 · null · 목록 · 빈 목록 보존' ($scRound.Doc.futureTop.keep -eq 7 -and $scRound.Items[0].future.keep -ceq '보존' -and
+        $scRound.Items.Count -eq 11 -and $null -eq $scRound.Items[8] -and $scRound.Items[9][1] -ceq '목록' -and $scRound.Items[10] -is [array] -and $scRound.Items[10].Count -eq 0)
+    Set-WtHomePin -Page test-links -Key a -Title '가' -Pinned $true
+    Set-WtHomePin -Page test-links -Key a -Title '가' -Pinned $true
+    Assert-Wt '홈 고정: 중복 고정은 순서 유지' ((Test-WtHomePin test-links a) -and (@(Get-WtShortcuts).Key -join ',') -ceq 'pin-first,pin-second,a,many,recent,z')
+    Set-WtHomePin -Page test-links -Key a -Title '가' -Pinned $false
+    Assert-Wt '홈 고정 해제' (-not (Test-WtHomePin test-links a))
+    $scStore = Open-WtStore 'shortcuts' 1; $scCopy = @(Copy-WtItem $scStore.Items)
+    $scCopy[0].uses = @($scOld) + @(1..205 | ForEach-Object { Get-WtStamp $scNow.AddSeconds(-$_) })
+    [void](Save-WtStore $scStore $scCopy)
+    Add-WtUse -Page test-links -Key many -Title '많음'
+    $scSaved = (Open-WtStore 'shortcuts' 1).Items[0]
+    Assert-Wt '연 기록: 30일 밖 버림 · 최근 200회 제한' ($scSaved.uses.Count -eq 200 -and $scSaved.uses -cnotcontains $scOld -and @($scSaved.uses | Where-Object { (ConvertFrom-WtStamp $_) -lt (ConvertFrom-WtStamp (Get-WtStamp $scNow.AddSeconds(-199))) }).Count -eq 0)
+    foreach ($id in 'test-links', 'test-side', 'test-main') { Register-WtAddon -Id $id -Title '검사 끝' -NewView { } }
+
+    $scHours = Get-WtWorkHours
+    Set-WtWorkHours @{ 'work.days' = @(1, 2, 3, 4, 5); 'work.start' = '10:00'; 'work.end' = '19:00'; 'work.lunchStart' = '12:00'; 'work.lunchEnd' = '13:00' }
+    Register-WtCalendarSource -Id 'test-marks' -CalendarItems {
+        foreach ($spec in @(@('2026-11-02', 'work', '10:00'), @('2026-11-03', 'work', '09:30'), @('2026-11-04', 'leave', ''), @('2026-11-07', 'work', '11:00'))) {
+            [pscustomobject]@{ Date = ConvertFrom-WtDateText $spec[0]; Kind = $spec[1]; Text = $spec[1]; Style = 'Sub'; AllDay = -not [bool]$spec[2]; Time = $spec[2]; Id = $spec[0] }
+        }
+    }
+    $marksData = Get-WtCalendarItems ([datetime]'2026-11-02') ([datetime]'2026-11-08')
+    $marks = @(2, 3, 4, 7, 8 | ForEach-Object { Get-WtCalendarMark ([datetime]::new(2026, 11, $_)) $marksData.Items })
+    Assert-Wt '작은 달력: 업무시간 설정 · 안/밖 ✔ 색 · 휴가 X · 쉬는 날 출근 ✔ 우선' ($marks[0].Glyph -eq 0xE73E -and $marks[0].Brush -ceq 'B.Status.Success.Icon' -and
+        $marks[1].Glyph -eq 0xE73E -and $marks[1].Brush -ceq 'B.Text.Tertiary' -and $marks[2].Glyph -eq 0xE711 -and $marks[2].DayOff -and $marks[3].Glyph -eq 0xE73E -and $marks[3].DayOff -and $marks[4].Glyph -eq 0xE711)
+    Register-WtCalendarSource -Id 'test-marks' -CalendarItems $null
+    Set-WtWorkHours $scHours
+
     # ---- 도움말 단축키 (가짜 탭) ----
     Register-WtAddon -Id 'test-x' -Title '엑스' -Order 30 -NewView { } -Shortcuts @(@('F5', '새로 고침'), @('Enter', '열기'))
     Register-WtAddon -Id 'test-y' -Title '와이' -Order 40 -NewView { } -Shortcuts (, @('F5', '새로 고침'))
@@ -1076,7 +1131,7 @@ pie
             $savedAddons = & (Get-Module Addons) { ,$script:addons.ToArray() }
             try {
                 & (Get-Module Addons) { $script:addons.Clear() }
-                Register-WtAddon -Id 'shell-late' -Title '뒤' -Group '첫 묶음' -Order 30 -Badge { $null } -NewView { New-WtText '빈 화면' }
+                Register-WtAddon -Id 'shell-late' -Title '뒤' -Group '첫 묶음' -Order 30 -Badge { $null } -NewView { New-WtText '빈 화면' } -OnOpen { param($OpenArgs) $script:testOpenArgs = $OpenArgs }
                 Register-WtAddon -Id 'shell-dot' -Title '점' -Group '다음 묶음' -Order 20 -Badge { 'dot' } -BadgeToolTip '가짜 점' -NewView { New-WtText '점 화면' }
                 Register-WtAddon -Id 'shell-count' -Title '수' -Group '첫 묶음' -Order 10 -Badge { 7 } -NewView {
                     New-WtSidePanel -Content (New-WtText '보조 내용') -Key 'test.shell.side' -Title '보조' -Width 308
@@ -1087,6 +1142,15 @@ pie
                 $script:window.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
                 $script:ui = Get-WtNamedElements $script:window $script:shellXaml
                 $script:current = $null; $script:views = @{}
+                $script:testOpenArgs = $null
+                Open-WtPage -Id 'shell-late' -Args @{ Key = '받은 키'; Date = [datetime]'2026-11-03'; Id = '선택 줄' }
+                $openArgsOk = $script:current -ceq 'shell-late' -and $script:testOpenArgs.Key -ceq '받은 키' -and $script:testOpenArgs.Id -ceq '선택 줄' -and $script:testOpenArgs.Date -eq [datetime]'2026-11-03'
+                $script:testOpenArgs = $null
+                Set-WtSetting 'addons.disabled' @('shell-late')
+                Open-WtPage -Id 'shell-late' -Args @{ Key = '무시' }
+                Open-WtPage -Id 'shell-no-such-page' -Args @{ Key = '무시' }
+                $openArgsOk = $openArgsOk -and $null -eq $script:testOpenArgs
+                Set-WtSetting 'addons.disabled' @()
                 Set-WtSetting 'nav.collapsed' $false
                 Update-WtNav
                 $groups = (@(Get-WtNavGroups) | ForEach-Object { "$($_.Name):$($_.Items.Id -join ',')" }) -join ';'
@@ -1192,7 +1256,7 @@ pie
                     Write-WtJsonFile (Get-WtSettingsPath) $hoursSnapshot
                     Initialize-WtSettings
                 }
-                [pscustomobject]@{ Groups = $groups; Badge = $badgeOk; Isolated = $failureIsolated; Minute = $minute; Refresh = $refresh
+                [pscustomobject]@{ OpenArgs = $openArgsOk; Groups = $groups; Badge = $badgeOk; Isolated = $failureIsolated; Minute = $minute; Refresh = $refresh
                     CollapsedNav = $collapsedNav; ExpandedNav = $expandedNav; Cycle = $cycle; OnlyNav = $onlyNav
                     Saved = $savedClosed -and $restored -and $opened; Narrow = $narrowStart; Overlay = $overlay; Restore = $wideRestore; Left = $leftOk
                     Reserved = -not (Test-WtKeyOwned 'Ctrl+Shift+B' $reserved) -and (Test-WtKeyOwned 'Ctrl+B' $reserved)
@@ -1207,6 +1271,7 @@ pie
             }
         }
         Assert-Wt '창 짜임: 묶음·순서가 등록대로' ($shellChecks.Groups -eq '첫 묶음:shell-count,shell-late;다음 묶음:shell-dot,shell-error') $shellChecks.Groups
+        Assert-Wt '탭 열기: 인자 전달 · 없는/꺼진 탭 무시 (가짜 탭)' $shellChecks.OpenArgs
         Assert-Wt '창 짜임: 숫자·점·없음·배지 실패 격리' ($shellChecks.Badge -and $shellChecks.Isolated)
         Assert-Wt '창 짜임: 탭 이동 때 재평가·분 타이머' ($shellChecks.Refresh -and $shellChecks.Minute)
         Assert-Wt '창 짜임: 메뉴 200/48·툴팁·아래 아이콘 가로/세로' ($shellChecks.CollapsedNav -and $shellChecks.ExpandedNav)

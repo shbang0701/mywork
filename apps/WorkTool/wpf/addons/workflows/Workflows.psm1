@@ -22,6 +22,7 @@ $script:run = $null          # 앱 안에서 실행 중인 것
 $script:consoles = [System.Collections.Generic.List[object]]::new()   # 띄운 콘솔 창: @{ Process; Record }
 $script:timer = $null
 $script:pendingFlow = $null  # 홈 카드에서 고른 업무 (화면을 열 때 고른다)
+$script:shortcutKey = $null
 $script:lastDeleted = $null  # 지운 업무 (실행 취소용)
 $script:filling = $false     # 코드로 트리를 고르는 중
 $script:outputKey = $null    # 출력 칸에 보이는 것이 어느 스크립트 · 업무의 것인지 ('script:경로' | 'flow:id')
@@ -883,6 +884,43 @@ function Show-WtFlowTree([object[]]$Items = @(Get-WtFlows)) {
     if ($found) { Select-WtFlowNode $found.Tag -Reuse }
     elseif ($keep) { Clear-WtFlowSelection }
     else { Update-WtFlowCenter -Reuse }
+    if ($script:shortcutKey) { Open-WtFlowArgs @{ Key = $script:shortcutKey } }
+}
+
+function Get-WtFlowShortcut($Tag) {
+    if ($Tag.Kind -eq 'flow') {
+        $flowItem = Get-WtFlows | Where-Object { $_.id -ceq $Tag.Id } | Select-Object -First 1
+        if ($flowItem) { [pscustomobject]@{ Page = 'workflows'; Key = "flow:$($flowItem.id)"; Title = $flowItem.title; Sub = '업무'; Icon = 0xE756 } }
+    } elseif ($Tag.Kind -eq 'script') {
+        [pscustomobject]@{ Page = 'workflows'; Key = "script:$($Tag.Path)"; Title = [IO.Path]::GetFileName($Tag.Path); Sub = '업무'; Icon = 0xE756 }
+    }
+}
+
+function Test-WtFlowShortcut([string]$Key) {
+    if ($Key.StartsWith('flow:', [StringComparison]::Ordinal)) { return @((Get-WtFlows) | Where-Object { $_.id -ceq $Key.Substring(5) }).Count -gt 0 }
+    if (-not $Key.StartsWith('script:', [StringComparison]::Ordinal)) { return $false }
+    $path = $Key.Substring(7)
+    try { [bool](Invoke-WtWork { param($file) Test-Path -LiteralPath $file -PathType Leaf } -Session Default -ArgumentList $path -Key (Get-WtPathKey $path) -TimeoutMs $script:scanWaitMs) }
+    catch { $false }
+}
+
+function Open-WtFlowArgs($OpenArgs) {
+    if (-not $OpenArgs.Key) { return }
+    $script:shortcutKey = [string]$OpenArgs.Key
+    $queue = [Collections.Generic.Queue[object]]::new()
+    foreach ($node in $script:ui.Tree.Items) { $queue.Enqueue($node) }
+    while ($queue.Count) {
+        $node = $queue.Dequeue(); $shortcut = Get-WtFlowShortcut $node.Tag
+        if ($shortcut -and $shortcut.Key -ceq $script:shortcutKey) {
+            $script:shortcutKey = $null
+            $parent = [System.Windows.Controls.ItemsControl]::ItemsControlFromItemContainer($node)
+            while ($parent -is [System.Windows.Controls.TreeViewItem]) { $parent.IsExpanded = $true; $parent = [System.Windows.Controls.ItemsControl]::ItemsControlFromItemContainer($parent) }
+            $node.IsSelected = $true; $node.BringIntoView()
+            Select-WtFlowNode $node.Tag -Reuse
+            return
+        }
+        foreach ($child in $node.Items) { if ($child -is [System.Windows.Controls.TreeViewItem]) { $queue.Enqueue($child) } }
+    }
 }
 
 function Add-WtFlowRoot {
@@ -1328,6 +1366,7 @@ function Complete-WtFlowStart($Work) {
         Update-WtFlowCommands
         return
     }
+    Add-WtUse -Page 'workflows' -Key $ctx.OutputKey -Title $(if ($ctx.Record.flow) { $ctx.Record.flow } else { $ctx.Name }) -Sub '업무' -Icon 0xE756
     if ($ctx.Mode -eq 'console') {
         if ($p) { $script:consoles.Add(@{ Process = $p; Record = $ctx.Record }) }
         $note = "콘솔 창을 띄웠습니다: $($ctx.Name). 그 창에서 끝내고 닫으세요."
@@ -1727,6 +1766,22 @@ function New-WtFlowsView {
     [void]$ldock.Children.Add($remove)
     $tree = [System.Windows.Controls.TreeView]::new()
     Set-WtStyle $tree 'Tree'
+    $tree.ContextMenu = New-WtHomePinContextMenu
+    $homePin = [System.Windows.Controls.MenuItem]::new(); $homePin.Header = '홈에 고정'
+    [void]$tree.ContextMenu.Items.Add($homePin)
+    $tree.Add_PreviewMouseRightButtonDown({
+            param($s, $e)
+            $element = $e.OriginalSource
+            while ($element -and $element -isnot [System.Windows.Controls.TreeViewItem] -and $element -is [System.Windows.Media.Visual]) { $element = [System.Windows.Media.VisualTreeHelper]::GetParent($element) }
+            $s.ContextMenu.Tag = if ($element -is [System.Windows.Controls.TreeViewItem]) { $element.Tag } else { $null }
+        })
+    $tree.Add_ContextMenuOpening({
+            param($s, $e)
+            $tag = if ($s.ContextMenu.Tag) { $s.ContextMenu.Tag } elseif ($s.SelectedItem) { $s.SelectedItem.Tag } else { $null }
+            $shortcut = Get-WtFlowShortcut $tag
+            if (-not $shortcut) { $e.Handled = $true; return }
+            $s.ContextMenu.Items.Clear(); [void]$s.ContextMenu.Items.Add((New-WtHomePinMenuItem $shortcut))
+        })
     $tree.Add_SelectedItemChanged({
             param($s, $e)
             $node = $s.SelectedItem
@@ -1996,7 +2051,8 @@ function Stop-WtFlows {
 Register-WtAddon -Id 'workflows' -Title '업무' -Icon 0xE756 -Group '작업' -Order 60 -WarmUp View `
     -NewView { New-WtFlowsView } `
     -Refresh { param($view) Update-WtFlowsView } `
-    -HomeCard { New-WtFlowsHomeCard } `
+    -OnOpen { param($OpenArgs) Open-WtFlowArgs $OpenArgs } `
+    -ShortcutExists { param($Key) Test-WtFlowShortcut $Key } `
     -OnExit { Stop-WtFlows } `
     -Help @('PowerShell 스크립트를 입력 폼으로 실행합니다.', '입력값을 업무로 저장해 다시 씁니다.') `
     -Shortcuts (, @('F5', '스크립트 목록 새로 고침'))

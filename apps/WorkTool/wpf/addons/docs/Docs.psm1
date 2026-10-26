@@ -22,6 +22,7 @@ $script:treeWaitNode = $null     # 그 경로로 가려고 하위 폴더를 읽�
 $script:folderFallback = $null   # 마지막으로 본 폴더를 못 열면 대신 열 폴더 @{ From; To }
 $script:treeBatches = [System.Collections.Generic.List[object]]::new()
 $script:treeBatchScheduled = $false
+$script:shortcutEntry = $null
 
 Register-WtSettingDefault 'docs.roots' @()
 Register-WtSettingDefault 'docs.pins' @()
@@ -163,12 +164,43 @@ function Find-WtDocEntry([object[]]$Entries, [string]$Query) {
 function Open-WtDocEntry($Entry) {
     if (-not $Entry) { return }
     if ($Entry.Missing) { Show-WtMessage "찾을 수 없습니다. 옮기거나 지웠으면 즐겨찾기에서 빼세요.`n$($Entry.Path)"; return }
-    if ($Entry.IsDir) { Show-WtDocFolder $Entry.Path -SelectTree; return }
+    if ($Entry.IsDir) {
+        Add-WtUse -Page 'docs' -Key $Entry.Path -Title $Entry.Name -Sub '문서' -Icon 0xE8B7
+        Show-WtDocFolder $Entry.Path -SelectTree; return
+    }
     $ext = [System.IO.Path]::GetExtension($Entry.Path).ToLowerInvariant()
     if ($script:runnable -contains $ext) {
         if (-not (Confirm-WtYesNo "'$($Entry.Name)'은(는) 실행되는 파일입니다. 실행할까요?")) { return }
     }
+    Add-WtUse -Page 'docs' -Key $Entry.Path -Title $Entry.Name -Sub '문서' -Icon 0xE8A5
     Open-WtPath $Entry.Path -NotFound "찾을 수 없습니다. 옮기거나 지웠으면 새로 고침하세요.`n$($Entry.Path)"
+}
+
+function Test-WtDocShortcut([string]$Key) {
+    try { [bool](Invoke-WtWork { param($path) Test-Path -LiteralPath $path } -Session Default -ArgumentList $Key -Key (Get-WtPathKey $Key) -TimeoutMs $script:folderWaitMs) }
+    catch { $false }
+}
+
+function Open-WtDocArgs($OpenArgs) {
+    if (-not $OpenArgs.Key) { return }
+    [void](Start-WtWork -Script { param($path) if (Test-Path -LiteralPath $path) { Get-Item -LiteralPath $path } } -Session Default -ArgumentList ([string]$OpenArgs.Key) `
+        -Key (Get-WtPathKey ([string]$OpenArgs.Key)) -TimeoutMs 10000 -OnDone {
+            param($work)
+            if ($work.State -ne 'done' -or -not $work.Result) { return }
+            $script:shortcutEntry = New-WtDocEntry $work.Result
+            Show-WtDocFolder (Split-Path $script:shortcutEntry.Path -Parent) -SelectTree
+            Complete-WtDocShortcutSelection
+        })
+}
+
+function Complete-WtDocShortcutSelection {
+    if (-not $script:shortcutEntry -or $script:ui.Loading) { return }
+    $entry = $script:entries | Where-Object Path -eq $script:shortcutEntry.Path | Select-Object -First 1
+    $script:shortcutEntry = $null
+    if ($entry) {
+        $script:ui.List.SelectedItem = $entry; $script:ui.List.ScrollIntoView($entry)
+        Open-WtDocEntry $entry
+    }
 }
 
 function Show-WtDocInExplorer([string]$Path) { Open-WtPath $Path -Reveal }
@@ -275,6 +307,7 @@ function Set-WtDocResult($Job, $Result) {
                 try { Set-WtSetting 'docs.last' $script:current } catch { $script:ui.Error = '마지막 위치를 저장하지 못했습니다. 폴더 쓰기 권한을 확인하세요.' }
             }
             Update-WtDocList
+            Complete-WtDocShortcutSelection
         }
         'home' {
             $col = $Job.Context
@@ -667,6 +700,21 @@ function New-WtDocsView {
             if ($d -is [System.Windows.Controls.ListBoxItem]) { Open-WtDocEntry $d.Tag }
         })
     $list.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Enter' -and $s.SelectedItem) { Open-WtDocEntry $s.SelectedItem; $e.Handled = $true } })
+    $list.ContextMenu = New-WtHomePinContextMenu
+    $homePin = [System.Windows.Controls.MenuItem]::new(); $homePin.Header = '홈에 고정'
+    [void]$list.ContextMenu.Items.Add($homePin)
+    $list.Add_PreviewMouseRightButtonDown({
+            param($s, $e)
+            $container = [System.Windows.Controls.ItemsControl]::ContainerFromElement($s, $e.OriginalSource)
+            $s.ContextMenu.Tag = if ($container) { $container.DataContext } else { $null }
+        })
+    $list.Add_ContextMenuOpening({
+            param($s, $e)
+            $entry = if ($s.ContextMenu.Tag) { $s.ContextMenu.Tag } else { $s.SelectedItem }
+            if (-not $entry -or $entry.Missing) { $e.Handled = $true; return }
+            $s.ContextMenu.Items.Clear()
+            [void]$s.ContextMenu.Items.Add((New-WtHomePinMenuItem ([pscustomobject]@{ Page = 'docs'; Key = $entry.Path; Title = $entry.Name; Sub = '문서'; Icon = 0xE8A5 })))
+        })
     [void]$area.Children.Add($list)
     $empty = New-WtStack Vertical 12
     $empty.HorizontalAlignment = 'Center'
@@ -735,7 +783,8 @@ function New-WtDocsHomeCard {
 Register-WtAddon -Id 'docs' -Title '문서' -Icon 0xE8B7 -Group '작업' -Order 50 -WarmUp View `
     -NewView { New-WtDocsView } `
     -Refresh { param($view) Update-WtDocsView } `
-    -HomeCard { New-WtDocsHomeCard } `
+    -OnOpen { param($OpenArgs) Open-WtDocArgs $OpenArgs } `
+    -ShortcutExists { param($Key) Test-WtDocShortcut $Key } `
     -OnExit { Stop-WtDocs } `
     -Help '폴더의 파일을 원래 프로그램으로 엽니다.' `
     -Shortcuts @(@('Enter', '고른 파일 열기 · 폴더 들어가기'), @('Alt + ↑', '위 폴더'), @('F5', '새로 고침'), @('Ctrl + F', '이름으로 필터링'))
