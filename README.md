@@ -28,6 +28,7 @@
     - [경량 성능 확인](apps/WorkTool/wpf/tests/Measure-WtPerformance.ps1) — 창 표시 없이 CPU·시간 예산 안에서 화면 구성 비용을 확인합니다. A~H 전체 판정은 하지 않습니다. [사용법](apps/WorkTool/wpf/README.md#성능-설정과-측정)
 - **[docs/guides/](docs/guides/)** — 읽는 가이드
   - [productivity/](docs/guides/productivity/) — 업무 효율·작업 환경
+    - [WorkTool 사용 매뉴얼](docs/guides/productivity/worktool-manual.md) — 실제 화면으로 보는 시작 방법과 탭별 사용법
     - [갤럭시 S26 울트라 앱별 키보드 가이드](docs/guides/productivity/galaxy-s26-ultra-app-keyboard-guide.md)
     - [PowerShell 7 · Solarized Light 다듬기 가이드](docs/guides/productivity/powershell-solarized-light-guide.md)
   - ops/ — 운영 노하우·장애 대응 (아직 없음)
