@@ -902,6 +902,8 @@ function Test-WtRoutineDayOff([datetime]$Date) {
 
 function Get-WtRoutineSlotKeys($Entry, [datetime]$Date) {
     if ($Entry.State -ne 'ok' -or $Date -lt $Entry.Start) { return }
+    $until = ConvertFrom-WtRoutineDate (Get-WtField (Get-WtField $Entry.Item 'routine') 'until')
+    if ($until -and $Date.Date -gt $until) { return }
     if ($Entry.Freq -ceq 'weekly' -and ((([int]$Date.DayOfWeek + 6) % 7) + 1) -notin $Entry.Days) { return }
     if ($Entry.WorkdaysOnly -and (Test-WtRoutineDayOff $Date)) { return }
     $dateText = ConvertTo-WtDateText $Date
@@ -940,8 +942,8 @@ function New-WtRoutine {
     Save-WtRoutine -Store $Store -Patch @{ title = $Title; start = @{ date = $date }; routine = $rule } -At $At
 }
 
-# Patch는 title/start/routine. 규칙 변경은 기존 편집의 기본값처럼 첫 회차부터 나눈다(옛 계열 지운 표시).
-function Save-WtRoutine($Store, $Patch, [string]$Id, [string]$At = (Get-WtStamp)) {
+# Patch는 title/start/routine. 규칙 변경은 From부터 새 계열로 나눈다. 생략하면 첫 회차부터(옛 계열 지운 표시).
+function Save-WtRoutine($Store, $Patch, [string]$Id, [string]$At = (Get-WtStamp), $From) {
     if ($null -eq $Store) { $Store = Open-WtScheduleStore }
     $fail = [pscustomobject]@{ Success = $false; Reason = ''; Id = $Id; Store = $Store }
     $stamp = Get-WtRoutineStamp $At
@@ -969,10 +971,21 @@ function Save-WtRoutine($Store, $Patch, [string]$Id, [string]$At = (Get-WtStamp)
     if ($entry.State -ne 'ok') { $fail.Reason = $entry.Problem; return $fail }
     if ($old -and (Get-WtRoutineRuleKey $old) -cne (Get-WtRoutineRuleKey $entry)) {
         if ($old.State -ne 'ok') { $fail.Reason = '정상인 루틴만 나눌 수 있습니다'; return $fail }
+        $cut = if ($null -ne $From) { ConvertFrom-WtRoutineDate $From } else { $old.Start }
+        $until = ConvertFrom-WtRoutineDate (Get-WtField (Get-WtField $old.Item 'routine') 'until')
+        if (-not $cut -or $cut -lt $old.Start -or ($until -and $cut -gt $until)) {
+            $fail.Reason = '루틴 계열 안의 날짜를 고르세요'; return $fail
+        }
         $previous = Copy-WtItem $old.Item
-        $reason = Set-WtRecordDeleted $previous $true $stamp
-        if ($reason) { $fail.Reason = $reason; return $fail }
+        if ($cut -gt $old.Start) {
+            Set-WtField $previous.routine 'until' (ConvertTo-WtDateText $cut.AddDays(-1))
+            Set-WtItemEdited $previous $stamp
+        } else {
+            $reason = Set-WtRecordDeleted $previous $true $stamp
+            if ($reason) { $fail.Reason = $reason; return $fail }
+        }
         $edit.Items[$edit.Index] = $previous
+        Set-WtField $edit.Item.start 'date' (ConvertTo-WtDateText $cut)
         Set-WtField $edit.Item 'id' (New-WtId)
         Set-WtField $edit.Item 'origin' ([pscustomobject]@{ from = 'split'; id = $Id; at = $stamp })
         Set-WtField $edit.Item 'created' $stamp; Set-WtField $edit.Item 'updated' $stamp; Set-WtField $edit.Item 'rev' 0

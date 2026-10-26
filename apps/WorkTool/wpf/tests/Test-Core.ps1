@@ -552,6 +552,14 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Register-WtAddon -Id 'test-side' -Title '옆' -NewView { } -HomeCard { } -HomeSlot side -HomeOrder 20 -CalendarHost
     Register-WtAddon -Id 'test-main' -Title '뒤' -NewView { } -HomeCard { } -HomeSlot main -HomeOrder 30
     Assert-Wt '홈 카드: 자리별 순서 · 달력 주인 등록' ((@(Get-WtHomeCards).Id -join ',') -ceq 'test-links,test-main,test-side' -and (Get-WtCalendarHost).Id -ceq 'test-side')
+    Register-WtAddon -Id 'test-two-cards' -Title '두 카드' -NewView { } -HomeCards @(
+        @{ Slot = 'main'; Order = 15; Card = { '가짜 본문' } }, @{ Slot = 'side'; Order = 25; Card = { '가짜 옆' } })
+    $twoCards = @(Get-WtHomeCards | Where-Object Id -ceq 'test-two-cards')
+    Assert-Wt '홈 카드: 탭 하나의 서로 다른 자리 두 카드 · 기존 단일 카드와 정렬' ($twoCards.Count -eq 2 -and
+        $twoCards[0].HomeSlot -ceq 'main' -and $twoCards[0].HomeOrder -eq 15 -and (& $twoCards[0].HomeCard) -ceq '가짜 본문' -and
+        $twoCards[1].HomeSlot -ceq 'side' -and $twoCards[1].HomeOrder -eq 25 -and (& $twoCards[1].HomeCard) -ceq '가짜 옆' -and
+        (@(Get-WtHomeCards).Id -join ',') -ceq 'test-links,test-two-cards,test-main,test-side,test-two-cards')
+    Register-WtAddon -Id 'test-two-cards' -Title '두 카드' -NewView { }
     function New-WtTestShortcut([string]$Key, [string]$Title, [object[]]$Uses, [bool]$Pinned = $false, $Order = $null) {
         [pscustomobject]@{ id = $Key; page = 'test-links'; key = $Key; title = $Title; sub = ''; icon = 0xE8A5; uses = @($Uses); pinned = $Pinned; pinOrder = $Order; future = @{ keep = '보존' } }
     }

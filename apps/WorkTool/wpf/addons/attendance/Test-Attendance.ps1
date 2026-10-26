@@ -264,6 +264,20 @@ try {
     $calendar = Get-WtAttendanceCalendarItems (& $d '2026-11-30') (& $d '2026-12-01') @(foreach ($i in $r.Store.Items) { ConvertFrom-WtAttendanceItem $i })
     Assert-WtTest '근태 달력: 월을 넘는 업무외는 두 날, 스타일은 쓰임새 이름' (((@($calendar).Date | ForEach-Object { ConvertTo-WtDateText $_ }) -join ',') -eq '2026-11-30,2026-12-01' -and
         @($calendar | Where-Object Style -cne 'Att.Over').Count -eq 0)
+    $workCalendarEntries = @(foreach ($json in @(
+        '{"id":"work-closed","kind":"work","start":{"date":"2026-10-27","time":"09:02"},"end":{"date":"2026-10-27","time":"18:10"}}',
+        '{"id":"work-open","kind":"work","start":{"date":"2026-10-27","time":"09:02"},"end":null}')) {
+        ConvertFrom-WtAttendanceItem ($json | ConvertFrom-Json -DateKind String)
+    })
+    $workCalendar = @(Get-WtAttendanceCalendarItems (& $d '2026-10-27') (& $d '2026-10-27') $workCalendarEntries)
+    Assert-WtTest '근태 달력 퇴근 있음: 근무 시작–끝(en dash) · 다른 칸 유지' ($workCalendar.Count -eq 2 -and
+        $workCalendar[0].Text -ceq '근무 09:02–18:10' -and $workCalendar[0].Date -eq (& $d '2026-10-27') -and
+        $workCalendar[0].Kind -ceq 'work' -and $workCalendar[0].Style -ceq 'Att.Work' -and -not $workCalendar[0].AllDay -and
+        $workCalendar[0].Time -ceq '09:02' -and $workCalendar[0].Id -ceq 'work-closed' -and $workCalendar[0].Page -ceq 'attendance')
+    Assert-WtTest '근태 달력 퇴근 없음: 근무 시작만 · 다른 칸 유지' ($workCalendar[1].Text -ceq '근무 09:02' -and
+        $workCalendar[1].Date -eq (& $d '2026-10-27') -and $workCalendar[1].Kind -ceq 'work' -and
+        $workCalendar[1].Style -ceq 'Att.Work' -and -not $workCalendar[1].AllDay -and $workCalendar[1].Time -ceq '09:02' -and
+        $workCalendar[1].Id -ceq 'work-open' -and $workCalendar[1].Page -ceq 'attendance')
 
     $reportItems = @(
         '{"id":"w","kind":"work","start":{"date":"2028-02-29","time":"08:00"},"end":null,"note":"미완료"}',

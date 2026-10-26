@@ -450,11 +450,13 @@ function Get-WtAttendanceCalendarItems([datetime]$From, [datetime]$To, [object[]
         elseif ($e.Kind -eq 'overtime' -and $e.HasEnd -and $e.End -gt $e.Start -and $e.End.TimeOfDay -eq [timespan]::Zero) { $last = $last.AddDays(-1) }
         $a = if ($e.StartDate -lt $From.Date) { $From.Date } else { $e.StartDate }
         $b = if ($last -gt $To.Date) { $To.Date } else { $last }
-        $label = switch ($e.Kind) { work { '출근' }; leave { '휴가' }; trip { '출장' }; overtime { '업무외' } }
+        $label = switch ($e.Kind) { work { '근무' }; leave { '휴가' }; trip { '출장' }; overtime { '업무외' } }
         $style = switch ($e.Kind) { work { 'Att.Work' }; leave { 'Att.Leave' }; trip { 'Att.Trip' }; overtime { 'Att.Over' } }
         for ($day = $a; $day -le $b; $day = $day.AddDays(1)) {
             $time = if ($e.HasTime -and $day -eq $e.StartDate) { $e.Start.ToString('HH:mm', $script:inv) } else { $null }
-            [pscustomobject]@{ Date = $day; Kind = $e.Kind; Text = $(if ($time) { "$label $time" } else { $label }); Style = $style
+            $text = if ($time) { "$label $time" } else { $label }
+            if ($e.Kind -ceq 'work' -and $time -and $e.HasEnd) { $text += '–' + $e.End.ToString('HH:mm', $script:inv) }
+            [pscustomobject]@{ Date = $day; Kind = $e.Kind; Text = $text; Style = $style
                 AllDay = $null -eq $time; Time = $time; Id = $e.Id; Page = 'attendance' }
         }
     }

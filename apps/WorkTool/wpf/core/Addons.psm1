@@ -22,6 +22,7 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   ShortcutExists { param($Key) } → 바로 가기 대상이 남아 있으면 $true (선택)
   HomeCard     { } → 홈에 놓을 카드 요소(여러 개 가능)를 돌려준다 (선택)
   HomeSlot     main(기본) · side. HomeOrder가 작을수록 먼저 놓는다
+  HomeCards    @(@{ Slot = 'main'|'side'; Order = 숫자; Card = { } }, ...). 한 탭의 여러 자리 카드 (선택)
   CalendarHost 작은 달력 날짜를 열 탭 표시 (선택)
   ImportLegacy { param($folder) } → 예전 WorkTool data 폴더에서 이 탭 데이터를 가져와 저장한다. 가져온 개수를 돌려준다 (선택)
   OnExit       { } → 끝내기 직전(SavePending 확인 뒤) 타이머·조회 등 실행 자원을 정리한다 (선택)
@@ -61,12 +62,22 @@ function Register-WtAddon {
         [string]$Description = '',
         [string[]]$Help = @(),
         [object[]]$Shortcuts = @(),
-        [scriptblock]$HelpCard
+        [scriptblock]$HelpCard,
+        [object[]]$HomeCards = @()
     )
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
     foreach ($s in $Shortcuts) {
         if (@($s).Count -ne 2) { throw "애드온 '$Id'의 단축키는 @('키', '설명') 모양이어야 합니다." }
+    }
+    $cards = @($HomeCards)
+    if (-not $PSBoundParameters.ContainsKey('HomeCards') -and $HomeCard) {
+        $cards = @(@{ Slot = $HomeSlot; Order = $HomeOrder; Card = $HomeCard })
+    }
+    foreach ($card in $cards) {
+        if ($card.Slot -cnotin @('main', 'side') -or $card.Card -isnot [scriptblock] -or $card.Order -isnot [int]) {
+            throw "애드온 '$Id'의 홈 카드는 Slot(main/side) · Order(정수) · Card(함수)가 필요합니다."
+        }
     }
     for ($i = $script:addons.Count - 1; $i -ge 0; $i--) {
         if ($script:addons[$i].Id -eq $Id) { $script:addons.RemoveAt($i) }
@@ -75,6 +86,7 @@ function Register-WtAddon {
             Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Group = $Group; Badge = $Badge; BadgeToolTip = $BadgeToolTip; Required = [bool]$Required
             NewView = $NewView; Refresh = $Refresh; OnOpen = $OnOpen; ShortcutExists = $ShortcutExists
             HomeCard = $HomeCard; HomeSlot = $HomeSlot; HomeOrder = $HomeOrder; CalendarHost = [bool]$CalendarHost
+            HomeCards = $cards
             CalendarItems = $CalendarItems; ImportLegacy = $ImportLegacy; OnExit = $OnExit
             Description = $Description
             SavePending = $SavePending; WarmUp = $WarmUp
@@ -85,7 +97,13 @@ function Register-WtAddon {
 }
 
 function Get-WtHomeCards {
-    Get-WtAddon | Where-Object HomeCard | Sort-Object HomeSlot, HomeOrder, Id
+    @(foreach ($addon in @(Get-WtAddon)) {
+        foreach ($card in @($addon.HomeCards)) {
+            $entry = $addon.Clone()
+            $entry.HomeCard = $card.Card; $entry.HomeSlot = $card.Slot; $entry.HomeOrder = $card.Order
+            $entry
+        }
+    }) | Sort-Object HomeSlot, HomeOrder, Id
 }
 
 function Get-WtCalendarHost {
