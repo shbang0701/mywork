@@ -67,13 +67,17 @@ flowchart LR
     })
     Write-WtStore memo -Items $memos
     $today = [datetime]::Today
-    Write-WtStore schedule -Items @(foreach ($i in 1..300) {
-        $day = $today.AddDays(($i % 300) - 150).ToString('yyyy-MM-dd')
-        @{ id = "schedule-$i"; title = "가짜 일정 $i"; startDate = $day; endDate = $day; time = '09:00'; endTime = '10:00'; note = '가짜 일정'; alarm = $null; repeat = ''; tags = @(); lastAlarm = ''; updated = $stamp }
+    # 일정 · 근태는 schema 2 형식 (docs/plans/schedule-attendance-design.md). 측정이 이전(schema 1 → 2) 비용을 재지 않게 바로 2로 쓴다
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    Write-WtStore schedule -Schema 2 -Items @(foreach ($i in 1..300) {
+        $day = $today.AddDays(($i % 300) - 150).ToString('yyyy-MM-dd', $inv)
+        [ordered]@{ id = "schedule-$i"; kind = 'event'; title = "가짜 일정 $i"; note = '가짜 일정'; start = [ordered]@{ date = $day; time = '09:00' }; end = [ordered]@{ date = $day; time = '10:00' }
+            repeat = $null; alarms = @(); tags = @(); created = $null; updated = $null; deleted = $null; origin = $null }
     })
-    Write-WtStore attendance -Items @(foreach ($i in 0..364) {
-        $day = $today.AddDays(-$i).ToString('yyyy-MM-dd')
-        @{ id = "attendance-$i"; type = '출근'; startDate = $day; endDate = $day; startTime = '09:00'; endTime = '18:00'; place = '가짜 장소'; detail = '가짜 기록'; updated = $stamp }
+    Write-WtStore attendance -Schema 2 -Items @(foreach ($i in 0..364) {
+        $day = $today.AddDays(-$i).ToString('yyyy-MM-dd', $inv)
+        [ordered]@{ id = "attendance-$i"; kind = 'work'; start = [ordered]@{ date = $day; time = '09:00' }; end = [ordered]@{ date = $day; time = '18:00' }; place = '가짜 장소'; note = '가짜 기록'; tags = @()
+            created = $null; updated = $null; deleted = $null; origin = $null }
     })
     $docs = Join-Path $Test.Root 'documents'
     [void][IO.Directory]::CreateDirectory($docs)

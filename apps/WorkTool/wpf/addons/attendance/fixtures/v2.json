@@ -1,0 +1,32 @@
+{
+  "schema": 2,
+  "saved": "2026-12-01T09:00:00+09:00",
+  "_fixture": "고정 시험 자료(가짜 값): schema 2 대표 예. 더하기만 하고 고치지 않는다. 형식을 바꾸면 이 파일은 그대로 두고 새 자료를 더한다.",
+  "items": [
+    { "id": "w1a2b3c4d5e6", "kind": "work", "start": { "date": "2026-11-02", "time": "08:50" }, "end": { "date": "2026-11-02", "time": "18:20" }, "place": "", "note": "", "tags": [],
+      "created": "2026-11-02T08:50:00+09:00", "updated": "2026-11-02T18:20:00+09:00", "deleted": null, "origin": null },
+    { "id": "w2a2b3c4d5e6", "kind": "work", "start": { "date": "2026-11-03", "time": "21:00" }, "end": { "date": "2026-11-04", "time": "06:30" }, "place": "", "note": "야간 근무", "tags": [],
+      "created": "2026-11-03T21:00:00+09:00", "updated": "2026-11-04T06:30:00+09:00", "deleted": null, "origin": null },
+    { "id": "w3a2b3c4d5e6", "kind": "work", "start": { "date": "2026-11-04", "time": "09:05" }, "end": null, "place": "", "note": "", "tags": [],
+      "created": "2026-11-04T09:05:00+09:00", "updated": "2026-11-04T09:05:00+09:00", "deleted": null, "origin": null },
+    { "id": "o1a2b3c4d5e6", "kind": "overtime", "start": { "date": "2026-11-05", "time": "23:00" }, "end": { "date": "2026-11-06", "time": "01:30" }, "place": "", "note": "야간 장애 원격 대응", "tags": [],
+      "overtime": { "how": "remote", "ref": "CHG-0001" }, "created": "2026-11-06T01:40:00+09:00", "updated": "2026-11-06T01:40:00+09:00", "deleted": null, "origin": null },
+    { "id": "o2a2b3c4d5e6", "kind": "overtime", "start": { "date": "2026-11-07", "time": "09:00" }, "end": { "date": "2026-11-08", "time": "11:00" }, "place": "데이터센터 A", "note": "주말 출동, 하루를 넘김", "tags": [ "출동" ],
+      "overtime": { "how": "onsite", "ref": "INC-0002" }, "created": "2026-11-08T11:10:00+09:00", "updated": "2026-11-08T11:10:00+09:00", "deleted": null, "origin": null },
+    { "id": "r1a2b3c4d5e6", "kind": "trip", "start": { "date": "2026-11-09", "time": null }, "end": { "date": "2026-11-11", "time": null }, "place": "지방 센터", "note": "장비 교체", "tags": [],
+      "created": "2026-11-01T09:00:00+09:00", "updated": "2026-11-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "l1a2b3c4d5e6", "kind": "leave", "start": { "date": "2026-11-18", "time": null }, "end": { "date": "2026-11-20", "time": null }, "place": "", "note": "11/20 회사 휴무는 일수에서 빠짐", "tags": [],
+      "leave": { "type": "annual", "days": null }, "created": "2026-11-01T09:00:00+09:00", "updated": "2026-11-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "l2a2b3c4d5e6", "kind": "leave", "start": { "date": "2026-11-23", "time": null }, "end": null, "place": "", "note": "", "tags": [],
+      "leave": { "type": "half-am", "days": null }, "created": "2026-11-01T09:00:00+09:00", "updated": "2026-11-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "l3a2b3c4d5e6", "kind": "leave", "start": { "date": "2026-11-25", "time": null }, "end": null, "place": "", "note": "사람이 정한 일수", "tags": [],
+      "leave": { "type": "comp", "days": 1 }, "created": "2026-11-01T09:00:00+09:00", "updated": "2026-11-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "l4a2b3c4d5e6", "kind": "leave", "start": { "date": "2026-11-30", "time": null }, "end": { "date": "2026-12-01", "time": null }, "place": "", "note": "달을 넘김", "tags": [],
+      "leave": { "type": "sick", "days": null }, "created": "2026-11-29T09:00:00+09:00", "updated": "2026-11-29T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "x1a2b3c4d5e6", "kind": "other", "start": { "date": "2026-11-12", "time": null }, "end": null, "place": "", "note": "건강검진", "tags": [],
+      "created": "2026-11-01T09:00:00+09:00", "updated": "2026-11-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "d1a2b3c4d5e6", "kind": "work", "start": { "date": "2026-11-16", "time": "09:00" }, "end": null, "place": "", "note": "지운 기록", "tags": [],
+      "created": "2026-11-16T09:00:00+09:00", "updated": "2026-11-16T10:00:00+09:00", "deleted": "2026-11-16T10:00:00+09:00", "origin": null },
+    { "id": "d2a2b3c4d5e6", "deleted": "2026-05-01T10:00:00+09:00" }
+  ]
+}

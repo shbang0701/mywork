@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "saved": "2026-10-27T11:01:00+09:00",
+  "_fixture": "가짜 루틴 체크 원자료 · 지운 표시와 오래된 증적",
+  "futureTop": { "keep": true },
+  "items": [
+    {
+      "id": "check-week", "routine": "routine-week", "slot": "2026-10-27", "at": "2026-10-27T09:01:00+09:00", "deleted": null,
+      "created": "2026-10-27T09:01:00+09:00", "updated": "2026-10-27T09:01:00+09:00", "rev": 0, "futureCheck": { "keep": "보존" }
+    },
+    {
+      "id": "check-hour", "routine": "routine-hour", "slot": "2026-10-27T11:00", "at": "2026-10-27T11:01:00+09:00", "deleted": null,
+      "created": "2026-10-27T11:01:00+09:00", "updated": "2026-10-27T11:01:00+09:00", "rev": 0
+    },
+    {
+      "id": "check-undone", "routine": "routine-work", "slot": "2026-10-27", "at": "2026-10-27T09:02:00+09:00", "deleted": "2026-10-27T09:03:00+09:00",
+      "created": "2026-10-27T09:02:00+09:00", "updated": "2026-10-27T09:03:00+09:00", "rev": 1
+    },
+    {
+      "id": "check-evidence", "routine": "old-routine", "slot": "2026-01-02", "at": "2026-01-02T09:00:00+09:00", "deleted": null,
+      "created": "2026-01-02T09:00:00+09:00", "updated": "2026-01-02T09:00:00+09:00", "rev": 0
+    }
+  ]
+}

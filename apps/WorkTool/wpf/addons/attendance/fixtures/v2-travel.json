@@ -1,0 +1,384 @@
+{
+  "schema": 2,
+  "saved": "2026-12-01T09:00:00+09:00",
+  "_fixture": "고정 시험 자료(가짜 값): 이동과 초과근무. 기존 자료는 고치지 않는다.",
+  "items": [
+    {
+      "id": "early-late",
+      "kind": "work",
+      "start": {
+        "date": "2026-11-02",
+        "time": "08:00"
+      },
+      "end": {
+        "date": "2026-11-02",
+        "time": "19:00"
+      },
+      "place": "",
+      "note": "early-late",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null
+    },
+    {
+      "id": "lunch",
+      "kind": "work",
+      "start": {
+        "date": "2026-11-03",
+        "time": "12:00"
+      },
+      "end": {
+        "date": "2026-11-03",
+        "time": "13:00"
+      },
+      "place": "",
+      "note": "lunch",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null
+    },
+    {
+      "id": "open-1",
+      "kind": "work",
+      "start": {
+        "date": "2026-11-04",
+        "time": "09:00"
+      },
+      "end": null,
+      "place": "",
+      "note": "open-1",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null
+    },
+    {
+      "id": "open-2",
+      "kind": "work",
+      "start": {
+        "date": "2026-11-04",
+        "time": "10:00"
+      },
+      "end": null,
+      "place": "",
+      "note": "open-2",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null
+    },
+    {
+      "id": "open-over",
+      "kind": "overtime",
+      "start": {
+        "date": "2026-11-04",
+        "time": "20:00"
+      },
+      "end": null,
+      "place": "",
+      "note": "open-over",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null,
+      "overtime": {
+        "how": "remote",
+        "ref": ""
+      },
+      "travel": {
+        "out": 5,
+        "back": 6
+      }
+    },
+    {
+      "id": "overnight",
+      "kind": "overtime",
+      "start": {
+        "date": "2026-11-05",
+        "time": "23:00"
+      },
+      "end": {
+        "date": "2026-11-06",
+        "time": "01:30"
+      },
+      "place": "",
+      "note": "overnight",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null,
+      "overtime": {
+        "how": "remote",
+        "ref": ""
+      }
+    },
+    {
+      "id": "weekend-work",
+      "kind": "work",
+      "start": {
+        "date": "2026-11-07",
+        "time": "11:00"
+      },
+      "end": {
+        "date": "2026-11-07",
+        "time": "14:00"
+      },
+      "place": "",
+      "note": "weekend-work",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null
+    },
+    {
+      "id": "weekend-site",
+      "kind": "overtime",
+      "start": {
+        "date": "2026-11-07",
+        "time": "12:00"
+      },
+      "end": {
+        "date": "2026-11-07",
+        "time": "15:00"
+      },
+      "place": "",
+      "note": "weekend-site",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null,
+      "overtime": {
+        "how": "onsite",
+        "ref": ""
+      },
+      "travel": {
+        "out": 30,
+        "back": 40
+      }
+    },
+    {
+      "id": "weekend-remote",
+      "kind": "overtime",
+      "start": {
+        "date": "2026-11-07",
+        "time": "10:00"
+      },
+      "end": {
+        "date": "2026-11-07",
+        "time": "16:00"
+      },
+      "place": "",
+      "note": "weekend-remote",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null,
+      "overtime": {
+        "how": "remote",
+        "ref": ""
+      },
+      "travel": {
+        "out": 10,
+        "back": 0
+      }
+    },
+    {
+      "id": "weekend-unknown",
+      "kind": "overtime",
+      "start": {
+        "date": "2026-11-07",
+        "time": "09:00"
+      },
+      "end": {
+        "date": "2026-11-07",
+        "time": "17:00"
+      },
+      "place": "",
+      "note": "weekend-unknown",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null,
+      "overtime": {
+        "how": null,
+        "ref": ""
+      },
+      "travel": {
+        "out": 20,
+        "back": 5
+      }
+    },
+    {
+      "id": "full-leave",
+      "kind": "leave",
+      "start": {
+        "date": "2026-11-18",
+        "time": null
+      },
+      "end": null,
+      "place": "",
+      "note": "full-leave",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null,
+      "leave": {
+        "type": "annual",
+        "days": null
+      }
+    },
+    {
+      "id": "leave-work",
+      "kind": "work",
+      "start": {
+        "date": "2026-11-18",
+        "time": "11:00"
+      },
+      "end": {
+        "date": "2026-11-18",
+        "time": "14:00"
+      },
+      "place": "",
+      "note": "leave-work",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null
+    },
+    {
+      "id": "holiday-work",
+      "kind": "work",
+      "start": {
+        "date": "2026-11-20",
+        "time": "09:00"
+      },
+      "end": {
+        "date": "2026-11-20",
+        "time": "14:00"
+      },
+      "place": "",
+      "note": "holiday-work",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null
+    },
+    {
+      "id": "half-leave",
+      "kind": "leave",
+      "start": {
+        "date": "2026-11-23",
+        "time": null
+      },
+      "end": null,
+      "place": "",
+      "note": "half-leave",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null,
+      "leave": {
+        "type": "half-am",
+        "days": null
+      }
+    },
+    {
+      "id": "half-work",
+      "kind": "work",
+      "start": {
+        "date": "2026-11-23",
+        "time": "08:00"
+      },
+      "end": {
+        "date": "2026-11-23",
+        "time": "19:00"
+      },
+      "place": "",
+      "note": "half-work",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null
+    },
+    {
+      "id": "month-end",
+      "kind": "overtime",
+      "start": {
+        "date": "2026-11-30",
+        "time": "23:00"
+      },
+      "end": {
+        "date": "2026-12-01",
+        "time": "01:00"
+      },
+      "place": "",
+      "note": "month-end",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null,
+      "overtime": {
+        "how": "remote",
+        "ref": ""
+      }
+    },
+    {
+      "id": "previous-month",
+      "kind": "overtime",
+      "start": {
+        "date": "2026-10-31",
+        "time": "23:00"
+      },
+      "end": {
+        "date": "2026-11-01",
+        "time": "01:00"
+      },
+      "place": "",
+      "note": "previous-month",
+      "tags": [],
+      "rev": 0,
+      "created": null,
+      "updated": null,
+      "deleted": null,
+      "origin": null,
+      "overtime": {
+        "how": "remote",
+        "ref": ""
+      }
+    }
+  ]
+}

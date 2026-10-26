@@ -1,0 +1,20 @@
+{
+  "schema": 2,
+  "saved": "2027-03-01T09:00:00+09:00",
+  "_fixture": "고정 시험 자료(가짜 값): 더 새 앱이 쓴 schema 2 흉내. 모르는 맨 위 키 · 칸 · kind · freq · 요일 코드 · 알람 모양. 더하기만 하고 고치지 않는다.",
+  "sync": { "device": "PC-02", "cursor": 42 },
+  "items": [
+    { "id": "f1f2f3f4f5f6", "kind": "event", "title": "모르는 칸이 있는 일정", "note": "", "start": { "date": "2026-10-29", "time": "09:00", "zone": "Asia/Seoul" }, "end": null, "repeat": null,
+      "alarms": [ { "before": 5, "sound": "chime" }, { "at": "2026-10-29T08:00" } ], "tags": [], "color": "#C00000", "location": { "room": "3층 회의실" },
+      "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "f2f2f3f4f5f6", "kind": "task", "title": "부품 도착 확인", "note": "", "start": { "date": "2026-10-30", "time": null }, "end": null, "repeat": null, "alarms": [], "tags": [], "done": null,
+      "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "f3f2f3f4f5f6", "kind": "event", "title": "매시간 확인", "note": "", "start": { "date": "2026-10-29", "time": "09:00" }, "end": null, "repeat": { "freq": "hourly", "interval": 1 }, "alarms": [], "tags": [],
+      "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "f4f2f3f4f5f6", "kind": "event", "title": "새 요일 표시", "note": "", "start": { "date": "2026-10-26", "time": "09:00" }, "end": null, "repeat": { "freq": "monthly", "interval": 1, "days": [ "1mo" ] }, "alarms": [], "tags": [],
+      "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "f5f2f3f4f5f6", "kind": "event", "title": "모르는 반복 칸", "note": "", "start": { "date": "2026-10-26", "time": "11:00" }, "end": null,
+      "repeat": { "freq": "weekly", "interval": 1, "days": [ "mon" ], "byHour": [ 11 ], "changes": { "2026-11-02": { "title": "바뀐 제목", "color": "blue" } } },
+      "alarms": [], "tags": [], "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null }
+  ]
+}

@@ -532,7 +532,11 @@ try {
     & $mod { param($id) $script:pendingFlow = $id; Update-WtFlowsView } $lost.id
     $lostState = & $mod { @{ Sub = $script:ui.Sub.Text; Repick = $script:ui.Repick.Visibility; Run = $script:ui.RunButton.IsEnabled; Save = $script:ui.SaveFlow.IsEnabled } }
     Assert-WtTest 'WPF 업무: 스크립트가 없어진 업무는 [스크립트 다시 고르기]를 보이고 실행을 막는다' ($lostState.Sub -eq '스크립트 파일이 없습니다.' -and $lostState.Repick -eq 'Visible' -and -not $lostState.Run -and -not $lostState.Save)
-    Assert-WtTest 'WPF 업무: 홈 카드에 저장한 업무가 보인다' (@(& $addon.HomeCard | Where-Object { $_ -is [System.Windows.UIElement] }).Count -eq 1)
+    & $addon.OnOpen @{ Key = "flow:$($broken.id)" }
+    Assert-WtTest 'WPF 업무: 바로 가기는 저장한 업무만 고르고 실행하지 않음 · 옛 홈 카드 제거' ((& $mod { $script:flow.id }) -ceq $broken.id -and -not (& $mod { Test-WtFlowBusy }) -and -not $addon.HomeCard)
+    Assert-WtTest 'WPF 업무: 남아 있는 업무/없는 업무 구분' ((& $addon.ShortcutExists "flow:$($broken.id)") -and -not (& $addon.ShortcutExists 'flow:없는-id'))
+    & $addon.OnOpen @{ Key = "script:$sleeper" }
+    Assert-WtTest 'WPF 업무: 스크립트 바로 가기도 선택만 한다' ((& $mod { $script:info.Path }) -ceq $sleeper -and -not (& $mod { Test-WtFlowBusy }))
     # 실행 중: 고른 것이 없어져도 [취소] · 출력은 보이고, 콘솔 창 실행은 따로 띄울 수 있다
     & $mod { param($p) Select-WtFlowNode @{ Kind = 'script'; Path = $p }; foreach ($rb in $script:ui.ModeButtons) { $rb.IsChecked = ($rb.Tag.Value -eq 'app') }; Invoke-WtFlowRun } $sleeper
     $proc = & $mod { $script:run.Process }

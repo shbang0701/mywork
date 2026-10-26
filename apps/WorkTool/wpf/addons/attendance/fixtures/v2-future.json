@@ -1,0 +1,23 @@
+{
+  "schema": 2,
+  "saved": "2027-03-01T09:00:00+09:00",
+  "_fixture": "고정 시험 자료(가짜 값): 더 새 앱이 쓴 schema 2 흉내. 모르는 맨 위 키 · 칸 · kind · leave.type · overtime.how. 더하기만 하고 고치지 않는다.",
+  "contract": { "start": "2026-08-01", "end": "2027-07-31" },
+  "items": [
+    { "id": "w9a2b3c4d5e6", "kind": "work", "start": { "date": "2026-11-10", "time": "09:00", "zone": "Asia/Seoul" }, "end": { "date": "2026-11-10", "time": "18:00" }, "place": "", "note": "", "tags": [],
+      "breaks": [ { "start": "12:00", "end": "13:00" } ], "geo": { "site": "본사" },
+      "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "r9a2b3c4d5e6", "kind": "trip", "start": { "date": "2026-11-12", "time": null }, "end": { "date": "2026-11-13", "time": null }, "place": "지방 센터", "note": "", "tags": [], "transport": "KTX",
+      "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "g1a2b3c4d5e6", "kind": "leave-grant", "start": { "date": "2026-11-01", "time": null }, "end": null, "place": "", "note": "월 발생", "tags": [],
+      "leave": { "type": "annual", "days": 1 }, "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "m1a2b3c4d5e6", "kind": "month-close", "month": "2026-11", "closed": "2026-12-02T10:00:00+09:00", "rule": "att-2",
+      "totals": { "workDays": 21, "overMinutes": 270, "tripDays": 2, "leaveDays": 2.5 }, "created": "2026-12-02T10:00:00+09:00", "updated": "2026-12-02T10:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "n1a2b3c4d5e6", "kind": "oncall", "start": { "date": "2026-11-16", "time": "18:00" }, "end": { "date": "2026-11-23", "time": "09:00" }, "place": "", "note": "주간 당번", "tags": [],
+      "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "l9a2b3c4d5e6", "kind": "leave", "start": { "date": "2026-11-17", "time": null }, "end": null, "place": "", "note": "", "tags": [],
+      "leave": { "type": "unpaid", "days": null }, "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "o9a2b3c4d5e6", "kind": "overtime", "start": { "date": "2026-11-18", "time": "22:00" }, "end": { "date": "2026-11-18", "time": "23:00" }, "place": "", "note": "", "tags": [],
+      "overtime": { "how": "phone", "ref": "" }, "created": "2027-02-01T09:00:00+09:00", "updated": "2027-02-01T09:00:00+09:00", "deleted": null, "origin": null }
+  ]
+}

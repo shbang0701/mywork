@@ -33,6 +33,8 @@
   - ops/ — 운영 노하우·장애 대응 (아직 없음)
 - **[docs/plans/](docs/plans/)** — 설계 메모·제안서
   - [업무 탭 설계](docs/plans/workflows-design.md) — 업무 기능은 `scripts/`의 스크립트 하나로 만들고, 업무 탭은 그 스크립트를 폼으로 실행·기록하는 틀. 기능 추가·수정·삭제가 파일 하나로 끝나게 하는 규칙과 스크립트 약속
+  - [일정 · 근태 데이터 설계](docs/plans/schedule-attendance-design.md) — WorkTool WPF 일정 · 근태 · 휴무일 파일 형식(schema 2)과, 옛 파일을 계속 읽는 규칙(날짜 붙은 백업 · 모르는 값 보존 · 깨진 항목은 「고칠 항목」), 예전 WinForms 데이터 합치기, 달력 표시 등록 자리. 고정 시험 자료는 각 탭 폴더의 `fixtures/`
+  - [메모 데이터 · 검색 설계](docs/plans/memo-design.md) — schema 1을 유지하는 폴더 · 고정 · 보관, 별도 열람 상태 · 저장한 보기, 칩과 공유하는 검색 트리 · 메모리 색인 · 호환 검사
   - [업무 탭 사용법과 결과 미리보기](docs/plans/workflows-preview.md) — 관련 그림은 `apps/WorkTool/design/workflows-*.svg`·`.png`, 원본은 `workflows-sample.json`, 결과는 `workflows-results.json`, 생성기는 `build-workflows-mockups.ps1`
 - **[docs/templates/](docs/templates/)** — 받아서 쓰는 Office 양식
   - [infra-kit/](docs/templates/infra-kit/) — IT 인프라 문서 세트: 장비 도면(Excel), PPT 구성 요소, 아이콘 60종

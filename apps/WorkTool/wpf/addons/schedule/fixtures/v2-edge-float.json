@@ -1,0 +1,17 @@
+{
+  "schema": 2,
+  "saved": "2026-10-26T09:00:00+09:00",
+  "_fixture": "고정 시험 자료(가짜 값): 정수처럼 보이지만 정수가 아닌 수(1e-30 · 1.0000000000000002)와 정수인 소수 표기(10.0), 꺼진 알람(before null). 더하기만 하고 고치지 않는다.",
+  "items": [
+    { "id": "f1", "kind": "event", "title": "알람 1e-30", "note": "", "start": { "date": "2026-10-01", "time": "09:00" }, "end": null, "repeat": null, "alarms": [ { "before": 1e-30 } ], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "f2", "kind": "event", "title": "알람 1.0000000000000002", "note": "", "start": { "date": "2026-10-01", "time": "09:00" }, "end": null, "repeat": null, "alarms": [ { "before": 1.0000000000000002 } ], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "f3", "kind": "event", "title": "간격 1.0000000000000002", "note": "", "start": { "date": "2026-10-01", "time": null }, "end": null, "repeat": { "freq": "daily", "interval": 1.0000000000000002 }, "alarms": [], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "f4", "kind": "event", "title": "알람 10.0 (정수)", "note": "", "start": { "date": "2026-10-01", "time": "09:00" }, "end": null, "repeat": null, "alarms": [ { "before": 10.0 } ], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "f5", "kind": "event", "title": "꺼진 알람", "note": "", "start": { "date": "2026-10-01", "time": "09:00" }, "end": null, "repeat": null, "alarms": [ { "before": null, "sound": "keep" } ], "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null }
+  ]
+}

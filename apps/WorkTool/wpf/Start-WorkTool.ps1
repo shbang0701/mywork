@@ -56,7 +56,7 @@ if ($env:WORKTOOL_HARDWARE_RENDER -ne '1') {
 }
 
 #region 모듈 불러오기 (묶음 파일에서는 이 구역이 모듈 소스로 바뀐다)
-$coreModules = 'Work', 'Storage', 'Settings', 'Theme', 'Ui', 'Highlight', 'Markdown', 'Mermaid', 'Addons', 'Pages', 'Shell'
+$coreModules = 'Work', 'Records', 'Storage', 'Settings', 'Calendar', 'Theme', 'Ui', 'Highlight', 'Markdown', 'Mermaid', 'Addons', 'Shortcuts', 'Pages', 'Shell'
 foreach ($name in $coreModules) {
     Import-Module (Join-Path $PSScriptRoot "core\$name.psm1") -Force -DisableNameChecking
 }

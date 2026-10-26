@@ -1,0 +1,14 @@
+{
+  "schema": 1, "saved": "2026-10-26T09:00:00+09:00", "futureViews": "남김",
+  "items": [
+    {
+      "id": "v1", "name": "장애 대응", "query": "(folder:장애 OR tag:운영) -tag:초안",
+      "sort": { "by": "updated", "dir": "desc", "futureSort": "남김" }, "scope": "active",
+      "created": "2026-10-01T09:00:00+09:00", "updated": "2026-10-26T09:00:00+09:00", "rev": 1, "deleted": null, "futureView": "남김"
+    },
+    {
+      "id": "v2", "name": "지운 보기", "query": "no:tag", "sort": { "by": "title", "dir": "asc" }, "scope": "all",
+      "created": "2026-10-01T09:00:00+09:00", "updated": "2026-10-25T09:00:00+09:00", "rev": 2, "deleted": "2026-10-25T09:00:00+09:00"
+    }
+  ]
+}

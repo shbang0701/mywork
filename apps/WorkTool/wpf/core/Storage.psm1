@@ -1,7 +1,12 @@
 # 저장 담당. 기능 모듈은 파일을 직접 읽고 쓰지 않고 이 모듈만 거친다.
 # - 데이터는 앱 폴더 밖(기본: 문서\WorkTool)에 둔다. 앱을 새 버전으로 덮어써도 데이터는 그대로다.
 # - 저장소(store) 하나 = JSON 파일 하나. 파일마다 schema 번호를 붙여, 형식이 바뀌면 읽을 때 한 단계씩 변환한다.
+#   schema는 옛 앱이 잘못 읽게 되는 변경에만 올린다(칸 · 값을 더하는 것은 올리지 않는다). 더 새 schema 파일은 읽지 않는다.
+#   변환하기 전 원본은 날짜 붙은 백업(<이름>.json.schema1.20261025-215429.bak)으로 남기고 덮어쓰지 않는다. 변환에 실패하면 원본을 건드리지 않는다.
+# - 읽을 때 날짜처럼 보이는 글을 [datetime]으로 바꾸지 않는다(-DateKind String). 글은 쓴 그대로 돌아온다.
+# - 맨 위의 모르는 키(importedFrom · 더 새 앱이 더한 키)는 기억해 두었다가 쓸 때 같이 쓴다. 변환할 때도 잃지 않는다.
 # - 쓸 때는 임시 파일에 먼저 쓰고 바꿔치기한다. 직전 파일은 .bak으로 하나 남긴다.
+# - 날짜 모양 · 지운 표시 · 예전 데이터 합치기 같은 형식 규칙은 Records.psm1, 칸의 뜻은 탭이 정한다.
 # - 읽기 실패는 항상 예외로 올린다. 빈 결과로 넘기면 다음 저장에서 기존 데이터를 덮어쓰기 때문이다.
 # - 읽기는 화면 밖(core\Work.psm1)에서 하고 $script:ioTimeoutMs까지만 기다린다. 데이터 폴더가 응답 없는 공유 폴더여도 화면이 멈추지 않고
 #   읽기 실패(IOException)로 올라간다. 그 폴더에 답 없는 읽기가 남아 있으면 기다리지 않고 바로 실패한다.
@@ -28,7 +33,20 @@ $script:writeHandlers = [System.Collections.Generic.List[scriptblock]]::new()
 $script:io = @{
     Lock = { param($p) [System.IO.File]::Open($p, 'OpenOrCreate', 'ReadWrite', 'None') }
     Unlock = { param($l) $l.Dispose() }
-    Copy = { param($a, $b) [System.IO.File]::Copy($a, $b, $true) }
+    # 변환 전 백업: 이미 있는 파일은 덮어쓰지 않고 -2 · -3 …을 붙인다. $text가 있으면(아직 파일에 쓰이지 않은 내용) 그 글을 쓴다
+    Backup = {
+        param($p, $stem, $text)
+        for ($n = 1; $n -lt 1000; $n++) {
+            $b = if ($n -eq 1) { "$stem.bak" } else { "$stem-$n.bak" }
+            if ([System.IO.Path]::Exists($b)) { continue }
+            if ($null -ne $text) {
+                $s = [System.IO.FileStream]::new($b, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+                try { $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes([string]$text); $s.Write($bytes, 0, $bytes.Length) } finally { $s.Dispose() }
+            } else { [System.IO.File]::Copy($p, $b, $false) }
+            return $b
+        }
+        throw [System.IO.IOException]::new("백업 파일 이름을 정하지 못했습니다: $stem")
+    }
     FindLegacy = {
         param($folders)
         foreach ($c in $folders) {
@@ -38,10 +56,21 @@ $script:io = @{
         }
         $null
     }
+    # 예전 CSV: WinForms는 BOM 붙은 UTF-8로 쓴다. Excel에서 「CSV(쉼표로 분리)」로 다시 저장하면 BOM 없는 CP949가 될 수 있어서,
+    # UTF-8로 읽히지 않으면 CP949로 읽는다(한글이 깨진 채로 가져오지 않게). 내용의 해시도 같이 돌려준다(바뀌었는지 알아보는 데 쓴다)
     ReadCsv = {
         param($p)
         if (-not [System.IO.Path]::Exists($p)) { return $null }
-        , @(Import-Csv -LiteralPath $p -Encoding utf8)
+        $bytes = [System.IO.File]::ReadAllBytes($p)
+        $enc = 'utf-8'
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $text = [System.Text.UTF8Encoding]::new($false, $true).GetString($bytes, 3, $bytes.Length - 3)
+        } else {
+            try { $text = [System.Text.UTF8Encoding]::new($false, $true).GetString($bytes) }
+            catch { $text = [System.Text.Encoding]::GetEncoding(949).GetString($bytes); $enc = 'cp949' }
+        }
+        $rows = if ($text.Trim()) { @(ConvertFrom-Csv -InputObject $text) } else { @() }
+        @{ Rows = $rows; Sha256 = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)); Encoding = $enc }
     }
 }
 
@@ -76,6 +105,8 @@ function Invoke-WtDataCall {
 function Set-WtAppRoot([string]$Path) {
     $script:appRoot = $Path
     $script:dataRoot = $null
+    $script:storeTops = @{}
+    $script:storeRead = @{}
 }
 
 function Get-WtAppRoot { $script:appRoot }
@@ -119,13 +150,20 @@ function Get-WtDataRoot {
 }
 
 # JSON 파일 하나를 읽는다. 없으면 $null. 아직 파일에 쓰이지 않은 내용(쓰는 중 · 늦게 실패해 앱이 가진 것)이 있으면
-# 디스크 대신 그것을 돌려준다. 앱이 가진 내용과 화면이 늘 같게
+# 디스크 대신 그것을 돌려준다. 앱이 가진 내용과 화면이 늘 같게.
+# 날짜처럼 보이는 글("2026-10-25T21:54:29")도 글 그대로 둔다. 기본값이면 [datetime]으로 바뀌고, 다시 글로 쓰면 문화권 모양이 된다
 function Read-WtJsonFile([string]$Path) {
+    $text = Read-WtJsonText $Path
+    if ($null -eq $text) { return $null }
+    $text | ConvertFrom-Json -Depth 20 -DateKind String
+}
+
+# JSON 파일의 글. 파일이 없으면 $null (빈 파일이면 ''). 아직 파일에 쓰이지 않은 내용이 있으면 그 글
+function Read-WtJsonText([string]$Path) {
     $pending = Get-WtDataWritePending $Path
-    if ($pending) { return $pending.Json | ConvertFrom-Json -Depth 20 }
-    try { $text = Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllText $Path) }
-    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return $null }
-    $text | ConvertFrom-Json -Depth 20
+    if ($pending) { return [string]$pending.Json }
+    try { Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllText $Path) }
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { $null }
 }
 
 <#
@@ -356,6 +394,9 @@ function Send-WtDataWriteNotices {
 $script:writeNotices = [System.Collections.Generic.List[object]]::new()
 $script:writeNoticeQueued = $false
 $script:writeFiles = @{}
+$script:storeTops = @{}          # 저장소 파일마다 마지막으로 읽은(쓴) 맨 위 키. Write-WtStore가 같이 쓴다
+$script:storeRead = @{}          # 저장소 파일마다 읽은 결과 (Set-WtStoreRead)
+$script:storeGeneration = 0
 
 function Get-WtStorePath {
     param([Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$Name)
@@ -393,9 +434,47 @@ function Get-WtStoreStamp([string]$Name) {
     "$path|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
 }
 
-# 저장소 하나를 읽는다. 파일이 없으면 $null.
-# $Migrate는 { param($doc, $from) ... $doc } 형태로, schema $from 문서를 $from+1 형식으로 바꿔 돌려준다.
-# 변환하기 전 원본은 <이름>.json.schema<번호>.bak으로 남긴다.
+# 문서 맨 위의 키 중 schema · saved · items가 아닌 것 (importedFrom · 더 새 앱이 더한 키 등)
+function Get-WtStoreTops($Doc) {
+    $tops = [ordered]@{}
+    foreach ($p in @($Doc.PSObject.Properties)) {
+        if ($p.Name -notin 'schema', 'saved', 'items') { $tops[$p.Name] = $p.Value }
+    }
+    $tops
+}
+
+<#
+저장소 파일마다 읽은 결과를 적어 둔다 (쓰기를 막는 데 쓴다). 키는 파일 경로(소문자)
+  State   ok(읽음) · missing(파일 없음) · refused(내용 때문에 읽지 않음: 빈 파일 · JSON 아님 · schema 없음 · 더 새 schema · 변환 실패)
+          · unread(디스크 · 네트워크 때문에 못 읽음)
+  Schema  파일의 schema (ok · missing이면 이 앱이 쓸 schema)
+  Reason  refused · unread일 때 이유
+  Generation  그 파일의 버전 번호. 읽거나 쓸 때마다 오른다. 핸들(Open-WtStore)은 열 때의 번호를 자기 것으로 들고, 저장할 때 지금 번호와 같아야 쓴다
+  거부(refused) 뒤 못 읽거나 파일이 없어져도 거부로 남는다. 다시 읽어 정상 schema(ok)를 확인해야만 풀린다
+#>
+function Set-WtStoreRead([string]$Path, [string]$State, [int]$Schema = 0, [string]$Reason = '') {
+    $key = $Path.ToLowerInvariant()
+    $script:storeGeneration++
+    $old = $script:storeRead[$key]
+    if ($State -in 'unread', 'missing' -and $old -and $old.State -eq 'refused') { $State = 'refused'; $Schema = $old.Schema; $Reason = $old.Reason }
+    $script:storeRead[$key] = @{ State = $State; Schema = $Schema; Reason = $Reason; Generation = $script:storeGeneration }
+}
+
+# 읽기를 거부한다: 거부했다고 적고 예외를 올린다. 파일은 바꾸지 않는다
+function Stop-WtStoreRead([string]$Path, [string]$Message) {
+    Set-WtStoreRead $Path 'refused' -Reason $Message
+    throw $Message
+}
+
+<#
+저장소 하나를 읽는다. 파일이 없으면 $null. 내용 때문에 읽을 수 없으면 거부하고(예외) 그 파일에 쓰지 못하게 적어 둔다:
+  빈 파일 · JSON이 아님 · 맨 위가 객체가 아님 · schema가 1~999 정수가 아님 · items가 목록이 아님 · 앱보다 높은 schema · 변환 실패.
+  「파일 없음」과 「빈 파일」은 다르다. 빈 파일은 깨진 파일이다.
+$Migrate는 { param($doc, $from) ... $doc } 형태로, schema $from 문서를 $from+1 형식으로 바꿔 돌려준다. 읽은 칸을 버리지 말고 아는 칸만 바꾼다.
+  변환은 메모리에서 먼저 끝까지 한다. 실패하면 원본 파일은 건드리지 않고 예외를 올린다(탭은 그 오류를 화면에 보여 준다).
+  성공하면 원본을 날짜 붙은 백업 <이름>.json.schema<번호>.<날짜-시각>.bak으로 남기고(덮어쓰지 않음) 새 형식으로 다시 쓴다.
+맨 위의 모르는 키는 기억해 두었다가 Write-WtStore가 같이 쓴다. items 안의 null · 깨진 항목도 그대로 둔다.
+#>
 function Read-WtStore {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -403,26 +482,58 @@ function Read-WtStore {
         [scriptblock]$Migrate
     )
     $path = Get-WtStorePath $Name
-    $doc = Read-WtJsonFile $path
-    if ($null -eq $doc) { return $null }
-    $from = [int]$doc.schema
+    $key = $path.ToLowerInvariant()
+    try { $text = Read-WtJsonText $path }
+    catch { Set-WtStoreRead $path 'unread' -Reason $_.Exception.Message; throw }
+    if ($null -eq $text) {
+        Set-WtStoreRead $path 'missing' $Schema
+        if ($script:storeRead[$key].State -eq 'refused') { throw "$Name.json은 전에 읽기를 거부한 파일입니다. 정상 schema를 다시 읽기 전에는 새로 만들지 않습니다. ($($script:storeRead[$key].Reason))" }
+        [void]$script:storeTops.Remove($key)
+        return $null
+    }
+    if (-not $text.Trim()) { Stop-WtStoreRead $path "$Name.json이 비어 있습니다. 파일은 바꾸지 않았습니다." }
+    try { $doc = $text | ConvertFrom-Json -Depth 20 -DateKind String }
+    catch { Stop-WtStoreRead $path "$Name.json을 JSON으로 읽지 못했습니다. 파일은 바꾸지 않았습니다. ($($_.Exception.Message))" }
+    if ($doc -isnot [System.Management.Automation.PSCustomObject]) { Stop-WtStoreRead $path "$Name.json의 맨 위가 객체가 아닙니다. 파일은 바꾸지 않았습니다." }
+    $num = ConvertFrom-WtWhole (Get-WtField $doc 'schema') 1 999
+    if ($null -eq $num) { Stop-WtStoreRead $path "$Name.json에 형식 번호(schema)가 없거나 잘못됐습니다. 파일은 바꾸지 않았습니다." }
+    # items는 꼭 목록이다. 없거나 null이면 빈 목록이 아니라 깨진 파일로 본다(빈 목록으로 저장하면 원래 내용을 모른 채 덮게 된다)
+    $list = Get-WtField $doc 'items'
+    if ($null -eq $list -or $list -isnot [array]) { Stop-WtStoreRead $path "$Name.json의 items가 없거나 목록이 아닙니다. 파일은 바꾸지 않았습니다." }
+    $from = [int]$num
     if ($from -gt $Schema) {
-        throw "$Name.json은 더 새 버전(schema $from)에서 저장됐습니다. WorkTool을 최신으로 바꿔 주세요."
+        Stop-WtStoreRead $path "$Name.json은 더 새 버전(schema $from)에서 저장됐습니다. WorkTool을 최신으로 바꿔 주세요. 파일은 바꾸지 않았습니다."
     }
     if ($from -lt $Schema) {
-        if (-not $Migrate) { throw "$Name.json을 schema $from에서 $Schema(으)로 바꾸는 방법이 없습니다." }
-        [void](Invoke-WtDataIo Copy -Arguments $path, "$path.schema$from.bak")
-        while ($from -lt $Schema) {
-            $doc = & $Migrate $doc $from
-            $from++
-            $doc.schema = $from
+        if (-not $Migrate) { Stop-WtStoreRead $path "$Name.json을 schema $from에서 $Schema(으)로 바꾸는 방법이 없습니다. 파일은 바꾸지 않았습니다." }
+        $first = $from
+        try {
+            while ($from -lt $Schema) {
+                $doc = & $Migrate $doc $from
+                $from++
+                $doc.schema = $from
+            }
+        } catch {
+            Stop-WtStoreRead $path "$Name.json을 schema $first에서 $Schema(으)로 바꾸지 못했습니다. 원본 파일은 그대로 둡니다. ($($_.Exception.Message))"
         }
-        Write-WtStore -Name $Name -Schema $Schema -Items @($doc.items)
+        $pending = Get-WtDataWritePending $path
+        $stem = "$path.schema$first.$((Get-Date).ToString('yyyyMMdd-HHmmss', [System.Globalization.CultureInfo]::InvariantCulture))"
+        try { [void](Invoke-WtDataIo Backup -Arguments $path, $stem, $(if ($pending) { $pending.Json } else { $null })) }
+        catch { Set-WtStoreRead $path 'unread' -Reason $_.Exception.Message; throw }
+        $script:storeTops[$key] = Get-WtStoreTops $doc
+        Set-WtStoreRead $path 'ok' $first
+        Write-WtStore -Name $Name -Schema $Schema -Items @($doc.items) -KeepNull
+        # 변환 코드가 만든 객체(해시 테이블 등) 대신, 다음에 읽을 때와 같은 모양(저장한 JSON을 다시 읽은 것)으로 돌려준다
+        $doc = Read-WtJsonFile $path
+    } else {
+        $script:storeTops[$key] = Get-WtStoreTops $doc
     }
+    Set-WtStoreRead $path 'ok' $Schema
     $doc
 }
 
-# 저장소의 항목만 배열로 돌려준다. 파일이 없으면 빈 배열
+# 저장소의 항목만 배열로 돌려준다. 파일이 없으면 빈 배열. null 항목은 뺀다(예전부터 쓰던 탭용).
+# 항목을 고쳐 저장하는 새 코드는 null · 깨진 항목까지 그대로 다루는 Open-WtStore · Save-WtStore를 쓴다
 function Get-WtStoreItems {
     param([Parameter(Mandatory)][string]$Name, [int]$Schema = 1, [scriptblock]$Migrate)
     $doc = Read-WtStore -Name $Name -Schema $Schema -Migrate $Migrate
@@ -430,20 +541,78 @@ function Get-WtStoreItems {
     , @($doc.items | Where-Object { $null -ne $_ })
 }
 
-# 저장소 하나를 통째로 쓴다. $Extra의 키는 문서 맨 위에 함께 저장된다 (예: 가져온 위치)
+<#
+저장소 하나를 통째로 쓴다(낮은 단계). 마지막으로 읽은(또는 쓴) 맨 위 키를 같이 쓰고, $Extra의 키는 그 위에 덮어 쓴다 (예: 가져온 위치).
+saved는 앱이 찍는 시각(시간대 포함)이다. -KeepNull이 없으면 items의 null은 뺀다.
+쓰기를 거부하는 경우(예외, 쓰기 실패와 다르다): 이 파일을 내용 때문에 읽지 않았거나(refused), 파일의 schema가 쓰려는 schema보다 높을 때.
+  그런 파일을 덮어쓰면 더 새 버전의 데이터나 고칠 수 있는 파일을 잃기 때문이다. 다시 읽어 ok가 되면 풀린다
+#>
 function Write-WtStore {
     param(
         [Parameter(Mandatory)][string]$Name,
         [int]$Schema = 1,
-        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Items,
-        [hashtable]$Extra
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()][object[]]$Items,
+        [hashtable]$Extra,
+        [switch]$KeepNull
     )
-    $doc = [ordered]@{ schema = $Schema; saved = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss') }
+    $path = Get-WtStorePath $Name
+    $key = $path.ToLowerInvariant()
+    $read = $script:storeRead[$key]
+    if ($read -and $read.State -eq 'refused') { throw "$Name.json은 읽지 못한 파일이라 저장하지 않습니다. ($($read.Reason))" }
+    if ($read -and $read.Schema -gt $Schema) { throw "$Name.json은 schema $($read.Schema) 파일이라 schema $Schema(으)로 저장하지 않습니다." }
+    $doc = [ordered]@{ schema = $Schema; saved = (Get-WtStamp) }
+    if ($script:storeTops.ContainsKey($key)) { foreach ($k in $script:storeTops[$key].Keys) { $doc[$k] = $script:storeTops[$key][$k] } }
     if ($Extra) { foreach ($k in $Extra.Keys) { $doc[$k] = $Extra[$k] } }
-    $doc['items'] = @($Items | Where-Object { $null -ne $_ })
-    Write-WtJsonFile (Get-WtStorePath $Name) $doc
+    $tops = [ordered]@{}
+    foreach ($k in $doc.Keys) { if ($k -notin 'schema', 'saved') { $tops[$k] = $doc[$k] } }
+    $script:storeTops[$key] = $tops
+    # if 식으로 받으면 항목 하나짜리 목록이 펴져서 목록이 아니게 되므로 나눠서 넣는다
+    if ($KeepNull) { $doc['items'] = @($Items) } else { $doc['items'] = @($Items | Where-Object { $null -ne $_ }) }
+    Write-WtJsonFile $path $doc
+    Set-WtStoreRead $path 'ok' $Schema
 }
 
+<#
+저장소 핸들: 읽은 결과와 「이 결과로 저장해도 되는지」를 함께 가진다. 항목을 고쳐 저장하는 코드는 이 길만 쓴다.
+읽기 문제로 예외를 올리지 않고 State에 담는다(화면이 오류를 보여 주게).
+  Name · Path · Schema(쓸 schema) · State(ok · missing · error) · Error(이유) · Doc(읽은 문서 | $null)
+  Items: 저장된 항목 그대로 (null · 깨진 항목 포함, 같은 순서). 저장할 때 이것을 고쳐서 넘긴다
+  Version: 열 때 그 파일의 버전 번호. 핸들 자기 것이고 바뀌지 않는다 (같은 핸들을 여러 곳이 나눠 가져도 저장 판정이 같이 바뀌지 않게)
+핸들의 Items 객체는 여럿이 같이 볼 수 있으므로, 고칠 때는 Copy-WtItem으로 복사해서 고친 목록을 넘긴다
+#>
+function Open-WtStore {
+    param([Parameter(Mandatory)][string]$Name, [int]$Schema = 1, [scriptblock]$Migrate)
+    $path = Get-WtStorePath $Name
+    $state = 'ok'; $err = $null; $doc = $null; $list = @()
+    try {
+        $doc = Read-WtStore -Name $Name -Schema $Schema -Migrate $Migrate
+        if ($null -eq $doc) { $state = 'missing' } else { $list = @($doc.items) }
+    } catch { $state = 'error'; $err = $_.Exception.Message }
+    $read = $script:storeRead[$path.ToLowerInvariant()]
+    New-WtStoreHandle $Name $path $Schema $state $err $doc $list $(if ($read) { $read.Generation } else { 0 })
+}
+
+# 핸들 하나. 저장 모듈은 만든 핸들을 다시 고치지 않는다(저장하면 새 핸들을 만든다). 부르는 쪽도 고치지 않는다
+function New-WtStoreHandle([string]$Name, [string]$Path, [int]$Schema, [string]$State, $ErrorText, $Doc, [AllowNull()][object[]]$List, [long]$Version) {
+    [pscustomobject][ordered]@{ Name = $Name; Path = $Path; Schema = $Schema; State = $State; Error = $ErrorText; Doc = $Doc; Items = $List; Version = $Version }
+}
+
+<#
+핸들로 저장한다(낙관적 잠금). 다음 경우에는 쓰지 않고 예외를 올린다(쓰기 실패와 다르다. 쓰기 실패는 저장 통로가 보유한다):
+  - 핸들이 읽기에 실패했다(error): 더 새 버전 · 깨진 파일 · 응답 없는 폴더
+  - 핸들의 Version이 그 파일의 지금 버전과 다르다: 핸들로 읽은 뒤 다시 읽었거나, 누가(같은 핸들을 가진 다른 곳 포함) 저장했다.
+    다시 Open-WtStore로 읽고 바꾼 내용을 그 위에 다시 맞춘 뒤 저장한다
+$Items의 null · 깨진 항목은 그대로 쓴다. 저장하면 새 버전의 핸들을 돌려준다(이어서 저장하려면 그것을 쓴다). 넘긴 핸들은 더 쓸 수 없다
+#>
+function Save-WtStore {
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()][object[]]$Items, [hashtable]$Extra)
+    if ($Store.State -notin 'ok', 'missing') { throw "$($Store.Name).json은 읽지 못해서 저장하지 않습니다. ($($Store.Error))" }
+    $key = ([string]$Store.Path).ToLowerInvariant()
+    $read = $script:storeRead[$key]
+    if (-not $read -or $read.Generation -ne $Store.Version) { throw "$($Store.Name).json이 이 핸들로 읽은 뒤에 바뀌었습니다(다시 읽음 · 다른 저장). 다시 읽은 뒤 저장하세요." }
+    Write-WtStore -Name $Store.Name -Schema $Store.Schema -Items @($Items) -Extra $Extra -KeepNull
+    New-WtStoreHandle $Store.Name $Store.Path $Store.Schema 'ok' $null $Store.Doc @($Items) $script:storeRead[$key].Generation
+}
 # 새 항목 ID
 function New-WtId { [guid]::NewGuid().ToString('N').Substring(0, 12) }
 
@@ -466,12 +635,21 @@ function Find-WtLegacyFolder {
     catch { $null }
 }
 
-# 예전 CSV 하나를 읽는다. 파일이 없으면 $null (빈 파일이면 빈 배열)
+# 예전 CSV 하나를 읽는다. 파일이 없으면 $null. 있으면 @{ Rows(줄 목록, 빈 파일이면 빈 배열); Sha256(내용 해시); Encoding('utf-8' | 'cp949'); File }
+function Read-WtLegacyCsv([string]$Folder, [string]$Name) {
+    $r = Invoke-WtDataIo ReadCsv -Arguments (Join-Path $Folder "$Name.csv") -Key 'legacy' -Where '예전 데이터 위치' -Session Default
+    if ($null -eq $r) { return $null }
+    [pscustomobject]@{ Rows = @($r.Rows); Sha256 = $r.Sha256; Encoding = $r.Encoding; File = "$Name.csv" }
+}
+
+# 예전 CSV 하나의 줄만 읽는다. 파일이 없으면 $null (빈 파일이면 빈 배열)
 function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
-    Invoke-WtDataIo ReadCsv -Arguments (Join-Path $Folder "$Name.csv") -Key 'legacy' -Where '예전 데이터 위치' -Session Default
+    $r = Read-WtLegacyCsv $Folder $Name
+    if ($null -eq $r) { return $null }
+    , $r.Rows
 }
 
 Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
     Test-WtDataWriting, Get-WtDataWriteState, Get-WtDataWriteStatus, Get-WtDataUnsaved, Resume-WtDataWrites, Register-WtDataWriteHandler, Stop-WtDataWrites,
-    Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, New-WtId,
-    Find-WtLegacyFolder, Import-WtLegacyCsv
+    Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, Open-WtStore, Save-WtStore, New-WtId,
+    Find-WtLegacyFolder, Read-WtLegacyCsv, Import-WtLegacyCsv

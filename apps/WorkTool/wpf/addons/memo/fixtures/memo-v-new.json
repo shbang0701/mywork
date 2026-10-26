@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "saved": "2026-10-26T09:00:00+09:00",
+  "futureTop": { "keep": [1, "2026-10-01", { "enabled": true }] },
+  "folders": [
+    { "id": "work", "name": "업무", "order": 10, "created": "2026-10-01T09:00:00+09:00", "futureFolder": "남김" },
+    { "id": "procedure", "name": "절차", "order": 20, "created": "2026-10-01T09:00:00+09:00" },
+    { "id": "incident", "name": "장애", "order": 30, "created": "2026-10-01T09:00:00+09:00" },
+    { "id": "personal", "name": "개인", "order": 40, "created": "2026-10-01T09:00:00+09:00" }
+  ],
+  "items": [
+    {
+      "id": "m1", "title": "복구 절차", "body": "권한 오류 대응 #백업 #운영\n[[장애 기록]]\n```\n#코드안 [[일상 기록]]\n```\n문자 * ? [] 그대로",
+      "tags": ["백업", "운영"], "lock": null, "folder": "procedure",
+      "pinned": true, "pinOrder": 20, "archived": false, "archivedAt": null,
+      "created": "2026-10-01T09:00:00+09:00", "updated": "2026-10-26T09:00:00+09:00", "rev": 2, "deleted": null,
+      "future": { "keep": ["값", { "date": "2026-10-01" }] }
+    },
+    {
+      "id": "m2", "title": "권한 오류", "body": "복구 절차 초안 #초안\n[[복구 절차]] [[복구 절차]]",
+      "tags": ["초안"], "lock": null, "folder": "incident", "pinned": true, "pinOrder": 10, "archived": false,
+      "created": "2026-10-02T09:00:00+09:00", "updated": "2026-10-25T09:00:00+09:00"
+    },
+    {
+      "id": "m3", "title": "일상 기록", "body": "태그 없는 일반 글", "tags": [], "lock": null,
+      "folder": "unknown-folder", "created": "2026-09-01T09:00:00+09:00", "updated": "2026-10-03T09:00:00+09:00"
+    },
+    {
+      "id": "m4", "title": "보관 메모", "body": "복구 절차 #백업", "tags": ["백업"], "lock": null,
+      "folder": "personal", "pinned": false, "archived": true, "archivedAt": "2026-10-24T09:00:00+09:00",
+      "created": "2026-10-03T09:00:00+09:00", "updated": "2026-10-24T09:00:00+09:00"
+    },
+    {
+      "id": "m5", "title": "장애 기록", "body": "복구 절차 결과 #운영\n[[복구 절차]]",
+      "tags": ["운영"], "lock": null, "folder": "work",
+      "created": "2026-10-04T09:00:00+09:00", "updated": "2026-10-23T09:00:00+09:00"
+    },
+    { "id": "gone", "deleted": "2026-10-25T09:00:00+09:00", "futureGone": "남김" },
+    null,
+    ["깨진 줄", { "keep": true }]
+  ]
+}

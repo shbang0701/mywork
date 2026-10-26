@@ -100,6 +100,7 @@ function Assert-WtTest([string]$Name, [bool]$Ok, $Detail = '') {
 
 # WPF 화면 검사는 Windows · STA에서만 한다. 할 수 있으면 WPF 어셈블리를 불러오고 $true
 function Test-WtTestWpf {
+    if (Get-Variable wtTestNoDesktop -Scope Global -ValueOnly -ErrorAction SilentlyContinue) { return $false }
     if (-not $IsWindows -or [System.Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') { return $false }
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml, System.Windows.Forms, System.Drawing
     $true

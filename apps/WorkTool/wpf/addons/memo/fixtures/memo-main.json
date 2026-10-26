@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "saved": "2026-10-22T11:20:05",
+  "importedFrom": "C:\\WorkTool\\data",
+  "items": [
+    {
+      "id": "old1", "title": "기존 메모", "body": "원래 본문 #백업",
+      "tags": ["백업"], "lock": null,
+      "created": "2026-10-01 09:00:00", "updated": "2026-10-22 11:20:05"
+    }
+  ]
+}

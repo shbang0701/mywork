@@ -67,8 +67,23 @@ try {
     & $docsModule { Open-WtDocEntry ($script:entries | Where-Object Name -eq '운영') }
     Wait-WtDocJobs
     Assert-WtTest 'WPF 문서: 폴더로 들어가면 트리도 따라간다' ((& $docsModule { $script:current }) -like '*\운영' -and (& $docsModule { $script:ui.Tree.SelectedItem.Tag.Path }) -like '*\운영' -and (& $docsModule { $script:ui.PathText.Text }) -eq '문서 루트 › 운영')
+    $docShortcut = @(Get-WtShortcuts | Where-Object Page -ceq docs)
+    Assert-WtTest '문서: 연 기록 · 존재 확인 · 옛 홈 카드 제거' ($docShortcut.Count -eq 1 -and $docShortcut[0].Title -ceq '운영' -and (& $addon.ShortcutExists $docShortcut[0].Key) -and -not $addon.HomeCard)
     & $docsModule { $script:ui.List.SelectedIndex = 0; $script:ui.Pin.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent)) }
     Assert-WtTest 'WPF 문서: 즐겨찾기 버튼' (@(Get-WtSetting 'docs.pins').Count -eq 1 -and @(Get-WtSetting 'docs.pins')[0] -like '*\운영\점검')
+    # 원래 프로그램 실행만 가짜로 바꾼다. 실제 경로 조회·부모 목록 선택·인자 전달은 그대로 검사한다.
+    & $docsModule {
+        $script:originalShortcutOpen = (Get-Command Open-WtDocEntry).ScriptBlock
+        $script:testShortcutOpened = $null
+        Set-Item Function:script:Open-WtDocEntry -Value { param($Entry) $script:testShortcutOpened = $Entry.Path }
+    }
+    try {
+        & $addon.OnOpen @{ Key = $docShortcut[0].Key }
+        $deadline = [datetime]::UtcNow.AddSeconds(5)
+        while (-not (& $docsModule { $script:testShortcutOpened }) -and [datetime]::UtcNow -lt $deadline) { Update-WtWork; Start-Sleep -Milliseconds 10 }
+        Assert-WtTest '문서 바로 가기: 실제 항목 조회 뒤 목록에서 고르고 연다' ((& $docsModule { $script:testShortcutOpened }) -ceq $docShortcut[0].Key -and
+            (& $docsModule { $script:ui.List.SelectedItem.Path }) -ceq $docShortcut[0].Key)
+    } finally { & $docsModule { Set-Item Function:script:Open-WtDocEntry -Value $script:originalShortcutOpen } }
     Set-WtSetting 'docs.pins' @(); Set-WtSetting 'docs.roots' @()
 
     # ---- 목록 가상화: 데이터 5천 개여도 보이는 행만 만든다 ----

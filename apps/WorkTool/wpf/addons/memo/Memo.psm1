@@ -11,6 +11,7 @@
 $ErrorActionPreference = 'Stop'
 
 $script:schema = 1
+$script:memoStore = $null   # 읽은 원자료/버전. 저장 뒤에는 새 핸들로 바꾼다 (MemoData.psm1).
 $script:items = @()
 $script:panes = [System.Collections.Generic.List[hashtable]]::new()   # 칸. 칸 = @{ Tabs; Current; Dirty; Loading; Editor; 화면 요소 … }
 $script:active = 0           # 포커스가 있는 칸 번호
@@ -34,9 +35,20 @@ Register-WtSettingDefault 'memo.tabs' $null
 
 # ---- 데이터 (WPF 없이) -------------------------------------------------------------------------
 
-function Get-WtMemoItems { Get-WtStoreItems -Name 'memo' -Schema $script:schema }
+function Get-WtMemoItems {
+    $script:memoStore = Open-WtMemoStore
+    if ($script:memoStore.State -notin 'ok', 'missing') { throw $script:memoStore.Error }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($item in $script:memoStore.Items) {
+        $id = Get-WtField $item 'id'
+        if ($id -is [string] -and $id -and $seen.Add($id) -and -not (Test-WtDeleted $item)) { $item }
+    }
+}
 
-function Save-WtMemoItems([object[]]$Items) { Write-WtStore -Name 'memo' -Schema $script:schema -Items @($Items) }
+function Save-WtMemoItems([object[]]$Items) {
+    if (-not $script:memoStore) { $script:memoStore = Open-WtMemoStore }
+    $script:memoStore = Save-WtMemoDataItems -Store $script:memoStore -Items @($Items)
+}
 
 # 최근 고친 순서
 function Get-WtMemoSorted([object[]]$Items) {
@@ -61,7 +73,9 @@ function Format-WtMemoTime([string]$Stamp) {
     Format-WtDate $t "M'/'d"
 }
 
-function Get-WtMemoStamp([datetime]$When) { $When.ToString('yyyy-MM-dd HH:mm:ss') }
+function Get-WtMemoStamp([datetime]$When) {
+    Get-WtStamp ([DateTimeOffset]::new($When).ToOffset([timespan]::FromHours(9)))
+}
 
 function New-WtMemo([datetime]$When = (Get-Date)) {
     $now = Get-WtMemoStamp $When
@@ -87,11 +101,11 @@ function Get-WtMemoTags([string]$Body) {
 # 메모 하나의 제목 · 본문을 바꾼다. 제목이 비면 저장 시각을 제목으로 쓴다 (예전 WorkTool과 같음)
 function Set-WtMemoContent($Memo, [string]$Title, [string]$Body, [datetime]$When = (Get-Date)) {
     $t = $Title.Trim()
-    if (-not $t) { $t = $When.ToString('yyyy-MM-dd HH:mm') }
+    if (-not $t) { $t = $When.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
     $Memo.title = $t
     $Memo.body = $Body
     $Memo | Add-Member -NotePropertyName tags -NotePropertyValue @(Get-WtMemoTags $Body) -Force   # 예전 데이터엔 tags가 없을 수 있다
-    $Memo.updated = Get-WtMemoStamp $When
+    Set-WtItemEdited $Memo (Get-WtMemoStamp $When)
     $Memo
 }
 
@@ -124,7 +138,7 @@ function Import-WtMemoLegacy([string]$Folder) {
             updated = [string]$r.Updated
         }
     }
-    Write-WtStore -Name 'memo' -Schema $script:schema -Items @($items) -Extra @{ importedFrom = $Folder }
+    $script:memoStore = Save-WtMemoDataItems -Store (Open-WtMemoStore) -Items @($items) -Extra @{ importedFrom = $Folder }
     @($items).Count
 }
 
@@ -611,11 +625,16 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
     Update-WtMemoTabStyles
     Sync-WtMemoListSelection
     Save-WtMemoTabs
+    Add-WtUse -Page 'memo' -Key $Id -Title (Get-WtMemoTitle $Id) -Sub '메모' -Icon 0xE70B
     $true
 }
 
 function Select-WtMemoTab($Pane, $Tab) {
-    if ([object]::ReferenceEquals($Pane.Current, $Tab)) { Set-WtMemoActivePane $Pane; return $true }
+    if ([object]::ReferenceEquals($Pane.Current, $Tab)) {
+        Set-WtMemoActivePane $Pane
+        Add-WtUse -Page 'memo' -Key $Tab.Id -Title (Get-WtMemoTitle $Tab.Id) -Sub '메모' -Icon 0xE70B
+        return $true
+    }
     if (-not (Save-WtMemoNow)) { return $false }
     Save-WtMemoPaneState $Pane
     $Pane.Current = $Tab
@@ -624,6 +643,7 @@ function Select-WtMemoTab($Pane, $Tab) {
     Update-WtMemoTabStyles
     Sync-WtMemoListSelection
     Save-WtMemoTabs
+    Add-WtUse -Page 'memo' -Key $Tab.Id -Title (Get-WtMemoTitle $Tab.Id) -Sub '메모' -Icon 0xE70B
     $true
 }
 
@@ -827,7 +847,7 @@ function Save-WtMemoNow([switch]$Retry) {
     foreach ($p in $ordered) {
         $m = if ($p.Current) { Get-WtMemoById $p.Current.Id } else { $null }
         if (-not $m) { Set-WtMemoStatus $p 'error' '편집 중인 메모를 찾을 수 없습니다.'; return $false }
-        $candidate = if ($byId.Contains([string]$m.id)) { $byId[[string]$m.id] } else { $m.PSObject.Copy() }
+        $candidate = if ($byId.Contains([string]$m.id)) { $byId[[string]$m.id] } else { Copy-WtItem $m }
         [void](Set-WtMemoContent $candidate $p.TitleBox.Text (Get-WtMemoEditorText $p.Editor))
         $byId[[string]$m.id] = $candidate
     }
@@ -1229,7 +1249,7 @@ function New-WtMemoView {
                 $e.Handled = $true
             }
         })
-    $listMenu = New-WtContextMenu
+    $listMenu = New-WtHomePinContextMenu
     foreach ($spec in @(@('tab', '새 탭에서 열기', 'Ctrl+클릭'), @('side', '오른쪽에 열기', ''))) {
         $mi = [System.Windows.Controls.MenuItem]::new()
         $mi.Header = $spec[1]
@@ -1239,12 +1259,21 @@ function New-WtMemoView {
         [void]$listMenu.Items.Add($mi)
     }
     $list.ContextMenu = $listMenu
+    $homePin = [System.Windows.Controls.MenuItem]::new()
+    $homePin.Header = '홈에 고정'
+    $homePin.Add_Click({
+            param($s, $e)
+            $memoId = [string]$s.Parent.Tag
+            Set-WtHomePin -Page 'memo' -Key $memoId -Title (Get-WtMemoTitle $memoId) -Sub '메모' -Icon 0xE70B -Pinned:(-not (Test-WtHomePin -Page 'memo' -Key $memoId))
+        })
+    [void]$listMenu.Items.Add($homePin)
     $list.Add_ContextMenuOpening({
             param($s, $e)
             $memoId = if ($script:listMenuId) { $script:listMenuId } elseif ($s.SelectedItem) { [string]$s.SelectedItem.Id } else { '' }
             $script:listMenuId = ''
             if (-not $memoId) { $e.Handled = $true; return }
             $s.ContextMenu.Tag = $memoId
+            $s.ContextMenu.Items[$s.ContextMenu.Items.Count - 1].Header = if (Test-WtHomePin -Page 'memo' -Key $memoId) { '홈 고정 해제' } else { '홈에 고정' }
         })
     [void]$ldock.Children.Add($list)
     $left.Child = $ldock
@@ -1468,16 +1497,17 @@ Register-WtDataWriteHandler {
     if ($script:ui.Count -and $path -ieq (Get-WtStorePath 'memo')) { Update-WtMemoSaveStatus }
 }
 
-Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Order 40 -WarmUp Full `
+Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 40 -WarmUp Full `
     -NewView { New-WtMemoView } `
     -Refresh { param($view) Update-WtMemoView } `
-    -HomeCard { New-WtMemoHomeCard } `
+    -OnOpen { param($OpenArgs) if ($OpenArgs.Key -and (Get-WtMemoById ([string]$OpenArgs.Key))) { $script:ui.Search.Text = ''; [void](Open-WtMemo ([string]$OpenArgs.Key)) } } `
+    -ShortcutExists { param($Key) @((Get-WtMemoItems) | Where-Object { $_.id -ceq $Key -and -not $_.deleted }).Count -gt 0 } `
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
     -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
     -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; if ($script:saveTimer) { $script:saveTimer.Stop() }; if ($script:undoTimer) { $script:undoTimer.Stop() } } `
-    -Help '메모는 쓰고 고칠 수 있습니다. 여러 메모를 탭으로 열어 두고, 오른쪽에 나눠 두 칸으로 볼 수 있습니다.' `
+    -Help @('마크다운 메모를 탭과 두 칸으로 엽니다.', 'Ctrl+E로 편집과 읽기를 바꿉니다.', 'Ctrl+/로 편집과 원문을 바꿉니다.') `
     -Shortcuts @(
-        @('Ctrl + N', '새 메모 (새 탭)'), @('Ctrl + S', '바로 저장 (보통은 자동 저장)'), @('Ctrl + O', '빠른 이동 (메모 이름으로 찾아 열기)'),
+        @('Ctrl + N', '새로 만들기 (새 탭)'), @('Ctrl + S', '바로 저장'), @('Ctrl + O', '메모 이름으로 찾아 열기'),
         @('Ctrl + W', '탭 닫기'), @('Ctrl + Shift + T', '닫은 탭 다시 열기'), @('Ctrl + Tab / Ctrl + Shift + Tab', '다음 / 이전 탭'),
         @('Ctrl + \', '오른쪽에 나눠 열기 (나눴으면 다른 칸으로)'), @('Alt + ← / Alt + →', '뒤로 / 앞으로 (링크 · 빠른 이동으로 간 메모)'),
         @('Ctrl + E', '편집 / 읽기'), @('Ctrl + /', '편집 / 원문'), @('Ctrl + Shift + F', '목록 검색칸으로'),
@@ -1491,5 +1521,5 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Order 40 -WarmUp Full 
         @('붙여넣기', '글을 고르고 URL을 붙이면 링크, 파일 경로는 경로 링크로'), @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크')) `
     -HelpCard { New-WtMemoMarkdownHelpCard }
 
-Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Find-WtMemo, Format-WtMemoTime, Import-WtMemoLegacy,
+Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Format-WtMemoTime, Import-WtMemoLegacy,
     New-WtMemo, Get-WtMemoTags, Set-WtMemoContent, Save-WtMemoItems
