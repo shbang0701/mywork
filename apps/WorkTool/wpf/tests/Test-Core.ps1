@@ -453,16 +453,16 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
 
     # ---- 설정 ----
     Initialize-WtSettings
-    Assert-Wt '설정 기본값' ((Get-WtSetting 'theme.color') -eq 'sky' -and (Get-WtSetting 'ui.opacity') -eq 100)
+    Assert-Wt '설정 기본값' ((Get-WtSetting 'theme.accent') -eq 'blue' -and (Get-WtSetting 'ui.opacity') -eq 100)
     Register-WtSettingHandler { param($k, $v) $script:seenKey = $k }
-    Set-WtSetting 'theme.color' 'pink'
+    Set-WtSetting 'theme.accent' 'pink'
     Set-WtSetting 'addons.disabled' @('test-b')
     Assert-Wt '설정이 바뀌면 처리기를 부른다' ($script:seenKey -eq 'addons.disabled')
     $saved = Get-Content (Get-WtSettingsPath) -Raw | ConvertFrom-Json
-    Assert-Wt '바꾼 값만 저장한다' (@($saved.values.PSObject.Properties.Name).Count -eq 2 -and $saved.values.'theme.color' -eq 'pink')
-    Set-WtSetting 'theme.color' 'sky'
+    Assert-Wt '바꾼 값만 저장한다' (@($saved.values.PSObject.Properties.Name).Count -eq 2 -and $saved.values.'theme.accent' -eq 'pink')
+    Set-WtSetting 'theme.accent' 'blue'
     $saved = Get-Content (Get-WtSettingsPath) -Raw | ConvertFrom-Json
-    Assert-Wt '기본값으로 돌리면 파일에서 빠진다' (-not ($saved.values.PSObject.Properties.Name -contains 'theme.color'))
+    Assert-Wt '기본값으로 돌리면 파일에서 빠진다' (-not ($saved.values.PSObject.Properties.Name -contains 'theme.accent'))
     Initialize-WtSettings
     Assert-Wt '배열 설정을 다시 읽는다' (@(Get-WtSetting 'addons.disabled') -contains 'test-b')
 
@@ -539,24 +539,48 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
 
     # ---- 테마 색 대비 ----
     $pairs = @(
-        @('OnAccent', 'Accent', 4.5), @('AccentStrong', 'AccentSoft', 4.5),
+        @('OnAccent', 'Accent', 4.5), @('OnAccent', 'Accent.Hover', 4.5), @('OnAccent', 'Accent.Pressed', 4.5), @('AccentStrong', 'AccentSoft', 4.5),
         @('Text', 'WindowBg', 4.5), @('Text', 'Sidebar', 4.5), @('Text', 'AccentSoft', 4.5), @('Text', 'Hover', 4.5),
         @('SubText', 'WindowBg', 4.5), @('SubText', 'Sidebar', 4.5), @('SubText', 'Card', 4.5),
         @('NavText', 'Sidebar', 4.5), @('NavText', 'Hover', 4.5),
         @('InputBorder', 'Card', 3.0), @('Accent', 'Card', 3.0))
+    Assert-Wt '테마 2판: 강조색은 파랑 기본 · 분홍 · 청록 · 보라 · 회색만' (((Get-WtPalette).Keys -join ',') -ceq 'blue,pink,teal,purple,gray')
+    $expectedAccents = @{
+        blue = @('#1A5BBE', '#174FA6', '#144690'); pink = @('#B83D69', '#A1355C', '#8C2E50')
+        teal = @('#0B6B69', '#0A5D5C', '#085150'); purple = @('#7048B8', '#623FA1', '#55378C'); gray = @('#56606D', '#4B545F', '#414953')
+    }
     foreach ($name in (Get-WtPalette).Keys) {
-        $c = Get-WtThemeColors $name
+        $c = Get-WtThemeColors -Accent $name
         $bad = foreach ($p in $pairs) {
             $ratio = Get-WtContrast $c[$p[0]] $c[$p[1]]
             if ($ratio -lt $p[2]) { '{0}/{1} {2:N2}' -f $p[0], $p[1], $ratio }
         }
         Assert-Wt "테마 '$name' 색 대비" (-not $bad) ($bad -join ', ')
+        Assert-Wt "테마 '$name' 2판 강조 상태와 중성 면" (($c.Accent, $c['Accent.Hover'], $c['Accent.Pressed'] -join ',') -ceq ($expectedAccents[$name] -join ',') -and
+            $c.WindowBg -ceq '#F3F4F6' -and $c.Sidebar -ceq '#F3F4F6' -and $c.Card -ceq '#FFFFFF' -and $c['Bg.Subtle'] -ceq '#F7F8FA' -and $c.AccentSoft -ceq '#E8F0FC')
+        $bad = foreach ($fg in 'Text.Primary', 'Text.Secondary', 'Text.Tertiary') {
+            foreach ($bg in 'Bg.Canvas', 'Bg.Surface', 'Bg.Subtle', 'Bg.Raised', 'Bg.Selected', 'Fill.Hover.Surface', 'Fill.Pressed.Surface', 'Fill.Hover.Canvas', 'Fill.Pressed.Canvas', 'Fill.Selected.Nav', 'Fill.Hover.Subtle', 'Fill.Pressed.Subtle') {
+                $ratio = Get-WtContrast $c[$fg] $c[$bg]
+                if ($ratio -lt 4.5) { '{0}/{1} {2:N2}' -f $fg, $bg, $ratio }
+            }
+        }
+        foreach ($bg in 'Bg.Canvas', 'Bg.Surface', 'Bg.Subtle', 'Bg.Selected', 'Fill.Hover.Surface', 'Fill.Pressed.Surface') {
+            $ratio = Get-WtContrast $c['Accent.Text'] $c[$bg]
+            if ($ratio -lt 4.5) { 'Accent.Text/{0} {1:N2}' -f $bg, $ratio }
+        }
+        Assert-Wt "테마 '$name' 2판 본문·보조·3차·강조 글자 AA 4.5:1" (-not $bad) ($bad -join ', ')
+        $bad = foreach ($state in 'Success', 'Warning', 'Error', 'Info', 'Neutral') {
+            if ((Get-WtContrast $c["Status.$state.Text"] $c["Status.$state.Bg"]) -lt 4.5 -or
+                (Get-WtContrast $c["Status.$state.Text"] $c['Bg.Surface']) -lt 4.5 -or
+                (Get-WtContrast $c["Status.$state.Icon"] $c['Bg.Surface']) -lt 3) { $state }
+        }
+        Assert-Wt "테마 '$name' 2판 상태 글자 AA·아이콘 대비" (-not $bad) ($bad -join ', ')
     }
     foreach ($k in 'Work', 'Over', 'Trip', 'Leave') {
-        $c = Get-WtThemeColors 'sky'
+        $c = Get-WtThemeColors -Accent 'blue'
         Assert-Wt "근태 표시 '$k' 색 대비" ((Get-WtContrast $c["Att.$k"] $c["Att.${k}Bg"]) -ge 4.5)
     }
-    $c = Get-WtThemeColors 'sky'
+    $c = Get-WtThemeColors -Accent 'blue'
     $bad = foreach ($k in 'Blue', 'Teal', 'Green', 'Orange', 'Red', 'Purple', 'Gray') {
         foreach ($fg in "Callout.$k", 'Text') {
             $ratio = Get-WtContrast $c[$fg] $c["Callout.${k}Bg"]
@@ -573,6 +597,21 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Assert-Wt '마크다운 · 다이어그램 색 대비' ((Get-WtContrast $c.Text $c['Md.Mark']) -ge 4.5 -and (Get-WtContrast $c.Text $c['Dia.NodeBg']) -ge 4.5 -and
         (Get-WtContrast $c.Text $c['Dia.NoteBg']) -ge 4.5 -and (Get-WtContrast $c.SubText $c['Dia.GroupBg']) -ge 4.5 -and
         (Get-WtContrast $c['Dia.Line'] $c.Card) -ge 3 -and (Get-WtContrast $c['Dia.NodeLine'] $c.Card) -ge 3)
+
+    # 옛 값은 보존하되 강조색 결정에는 쓰지 않는다. 새 값이 없거나 모르는 값이면 파랑.
+    foreach ($legacyName in 'sky', 'pink', 'green', 'yellow', 'purple', 'gray', 'black', 'unknown') {
+        Set-WtSetting 'theme.color' $legacyName
+        Assert-Wt "테마: 옛 theme.color '$legacyName'은 무시" ((Get-WtThemeColors $legacyName).Accent -ceq '#1A5BBE' -and (Get-WtSetting 'theme.accent') -ceq 'blue')
+    }
+    Set-WtSetting 'theme.accent' 'pink'
+    $savedTheme = Get-Content (Get-WtSettingsPath) -Raw | ConvertFrom-Json
+    Assert-Wt '테마: 강조색을 바꿔도 파일의 옛 키는 남는다' ($savedTheme.values.'theme.color' -ceq 'unknown' -and $savedTheme.values.'theme.accent' -ceq 'pink' -and (Get-WtThemeColors 'gray').Accent -ceq '#B83D69')
+    Set-WtSetting 'theme.accent' 'unknown'
+    Assert-Wt '테마: 모르는 새 강조색도 파랑으로 안전하게 표시' ((Get-WtThemeColors).Accent -ceq '#1A5BBE')
+    Set-WtSetting 'theme.accent' 'blue'
+    Assert-Wt '테마: 글자 2판 단계와 옛 크기 별칭' ((Get-WtFontSize 'Body') -eq 14 -and (Get-WtFontSize 'Small') -eq 12 -and
+        (Get-WtFontSize 'Title') -eq 20 -and (Get-WtFontSize 'Memo.Body') -eq 15 -and (Get-WtFontSize 'BodyLine') -eq 24 -and
+        (Get-WtFontSize 'MdH2') -eq 18 -and (Get-WtFontSize 'MdH3') -eq 16 -and (Get-WtFontSize 'Code') -eq 14)
 
     # ---- 마크다운 ----
     $md = @'
@@ -692,6 +731,82 @@ flowchart LR
 
     # ---- WPF로 그리기 (Windows · STA에서만) ----
     if ($wpf) {
+        # 공통 부품만 검사한다. 실제 탭의 배치·문구 기대는 바꾸지 않는다.
+        $v2Theme = New-WtThemeDictionary
+        $v2Styles = Get-WtStyleDictionary
+        $styleErrors = foreach ($styleKey in @($v2Styles.Keys)) {
+            $itemStyle = $v2Styles[$styleKey]
+            if ($itemStyle -isnot [System.Windows.Style] -or -not [System.Windows.FrameworkElement].IsAssignableFrom($itemStyle.TargetType)) { continue }
+            try {
+                $control = [Activator]::CreateInstance($itemStyle.TargetType)
+                $control.Resources.MergedDictionaries.Add($v2Theme); $control.Resources.MergedDictionaries.Add($v2Styles)
+                $control.Style = $itemStyle
+                if ($control -is [System.Windows.Controls.Control]) { [void]$control.ApplyTemplate() }
+                $control.Measure([System.Windows.Size]::new(800, 800))
+            } catch { "$styleKey : $($_.Exception.Message)" }
+        }
+        Assert-Wt 'WPF 2판: 모든 공통 스타일 템플릿을 실제로 만든다' (-not $styleErrors) ($styleErrors -join '; ')
+        $styleHost = [System.Windows.Controls.StackPanel]::new()
+        $styleHost.Resources.MergedDictionaries.Add($v2Theme); $styleHost.Resources.MergedDictionaries.Add($v2Styles)
+        $v2Button = New-WtButton '검사' -Kind Primary
+        $v2Icon = New-WtButton '' -Kind Icon -Icon 0xE710
+        $v2Input = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $v2Input 'Input'
+        $v2Row = [System.Windows.Controls.ListBoxItem]::new(); Set-WtStyle $v2Row 'Row'; $v2Row.Content = '행'; $v2Row.IsSelected = $true
+        $v2Check = [System.Windows.Controls.CheckBox]::new(); Set-WtStyle $v2Check 'Checklist.Row'; $v2Check.Content = '완료'; $v2Check.IsChecked = $true
+        foreach ($element in $v2Button, $v2Icon, $v2Input, $v2Row, $v2Check) { [void]$styleHost.Children.Add($element); [void]$element.ApplyTemplate() }
+        $styleHost.Measure([System.Windows.Size]::new(800, 800)); $styleHost.Arrange([System.Windows.Rect]::new(0, 0, 800, 800))
+        Assert-Wt 'WPF 2판: 버튼·입력·목록 32, 아이콘·체크리스트 28' ($v2Button.MinHeight -eq 32 -and $v2Input.MinHeight -eq 32 -and $v2Row.MinHeight -eq 32 -and $v2Icon.Width -eq 28 -and $v2Icon.Height -eq 28 -and $v2Check.MinHeight -eq 28)
+        $v2Filter = New-WtFilterChip '조건'
+        [void]$styleHost.Children.Add($v2Filter.Root)
+        $styleHost.Measure([System.Windows.Size]::new(800, 800)); $styleHost.Arrange([System.Windows.Rect]::new(0, 0, 800, 800))
+        $global:wtTestChipRemoved = 0
+        $v2Filter.Remove.Add_Click({ $global:wtTestChipRemoved++ })
+        $v2Filter.Remove.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+        Assert-Wt 'WPF 2판: 조건 칩 높이 24·삭제 영역 20×24·삭제 이벤트 하나' ($v2Filter.Root.ActualHeight -eq 24 -and $v2Filter.Remove.Width -eq 20 -and $v2Filter.Remove.Height -eq 24 -and $global:wtTestChipRemoved -eq 1)
+        $v2Binding = [System.Windows.Data.Binding]::new('Value')
+        $v2Binding.Source = [pscustomobject]@{ Value = '검사' }
+        $v2Expression = $v2Input.SetBinding([System.Windows.Controls.TextBox]::TextProperty, $v2Binding)
+        $v2Error = [System.Windows.Controls.ValidationError]::new([System.Windows.Controls.ExceptionValidationRule]::new(), $v2Expression, '검사 오류', $null)
+        [System.Windows.Controls.Validation]::MarkInvalid($v2Expression, $v2Error)
+        $errorIcon = $v2Input.Template.FindName('ErrorIcon', $v2Input)
+        Assert-Wt 'WPF 2판: 입력 오류는 오류색 선·아이콘과 이유 툴팁' ($v2Input.BorderBrush.Color.ToString() -ceq '#FFC42F29' -and $errorIcon.Visibility -eq 'Visible' -and $v2Input.ToolTip -ceq '검사 오류')
+        [System.Windows.Controls.Validation]::ClearInvalid($v2Expression)
+        $selectedBar = $v2Row.Template.FindName('SelectedBar', $v2Row)
+        Assert-Wt 'WPF 2판: 선택 행은 선택 면 + 3×16 강조 막대' ($v2Row.Background.Color.ToString() -ceq '#FFE8F0FC' -and $selectedBar.Visibility -eq 'Visible' -and $selectedBar.Width -eq 3 -and $selectedBar.Height -eq 16)
+        $checkLabel = Get-WtVisualChild $v2Check ([System.Windows.Controls.ContentPresenter])
+        $checkText = Get-WtVisualChild $checkLabel ([System.Windows.Controls.TextBlock])
+        Assert-Wt 'WPF 2판: 완료 체크리스트는 3차 글자색만, 취소선·추가 투명도 없음' ($v2Check.Foreground.Color.ToString() -ceq '#FF5C6470' -and $v2Check.Opacity -eq 1 -and $checkText.TextDecorations.Count -eq 0)
+        $v2Button.IsEnabled = $false
+        Assert-Wt 'WPF 2판: 비활성은 정해진 면·선·글자, 불투명도 1' ($v2Button.Background.Color.ToString() -ceq '#FFF3F4F6' -and $v2Button.Foreground.Color.ToString() -ceq '#FFA3AAB4' -and $v2Button.Opacity -eq 1)
+        $v2Tip = [System.Windows.Controls.ToolTip]::new()
+        $v2Tip.Resources.MergedDictionaries.Add($v2Theme); $v2Tip.Resources.MergedDictionaries.Add($v2Styles)
+        $v2Tip.Content = '긴 안내 글 ' * 80
+        [void]$v2Tip.ApplyTemplate(); $v2Tip.Measure([System.Windows.Size]::new(800, 800))
+        Assert-Wt 'WPF 2판: 앱 기본 툴팁은 12/16·여백 8/6·최대 320·400/100ms, 그림자 없음' ($v2Tip.Style -eq $v2Styles[[System.Windows.Controls.ToolTip]] -and
+            $v2Tip.FontSize -eq 12 -and $v2Tip.Padding -eq [System.Windows.Thickness]::new(8, 6, 8, 6) -and $v2Tip.MaxWidth -eq 320 -and $v2Tip.DesiredSize.Width -le 320 -and
+            -not $v2Tip.HasDropShadow -and $null -eq $v2Tip.Effect -and [System.Windows.Controls.ToolTipService]::GetInitialShowDelay($v2Input) -eq 400 -and [System.Windows.Controls.ToolTipService]::GetBetweenShowDelay($v2Input) -eq 100 -and
+            [System.Windows.Controls.ToolTipService]::GetInitialShowDelay([System.Windows.Documents.Hyperlink]::new()) -eq 400)
+        Assert-Wt 'WPF 2판: 메모 본문·제목 줄 높이와 치수 자원' ($v2Theme['F.Memo.Body'] -eq 15 -and $v2Theme['F.Memo.Body.LineHeight'] -eq 24 -and $v2Theme['F.Memo.H2.LineHeight'] -eq 26 -and $v2Theme['F.Memo.H6.LineHeight'] -eq 22 -and
+            $v2Theme['F.Radius.Control'].TopLeft -eq 4 -and $v2Theme['F.Radius.Overlay'].TopLeft -eq 8 -and $v2Theme['F.Line.Focus'] -eq 2)
+        Set-WtSetting 'theme.accent' 'teal'
+        Assert-Wt 'WPF 2판: 강조색 변경을 기존 사전에 즉시 반영하고 면은 유지' ($v2Theme['B.Accent'].Color.ToString() -ceq '#FF0B6B69' -and $v2Theme['B.Bg.Canvas'].Color.ToString() -ceq '#FFF3F4F6')
+        Set-WtSetting 'theme.accent' 'blue'
+        $v2ThemeCard = & (Get-Module Pages) { New-WtThemeCard }
+        function Get-WtTestThemeChoices($Element) {
+            if ($Element -is [System.Windows.Controls.RadioButton] -and $Element.GroupName -ceq 'WtTheme') { $Element }
+            foreach ($child in [System.Windows.LogicalTreeHelper]::GetChildren($Element)) {
+                if ($child -is [System.Windows.DependencyObject]) { Get-WtTestThemeChoices $child }
+            }
+        }
+        $themeChoices = @(Get-WtTestThemeChoices $v2ThemeCard)
+        Assert-Wt 'WPF 2판: 설정은 강조색 제목·이름과 견본 5개, 설명 줄 없음' ($themeChoices.Count -eq 5 -and ($themeChoices.Content -join ',') -ceq '파랑,분홍,청록,보라,회색' -and
+            @(Get-WtTestTexts $v2ThemeCard) -contains '강조색' -and $v2ThemeCard.Child.Children[1].Children[0].Children.Count -eq 1)
+        foreach ($choice in $themeChoices) { $choice.IsChecked = $true }
+        Assert-Wt 'WPF 2판: 설정의 강조색 선택이 새 키·현재 사전에 반영' ((Get-WtSetting 'theme.accent') -ceq 'gray' -and $v2Theme['B.Accent'].Color.ToString() -ceq '#FF56606D')
+        Set-WtSetting 'theme.accent' 'blue'
+        $v2Source = [System.IO.File]::ReadAllText((Join-Path $root 'core/Ui.psm1')) + [System.IO.File]::ReadAllText((Join-Path $root 'core/Theme.psm1'))
+        Assert-Wt 'WPF 2판: 효과·그라데이션·애니메이션·둥근 안쪽 Clip 없음' ($v2Source -notmatch 'DropShadowEffect|BlurEffect|(?:Linear|Radial)GradientBrush|<Storyboard|<(?:Double|Color|Thickness|Object)Animation[ >]|ClipToBounds="True"|<[^>]*\.Clip>')
+
         $sample = $md + @'
 
 

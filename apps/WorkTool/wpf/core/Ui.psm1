@@ -10,33 +10,70 @@ $script:ns = 'xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" 
 $script:stylesXaml = @'
 <ResourceDictionary {NS}>
 
+  <!-- 키보드 포커스: 바깥 2 + 안쪽 1, 요소에서 1 띄움. 행은 안쪽에 그린다. -->
+  <Style x:Key="Focus.Outside" TargetType="Control">
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Control">
+      <Grid Margin="-4" IsHitTestVisible="False">
+        <Border BorderBrush="{DynamicResource B.Text.Primary}" BorderThickness="2" CornerRadius="4"/>
+        <Border Margin="2" BorderBrush="{DynamicResource B.Bg.Surface}" BorderThickness="1" CornerRadius="2"/>
+      </Grid>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="Focus.Inside" TargetType="Control">
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Control">
+      <Grid Margin="1" IsHitTestVisible="False">
+        <Border BorderBrush="{DynamicResource B.Text.Primary}" BorderThickness="2"/>
+        <Border Margin="2" BorderBrush="{DynamicResource B.Bg.Surface}" BorderThickness="1"/>
+      </Grid>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+
+
   <Style x:Key="T.Body" TargetType="TextBlock">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Body.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Body.LineHeight}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
     <Setter Property="TextWrapping" Value="Wrap"/>
+
   </Style>
   <Style x:Key="T.Sub" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
-    <Setter Property="FontSize" Value="{DynamicResource F.Small}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Caption}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Caption.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Caption.LineHeight}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
+
   </Style>
   <Style x:Key="T.Title" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
     <Setter Property="FontSize" Value="{DynamicResource F.Title}"/>
-    <Setter Property="FontWeight" Value="Bold"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Title.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Title.LineHeight}"/>
+
   </Style>
   <Style x:Key="T.H2" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
-    <Setter Property="FontSize" Value="{DynamicResource F.H2}"/>
-    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.BodyStrong}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.BodyStrong.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.BodyStrong.LineHeight}"/>
+
   </Style>
   <Style x:Key="T.Number" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
-    <Setter Property="FontSize" Value="{DynamicResource F.Number}"/>
-    <Setter Property="FontWeight" Value="Bold"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Title}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Title.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Title.LineHeight}"/>
+
   </Style>
-  <Style x:Key="T.Dialog" TargetType="TextBlock" BasedOn="{StaticResource T.H2}">
-    <Setter Property="FontSize" Value="{DynamicResource F.Dialog}"/>
+  <Style x:Key="T.Dialog" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
+    <Setter Property="FontSize" Value="{DynamicResource F.Subtitle}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Subtitle.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Subtitle.LineHeight}"/>
+
   </Style>
   <Style x:Key="T.Strong" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
-    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.BodyStrong}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.BodyStrong.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.BodyStrong.LineHeight}"/>
+
   </Style>
   <Style x:Key="T.Icon" TargetType="TextBlock">
     <Setter Property="FontFamily" Value="{DynamicResource Font.Icon}"/>
@@ -46,16 +83,18 @@ $script:stylesXaml = @'
   </Style>
 
   <Style x:Key="Card" TargetType="Border">
-    <Setter Property="Background" Value="{DynamicResource B.Card}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
     <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="CornerRadius" Value="12"/>
-    <Setter Property="Padding" Value="20,16"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/>
+    <Setter Property="Padding" Value="{DynamicResource F.Padding.Panel}"/>
+
   </Style>
   <Style x:Key="Tile" TargetType="Border">
-    <Setter Property="Background" Value="{DynamicResource B.WindowBg}"/>
-    <Setter Property="CornerRadius" Value="10"/>
-    <Setter Property="Padding" Value="14,10"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/>
+    <Setter Property="Padding" Value="{DynamicResource F.Padding.Panel}"/>
+
   </Style>
   <Style x:Key="Divider" TargetType="Border">
     <Setter Property="BorderBrush" Value="{DynamicResource B.Divider}"/>
@@ -65,117 +104,175 @@ $script:stylesXaml = @'
   <Style x:Key="Btn" TargetType="Button">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
-    <Setter Property="Background" Value="{DynamicResource B.Card}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.ButtonBorder}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Body.Weight}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Strong}"/>
     <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="Padding" Value="16,0"/>
-    <Setter Property="MinHeight" Value="40"/>
+    <Setter Property="Padding" Value="12,0"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/>
     <Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-    <Setter Property="Template">
-      <Setter.Value>
-        <ControlTemplate TargetType="Button">
-          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="{TemplateBinding Padding}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="False"/>
-          </Border>
-        </ControlTemplate>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource F.Radius.Control}" Padding="{TemplateBinding Padding}">
+        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="False"/>
+      </Border>
+    </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.Hover}"/>
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
       </Trigger>
-      <Trigger Property="IsKeyboardFocused" Value="True">
-        <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
       </Trigger>
       <Trigger Property="IsEnabled" Value="False">
-        <Setter Property="Opacity" Value="0.5"/>
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
       </Trigger>
     </Style.Triggers>
   </Style>
   <Style x:Key="Btn.Primary" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="Background" Value="{DynamicResource B.Accent}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
+    <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="Foreground" Value="{DynamicResource B.OnAccent}"/>
-    <Setter Property="FontWeight" Value="SemiBold"/>
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.AccentHover}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource B.AccentHover}"/>
+        <Setter Property="Background" Value="{DynamicResource B.Accent.Hover}"/>
       </Trigger>
-      <Trigger Property="IsKeyboardFocused" Value="True">
-        <Setter Property="BorderBrush" Value="{DynamicResource B.Text}"/>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Accent.Pressed}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
       </Trigger>
     </Style.Triggers>
   </Style>
   <Style x:Key="Btn.Danger" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Danger}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/>
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.DangerBg}"/>
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
       </Trigger>
     </Style.Triggers>
   </Style>
   <Style x:Key="Btn.Link" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.AccentStrong}"/>
-    <Setter Property="FontSize" Value="{DynamicResource F.Small}"/>
-    <Setter Property="MinHeight" Value="32"/>
-    <Setter Property="Padding" Value="10,0"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Accent.Text}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Caption}"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Compact}"/>
+    <Setter Property="Padding" Value="12,0"/>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
+      </Trigger>
+    </Style.Triggers>
   </Style>
   <Style x:Key="Btn.Icon" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.NavText}"/>
-    <Setter Property="Width" Value="40"/>
-    <Setter Property="Height" Value="40"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
+    <Setter Property="Width" Value="{DynamicResource F.Height.Compact}"/>
+    <Setter Property="Height" Value="{DynamicResource F.Height.Compact}"/>
     <Setter Property="MinHeight" Value="0"/>
     <Setter Property="Padding" Value="0"/>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
+      </Trigger>
+    </Style.Triggers>
   </Style>
   <Style x:Key="Btn.Chrome" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
     <Setter Property="Width" Value="46"/>
-    <Setter Property="Height" Value="40"/>
-  </Style>
-  <Style x:Key="Btn.Close" TargetType="Button" BasedOn="{StaticResource Btn.Chrome}">
+    <Setter Property="Height" Value="{DynamicResource F.Height.Control}"/>
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.CloseHover}"/>
-        <Setter Property="Foreground" Value="#FFFFFF"/>
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Canvas}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Canvas}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
       </Trigger>
     </Style.Triggers>
+  </Style>
+  <Style x:Key="Btn.Close" TargetType="Button" BasedOn="{StaticResource Btn.Chrome}">
+
+
   </Style>
 
   <Style x:Key="Nav" TargetType="RadioButton">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.NavText}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
     <Setter Property="Background" Value="Transparent"/>
-    <Setter Property="Height" Value="40"/>
+    <Setter Property="Height" Value="{DynamicResource F.Height.Control}"/>
     <Setter Property="Margin" Value="0,2"/>
     <Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-    <Setter Property="Template">
-      <Setter.Value>
-        <ControlTemplate TargetType="RadioButton">
-          <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="12,0">
-            <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/>
-          </Border>
-        </ControlTemplate>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
+      <Grid>
+        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="12,0"><ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/></Border>
+        <Border x:Name="SelectedBar" Width="3" Height="16" CornerRadius="1.5" Background="{DynamicResource B.Accent}" HorizontalAlignment="Left" VerticalAlignment="Center" Visibility="Collapsed"/>
+      </Grid>
+      <ControlTemplate.Triggers><Trigger Property="IsChecked" Value="True"><Setter TargetName="SelectedBar" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.Hover}"/>
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Canvas}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Canvas}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
       </Trigger>
       <Trigger Property="IsChecked" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/>
-        <Setter Property="Foreground" Value="{DynamicResource B.AccentStrong}"/>
-        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Selected.Nav}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.BodyStrong.Weight}"/>
       </Trigger>
     </Style.Triggers>
   </Style>
@@ -183,79 +280,84 @@ $script:stylesXaml = @'
   <Style x:Key="Seg" TargetType="RadioButton">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.ChipText}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
     <Setter Property="Background" Value="Transparent"/>
-    <Setter Property="MinHeight" Value="34"/>
-    <Setter Property="Padding" Value="14,0"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Compact}"/>
+    <Setter Property="Padding" Value="12,0"/>
     <Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-    <Setter Property="Template">
-      <Setter.Value>
-        <ControlTemplate TargetType="RadioButton">
-          <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="False"/>
-          </Border>
-        </ControlTemplate>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton"><Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="False"/></Border></ControlTemplate></Setter.Value></Setter>
     <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
+      </Trigger>
       <Trigger Property="IsChecked" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.Card}"/>
-        <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
-        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
       </Trigger>
     </Style.Triggers>
   </Style>
 
   <Style x:Key="Swatch" TargetType="RadioButton">
-    <Setter Property="Width" Value="40"/>
-    <Setter Property="Height" Value="40"/>
-    <Setter Property="Margin" Value="0,0,6,0"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/>
+    <Setter Property="Margin" Value="0,0,8,0"/>
     <Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-    <Setter Property="Template">
-      <Setter.Value>
-        <ControlTemplate TargetType="RadioButton">
-          <Grid Background="Transparent">
-            <Ellipse x:Name="Ring" Stroke="{DynamicResource B.Text}" StrokeThickness="2" Visibility="Hidden"/>
-            <Ellipse Margin="6" Fill="{TemplateBinding Background}" Stroke="{TemplateBinding BorderBrush}" StrokeThickness="1"/>
-          </Grid>
-          <ControlTemplate.Triggers>
-            <Trigger Property="IsChecked" Value="True">
-              <Setter TargetName="Ring" Property="Visibility" Value="Visible"/>
-            </Trigger>
-          </ControlTemplate.Triggers>
-        </ControlTemplate>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
+      <Border x:Name="Bd" Background="{DynamicResource B.Bg.Surface}" BorderBrush="{DynamicResource B.Border.Strong}" BorderThickness="1" CornerRadius="4" Padding="8,0">
+        <DockPanel>
+          <Border DockPanel.Dock="Left" Width="16" Height="16" CornerRadius="2" Background="{TemplateBinding Background}" VerticalAlignment="Center"/>
+          <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="False"/>
+        </DockPanel>
+      </Border>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+        <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
+        <Trigger Property="IsChecked" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter TargetName="Bd" Property="BorderThickness" Value="2"/></Trigger>
+        <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/><Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/></Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
   </Style>
 
   <Style x:Key="Input" TargetType="TextBox">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
-    <Setter Property="Background" Value="{DynamicResource B.Card}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.InputBorder}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Control}"/>
     <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="Padding" Value="10,8"/>
-    <Setter Property="MinHeight" Value="40"/>
+    <Setter Property="Padding" Value="10,0"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/>
     <Setter Property="VerticalContentAlignment" Value="Center"/>
-    <Setter Property="Template">
-      <Setter.Value>
-        <ControlTemplate TargetType="TextBox">
-          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8">
-            <!-- 안쪽 여백(Padding)은 TextBox가 글자 둘레에 스스로 넣는다. 여기서 또 넣으면 두 배가 된다 -->
-            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
-                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
-          </Border>
-        </ControlTemplate>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Body.LineHeight}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+    <Setter Property="Validation.ErrorTemplate" Value="{x:Null}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox">
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+        <Grid>
+          <ScrollViewer x:Name="PART_ContentHost" Focusable="False" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+          <TextBlock x:Name="ErrorIcon" Text="&#xEB90;" FontFamily="{DynamicResource Font.Icon}" FontSize="16" Foreground="{DynamicResource B.Status.Error.Icon}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0" Visibility="Collapsed"/>
+        </Grid>
+      </Border>
+      <ControlTemplate.Triggers><Trigger Property="Validation.HasError" Value="True"><Setter TargetName="ErrorIcon" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers>
-      <Trigger Property="IsKeyboardFocused" Value="True">
-        <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
-      </Trigger>
+      <Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter Property="BorderThickness" Value="2"/></Trigger>
+      <Trigger Property="Validation.HasError" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource B.Status.Error.Icon}"/><Setter Property="Padding" Value="10,0,32,0"/><Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=(Validation.Errors)[0].ErrorContent}"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/><Setter Property="Opacity" Value="1"/></Trigger>
     </Style.Triggers>
   </Style>
   <Style x:Key="Reader" TargetType="TextBox" BasedOn="{StaticResource Input}">
@@ -267,15 +369,18 @@ $script:stylesXaml = @'
     <Setter Property="AcceptsReturn" Value="True"/>
     <Setter Property="VerticalContentAlignment" Value="Top"/>
     <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+      <Style.Triggers><Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="BorderThickness" Value="0"/></Trigger></Style.Triggers>
   </Style>
   <!-- 실행 출력: 코드 바탕의 읽기 전용 여러 줄. 줄을 바꾸지 않고 가로로 스크롤한다 (스크립트 출력 등) -->
   <Style x:Key="Output" TargetType="TextBox" BasedOn="{StaticResource Input}">
     <Setter Property="IsReadOnly" Value="True"/>
-    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Background" Value="{DynamicResource B.Code.Bg}"/>
     <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
-    <Setter Property="FontSize" Value="{DynamicResource F.Code}"/>
-    <Setter Property="Padding" Value="12,8"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Code.Dense}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Code.Dense.LineHeight}"/>
+    <Setter Property="Padding" Value="12"/>
     <Setter Property="TextWrapping" Value="NoWrap"/>
     <Setter Property="AcceptsReturn" Value="True"/>
     <Setter Property="VerticalContentAlignment" Value="Top"/>
@@ -285,26 +390,19 @@ $script:stylesXaml = @'
 
   <!-- 고르기 칸(ComboBox): 입력칸과 같은 테두리 · 높이 · 모서리. 펼친 목록은 카드 모양 -->
   <Style x:Key="Combo.Item" TargetType="ComboBoxItem">
-    <Setter Property="Padding" Value="10,8"/>
-    <Setter Property="Background" Value="Transparent"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-    <Setter Property="Template">
-      <Setter.Value>
-        <ControlTemplate TargetType="ComboBoxItem">
-          <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}" Margin="4,1">
-            <ContentPresenter/>
-          </Border>
-          <ControlTemplate.Triggers>
-            <Trigger Property="IsHighlighted" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.Hover}"/>
-            </Trigger>
-            <Trigger Property="IsSelected" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.AccentSoft}"/>
-            </Trigger>
-          </ControlTemplate.Triggers>
-        </ControlTemplate>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="Padding" Value="12,0"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ComboBoxItem">
+      <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"><ContentPresenter VerticalAlignment="Center"/></Border>
+    </ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers>
+      <Trigger Property="IsHighlighted" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
+    </Style.Triggers>
   </Style>
   <Style x:Key="Combo" TargetType="ComboBox">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
@@ -312,8 +410,10 @@ $script:stylesXaml = @'
     <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
     <Setter Property="Background" Value="{DynamicResource B.Card}"/>
     <Setter Property="BorderBrush" Value="{DynamicResource B.InputBorder}"/>
-    <Setter Property="MinHeight" Value="40"/>
-    <Setter Property="Padding" Value="10,8,32,8"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="Padding" Value="10,0,32,0"/>
     <Setter Property="ItemContainerStyle" Value="{StaticResource Combo.Item}"/>
     <Setter Property="Template">
       <Setter.Value>
@@ -323,17 +423,12 @@ $script:stylesXaml = @'
                           IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
               <ToggleButton.Template>
                 <ControlTemplate TargetType="ToggleButton">
-                  <Border x:Name="Bd" CornerRadius="8" BorderThickness="1"
+                  <Border x:Name="Bd" CornerRadius="4" BorderThickness="{Binding BorderThickness, RelativeSource={RelativeSource AncestorType=ComboBox}}"
                           Background="{Binding Background, RelativeSource={RelativeSource AncestorType=ComboBox}}"
                           BorderBrush="{Binding BorderBrush, RelativeSource={RelativeSource AncestorType=ComboBox}}">
                     <TextBlock Text="&#xE70D;" FontFamily="{DynamicResource Font.Icon}" FontSize="12" Foreground="{DynamicResource B.SubText}"
                                HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0"/>
                   </Border>
-                  <ControlTemplate.Triggers>
-                    <Trigger Property="IsMouseOver" Value="True">
-                      <Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.Hover}"/>
-                    </Trigger>
-                  </ControlTemplate.Triggers>
                 </ControlTemplate>
               </ToggleButton.Template>
             </ToggleButton>
@@ -350,10 +445,10 @@ $script:stylesXaml = @'
           </Grid>
           <ControlTemplate.Triggers>
             <Trigger Property="IsKeyboardFocusWithin" Value="True">
-              <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
+              <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter Property="BorderThickness" Value="2"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
-              <Setter Property="Opacity" Value="0.5"/>
+              <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/><Setter Property="Opacity" Value="1"/>
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
@@ -365,13 +460,16 @@ $script:stylesXaml = @'
   <Style x:Key="Busy" TargetType="ProgressBar">
     <Setter Property="Height" Value="4"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Accent}"/>
-    <Setter Property="Background" Value="{DynamicResource B.Chip}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="IsIndeterminate" Value="True"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ProgressBar"><Grid Background="{TemplateBinding Background}"><Border x:Name="PART_Track"/><Border x:Name="PART_Indicator" Width="32" HorizontalAlignment="Left" Background="{TemplateBinding Foreground}" CornerRadius="2"/></Grid></ControlTemplate></Setter.Value></Setter>
   </Style>
 
   <!-- 편집 칸: 카드 안을 채우는 테두리 없는 여러 줄 입력 (메모 본문 등) -->
   <Style x:Key="Editor" TargetType="TextBox" BasedOn="{StaticResource Input}">
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.Body.LineHeight}"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Padding" Value="0"/>
@@ -380,6 +478,7 @@ $script:stylesXaml = @'
     <Setter Property="AcceptsTab" Value="True"/>
     <Setter Property="VerticalContentAlignment" Value="Top"/>
     <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+      <Style.Triggers><Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="BorderThickness" Value="0"/></Trigger></Style.Triggers>
   </Style>
   <!-- 제목 입력: 글자처럼 보이는 한 줄 입력 (포커스가 가면 아래 선이 강조색) -->
   <Style x:Key="Input.Title" TargetType="TextBox" BasedOn="{StaticResource Input}">
@@ -388,41 +487,37 @@ $script:stylesXaml = @'
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Padding" Value="0,2"/>
     <Setter Property="MinHeight" Value="0"/>
-    <Setter Property="FontSize" Value="{DynamicResource F.Number}"/>
-    <Setter Property="FontWeight" Value="Bold"/>
-    <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="BorderBrush" Value="{DynamicResource B.InputBorder}"/>
-      </Trigger>
-      <Trigger Property="IsKeyboardFocused" Value="True">
-        <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
-      </Trigger>
-    </Style.Triggers>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H1}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H1.Weight}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.H1.LineHeight}"/>
+    <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Control}"/></Trigger><Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter Property="BorderThickness" Value="0,0,0,2"/></Trigger></Style.Triggers>
   </Style>
 
   <Style x:Key="Row" TargetType="ListBoxItem">
-    <Setter Property="Background" Value="Transparent"/>
-    <Setter Property="Padding" Value="12,10"/>
-    <Setter Property="Margin" Value="0,1"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/>
+    <Setter Property="Padding" Value="12,0"/>
+    <Setter Property="Margin" Value="0"/>
     <Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
     <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-    <Setter Property="Template">
-      <Setter.Value>
-        <ControlTemplate TargetType="ListBoxItem">
-          <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
-            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
-          </Border>
-        </ControlTemplate>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
+      <Grid>
+        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/></Border>
+        <Border x:Name="SelectedBar" Width="3" Height="16" CornerRadius="1.5" Background="{DynamicResource B.Accent}" HorizontalAlignment="Left" VerticalAlignment="Center" Visibility="Collapsed"/>
+      </Grid>
+      <ControlTemplate.Triggers><Trigger Property="IsSelected" Value="True"><Setter TargetName="SelectedBar" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.Hover}"/>
-      </Trigger>
-      <Trigger Property="IsSelected" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/>
-      </Trigger>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <MultiTrigger><MultiTrigger.Conditions><Condition Property="IsMouseOver" Value="True"/><Condition Property="IsMouseCaptured" Value="True"/></MultiTrigger.Conditions><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></MultiTrigger>
+      <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/></Trigger>
     </Style.Triggers>
   </Style>
   <Style x:Key="List" TargetType="ListBox">
@@ -439,14 +534,16 @@ $script:stylesXaml = @'
   <DataTemplate x:Key="Memo.Item">
     <StackPanel>
       <DockPanel>
-        <TextBlock DockPanel.Dock="Right" Text="{Binding Stamp}" Style="{DynamicResource T.Sub}" Margin="8,0,0,0"/>
-        <TextBlock Text="{Binding Title}" Style="{DynamicResource T.Strong}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+        <TextBlock DockPanel.Dock="Right" Text="{Binding Stamp}" Style="{DynamicResource T.CaptionMuted}" Margin="8,0,0,0"/>
+        <TextBlock Text="{Binding Title}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
       </DockPanel>
-      <TextBlock Text="{Binding Snippet}" Style="{DynamicResource T.Sub}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+      <TextBlock Text="{Binding Snippet}" Style="{DynamicResource T.CaptionMuted}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
     </StackPanel>
   </DataTemplate>
   <Style x:Key="Memo.List" TargetType="ListBox" BasedOn="{StaticResource List}">
     <Setter Property="ItemTemplate" Value="{StaticResource Memo.Item}"/>
+    <Setter Property="ItemContainerStyle" Value="{DynamicResource Memo.Row}"/>
+
   </Style>
 
   <!-- 메모 칸(pane): 맨 위 탭 줄이 카드 가장자리에 붙도록 안쪽 여백 없는 카드 -->
@@ -454,79 +551,103 @@ $script:stylesXaml = @'
     <Setter Property="Padding" Value="0"/>
   </Style>
   <Style x:Key="Memo.TabBar" TargetType="Border">
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
     <Setter Property="BorderThickness" Value="0,0,0,1"/>
-    <Setter Property="Padding" Value="8,4,8,0"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.MemoTabBar}"/>
+    <Setter Property="Padding" Value="9,6,0,6"/>
+
   </Style>
   <!-- 메모 탭 하나. 선택 표시는 바탕 + 아래 가운데 막대(3 × 16). 막대 색은 BorderBrush로 받는다
        Memo.Tab: 선택 안 됨 · Memo.Tab.Current: 포커스가 있는 칸의 지금 탭 · Memo.Tab.Selected: 다른 칸의 지금 탭(덜 강조) -->
   <Style x:Key="Memo.Tab" TargetType="Button">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
-    <Setter Property="MinHeight" Value="40"/>
-    <Setter Property="Padding" Value="12,0,4,0"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.MemoTab}"/>
+    <Setter Property="MinWidth" Value="120"/>
+    <Setter Property="MaxWidth" Value="240"/>
+    <Setter Property="Padding" Value="12,0,0,0"/>
     <Setter Property="Margin" Value="0,0,4,0"/>
     <Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-    <Setter Property="Template">
-      <Setter.Value>
-        <ControlTemplate TargetType="Button">
-          <Grid>
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="Transparent" BorderThickness="1"
-                    CornerRadius="8,8,0,0" Padding="{TemplateBinding Padding}">
-              <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/>
-            </Border>
-            <Border Width="16" Height="3" CornerRadius="1" HorizontalAlignment="Center" VerticalAlignment="Bottom"
-                    Background="{TemplateBinding BorderBrush}"/>
-          </Grid>
-          <ControlTemplate.Triggers>
-            <Trigger Property="IsKeyboardFocused" Value="True">
-              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource B.Text}"/>
-            </Trigger>
-          </ControlTemplate.Triggers>
-        </ControlTemplate>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+      <Grid>
+        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}"><ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/></Border>
+        <Border Height="2" Margin="8,0" Background="{TemplateBinding BorderBrush}" VerticalAlignment="Bottom"/>
+      </Grid>
+    </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.Hover}"/>
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
       </Trigger>
     </Style.Triggers>
   </Style>
   <Style x:Key="Memo.Tab.Selected" TargetType="Button" BasedOn="{StaticResource Memo.Tab}">
-    <Setter Property="Background" Value="{DynamicResource B.Chip}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.InputBorder}"/>
-  </Style>
-  <Style x:Key="Memo.Tab.Current" TargetType="Button" BasedOn="{StaticResource Memo.Tab}">
-    <Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
     <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/>
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Memo.Tab.Current" TargetType="Button" BasedOn="{StaticResource Memo.Tab}">
+    <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
       </Trigger>
     </Style.Triggers>
   </Style>
   <Style x:Key="Memo.TabText" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
     <Setter Property="TextWrapping" Value="NoWrap"/>
     <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
-    <Setter Property="MaxWidth" Value="160"/>
     <Setter Property="VerticalAlignment" Value="Center"/>
   </Style>
   <!-- 탭의 닫기(X). 탭 바탕(마우스 올림 · 선택)과 겹치지 않게 마우스 올림은 테두리 색 -->
   <Style x:Key="Memo.TabClose" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
     <Setter Property="Width" Value="24"/>
-    <Setter Property="Height" Value="24"/>
-    <Setter Property="Margin" Value="4,0,0,0"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
-    <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.Border}"/>
-        <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
-      </Trigger>
-    </Style.Triggers>
+    <Setter Property="Height" Value="{DynamicResource F.Height.MemoTab}"/>
+    <Setter Property="Margin" Value="0"/>
+    <Setter Property="FontSize" Value="10"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+      <Border Background="{TemplateBinding Background}" CornerRadius="4">
+        <TextBlock Text="&#xE711;" FontFamily="{DynamicResource Font.Icon}" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{TemplateBinding Foreground}"/>
+      </Border>
+    </ControlTemplate></Setter.Value></Setter>
+
   </Style>
   <!-- 두 칸 사이 경계: 폭 16(칸 사이 간격)을 끌어 폭을 바꾼다. 마우스를 올리거나 끌 때만 가운데 선이 보인다 -->
   <Style x:Key="Memo.Splitter" TargetType="GridSplitter">
@@ -536,7 +657,7 @@ $script:stylesXaml = @'
     <Setter Property="ResizeDirection" Value="Columns"/>
     <Setter Property="ResizeBehavior" Value="PreviousAndNext"/>
     <Setter Property="Cursor" Value="SizeWE"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="GridSplitter">
@@ -558,7 +679,7 @@ $script:stylesXaml = @'
       </Setter.Value>
     </Setter>
   </Style>
-  <!-- 빠른 이동(Ctrl+O): 메모 화면 위 가운데에 겹쳐 뜨는 검색 상자 + 결과 목록. 그림자는 Overlay.Shadow를 뒤에 깐다 -->
+  <!-- 빠른 이동(Ctrl+O): 메모 화면 위 가운데에 겹쳐 뜨는 검색 상자 + 결과 목록. 외곽 면은 Overlay.Shadow를 뒤에 깐다 -->
   <Style x:Key="Memo.QuickHost" TargetType="Grid">
     <Setter Property="Width" Value="560"/>
     <Setter Property="HorizontalAlignment" Value="Center"/>
@@ -566,6 +687,7 @@ $script:stylesXaml = @'
     <Setter Property="Margin" Value="0,24,0,0"/>
   </Style>
   <Style x:Key="Memo.QuickPanel" TargetType="Border" BasedOn="{StaticResource Card}">
+    <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Overlay}"/>
     <Setter Property="Padding" Value="12"/>
   </Style>
   <DataTemplate x:Key="Memo.QuickItem">
@@ -636,12 +758,12 @@ $script:stylesXaml = @'
     <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Padding" Value="4,6,10,6"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="TreeViewItem">
           <StackPanel>
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}" Margin="0,1"
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}" Margin="0,1"
                     BorderBrush="Transparent" BorderThickness="1">
               <DockPanel>
                 <ToggleButton x:Name="Expander" DockPanel.Dock="Left" Style="{StaticResource TreeExpander}" ClickMode="Press"
@@ -687,30 +809,34 @@ $script:stylesXaml = @'
   <Style x:Key="Check" TargetType="CheckBox">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
     <Setter Property="VerticalContentAlignment" Value="Center"/>
     <Setter Property="Margin" Value="0,4"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Checklist}"/>
     <Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="CheckBox">
-      <DockPanel Background="Transparent">
-        <Border x:Name="Box" DockPanel.Dock="Left" Width="16" Height="16" VerticalAlignment="Center"
-          CornerRadius="4" Background="{DynamicResource B.Card}" BorderBrush="{DynamicResource B.InputBorder}" BorderThickness="1">
-          <Grid>
-            <Path x:Name="Mark" Data="M 2,7 L 6,11 L 12,3" Stroke="{DynamicResource B.OnAccent}" StrokeThickness="2" Visibility="Collapsed"/>
-            <Border x:Name="Dash" Width="8" Height="2" Background="{DynamicResource B.OnAccent}" Visibility="Collapsed"/>
-          </Grid>
-        </Border>
-        <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="False"/>
-      </DockPanel>
+      <Border x:Name="HitArea" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+        <DockPanel>
+          <Border x:Name="Box" DockPanel.Dock="Left" Width="16" Height="16" CornerRadius="2" Background="{DynamicResource B.Bg.Surface}" BorderBrush="{DynamicResource B.Border.Control}" BorderThickness="1" VerticalAlignment="Center">
+            <Grid><TextBlock x:Name="Mark" Text="&#xE73E;" FontFamily="{DynamicResource Font.Icon}" FontSize="12" Foreground="{DynamicResource B.OnAccent}" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/><Border x:Name="Dash" Width="8" Height="2" Background="{DynamicResource B.OnAccent}" Visibility="Collapsed"/></Grid>
+          </Border>
+          <ContentPresenter Margin="10,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="False"/>
+        </DockPanel>
+      </Border>
       <ControlTemplate.Triggers>
-        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.SubText}"/></Trigger>
+        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+        <Trigger Property="IsPressed" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
         <Trigger Property="IsChecked" Value="True"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Accent}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter TargetName="Mark" Property="Visibility" Value="Visible"/></Trigger>
         <Trigger Property="IsChecked" Value="{x:Null}"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Accent}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter TargetName="Dash" Property="Visibility" Value="Visible"/></Trigger>
-        <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Text}"/><Setter TargetName="Box" Property="BorderThickness" Value="2"/></Trigger>
-        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter TargetName="Mark" Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers>      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+      </Trigger></Style.Triggers>
   </Style>
 
   <!-- 스크롤 막대: 화살표 없이 둥근 손잡이만 (막대 폭 12 · 손잡이 8). 키 없는 스타일이라 창 안의 모든 스크롤에 쓰인다 -->
@@ -838,7 +964,7 @@ $script:stylesXaml = @'
   <Style x:Key="Range" TargetType="Slider">
     <Setter Property="MinHeight" Value="32"/>
     <Setter Property="Cursor" Value="Hand"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Slider">
@@ -851,22 +977,20 @@ $script:stylesXaml = @'
           </Grid>
           <ControlTemplate.Triggers>
             <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Thumb" Property="BorderBrush" Value="{DynamicResource B.Text}"/></Trigger>
-            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="1"/></Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
       </Setter.Value>
     </Setter>
   </Style>
 
-  <!-- 겹쳐 뜨는 패널(좁은 창에서 내용 위에 여는 설명 패널 등)의 그림자. 패널에 바로 걸면 패널 글자까지 그림 한 장으로 다시 그려져서, 패널 뒤에 따로 깐다 -->
+  <!-- 옛 Overlay.Shadow 이름은 호환용이다. 2판은 효과 없이 면·선만 둔다. -->
   <Style x:Key="Overlay.Shadow" TargetType="Border">
-    <Setter Property="Background" Value="{DynamicResource B.Card}"/>
-    <Setter Property="CornerRadius" Value="12"/>
-    <Setter Property="Effect">
-      <Setter.Value>
-        <DropShadowEffect BlurRadius="16" ShadowDepth="8" Direction="270" Opacity="0.14" Color="#000000"/>
-      </Setter.Value>
-    </Setter>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Overlay}"/>
+
   </Style>
 
   <!-- 마크다운 보기 (Markdown.psm1). 문서 요소(Paragraph · Section · Run …)의 모양 -->
@@ -877,14 +1001,14 @@ $script:stylesXaml = @'
     <Setter Property="Padding" Value="-5,0,-5,0"/>
     <Setter Property="AcceptsTab" Value="False"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
     <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
   </Style>
   <Style x:Key="Md.Doc" TargetType="FlowDocument">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
-    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
-    <Setter Property="LineHeight" Value="{DynamicResource F.BodyLine}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Memo.Body.LineHeight}"/>
     <Setter Property="PagePadding" Value="0"/>
     <Setter Property="TextAlignment" Value="Left"/>
   </Style>
@@ -895,28 +1019,38 @@ $script:stylesXaml = @'
     <Setter Property="Margin" Value="0"/>
   </Style>
   <Style x:Key="Md.H1" TargetType="Paragraph">
-    <Setter Property="FontSize" Value="{DynamicResource F.MdH1}"/>
-    <Setter Property="FontWeight" Value="Bold"/>
-    <Setter Property="LineHeight" Value="Auto"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H1}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H1.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Memo.H1.LineHeight}"/>
     <Setter Property="Margin" Value="0,24,0,12"/>
   </Style>
   <Style x:Key="Md.H2" TargetType="Paragraph" BasedOn="{StaticResource Md.H1}">
-    <Setter Property="FontSize" Value="{DynamicResource F.MdH2}"/>
-    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H2}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H2.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Memo.H2.LineHeight}"/>
     <Setter Property="Margin" Value="0,24,0,8"/>
   </Style>
   <Style x:Key="Md.H3" TargetType="Paragraph" BasedOn="{StaticResource Md.H2}">
-    <Setter Property="FontSize" Value="{DynamicResource F.MdH3}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H3}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H3.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Memo.H3.LineHeight}"/>
     <Setter Property="Margin" Value="0,16,0,8"/>
   </Style>
   <Style x:Key="Md.H4" TargetType="Paragraph" BasedOn="{StaticResource Md.H2}">
-    <Setter Property="FontSize" Value="{DynamicResource F.H2}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H4}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H4.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Memo.H4.LineHeight}"/>
     <Setter Property="Margin" Value="0,16,0,4"/>
   </Style>
   <Style x:Key="Md.H5" TargetType="Paragraph" BasedOn="{StaticResource Md.H4}">
-    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H5}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H5.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Memo.H5.LineHeight}"/>
   </Style>
   <Style x:Key="Md.H6" TargetType="Paragraph" BasedOn="{StaticResource Md.H5}">
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H6}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H6.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Memo.H6.LineHeight}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
   </Style>
   <Style x:Key="Md.List" TargetType="List">
@@ -966,8 +1100,8 @@ $script:stylesXaml = @'
   </Style>
   <Style x:Key="Md.CodeText" TargetType="Paragraph">
     <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
-    <Setter Property="FontSize" Value="{DynamicResource F.Code}"/>
-    <Setter Property="LineHeight" Value="Auto"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Code}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Memo.Code.LineHeight}"/>
     <Setter Property="Margin" Value="0"/>
   </Style>
   <Style x:Key="Md.CodeNote" TargetType="Paragraph">
@@ -1093,44 +1227,54 @@ $script:stylesXaml = @'
     <Setter Property="Padding" Value="0"/>
     <Setter Property="Margin" Value="0"/>
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
-    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
     <Setter Property="CaretBrush" Value="{DynamicResource B.Text}"/>
-    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.BodyLine}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.Body.LineHeight}"/>
     <Setter Property="TextBlock.LineStackingStrategy" Value="BlockLineHeight"/>
     <Setter Property="TextWrapping" Value="Wrap"/>
     <Setter Property="AcceptsReturn" Value="True"/>
     <Setter Property="AcceptsTab" Value="True"/>
     <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
     <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
-    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
     <Setter Property="HorizontalAlignment" Value="Stretch"/>
   </Style>
   <Style x:Key="Memo.IslandH1" TargetType="TextBox" BasedOn="{StaticResource Memo.Island}">
-    <Setter Property="FontSize" Value="{DynamicResource F.MdH1}"/>
-    <Setter Property="FontWeight" Value="Bold"/>
-    <Setter Property="TextBlock.LineHeight" Value="Auto"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H1}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H1.Weight}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.H1.LineHeight}"/>
   </Style>
   <Style x:Key="Memo.IslandH2" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH1}">
-    <Setter Property="FontSize" Value="{DynamicResource F.MdH2}"/>
-    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H2}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H2.Weight}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.H2.LineHeight}"/>
   </Style>
   <Style x:Key="Memo.IslandH3" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH2}">
-    <Setter Property="FontSize" Value="{DynamicResource F.MdH3}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H3}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H3.Weight}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.H3.LineHeight}"/>
   </Style>
   <Style x:Key="Memo.IslandH4" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH2}">
-    <Setter Property="FontSize" Value="{DynamicResource F.H2}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H4}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H4.Weight}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.H4.LineHeight}"/>
   </Style>
   <Style x:Key="Memo.IslandH5" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH4}">
-    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H5}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H5.Weight}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.H5.LineHeight}"/>
   </Style>
   <Style x:Key="Memo.IslandH6" TargetType="TextBox" BasedOn="{StaticResource Memo.IslandH5}">
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H6}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Memo.H6.Weight}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.H6.LineHeight}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
   </Style>
   <Style x:Key="Memo.IslandCode" TargetType="TextBox" BasedOn="{StaticResource Memo.Island}">
     <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
-    <Setter Property="FontSize" Value="{DynamicResource F.Code}"/>
-    <Setter Property="TextBlock.LineHeight" Value="Auto"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Code}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.Code.LineHeight}"/>
     <Setter Property="Background" Value="{DynamicResource B.Code.Bg}"/>
     <Setter Property="Padding" Value="12,8"/>
   </Style>
@@ -1140,10 +1284,10 @@ $script:stylesXaml = @'
   </Style>
   <!-- [[ 자동 완성 팝업: 떠 있는 패널(모서리 8 · 테두리). 항목은 포커스를 받지 않는다(입력칸에 커서를 둔 채 고름) -->
   <Style x:Key="Memo.Suggest" TargetType="Border">
+    <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Overlay}"/>
     <Setter Property="Background" Value="{DynamicResource B.Card}"/>
     <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
     <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="CornerRadius" Value="8"/>
     <Setter Property="Padding" Value="4"/>
     <Setter Property="MinWidth" Value="240"/>
     <Setter Property="MaxWidth" Value="400"/>
@@ -1178,7 +1322,7 @@ $script:stylesXaml = @'
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="CheckBox">
       <Border x:Name="HitArea" Padding="{TemplateBinding Padding}" Background="Transparent">
         <Border x:Name="Box" Width="16" Height="16" HorizontalAlignment="Left" VerticalAlignment="Center"
-          CornerRadius="4" Background="{DynamicResource B.Card}" BorderBrush="{DynamicResource B.InputBorder}" BorderThickness="1">
+          CornerRadius="2" Background="{DynamicResource B.Card}" BorderBrush="{DynamicResource B.InputBorder}" BorderThickness="1">
           <Grid>
             <Path x:Name="Mark" Data="M 2,7 L 6,11 L 12,3" Stroke="{DynamicResource B.OnAccent}" StrokeThickness="2" Visibility="Collapsed"/>
             <Border x:Name="Dash" Width="8" Height="2" Background="{DynamicResource B.OnAccent}" Visibility="Collapsed"/>
@@ -1191,7 +1335,7 @@ $script:stylesXaml = @'
         <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.Hover}"/></Trigger>
         <Trigger Property="IsPressed" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.AccentSoft}"/></Trigger>
         <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Text}"/><Setter TargetName="Box" Property="BorderThickness" Value="2"/></Trigger>
-        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="1"/></Trigger>
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
@@ -1201,11 +1345,11 @@ $script:stylesXaml = @'
     <Setter Property="BorderThickness" Value="3,0,0,0"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
     <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Hover}"/></Trigger>
       <DataTrigger Binding="{Binding Selected}" Value="True">
         <Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
       </DataTrigger>
-      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Hover}"/></Trigger>
     </Style.Triggers>
   </Style>
   <Style x:Key="Task.Cell" TargetType="DataGridCell">
@@ -1220,11 +1364,12 @@ $script:stylesXaml = @'
     </Style.Triggers>
   </Style>
   <Style x:Key="Task.Header" TargetType="DataGridColumnHeader">
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/>
     <Setter Property="FontWeight" Value="SemiBold"/>
-    <Setter Property="Padding" Value="12,8"/>
-    <Setter Property="Background" Value="{DynamicResource B.Card}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.SubText}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
+    <Setter Property="Padding" Value="12,0"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
     <Setter Property="BorderThickness" Value="0,0,0,1"/>
   </Style>
   <Style x:Key="Task.Text" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
@@ -1233,6 +1378,129 @@ $script:stylesXaml = @'
     <Setter Property="VerticalAlignment" Value="Center"/>
     <Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=Text}"/>
   </Style>
+  <Style x:Key="Btn.Compact" TargetType="Button" BasedOn="{StaticResource Btn}">
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Compact}"/>
+
+  </Style>
+  <Style x:Key="Btn.Icon32" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
+    <Setter Property="Width" Value="{DynamicResource F.Height.Control}"/>
+    <Setter Property="Height" Value="{DynamicResource F.Height.Control}"/>
+
+  </Style>
+  <Style x:Key="Btn.Icon.Canvas" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
+
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Canvas}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Canvas}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Btn.Icon.Subtle" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
+
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Subtle}"/>
+      </Trigger>
+      <Trigger Property="IsPressed" Value="True">
+        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Subtle}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+    <Setter Property="Opacity" Value="1"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Row.TwoLine" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Row2}"/>
+
+  </Style>
+  <Style x:Key="Memo.Row" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.MemoRow}"/>
+
+  </Style>
+  <Style x:Key="T.CaptionMuted" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
+
+  </Style>
+  <Style x:Key="Tab" TargetType="TabItem">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Tab}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="BorderBrush" Value="Transparent"/>
+    <Setter Property="Padding" Value="12,0"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TabItem">
+      <Grid><Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"><ContentPresenter ContentSource="Header" VerticalAlignment="Center"/></Border><Border Height="2" VerticalAlignment="Top" Background="{TemplateBinding BorderBrush}"/></Grid>
+    </ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger><Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/><Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/></Trigger></Style.Triggers>
+  </Style>
+  <Style x:Key="Checklist.Row" TargetType="CheckBox" BasedOn="{StaticResource Check}">
+    <Setter Property="Margin" Value="0"/>
+    <Style.Triggers><Trigger Property="IsChecked" Value="True"><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></Trigger><Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger></Style.Triggers>
+  </Style>
+  <Style x:Key="Checklist.Row.Memo" TargetType="CheckBox" BasedOn="{StaticResource Checklist.Row}">
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
+
+  </Style>
+  <Style x:Key="Chip" TargetType="Border">
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Chip}"/>
+    <Setter Property="Padding" Value="8,0"/>
+
+  </Style>
+  <Style x:Key="Chip.Filter" TargetType="Border">
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.FilterChip}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <MultiTrigger><MultiTrigger.Conditions><Condition Property="IsMouseOver" Value="True"/><Condition Property="IsMouseCaptureWithin" Value="True"/></MultiTrigger.Conditions><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></MultiTrigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/></Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Chip.Remove" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
+    <Setter Property="Width" Value="20"/>
+    <Setter Property="Height" Value="{DynamicResource F.Height.FilterChip}"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Font.Icon}"/>
+    <Setter Property="FontSize" Value="10"/>
+    <Setter Property="Content" Value="&#xE711;"/>
+
+  </Style>
+  <PopupAnimation x:Key="{x:Static SystemParameters.ToolTipPopupAnimationKey}">None</PopupAnimation>
+  <Style x:Key="ToolTip" TargetType="ToolTip">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Caption}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Padding" Value="8,6"/>
+    <Setter Property="MaxWidth" Value="{DynamicResource F.ToolTip.MaxWidth}"/>
+    <Setter Property="HasDropShadow" Value="False"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToolTip">
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+        <ContentPresenter TextBlock.LineHeight="{DynamicResource F.Caption.LineHeight}">
+          <ContentPresenter.Resources><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style></ContentPresenter.Resources>
+        </ContentPresenter>
+      </Border>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style TargetType="ToolTip" BasedOn="{StaticResource ToolTip}"/>
+
 </ResourceDictionary>
 '@
 
@@ -1241,6 +1509,14 @@ $script:styles = $null
 # 스타일 사전 (처음 부를 때 한 번 만든다)
 function Get-WtStyleDictionary {
     if (-not $script:styles) {
+        foreach ($targetType in [System.Windows.FrameworkElement], [System.Windows.FrameworkContentElement]) {
+            if ([System.Windows.Controls.ToolTipService]::InitialShowDelayProperty.GetMetadata($targetType).DefaultValue -ne 400) {
+                [System.Windows.Controls.ToolTipService]::InitialShowDelayProperty.OverrideMetadata($targetType, [System.Windows.FrameworkPropertyMetadata]::new(400))
+            }
+            if ([System.Windows.Controls.ToolTipService]::BetweenShowDelayProperty.GetMetadata($targetType).DefaultValue -ne 100) {
+                [System.Windows.Controls.ToolTipService]::BetweenShowDelayProperty.OverrideMetadata($targetType, [System.Windows.FrameworkPropertyMetadata]::new(100))
+            }
+        }
         $script:styles = [System.Windows.Markup.XamlReader]::Parse($script:stylesXaml.Replace('{NS}', $script:ns))
     }
     $script:styles
@@ -1376,7 +1652,7 @@ function New-WtButtonContent([string]$Text, [int]$Icon = 0) {
 function New-WtSegmented([object[]]$Options, [string]$Selected, [string]$Group, [scriptblock]$OnChange) {
     $box = [System.Windows.Controls.Border]::new()
     Set-WtResource $box 'Background' 'B.Chip'
-    $box.CornerRadius = [System.Windows.CornerRadius]::new(10)
+    Set-WtResource $box 'CornerRadius' 'F.Radius.Control'
     $box.Padding = [System.Windows.Thickness]::new(4)
     $box.HorizontalAlignment = 'Left'
     $row = New-WtStack Horizontal 4
@@ -1399,15 +1675,18 @@ function New-WtSearchBox([string]$Hint = '검색') {
     $g = [System.Windows.Controls.Grid]::new()
     $box = [System.Windows.Controls.TextBox]::new()
     Set-WtStyle $box 'Input'
-    $box.Padding = [System.Windows.Thickness]::new(36, 8, 10, 8)
+    $box.Padding = [System.Windows.Thickness]::new(32, 0, 10, 0)
     $icon = New-WtIcon 0xE721
-    Set-WtResource $icon 'Foreground' 'B.SubText'
+    Set-WtResource $icon 'Foreground' 'B.Text.Tertiary'
+    Set-WtResource $icon 'FontSize' 'F.Body'
     $icon.HorizontalAlignment = 'Left'
-    $icon.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
+    $icon.Margin = [System.Windows.Thickness]::new(10, 0, 0, 0)
     $icon.IsHitTestVisible = $false
     $hintText = New-WtText $Hint 'T.Sub'   # $hint로 쓰면 [string]$Hint와 같은 변수가 된다
     $hintText.VerticalAlignment = 'Center'
-    $hintText.Margin = [System.Windows.Thickness]::new(38, 0, 0, 0)
+    $hintText.Margin = [System.Windows.Thickness]::new(32, 0, 0, 0)
+    Set-WtResource $hintText 'Foreground' 'B.Text.Tertiary'
+    Set-WtResource $hintText 'FontSize' 'F.Body'
     $hintText.IsHitTestVisible = $false
     $box.Tag = $hintText
     $box.Add_TextChanged({ param($s, $e) $s.Tag.Visibility = if ($s.Text) { 'Collapsed' } else { 'Visible' } })
@@ -1417,11 +1696,10 @@ function New-WtSearchBox([string]$Hint = '검색') {
     @{ Root = $g; Box = $box }
 }
 
-# 작은 알약 모양 표시. $Bg/$Fg는 테마 리소스 이름 (예: 'Att.WorkBg', 'Att.Work')
-function New-WtTag([string]$Text, [string]$Bg = 'Chip', [string]$Fg = 'ChipText', [int]$Icon = 0) {
+# 작은 칩 표시. $Bg/$Fg는 테마 리소스 이름 (예: 'Att.WorkBg', 'Att.Work')
+function New-WtTag([string]$Text, [string]$Bg = 'Bg.Selected', [string]$Fg = 'Accent.Text', [int]$Icon = 0) {
     $b = [System.Windows.Controls.Border]::new()
-    $b.CornerRadius = [System.Windows.CornerRadius]::new(12)
-    $b.Padding = [System.Windows.Thickness]::new(9, 2, 9, 3)
+    Set-WtStyle $b 'Chip'
     $b.VerticalAlignment = 'Center'
     $b.HorizontalAlignment = 'Left'
     Set-WtResource $b 'Background' "B.$Bg"
@@ -1434,11 +1712,39 @@ function New-WtTag([string]$Text, [string]$Bg = 'Chip', [string]$Fg = 'ChipText'
     }
     $t = New-WtText $Text 'T.Sub'
     Set-WtResource $t 'Foreground' "B.$Fg"
-    $t.FontWeight = 'SemiBold'
+    $t.FontWeight = 'Normal'
     $t.TextWrapping = 'NoWrap'
     [void](Add-WtChild $row $t)
     $b.Child = $row
     $b
+}
+
+# 조건 칩: 텍스트 + 오른쪽 20×24 삭제 영역. 호출자는 Remove.Click에 해제 동작을 붙인다.
+function New-WtFilterChip([string]$Text) {
+    $root = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $root 'Chip.Filter'
+    $layers = [System.Windows.Controls.Grid]::new()
+    $outline = [System.Windows.Controls.Border]::new()
+    Set-WtResource $outline 'CornerRadius' 'F.Radius.Control'
+    Set-WtResource $outline 'BorderBrush' 'B.Border.Default'
+    $outline.BorderThickness = [System.Windows.Thickness]::new(1)
+    $outline.IsHitTestVisible = $false
+    [void]$layers.Children.Add($outline)
+    $row = New-WtStack Horizontal 4
+    $row.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
+    $label = New-WtText $Text 'T.Sub'
+    Set-WtResource $label 'Foreground' 'B.Text.Primary'
+    $label.VerticalAlignment = 'Center'
+    $label.TextWrapping = 'NoWrap'
+    [void](Add-WtChild $row $label)
+    $remove = [System.Windows.Controls.Button]::new()
+    Set-WtStyle $remove 'Chip.Remove'
+    $remove.ToolTip = $Text
+    [System.Windows.Automation.AutomationProperties]::SetName($remove, $Text)
+    [void](Add-WtChild $row $remove)
+    [void]$layers.Children.Add($row)
+    $root.Child = $layers
+    @{ Root = $root; Remove = $remove }
 }
 
 # 숫자 칸: 이름(점 색) + 큰 숫자 + 단위
@@ -1655,5 +1961,5 @@ function Get-WtVisualChild($Root, [type]$Type) {
 
 Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, New-WtMinuteInput, New-WtContextMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
-    New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag,
+    New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
     New-WtStatTile, New-WtPageHeader, New-WtPage, New-WtListRow, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError

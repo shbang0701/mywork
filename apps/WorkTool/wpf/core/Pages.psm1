@@ -39,25 +39,30 @@ function New-WtThemeCard {
     $col = New-WtStack Vertical 4
     [void](Add-WtChild $col (New-WtCardHeader '화면'))
 
-    # 색: 팔레트마다 동그라미 하나
+    # 강조색: 이름과 견본. 색·모양은 공통 자원만 참조한다.
     $swatches = New-WtStack Horizontal
-    $current = [string](Get-WtSetting 'theme.color')
+    $current = [string](Get-WtSetting 'theme.accent')
     $palettes = Get-WtPalette
+    if (-not $palettes.Contains($current)) { $current = 'blue' }
     foreach ($key in $palettes.Keys) {
         $p = $palettes[$key]
         $rb = [System.Windows.Controls.RadioButton]::new()
         Set-WtStyle $rb 'Swatch'
         $rb.GroupName = 'WtTheme'
         $rb.Tag = $key
+        $rb.Content = $p.Label
         $rb.ToolTip = $p.Label
-        $rb.Background = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($p.Accent))
-        $rb.BorderBrush = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($p.Tint))
+        Set-WtResource $rb 'Background' ("B.Accent." + (Get-Culture).TextInfo.ToTitleCase($key))
         $rb.IsChecked = ($key -eq $current)
-        $rb.Add_Checked({ param($s, $e) Set-WtSetting 'theme.color' ([string]$s.Tag) })
+        $rb.Add_Checked({
+            param($s, $e)
+            Set-WtSetting 'theme.accent' ([string]$s.Tag)
+            # 셸 파일은 건드리지 않고 기존 아이콘 그리기만 같은 선택색으로 다시 부른다.
+            if (Get-WtWindow) { & (Get-Module Shell) { Update-WtAppIcon } }
+        })
         [void]$swatches.Children.Add($rb)
     }
-    $labels = ($palettes.Values | ForEach-Object { $_.Label }) -join ' · '
-    [void](Add-WtChild $col (New-WtSettingRow '색' $swatches $labels))
+    [void](Add-WtChild $col (New-WtSettingRow '강조색' $swatches))
 
     # 창 투명도: 끌면 바로 보이고, 손을 떼고 잠시 뒤 저장한다
     $op = New-WtStack Horizontal 12

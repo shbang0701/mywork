@@ -4,7 +4,7 @@
 $ErrorActionPreference = 'Stop'
 
 $script:defaults = @{
-    'theme.color'     = 'sky'    # Theme.psm1의 팔레트 이름
+    'theme.accent'    = 'blue'   # 강조색: blue · pink · teal · purple · gray (옛 theme.color는 읽어도 쓰지 않음)
     'ui.opacity'      = 100      # 창 불투명도(%) 60~100
     'ui.fontScale'    = 'm'      # 글자 크기 s · m · l
     'nav.collapsed'   = $false   # 왼쪽 메뉴 접힘
