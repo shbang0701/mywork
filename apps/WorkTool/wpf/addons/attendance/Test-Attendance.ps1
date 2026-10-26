@@ -11,6 +11,7 @@
       v1.json         1단계 WPF가 쓴 schema 1
       v2.json         schema 2 대표 예 (퇴근 · 밤샘 근무 · 원격 · 현장 출동 · 하루 넘는 업무외 · 휴가 종류 · 사람이 정한 일수 · 달 넘김)
       v2-future.json  더 새 앱이 쓴 schema 2 흉내 (모르는 맨 위 키 · 칸 · kind · leave.type · overtime.how)
+      v2-travel.json  이동 · 겹침 우선순위 · 초과근무 고정 예 (11월 작업장 960 · 원격 390 · 장소 없음 120 · 이동 116분)
       v2-edge.json    null 항목 · 31일 넘는 기록 · 범위 밖 휴가 일수(BigInteger · 음수) · 확정 일수 0.5 · 2199년 뒤 날짜 · rev (2026-10-26 검토 반례)
     휴무일은 tests\fixtures\holidays.json(코어 고정 시험 자료)을 쓴다: 10/3 · 10/9 공휴일, 10/8 개인 휴무, 11/20 회사 휴무.
     월 합계 기대 값은 여기에 못 박아 둔다. 규칙(att-2)을 바꿔 값이 바뀌면 이 파일을 일부러 고쳐야 한다.
@@ -74,6 +75,8 @@ try {
     Assert-WtTest '근태 att-2: 출장 일수를 근무일만 세는 설정 (지운 휴무는 휴무가 아님)' ($text -like '* trip 1/1 *') $text
     $text = Format-WtTestSummary (Get-WtAttendanceSummary (& $d '2026-09-01') $data.Entries)
     Assert-WtTest '근태 att-2 9월: 달을 넘긴 휴가는 그 달에 걸친 날만' ($text -eq 'work 1/0/1 · over 0/0/0 · trip 0/0 · leave 1 · skip 1') $text
+
+    Assert-WtTest '장소 없는 예전 CSV: 작업장 0 · 원격 0 · 장소 없음 270분 (원자료 null 그대로)' ($sum.OvertimeSite -eq 0 -and $sum.OvertimeRemote -eq 0 -and $sum.OvertimeUnknown -eq 270 -and $null -eq $byId.t3.Item.overtime.how)
 
     # ---- 다시 가져오기: 덮어쓰지 않고 합친다 ----
     $r2 = Import-WtLegacyData -Force
@@ -186,6 +189,52 @@ try {
     }
     $wrong = @(foreach ($k in $cases.Keys) { $e = ConvertFrom-WtAttendanceItem ($cases[$k] | ConvertFrom-Json -DateKind String); if ($e.State -ne 'broken') { "$k=$($e.State)" } })
     Assert-WtTest '근태 규칙: 틀린 값은 고칠 항목' (-not $wrong.Count) ($wrong -join ', ')
+
+    # ---- 근태 4: 못 박은 분 단위 기대 값. 규칙을 복제해서 기대 값을 만들지 않는다. ----
+    $travelDoc = Get-Content (Join-Path $fixtures 'v2-travel.json') -Raw | ConvertFrom-Json -Depth 30 -DateKind String
+    $travelBefore = Get-WtTestJson $travelDoc
+    $travelEntries = @(foreach ($item in $travelDoc.items) { ConvertFrom-WtAttendanceItem $item })
+    $travelOff = [Collections.Generic.HashSet[string]]::new([string[]]@('2026-11-20'))
+    $november = & $d '2026-11-01'
+    $travelSum = Get-WtAttendanceSummary $november $travelEntries $travelOff
+    Assert-WtTest '초과 합계: 작업장 960 · 원격 390 · 장소 없음 120 · 이동 116 · 퇴근 없는 날 1' ($travelSum.OvertimeSite -eq 960 -and $travelSum.OvertimeRemote -eq 390 -and $travelSum.OvertimeUnknown -eq 120 -and $travelSum.Travel -eq 116 -and $travelSum.NoLeaveDays -eq 1) ($travelSum | ConvertTo-Json -Compress)
+    $dayCases = @(
+        @('2026-11-02',120,0,0,0,0), @('2026-11-03',0,0,0,0,0), @('2026-11-04',0,0,0,11,1),
+        @('2026-11-05',0,150,0,0,0), @('2026-11-07',240,120,120,105,0), @('2026-11-18',180,0,0,0,0),
+        @('2026-11-20',300,0,0,0,0), @('2026-11-23',120,0,0,0,0), @('2026-11-30',0,120,0,0,0))
+    foreach ($case in $dayCases) {
+        $dayEntries = @($travelEntries | Where-Object { $_.StartDate -eq (& $d $case[0]) })
+        $got = Get-WtAttendanceSummary $november $dayEntries $travelOff
+        Assert-WtTest "초과 $($case[0]): 작업장 $($case[1]) · 원격 $($case[2]) · 장소 없음 $($case[3]) · 이동 $($case[4]) · 미퇴근 $($case[5])" ($got.OvertimeSite -eq $case[1] -and $got.OvertimeRemote -eq $case[2] -and $got.OvertimeUnknown -eq $case[3] -and $got.Travel -eq $case[4] -and $got.NoLeaveDays -eq $case[5])
+    }
+    $decemberSum = Get-WtAttendanceSummary (& $d '2026-12-01') $travelEntries $travelOff
+    Assert-WtTest '자정·달 넘김은 통째 시작한 달: 12월 초과와 이동 0' ($decemberSum.OvertimeSite -eq 0 -and $decemberSum.OvertimeRemote -eq 0 -and $decemberSum.OvertimeUnknown -eq 0 -and $decemberSum.Travel -eq 0)
+    $savedHours = Get-WtWorkHours
+    try {
+        Set-WtSetting 'work.days' @(6,7)
+        $mon = Get-WtAttendanceSummary $november @($travelEntries | Where-Object Id -ceq 'early-late') $travelOff
+        $sat = Get-WtAttendanceSummary $november @($travelEntries | Where-Object { $_.StartDate -eq (& $d '2026-11-07') }) $travelOff
+        Assert-WtTest 'work.days=토·일: 월요일 660분 · 토요일 정규시간 안 0분 (점심 포함 정규시간 제외)' ($mon.OvertimeSite -eq 660 -and $sat.OvertimeSite -eq 0 -and $sat.OvertimeRemote -eq 0 -and $sat.OvertimeUnknown -eq 0 -and $sat.Travel -eq 105)
+        Set-WtWorkHours @{ 'work.days'=@(1,2,3,4,5); 'work.start'='10:00'; 'work.end'='17:00'; 'work.lunchStart'='12:30'; 'work.lunchEnd'='13:30' }
+        $shift = Get-WtAttendanceSummary $november @($travelEntries | Where-Object Id -ceq 'early-late') $travelOff
+        Assert-WtTest '업무시간 설정 변경: 08~19에서 10~17 제외 = 작업장 240분' ($shift.OvertimeSite -eq 240)
+    } finally { Set-WtWorkHours $savedHours }
+    $thread = [Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture
+    try {
+        foreach ($culture in 'ko-KR','en-US','th-TH','ar-SA','de-DE') {
+            $thread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($culture)
+            $got = Get-WtAttendanceSummary $november $travelEntries $travelOff
+            Assert-WtTest "초과 5개 문화권 $culture : 960 / 390 / 120 / 116 / 1" ($got.OvertimeSite -eq 960 -and $got.OvertimeRemote -eq 390 -and $got.OvertimeUnknown -eq 120 -and $got.Travel -eq 116 -and $got.NoLeaveDays -eq 1)
+        }
+    } finally { $thread.CurrentCulture = $oldCulture }
+    Assert-WtTest '조회·계산은 travel·how 등 원자료를 바꾸지 않음' ((Get-WtTestJson $travelDoc) -ceq $travelBefore)
+    $travelItem = @($travelDoc.items | Where-Object id -ceq 'weekend-site')[0]
+    foreach ($badTravel in @(@{out=-1;back=0}, @{out=0;back=1441}, @{out=0.5;back=0}, @{out='1';back=0}, @{out=$true;back=0}, @{out=0}, '틀린 모양', $null)) {
+        $bad = Copy-WtItem $travelItem; $bad.travel = $badTravel
+        Assert-WtTest 'travel 범위·형식 검사: 잘못된 값은 고칠 항목' ((ConvertFrom-WtAttendanceItem $bad).State -ceq 'broken')
+    }
+    $edgeTravel = Copy-WtItem $travelItem; $edgeTravel.travel = @{out=0;back=1440}
+    Assert-WtTest 'travel 끝값 0·1440 허용' ((ConvertFrom-WtAttendanceItem $edgeTravel).Travel -eq 1440)
 
     # ---- 문화권이 달라도 같은 결과 ----
     $rows = (Read-WtLegacyCsv $fixtures 'legacy').Rows
@@ -317,36 +366,50 @@ try {
 
     if (Test-WtTestWpf) {
         $test = New-WtTestData 'attendance-view'; $tests.Add($test)
-        [void][System.IO.Directory]::CreateDirectory($test.Legacy)
-        [System.IO.File]::Copy((Join-Path $fixtures 'legacy.csv'), (Join-Path $test.Legacy 'attendance.csv'))
-        [void](Import-WtLegacyData)
+        Copy-WtTestFixture 'v2-travel.json'; Copy-WtTestHolidays
         $module = Get-Module Attendance
+        & $module { $script:month = [datetime]::new(2026,11,1) }
         $view = New-WtTestView 'attendance'
-        & $module { Update-WtAttendanceView; $script:testFirst = $script:body.Children[0]; Update-WtAttendanceView }
-        Assert-WtTest '근태 화면: 같은 월과 데이터는 화면을 재사용한다' (& $module { [object]::ReferenceEquals($script:testFirst, $script:body.Children[0]) })
-        & $module { $script:month = $script:month.AddMonths(-1); Update-WtAttendanceView }
-        Assert-WtTest '근태 화면: 달을 바꾸면 다시 만들고 재진입해도 고른 달 유지' (& $module {
-            $month = $script:month; $changed = -not [object]::ReferenceEquals($script:testFirst, $script:body.Children[0])
-            Update-WtAttendanceView; $changed -and $script:month -eq $month
+        $view.Measure([Windows.Size]::new(1080,616)); $view.Arrange([Windows.Rect]::new(0,0,1080,616)); $view.UpdateLayout()
+        & $module { Update-WtAttendanceView; $script:testFirst = $script:table.ItemsSource; Update-WtAttendanceView }
+        Assert-WtTest '근태 화면: 같은 월과 데이터는 표 재사용' (& $module { [object]::ReferenceEquals($script:testFirst, $script:table.ItemsSource) })
+        Assert-WtTest '근태 표: 날짜순 8열·U14 폭·행 32·— 장소' (& $module {
+            ($script:table.Columns | ForEach-Object Header) -join ',' -ceq '날짜,종류,시작,끝,장소,이동,시간,메모' -and
+            ($script:table.Columns | Select-Object -First 7 | ForEach-Object { $_.Width.Value }) -join ',' -ceq '90,80,64,64,72,56,64' -and
+            $script:table.RowHeight -eq 32 -and @($script:table.ItemsSource | Where-Object { $_.Entry.Id -ceq 'weekend-unknown' -and $_.Place -ceq '—' }).Count -eq 1
         })
-        $data = Get-WtAttendanceData
-        $items = @($data.Items)
-        $items[0].note = '외부에서 바꾼 기록'
-        $items[0].start.date = ([datetime]::Today.AddMonths(-1)).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
-        Set-WtItemEdited $items[0]
-        Save-WtAttendanceItems $data.Store $items
-        & $module { Update-WtAttendanceView }
-        $texts = @(Get-WtTestTexts $view)
-        Assert-WtTest '근태 화면: 저장이 바뀌면 다시 들어올 때 반영하고, 고칠 항목을 보여 준다' ($texts -contains '외부에서 바꾼 기록' -and @($texts | Where-Object { $_ -like '고칠 항목*' }).Count -eq 1)
-        $card = & $module { New-WtAttendanceHomeCard }
-        Assert-WtTest '근태: 기존 홈 카드 등록 제거' (-not (Get-WtAddon -Id attendance).HomeCard)
-        Assert-WtTest '근태 화면: 홈 카드' (@(Get-WtTestTexts $card | Where-Object { $_ -like '근태 · *' }).Count -eq 1)
-        [System.IO.File]::WriteAllText((Get-WtStorePath 'holidays'), '{ "schema": 9, "items": [] }', [System.Text.UTF8Encoding]::new($false))
-        & $module { Update-WtAttendanceView }
-        Assert-WtTest '근태 화면: 휴무일을 못 읽으면 주말만 뺐다고 알린다' (@(Get-WtTestTexts $view | Where-Object { $_ -like '휴무일을 읽지 못해*' }).Count -eq 1)
-        [System.IO.File]::WriteAllText((Get-WtStorePath 'attendance'), '{ "schema": 3, "items": [] }', [System.Text.UTF8Encoding]::new($false))
-        & $module { Update-WtAttendanceView }
-        Assert-WtTest '근태 화면: 못 읽는 파일이면 화면은 열고 이유를 보여 준다' ((Get-WtTestTexts $view) -contains '근태 파일을 읽지 못했습니다')
+        Assert-WtTest '근태 요약: 장소 없음·퇴근 기록 없음 표시, 기존 홈 카드 등록 없음' ((Get-WtTestTexts $view) -contains '장소 없음' -and (Get-WtTestTexts $view) -contains '퇴근 기록 없음' -and -not (Get-WtAddon -Id attendance).HomeCard)
+        & $module { $entry = @($script:data.Entries | Where-Object Id -ceq 'weekend-unknown')[0]; Show-WtAttForm $entry; $script:form.Fields.note.Text = '메모만 변경'; Save-WtAttForm }
+        $unknown = @((Get-WtAttendanceData).Items | Where-Object id -ceq 'weekend-unknown')[0]
+        Assert-WtTest '편집: 메모만 고치면 how=null·기존 이동 보존' ($null -eq $unknown.overtime.how -and $unknown.travel.out -eq 20 -and $unknown.travel.back -eq 5)
+        & $module { $entry = @($script:data.Entries | Where-Object Id -ceq 'weekend-unknown')[0]; Show-WtAttForm $entry; $script:form.Fields.place.SelectedItem = '원격'; Save-WtAttForm }
+        $changed = Get-WtAttendanceSummary $november (Get-WtAttendanceData).Entries $travelOff
+        Assert-WtTest '편집: 장소 선택은 해당 기록만 원격으로 재분류 (Unknown 0 · Remote 510)' ($changed.OvertimeUnknown -eq 0 -and $changed.OvertimeRemote -eq 510)
+        Assert-WtTest '요약: 장소 없음 0이면 숨김' ((Get-WtTestTexts $view) -notcontains '장소 없음')
+        Assert-WtTest '표: 취소 후 같은 선택 행을 다시 클릭해도 편집 폼을 연다' (& $module {
+            $script:table.SelectedItem = $script:table.ItemsSource[0]; Show-WtAttSummary
+            $script:view.Root.UpdateLayout()
+            $row = $script:table.ItemContainerGenerator.ContainerFromIndex(0)
+            $mouse = [Windows.Input.MouseButtonEventArgs]::new([Windows.Input.Mouse]::PrimaryDevice, 0, [Windows.Input.MouseButton]::Left)
+            $mouse.RoutedEvent = [Windows.Input.Mouse]::PreviewMouseUpEvent
+            $row.RaiseEvent($mouse)
+            $script:form -and $script:form.Entry.Id -ceq $script:table.ItemsSource[0].Entry.Id
+        })
+        Assert-WtTest '직접 입력: 선택 달의 1일과 빈 시작·끝·이동·메모로 연다' (& $module {
+            Show-WtAttForm
+            $script:form.Fields.date.Text -ceq '2026-11-01' -and $script:form.Fields.start.Text -ceq '' -and $script:form.Fields.end.Text -ceq '' -and
+                $script:form.Fields.out.Text -ceq '' -and $script:form.Fields.back.Text -ceq '' -and $script:form.Fields.note.Text -ceq ''
+        })
+        $beforeBad = [IO.File]::ReadAllText((Get-WtStorePath 'attendance'))
+        & $module { Show-WtAttForm; $script:form.Fields.date.Text = '2026-11-12'; $script:form.Fields.start.Text = '18:00'; $script:form.Fields.end.Text = '09:00'; Save-WtAttForm }
+        Assert-WtTest '폼: 이른 끝은 해당 칸 아래 오류·저장 안 함' ((Get-WtTestTexts $view) -contains '끝이 시작보다 이릅니다.' -and (& $module { [Windows.Controls.Validation]::GetHasError($script:form.Fields.end) }) -and [IO.File]::ReadAllText((Get-WtStorePath 'attendance')) -ceq $beforeBad)
+        & $module { $script:form.Fields.next.IsChecked = $true; Save-WtAttForm }
+        Assert-WtTest '폼: 다음 날 체크로 밤샘 직접 입력 저장' (@((Get-WtAttendanceData).Entries | Where-Object { $_.StartDate -eq [datetime]::new(2026,11,12) -and $_.Minutes -eq 900 }).Count -eq 1)
+        & $module { $script:month = $script:month.AddMonths(-1); $script:form = $null; Update-WtAttendanceView }
+        Assert-WtTest '근태 화면: 달 이동 후 이전 달 자료·0인 미퇴근 줄 숨김' ((Get-WtTestTexts $view) -notcontains '퇴근 기록 없음' -and (& $module { $script:table.ItemsSource.Count -eq 1 }))
+        [IO.File]::WriteAllText((Get-WtStorePath 'attendance'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))
+        & $module { $script:viewKey = $null; Update-WtAttendanceView }
+        Assert-WtTest '못 읽는 파일: 쓰기 버튼 비활성·이유 툴팁, 빈 화면 유지' (& $module { -not $script:view.new.IsEnabled -and $script:table.ToolTip -like '*더 새 버전*' })
     }
 } finally {
     foreach ($t in $tests) { Remove-WtTestData $t }

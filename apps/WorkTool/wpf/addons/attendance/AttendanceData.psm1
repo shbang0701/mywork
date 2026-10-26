@@ -11,6 +11,7 @@
 #   place · note   글 (비면 ""). place: 출장지 · 현장
 #   tags     [ 글 ]
 #   overtime { how: "remote" 원격 · "onsite" 현장 · null, ref: 관련 번호(작업 · 변경 · 장애 번호, 글) }   kind = overtime일 때
+#   travel   { out, back } 선택 이동 분. 각각 정수 0~1440, 업무외에만 쓰며 없으면 이동 없음.
 #   leave    { type, days }   kind = leave일 때
 #            type annual 연차 · half 반차 · half-am 오전 반차 · half-pm 오후 반차 · sick 병가 · family 경조사 · comp 대체 휴무 · other 기타
 #            days null = 규칙대로 센다(아래), 숫자 = 사람이 정한 차감 일수(회사가 정한 사실이라 저장한다)
@@ -104,7 +105,8 @@ State: ok · readonly(새 버전의 값) · broken(고칠 항목) · deleted
 #>
 function ConvertFrom-WtAttendanceItem($Item) {
     $e = [ordered]@{ Id = ''; Item = $Item; State = 'ok'; Problem = ''; Kind = ''; StartDate = $null; EndDate = $null; Start = $null; End = $null
-        HasTime = $false; HasEnd = $false; Minutes = $null; Place = ''; Note = ''; How = $null; Ref = ''; LeaveType = $null; LeaveDays = $null }
+        HasTime = $false; HasEnd = $false; Minutes = $null; Place = ''; Note = ''; How = $null; Ref = ''; LeaveType = $null; LeaveDays = $null
+        TravelOut = 0; TravelBack = 0; Travel = 0 }
     if (Test-WtDeleted $Item) { $e.Id = [string]$Item.id; $e.State = 'deleted'; return [pscustomobject]$e }
     if (-not (Test-WtAttObject $Item)) { $e.State = 'broken'; $e.Problem = '항목 모양이 틀렸습니다'; return [pscustomobject]$e }
     $e.Id = [string]$Item.id; $e.Kind = [string]$Item.kind; $e.Place = [string]$Item.place; $e.Note = [string]$Item.note
@@ -131,6 +133,19 @@ function ConvertFrom-WtAttendanceItem($Item) {
     # 새 버전의 값은 고칠 항목이 아니다. 더 새 앱에서는 맞는 값이라 읽기 전용으로만 둔다
     if ($script:kinds -cnotcontains $e.Kind) { $e.State = 'readonly'; $e.Problem = "새 버전의 근태 종류입니다: '$($e.Kind)'"; return [pscustomobject]$e }
     if ($e.Kind -eq 'overtime') {
+        $travel = Get-WtField $Item 'travel'
+        $hasTravel = if ($Item -is [Collections.IDictionary]) { $Item.Contains('travel') } else { $null -ne $Item.PSObject.Properties['travel'] }
+        if ($hasTravel) {
+            if (-not (Test-WtRecordObject $travel)) { if (-not $problem) { $problem = '이동은 가는 길 · 오는 길 분을 적으세요.' } }
+            else {
+                foreach ($part in 'out', 'back') {
+                    $minutes = ConvertFrom-WtWhole (Get-WtField $travel $part) 0 1440
+                    if ($null -eq $minutes) { if (-not $problem) { $problem = '이동은 0~1440의 정수 분으로 입력하세요.' } }
+                    elseif ($part -ceq 'out') { $e.TravelOut = [int]$minutes } else { $e.TravelBack = [int]$minutes }
+                }
+                $e.Travel = $e.TravelOut + $e.TravelBack
+            }
+        }
         $o = $Item.overtime
         if ($null -ne $o) {
             if (-not (Test-WtAttObject $o)) { if (-not $problem) { $problem = '업무외 정보(overtime) 모양이 틀렸습니다' } }
@@ -189,6 +204,7 @@ function Get-WtLeaveDays($Entry, [datetime]$First, [datetime]$Last, $DayOff) {
   출장   그 달에 걸친 기록. TripCount 건수 · TripDays 일수($TripDays: all = 걸친 날 모두, workdays = 근무일만)
   휴가   LeaveDays: Get-WtLeaveDays 합계 (근무일 = 토 · 일 · 휴무일이 아닌 날)
          = LeaveFixed(사람이 정한 days, 확정) + LeaveEstimated(days가 null이라 지금 규칙 · 휴무일로 센 잠정 값)
+  초과 OvertimeSite · OvertimeRemote · OvertimeUnknown 분(작업장 → 원격 → 장소 없음 우선). Travel 이동 분은 별도. NoLeaveDays 퇴근 없는 날 수.
   Skipped 계산에서 뺀 항목 수(읽기 전용 · 고칠 항목). other(기타)는 셈에 넣지 않는다
 $DayOff: 휴무일 날짜 모음(yyyy-MM-dd). 주지 않으면 core\Calendar.psm1의 휴무일을 쓴다
 #>
@@ -198,7 +214,8 @@ function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, 
     if ($null -eq $DayOff) { $DayOff = Get-WtHolidayDates $first $last }
     if (-not $TripDays) { $TripDays = [string](Get-WtSetting 'attendance.tripDays') }
     $r = [ordered]@{ Rule = $script:rule; Month = $first; WorkDays = 0; WorkMinutes = 0; WorkOpen = 0; OverMinutes = 0; OverCount = 0; OverOpen = 0
-        TripCount = 0; TripDays = 0; LeaveDays = 0.0; LeaveFixed = 0.0; LeaveEstimated = 0.0; Skipped = 0 }
+        TripCount = 0; TripDays = 0; LeaveDays = 0.0; LeaveFixed = 0.0; LeaveEstimated = 0.0; Skipped = 0
+        OvertimeSite = 0; OvertimeRemote = 0; OvertimeUnknown = 0; Travel = 0; NoLeaveDays = 0 }
     $workDates = [System.Collections.Generic.HashSet[datetime]]::new()
     foreach ($e in @($Entries)) {
         if ($null -eq $e -or $e.State -eq 'deleted') { continue }
@@ -230,6 +247,44 @@ function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, 
         }
     }
     $r.WorkDays = $workDates.Count
+    # 기존 att-2 칸은 그대로 두고, 초과근무만 업무시간 설정을 적용한다.
+    $hours = Get-WtWorkHours
+    $workStart = ConvertFrom-WtTimeText $hours['work.start']; $workEnd = ConvertFrom-WtTimeText $hours['work.end']
+    $lunchStart = ConvertFrom-WtTimeText $hours['work.lunchStart']; $lunchEnd = ConvertFrom-WtTimeText $hours['work.lunchEnd']
+    $valid = @($Entries | Where-Object { $_ -and $_.State -ceq 'ok' })
+    $missing = [Collections.Generic.HashSet[datetime]]::new()
+    $started = @($valid | Where-Object { $_.Kind -cin @('work', 'overtime') -and $_.StartDate -ge $first -and $_.StartDate -le $last })
+    foreach ($dayGroup in @($started | Group-Object { $_.StartDate.Ticks })) {
+        $day = $dayGroup.Group[0].StartDate
+        $weekday = if ([int]$day.DayOfWeek -eq 0) { 7 } else { [int]$day.DayOfWeek }
+        $fullLeave = @($valid | Where-Object { $_.Kind -ceq 'leave' -and $_.LeaveType -cnotin $script:halfTypes -and $_.StartDate -le $day -and $_.EndDate -ge $day }).Count -gt 0
+        $working = $weekday -in $hours['work.days'] -and -not $DayOff.Contains((ConvertTo-WtDateText $day)) -and -not $fullLeave
+        $ranges = [Collections.Generic.List[object]]::new()
+        $cuts = [Collections.Generic.SortedSet[long]]::new()
+        foreach ($entry in $dayGroup.Group) {
+            if ($entry.Kind -ceq 'overtime') { $r.Travel += $entry.Travel }
+            if ($entry.Kind -ceq 'work' -and -not $entry.HasEnd) { [void]$missing.Add($day) }
+            if (-not $entry.HasTime -or -not $entry.HasEnd -or $entry.End -le $entry.Start) { continue }
+            $rank = if ($entry.Kind -ceq 'work' -or $entry.How -ceq 'onsite') { 0 } elseif ($entry.How -ceq 'remote') { 1 } else { 2 }
+            $ranges.Add(@{ A = $entry.Start.Ticks; B = $entry.End.Ticks; Rank = $rank })
+            [void]$cuts.Add($entry.Start.Ticks); [void]$cuts.Add($entry.End.Ticks)
+        }
+        if ($working) {
+            $regularA = ($day + $workStart).Ticks; $regularB = ($day + $workEnd).Ticks
+            $lunchA = ($day + $lunchStart).Ticks; $lunchB = ($day + $lunchEnd).Ticks
+            foreach ($tick in $regularA, $regularB, $lunchA, $lunchB) { [void]$cuts.Add($tick) }
+        }
+        $points = @($cuts)
+        for ($index = 0; $index -lt $points.Count - 1; $index++) {
+            $a = $points[$index]; $b = $points[$index + 1]
+            if ($working -and (($a -ge $regularA -and $a -lt $regularB) -or ($a -ge $lunchA -and $a -lt $lunchB))) { continue }
+            $winner = 3
+            foreach ($range in $ranges) { if ($range.A -le $a -and $range.B -ge $b -and $range.Rank -lt $winner) { $winner = $range.Rank } }
+            $length = [int](($b - $a) / [timespan]::TicksPerMinute)
+            switch ($winner) { 0 { $r.OvertimeSite += $length }; 1 { $r.OvertimeRemote += $length }; 2 { $r.OvertimeUnknown += $length } }
+        }
+    }
+    $r.NoLeaveDays = $missing.Count
     [pscustomobject]$r
 }
 
@@ -346,7 +401,7 @@ function Get-WtAttendanceLastImport { $script:lastImport }
 
 # ---- 편집 · 지금 기록 -------------------------------------------------------------------------
 
-# Patch: kind · start · end · place · note · tags · overtime · leave. Id 없으면 새 기록.
+# Patch: kind · start · end · place · note · tags · overtime · leave · travel. Id 없으면 새 기록.
 # ClockPoint는 지금 기록 함수 전용(벽시계와 at을 함께 찍음). 직접 고친 점에서는 at을 지운다.
 function Save-WtAttendanceItem($Store, $Patch, [string]$Id, [string]$At = (Get-WtStamp), [string]$ClockPoint = '') {
     $fail = [pscustomobject]@{ Success = $false; Reason = ''; Id = $Id; Store = $Store }
@@ -355,7 +410,7 @@ function Save-WtAttendanceItem($Store, $Patch, [string]$Id, [string]$At = (Get-W
     if (-not $now) { $fail.Reason = '앱 시각을 읽지 못했습니다'; return $fail }
     if (-not (Test-WtRecordObject $Patch)) { $fail.Reason = '바꿀 칸은 객체여야 합니다'; return $fail }
     $names = if ($Patch -is [System.Collections.IDictionary]) { @($Patch.Keys) } else { @($Patch.PSObject.Properties.Name) }
-    if (@($names | Where-Object { $_ -cnotin @('kind', 'start', 'end', 'place', 'note', 'tags', 'overtime', 'leave') }).Count) {
+    if (@($names | Where-Object { $_ -cnotin @('kind', 'start', 'end', 'place', 'note', 'tags', 'overtime', 'leave', 'travel') }).Count) {
         $fail.Reason = '편집할 수 없는 칸입니다'; return $fail
     }
     if ($ClockPoint -cnotin @('', 'start', 'end')) { $fail.Reason = '찍을 점을 확인하세요'; return $fail }
@@ -414,7 +469,7 @@ function Start-WtAttendanceRecord($Store, [string]$Kind = 'work', [string]$How =
     $reason = ''
     if (-not $now -or $Kind -cnotin @('work', 'overtime')) { $reason = '시각 · 기록 종류를 확인하세요' }
     $entries = @(foreach ($i in @($Store.Items)) { ConvertFrom-WtAttendanceItem $i })
-    $open = @($entries | Where-Object { $_.State -eq 'ok' -and $_.Kind -ceq $Kind -and -not $_.HasEnd })
+    $open = @($entries | Where-Object { $_.State -eq 'ok' -and $_.Kind -ceq $Kind -and -not $_.HasEnd -and ($Kind -ceq 'overtime' -or $_.StartDate -eq $now.Date) })
     if ($open.Count) { $reason = '끝 시각 없는 기록을 먼저 마치거나 고치세요' }
     if ($now -and $Kind -ceq 'work' -and @($entries | Where-Object { $_.State -eq 'ok' -and $_.Kind -ceq 'work' -and $_.StartDate -eq $now.Date }).Count) {
         $reason = '오늘 출근 기록이 이미 있습니다'
