@@ -1,6 +1,9 @@
 # 메모 데이터 · 검색. 화면과 파일 I/O 없이 core/Storage.psm1의 핸들만 쓴다.
 $ErrorActionPreference = 'Stop'
 $script:memoInv = [Globalization.CultureInfo]::InvariantCulture
+$script:memoQueryDays = [regex]::new('^([1-9][0-9]*)[dD]$', 'Compiled, CultureInvariant')
+$script:memoRelativeDays = [regex]::new('^([0-9]+)d$', 'Compiled, CultureInvariant')
+$script:memoDateRange = [regex]::new('\.\.', 'Compiled, CultureInvariant')
 
 # ---- 검색식: Scope(검색 전체) + Root(칩과 공유하는 조건 트리) ---------------------------------
 # 노드: all / term(Field, Value) / not(Child) / and|or(Children).
@@ -75,14 +78,15 @@ function Read-WtMemoQueryTerm($Reader) {
             return [pscustomobject]@{ Kind = 'scope'; Position = $token.Position; Length = $token.Length }
         }
         { $_ -in 'updated', 'created' } {
-            if ($value -match '^([1-9][0-9]*)[dD]$') {
+            $relative = $script:memoQueryDays.Match($value)
+            if ($relative.Success) {
                 $days = 0
-                if (-not [int]::TryParse($Matches[1], [Globalization.NumberStyles]::None, $script:memoInv, [ref]$days) -or $days -gt 109573) {
+                if (-not [int]::TryParse($relative.Groups[1].Value, [Globalization.NumberStyles]::None, $script:memoInv, [ref]$days) -or $days -gt 109573) {
                     Stop-WtMemoQuery $Reader $token.Position $token.Length '최근 날짜 수가 너무 큽니다.'
                 }
                 $value = $days.ToString($script:memoInv) + 'd'
             } else {
-                $parts = $value.TrimStart('<', '>') -split '\.\.'
+                $parts = $script:memoDateRange.Split($value.TrimStart('<', '>'))
                 if ($parts.Count -gt 2 -or ($value.StartsWith('<') -or $value.StartsWith('>')) -and $parts.Count -ne 1) {
                     Stop-WtMemoQuery $Reader $token.Position $token.Length '날짜 조건은 날짜, 시작..끝, <날짜, >날짜로 씁니다.'
                 }
@@ -195,28 +199,32 @@ function ConvertTo-WtMemoQuery {
     $text
 }
 
-# ---- 색인: 사본만 보관, 제목/연결 역목록으로 한 메모 갱신 --------------------------------------
+# ---- 색인: 나란한 칸 목록. 메모 번호는 갱신/삭제 후에도 바꾸지 않는다. -------------------------
 function New-WtMemoStringSet { , [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
 
 function Get-WtMemoLinkInfo([string]$Body) {
-    $info = @{ Outgoing = (New-WtMemoStringSet); HasLink = $false }
-    $walk = {
-        param($nodes)
-        foreach ($node in @($nodes)) {
+    $outgoing = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $hasLink = $false
+    $stack = [Collections.Generic.Stack[object]]::new()
+    $stack.Push((ConvertTo-WtMarkdownModel $Body).Blocks)
+    while ($stack.Count) {
+        $nodes = $stack.Pop()
+        foreach ($node in $nodes) {
             if ($null -eq $node) { continue }
             if ($node.T -eq 'link') {
-                $info.HasLink = $true
+                $hasLink = $true
                 if ($node.Kind -eq 'wiki') {
-                    $name = (([string]$node.Target) -split '#', 2)[0].Trim().ToLowerInvariant()
-                    if ($name) { [void]$info.Outgoing.Add($name) }
+                    $target = [string]$node.Target; $hashAt = $target.IndexOf('#', [StringComparison]::Ordinal)
+                    if ($hashAt -ge 0) { $target = $target.Substring(0, $hashAt) }
+                    $target = $target.Trim().ToLowerInvariant()
+                    if ($target) { [void]$outgoing.Add($target) }
                 }
             }
-            foreach ($key in 'Inl', 'Title', 'Blocks', 'Items') { if ($node.$key -is [array]) { & $walk $node.$key } }
-            foreach ($cell in @($node.Cells)) { if ($cell) { & $walk $cell } }
+            foreach ($key in 'Inl', 'Title', 'Blocks', 'Items') { if ($node.$key -is [array]) { $stack.Push($node.$key) } }
+            foreach ($cell in $node.Cells) { if ($cell) { $stack.Push($cell) } }
         }
     }
-    & $walk (ConvertTo-WtMarkdownModel $Body).Blocks
-    $info
+    @{ Outgoing = $outgoing; HasLink = $hasLink }
 }
 
 # 옛 memo.json의 시간대 없는 앱 시각도 읽되 글 자체는 바꾸지 않는다.
@@ -228,68 +236,165 @@ function Get-WtMemoIndexedTime([string]$Text) {
     $null
 }
 
-function Add-WtMemoIndexMap($Map, [string]$Key, [string]$Id) {
-    if (-not $Map.ContainsKey($Key)) { $Map[$Key] = New-WtMemoStringSet }
-    [void]$Map[$Key].Add($Id)
-}
-
-function Remove-WtMemoIndexMap($Map, [string]$Key, [string]$Id) {
-    if ($Map.ContainsKey($Key)) { [void]$Map[$Key].Remove($Id); if ($Map[$Key].Count -eq 0) { [void]$Map.Remove($Key) } }
-}
-
-function Set-WtMemoIndexEntry($Index, $Memo) {
-    $id = Get-WtField $Memo 'id'
-    if ($id -isnot [string] -or -not $id -or (Test-WtDeleted $Memo)) { return }
-    $title = [string](Get-WtField $Memo 'title'); $body = [string](Get-WtField $Memo 'body')
-    $tags = New-WtMemoStringSet
-    $rawTags = Get-WtField $Memo 'tags'
-    foreach ($tag in $rawTags) { if ($tag -is [string]) { [void]$tags.Add($tag.ToLowerInvariant()) } }
-    $links = Get-WtMemoLinkInfo $body
-    $created = Get-WtMemoIndexedTime ([string](Get-WtField $Memo 'created'))
-    $updated = Get-WtMemoIndexedTime ([string](Get-WtField $Memo 'updated'))
-    $order = ConvertFrom-WtWhole (Get-WtField $Memo 'pinOrder') ([long]::MinValue) ([long]::MaxValue)
-    $entry = [pscustomobject]@{
-        Id = $id; Title = $title; Body = $body; TitleLower = $title.ToLowerInvariant(); BodyLower = $body.ToLowerInvariant()
-        Tags = $tags; Folder = [string](Get-WtField $Memo 'folder'); Pinned = ((Get-WtField $Memo 'pinned') -eq $true)
-        PinOrder = $(if ($null -eq $order) { [long]::MaxValue } else { $order }); Archived = ((Get-WtField $Memo 'archived') -eq $true)
-        Created = $created; Updated = $updated; Outgoing = $links.Outgoing; HasLink = $links.HasLink; BacklinkCount = 0
-        TitleOrdinal = 0; IdOrdinal = 0
+# 공개 색인의 옛 Entries/Sources는 요청할 때만 만든다. 검색은 이 사본을 사용하지 않는다.
+function Get-WtMemoIndexEntries($Index) {
+    Initialize-WtMemoLinks $Index
+    if ($Index.OrderDirty) { Update-WtMemoIndexOrder $Index }
+    $c = $Index.Columns
+    $entries = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    for ($n = 0; $n -lt $c.Id.Count; $n++) {
+        if (-not $c.Alive[$n]) { continue }
+        $entries[$c.Id[$n]] = [pscustomobject]@{
+            Id = $c.Id[$n]; Title = $c.Title[$n]; Body = $c.Body[$n]; TitleLower = $c.TitleLower[$n]; BodyLower = $c.BodyLower[$n]
+            Tags = $c.Tags[$n]; Folder = $c.Folder[$n]; Pinned = $c.Pinned[$n]; PinOrder = $c.PinOrder[$n]; Archived = $c.Archived[$n]
+            Created = $c.Created[$n]; Updated = $c.Updated[$n]; Outgoing = $c.Outgoing[$n]; HasLink = $c.HasLink[$n]
+            BacklinkCount = $c.BacklinkCount[$n]; TitleOrdinal = $c.TitleOrdinal[$n]; IdOrdinal = $c.IdOrdinal[$n]
+        }
     }
-    $Index.Entries[$id] = $entry
-    Add-WtMemoIndexMap $Index.Titles $entry.TitleLower $id
-    foreach ($target in $entry.Outgoing) { Add-WtMemoIndexMap $Index.Sources $target $id }
+    , $entries
 }
 
 function Update-WtMemoBacklinks($Index, [string]$TitleLower) {
     if (-not $Index.Titles.ContainsKey($TitleLower)) { return }
-    # 제목이 겹치면 임의로 한 메모로 확정하지 않는다. 검색은 후보 id를 담은 오류로 돌려준다.
-    $count = if ($Index.Titles[$TitleLower].Count -eq 1 -and $Index.Sources.ContainsKey($TitleLower)) { $Index.Sources[$TitleLower].Count } else { 0 }
-    foreach ($id in $Index.Titles[$TitleLower]) { $Index.Entries[$id].BacklinkCount = $count }
+    $count = if ($Index.Titles[$TitleLower].Count -eq 1 -and $Index.LinkSources.ContainsKey($TitleLower)) { $Index.LinkSources[$TitleLower].Count } else { 0 }
+    foreach ($id in $Index.Titles[$TitleLower]) { $Index.Columns.BacklinkCount[$Index.Slots[$id]] = $count }
 }
 
-# 제목/id는 .NET ordinal로 순서를 매긴다. 검색마다 PowerShell 비교 함수를 수만 번 부르지 않는다.
+function Initialize-WtMemoLinks($Index) {
+    if ($Index.LinksReady) { return }
+    $c = $Index.Columns
+    # 같은 본문은 한 번만 해석한다. Markdown의 코드/위키 연결 규칙은 기존 해석기를 그대로 쓴다.
+    $cache = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    for ($n = 0; $n -lt $c.Id.Count; $n++) {
+        if (-not $c.Alive[$n]) { continue }
+        $body = $c.Body[$n]
+        if (-not $cache.ContainsKey($body)) { $cache[$body] = Get-WtMemoLinkInfo $body }
+        $info = $cache[$body]; $c.Outgoing[$n] = $info.Outgoing; $c.HasLink[$n] = $info.HasLink
+        foreach ($target in $info.Outgoing) {
+            if (-not $Index.LinkSources.ContainsKey($target)) { $Index.LinkSources[$target] = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
+            [void]$Index.LinkSources[$target].Add($c.Id[$n])
+        }
+    }
+    $Index.LinksReady = $true
+    foreach ($target in $Index.Titles.Keys) { Update-WtMemoBacklinks $Index $target }
+}
+
+# 정렬용 ordinal은 제목/id가 바뀐 다음 검색에서만 다시 만든다. 갱신 자체는 한 칸만 고친다.
 function Update-WtMemoIndexOrder($Index) {
+    $c = $Index.Columns
     $titles = [string[]]@($Index.Titles.Keys); [Array]::Sort($titles, [StringComparer]::Ordinal)
-    for ($i = 0; $i -lt $titles.Count; $i++) { foreach ($id in $Index.Titles[$titles[$i]]) { $Index.Entries[$id].TitleOrdinal = $i } }
-    $ids = [string[]]@($Index.Entries.Keys); [Array]::Sort($ids, [StringComparer]::Ordinal)
-    for ($i = 0; $i -lt $ids.Count; $i++) { $Index.Entries[$ids[$i]].IdOrdinal = $i }
+    for ($n = 0; $n -lt $titles.Length; $n++) {
+        foreach ($id in $Index.Titles[$titles[$n]]) { $c.TitleOrdinal[$Index.Slots[$id]] = $n }
+    }
+    $ids = [string[]]@($Index.Slots.Keys); [Array]::Sort($ids, [StringComparer]::Ordinal)
+    for ($n = 0; $n -lt $ids.Length; $n++) { $c.IdOrdinal[$Index.Slots[$ids[$n]]] = $n }
+    $Index.OrderDirty = $false
+}
+
+# 처음에는 전체 목록을 한 번에 넘기고, 증분 갱신은 한 항목만 넘긴다.
+function Set-WtMemoIndexEntry($Index, [object[]]$Memos) {
+    $c = $Index.Columns; $slots = $Index.Slots; $titles = $Index.Titles; $sources = $Index.LinkSources
+    $Index.SortOrders.Clear()
+    $affected = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($memo in $Memos) {
+        if ($null -eq $memo -or $memo -is [string] -or $memo -is [ValueType] -or $memo -is [array]) { continue }
+        $id = $memo.id
+        if ($id -isnot [string] -or -not $id) { continue }
+        $deleted = $memo.deleted
+        $isDeleted = $null -ne $deleted -and -not ($deleted -is [bool] -and -not $deleted) -and "$deleted" -ne ''
+        if ($slots.ContainsKey($id)) {
+            $n = $slots[$id]; $oldTitle = $c.TitleLower[$n]; $oldBody = $c.Body[$n]
+            [void]$affected.Add($oldTitle)
+            [void]$titles[$oldTitle].Remove($id)
+            if (-not $titles[$oldTitle].Count) { [void]$titles.Remove($oldTitle) }
+            if ($Index.LinksReady) {
+                foreach ($target in $c.Outgoing[$n]) {
+                    [void]$affected.Add($target); [void]$sources[$target].Remove($id)
+                    if (-not $sources[$target].Count) { [void]$sources.Remove($target) }
+                }
+            }
+            if ($isDeleted) {
+                $c.Alive[$n] = $false; [void]$slots.Remove($id); $Index.OrderDirty = $true
+                continue
+            }
+        } else {
+            if ($isDeleted) { continue }
+            if ($Index.NextSlot -eq $c.Id.Count) {
+                # 묶음 전체의 빈 칸을 .NET으로 한 번에 확보한다. 갱신 때는 기존 칸만 쓴다.
+                foreach ($name in 'Id', 'Title', 'Body', 'TitleLower', 'BodyLower', 'Folder') { $c[$name].AddRange([string[]]::new($Memos.Count)) }
+                foreach ($name in 'Pinned', 'Archived', 'Alive', 'HasLink') { $c[$name].AddRange([bool[]]::new($Memos.Count)) }
+                foreach ($name in 'PinOrder', 'CreatedTicks', 'UpdatedTicks', 'CreatedDay', 'UpdatedDay') { $c[$name].AddRange([long[]]::new($Memos.Count)) }
+                foreach ($name in 'BacklinkCount', 'TitleOrdinal', 'IdOrdinal') { $c[$name].AddRange([int[]]::new($Memos.Count)) }
+                foreach ($name in 'Created', 'Updated', 'Outgoing', 'Tags') { $c[$name].AddRange([object[]]::new($Memos.Count)) }
+            }
+            $n = $Index.NextSlot; $Index.NextSlot++; $slots[$id] = $n; $oldTitle = $null; $oldBody = $null
+            $Index.OrderDirty = $true
+        }
+        $title = [string]$memo.title; $body = [string]$memo.body; $titleLower = $title.ToLowerInvariant()
+        $c.Id[$n] = $id; $c.Title[$n] = $title; $c.Body[$n] = $body
+        $c.TitleLower[$n] = $titleLower; $c.BodyLower[$n] = $body.ToLowerInvariant()
+        $tags = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($tag in $memo.tags) { if ($tag -is [string]) { [void]$tags.Add($tag.ToLowerInvariant()) } }
+        $c.Tags[$n] = $tags; $c.Folder[$n] = [string]$memo.folder; $c.Pinned[$n] = ($memo.pinned -eq $true)
+        $c.Archived[$n] = ($memo.archived -eq $true); $c.Alive[$n] = $true
+        $order = $memo.pinOrder
+        if ($order -isnot [long] -and $order -isnot [int] -and $null -ne $order) { $order = ConvertFrom-WtWhole $order ([long]::MinValue) ([long]::MaxValue) }
+        $c.PinOrder[$n] = if ($null -eq $order) { [long]::MaxValue } else { [long]$order }
+        foreach ($name in 'Created', 'Updated') {
+            $text = [string]$memo.$name
+            if (-not $Index.TimeCache.ContainsKey($text)) {
+                $stamp = [DateTimeOffset]::MinValue
+                $valid = [DateTimeOffset]::TryParseExact($text, "yyyy-MM-dd'T'HH:mm:sszzz", $script:memoInv, [Globalization.DateTimeStyles]::None, [ref]$stamp)
+                $Index.TimeCache[$text] = if ($valid) { $stamp } elseif ($text) { Get-WtMemoIndexedTime $text } else { $null }
+            }
+            $stamp = $Index.TimeCache[$text]; $c[$name][$n] = $stamp
+            $c[$name + 'Ticks'][$n] = if ($null -eq $stamp) { -1L } else { $stamp.UtcTicks }
+            $c[$name + 'Day'][$n] = if ($null -eq $stamp) { -1L } else { $stamp.LocalDateTime.Date.Ticks }
+        }
+        if (-not $titles.ContainsKey($titleLower)) { $titles[$titleLower] = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
+        [void]$titles[$titleLower].Add($id); [void]$affected.Add($titleLower)
+        if ($null -eq $oldTitle -or -not [string]::Equals($oldTitle, $titleLower, [StringComparison]::Ordinal)) { $Index.OrderDirty = $true }
+        if ($Index.LinksReady) {
+            if ($null -eq $c.Outgoing[$n] -or -not [string]::Equals($oldBody, $body, [StringComparison]::Ordinal)) {
+                $info = Get-WtMemoLinkInfo $body; $c.Outgoing[$n] = $info.Outgoing; $c.HasLink[$n] = $info.HasLink
+            }
+            foreach ($target in $c.Outgoing[$n]) {
+                [void]$affected.Add($target)
+                if (-not $sources.ContainsKey($target)) { $sources[$target] = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
+                [void]$sources[$target].Add($id)
+            }
+        }
+    }
+    if ($Index.LinksReady) { foreach ($target in $affected) { Update-WtMemoBacklinks $Index $target } }
 }
 
 function New-WtMemoIndex {
     param([Parameter(Position = 0)][AllowEmptyCollection()][object[]]$Memos = @(), [object[]]$Folders)
     if (-not $PSBoundParameters.ContainsKey('Folders')) { $Folders = @(Get-WtMemoDefaultFolders) }
+    $c = @{}
+    foreach ($name in 'Id', 'Title', 'Body', 'TitleLower', 'BodyLower', 'Folder') { $c[$name] = [Collections.Generic.List[string]]::new($Memos.Count) }
+    foreach ($name in 'Pinned', 'Archived', 'Alive', 'HasLink') { $c[$name] = [Collections.Generic.List[bool]]::new($Memos.Count) }
+    foreach ($name in 'PinOrder', 'CreatedTicks', 'UpdatedTicks', 'CreatedDay', 'UpdatedDay') { $c[$name] = [Collections.Generic.List[long]]::new($Memos.Count) }
+    foreach ($name in 'BacklinkCount', 'TitleOrdinal', 'IdOrdinal') { $c[$name] = [Collections.Generic.List[int]]::new($Memos.Count) }
+    foreach ($name in 'Created', 'Updated', 'Outgoing', 'Tags') { $c[$name] = [Collections.Generic.List[object]]::new($Memos.Count) }
     $index = [pscustomobject]@{
-        Entries = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+        Columns = $c; Slots = [Collections.Generic.Dictionary[string, int]]::new([StringComparer]::Ordinal)
         Titles = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-        Sources = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-        Folders = @($Folders)
+        LinkSources = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+        Folders = @($Folders); LinksReady = $false; OrderDirty = $true; NextSlot = 0
+        SortOrders = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+        TimeCache = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
     }
-    $seen = New-WtMemoStringSet
+    $index.PSObject.Properties.Add([Management.Automation.PSScriptProperty]::new('Entries', { Get-WtMemoIndexEntries $this }))
+    $index.PSObject.Properties.Add([Management.Automation.PSScriptProperty]::new('Sources', { Initialize-WtMemoLinks $this; , $this.LinkSources }))
+    # 처음 나온 id가 지운 줄/빈 id여도 뒤의 중복 줄을 채택하지 않는 옛 규칙을 유지한다.
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $unique = [Collections.Generic.List[object]]::new($Memos.Count)
     foreach ($memo in $Memos) {
-        $id = Get-WtField $memo 'id'
-        if ($id -is [string] -and $seen.Add($id)) { Set-WtMemoIndexEntry $index $memo }
+        $id = if ($memo -is [Collections.IDictionary]) { $memo['id'] } elseif ($null -ne $memo) { $memo.PSObject.Properties['id'].Value } else { $null }
+        if ($id -is [string] -and $seen.Add($id)) { $unique.Add($memo) }
     }
-    foreach ($titleLower in $index.Titles.Keys) { Update-WtMemoBacklinks $index $titleLower }
+    Set-WtMemoIndexEntry $index $unique.ToArray()
     Update-WtMemoIndexOrder $index
     $index
 }
@@ -298,23 +403,20 @@ function Update-WtMemoIndex {
     [CmdletBinding(DefaultParameterSetName = 'memo')]
     param([Parameter(Mandatory)]$Index, [Parameter(Mandatory, ParameterSetName = 'memo')]$Memo,
         [Parameter(Mandatory, ParameterSetName = 'remove')][string]$Remove)
-    $id = if ($PSCmdlet.ParameterSetName -eq 'remove') { $Remove } else { [string](Get-WtField $Memo 'id') }
-    $affected = New-WtMemoStringSet
-    if ($Index.Entries.ContainsKey($id)) {
-        $old = $Index.Entries[$id]; [void]$affected.Add($old.TitleLower)
-        Remove-WtMemoIndexMap $Index.Titles $old.TitleLower $id
-        foreach ($target in $old.Outgoing) { [void]$affected.Add($target); Remove-WtMemoIndexMap $Index.Sources $target $id }
-        [void]$Index.Entries.Remove($id)
-    }
-    if ($PSCmdlet.ParameterSetName -eq 'memo') {
-        Set-WtMemoIndexEntry $Index $Memo
-        if ($Index.Entries.ContainsKey($id)) {
-            $entry = $Index.Entries[$id]; [void]$affected.Add($entry.TitleLower)
-            foreach ($target in $entry.Outgoing) { [void]$affected.Add($target) }
+    if ($PSCmdlet.ParameterSetName -eq 'remove') {
+        if (-not $Index.Slots.ContainsKey($Remove)) { return }
+        # 삭제도 같은 한 칸 갱신 경로를 거친다. 실제 원자료는 바꾸지 않는다.
+        Set-WtMemoIndexEntry $Index @([pscustomobject]@{ id = $Remove; deleted = $true })
+    } else {
+        # 옛 판은 id를 글로 읽어 기존 칸을 먼저 빼고, 문자열 id가 아닌 새 줄은 넣지 않는다.
+        $rawId = Get-WtField $Memo 'id'
+        if ($rawId -isnot [string]) {
+            $id = [string]$rawId
+            if ($Index.Slots.ContainsKey($id)) { Set-WtMemoIndexEntry $Index @([pscustomobject]@{ id = $id; deleted = $true }) }
+            return
         }
+        Set-WtMemoIndexEntry $Index @($Memo)
     }
-    foreach ($titleLower in $affected) { Update-WtMemoBacklinks $Index $titleLower }
-    Update-WtMemoIndexOrder $Index
 }
 
 function Get-WtMemoQueryTerms($Node, [switch]$Negated) {
@@ -323,69 +425,114 @@ function Get-WtMemoQueryTerms($Node, [switch]$Negated) {
     foreach ($child in @($Node.Children)) { if ($child) { Get-WtMemoQueryTerms $child -Negated:$Negated } }
 }
 
-function Get-WtMemoMatchSet($Index, $Node, [datetime]$Today) {
-    $set = New-WtMemoStringSet
+# 재귀는 조건 트리의 노드마다 한 번. 메모 반복문에는 함수/파이프라인/스크립트 블록이 없다.
+# Candidate는 상위 AND에서 살아 있는 번호만 담는다. NOT도 그 범위 안에서 뒤집는다.
+function Get-WtMemoMatchSet($Index, $Node, [datetime]$Today, [bool[]]$Candidate) {
+    $c = $Index.Columns; $count = $c.Id.Count
+    $mask = [bool[]]::new($count)
     switch ($Node.Kind) {
-        'all' { $set.UnionWith([string[]]@($Index.Entries.Keys)); return , $set }
+        'all' { return , $Candidate.Clone() }
         'not' {
-            $set.UnionWith([string[]]@($Index.Entries.Keys)); $set.ExceptWith((Get-WtMemoMatchSet $Index $Node.Child $Today)); return , $set
+            $part = Get-WtMemoMatchSet $Index $Node.Child $Today $Candidate
+            for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $Candidate[$n] -and -not $part[$n] }
+            return , $mask
         }
-        { $_ -in 'and', 'or' } {
-            $first = $true
-            foreach ($child in $Node.Children) {
-                $part = Get-WtMemoMatchSet $Index $child $Today
-                if ($first -or $Node.Kind -eq 'or') { $set.UnionWith($part) } else { $set.IntersectWith($part) }
-                $first = $false
+        'and' {
+            $mask = $Candidate.Clone()
+            # 싼 잎을 먼저 평가한다. 예외가 날 수 있는 linksto끼리의 원래 순서는 보존한다.
+            foreach ($pass in 0, 1) {
+                foreach ($child in $Node.Children) {
+                    $cheap = $child.Kind -eq 'term' -and $child.Field -in 'folder', 'is', 'tag', 'no', 'created', 'updated'
+                    if (($pass -eq 0) -ne $cheap) { continue }
+                    $mask = Get-WtMemoMatchSet $Index $child $Today $mask
+                }
             }
-            return , $set
+            return , $mask
+        }
+        'or' {
+            foreach ($child in $Node.Children) {
+                $part = Get-WtMemoMatchSet $Index $child $Today $Candidate
+                for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $mask[$n] -or $part[$n] }
+            }
+            return , $mask
         }
     }
     $value = ([string]$Node.Value).ToLowerInvariant(); $field = [string]$Node.Field
-    $from = $null; $to = $null; $compare = ''; $folderIds = New-WtMemoStringSet
-    if ($field -in 'updated', 'created') {
-        if ($value -match '^([0-9]+)d$') { $from = $Today.AddDays(1 - [int]$Matches[1]); $to = $Today }
-        elseif ($value.StartsWith('<') -or $value.StartsWith('>')) { $compare = $value.Substring(0, 1); $from = ConvertFrom-WtDateText $value.Substring(1) }
-        else { $parts = $value -split '\.\.'; $from = ConvertFrom-WtDateText $parts[0]; $to = if ($parts.Count -eq 2) { ConvertFrom-WtDateText $parts[1] } else { $from } }
-    }
-    if ($field -eq 'folder') {
-        foreach ($folder in $Index.Folders) {
-            if ([string]::Equals([string]$folder.id, [string]$Node.Value, [StringComparison]::Ordinal) -or [string]::Equals([string]$folder.name, $value, [StringComparison]::OrdinalIgnoreCase)) {
-                [void]$folderIds.Add([string]$folder.id)
+    switch ($field) {
+        'text' {
+            [string[]]$tl = $c.TitleLower.ToArray(); [string[]]$bl = $c.BodyLower.ToArray()
+            for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $tl[$n].IndexOf($value, [StringComparison]::Ordinal) -ge 0 -or $bl[$n].IndexOf($value, [StringComparison]::Ordinal) -ge 0 } }
+        }
+        'title' {
+            [string[]]$tl = $c.TitleLower.ToArray()
+            for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $tl[$n].IndexOf($value, [StringComparison]::Ordinal) -ge 0 } }
+        }
+        'body' {
+            [string[]]$bl = $c.BodyLower.ToArray()
+            for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $bl[$n].IndexOf($value, [StringComparison]::Ordinal) -ge 0 } }
+        }
+        'tag' {
+            [Collections.Generic.HashSet[string][]]$tags = $c.Tags.ToArray()
+            for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $tags[$n].Contains($value) } }
+        }
+        'no' {
+            [Collections.Generic.HashSet[string][]]$tags = $c.Tags.ToArray()
+            for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $Candidate[$n] -and $tags[$n].Count -eq 0 }
+        }
+        'is' {
+            [bool[]]$pins = $c.Pinned.ToArray()
+            for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $Candidate[$n] -and $pins[$n] }
+        }
+        'folder' {
+            $folderIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($folder in $Index.Folders) {
+                if ([string]::Equals([string]$folder.id, [string]$Node.Value, [StringComparison]::Ordinal) -or [string]::Equals([string]$folder.name, $value, [StringComparison]::OrdinalIgnoreCase)) { [void]$folderIds.Add([string]$folder.id) }
+            }
+            [string[]]$folders = $c.Folder.ToArray()
+            for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $folderIds.Contains($folders[$n]) } }
+        }
+        'has' {
+            Initialize-WtMemoLinks $Index
+            if ($value -eq 'link') {
+                [bool[]]$links = $c.HasLink.ToArray()
+                for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $Candidate[$n] -and $links[$n] }
+            } else {
+                [int[]]$backlinks = $c.BacklinkCount.ToArray()
+                for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $Candidate[$n] -and $backlinks[$n] -gt 0 }
             }
         }
-    }
-    if ($field -eq 'linksto') {
-        $targetTitle = $value
-        if ($Index.Entries.ContainsKey([string]$Node.Value)) { $targetTitle = $Index.Entries[[string]$Node.Value].TitleLower }
-        if ($Index.Titles.ContainsKey($targetTitle)) {
-            if ($Index.Titles[$targetTitle].Count -gt 1) { throw [ArgumentException]::new("같은 제목이 여럿입니다. 메모 id로 대상을 골라 주세요: $($Node.Value)") }
-            if ($Index.Sources.ContainsKey($targetTitle)) { $set.UnionWith($Index.Sources[$targetTitle]) }
-        }
-        return , $set
-    }
-    foreach ($entry in $Index.Entries.Values) {
-        $match = switch ($field) {
-            'text' { $entry.TitleLower.Contains($value) -or $entry.BodyLower.Contains($value) }
-            'title' { $entry.TitleLower.Contains($value) }
-            'body' { $entry.BodyLower.Contains($value) }
-            'tag' { $entry.Tags.Contains($value) }
-            'folder' { $folderIds.Contains($entry.Folder) }
-            'is' { $entry.Pinned }
-            'has' { if ($value -eq 'link') { $entry.HasLink } else { $entry.BacklinkCount -gt 0 } }
-            'no' { $entry.Tags.Count -eq 0 }
-            { $_ -in 'updated', 'created' } {
-                $stamp = if ($field -eq 'updated') { $entry.Updated } else { $entry.Created }
-                if ($null -eq $stamp) { $false }
-                else {
-                    $day = $stamp.LocalDateTime.Date
-                    if ($compare -eq '<') { $day -lt $from } elseif ($compare -eq '>') { $day -gt $from } else { $day -ge $from -and $day -le $to }
+        'linksto' {
+            Initialize-WtMemoLinks $Index
+            $targetTitle = $value
+            if ($Index.Slots.ContainsKey([string]$Node.Value)) { $targetTitle = $c.TitleLower[$Index.Slots[[string]$Node.Value]] }
+            if ($Index.Titles.ContainsKey($targetTitle)) {
+                if ($Index.Titles[$targetTitle].Count -gt 1) { throw [ArgumentException]::new("같은 제목이 여럿입니다. 메모 id로 대상을 골라 주세요: $($Node.Value)") }
+                if ($Index.LinkSources.ContainsKey($targetTitle)) {
+                    foreach ($id in $Index.LinkSources[$targetTitle]) { $n = $Index.Slots[$id]; $mask[$n] = $Candidate[$n] }
                 }
             }
-            default { $false }
         }
-        if ($match) { [void]$set.Add($entry.Id) }
+        { $_ -in 'updated', 'created' } {
+            $from = $null; $to = $null; $compare = ''
+            $relative = $script:memoRelativeDays.Match($value)
+            if ($relative.Success) { $from = $Today.AddDays(1 - [int]$relative.Groups[1].Value); $to = $Today }
+            elseif ($value.StartsWith('<') -or $value.StartsWith('>')) { $compare = $value.Substring(0, 1); $from = ConvertFrom-WtDateText $value.Substring(1) }
+            else {
+                $parts = $script:memoDateRange.Split($value); $from = ConvertFrom-WtDateText $parts[0]
+                $to = if ($parts.Count -eq 2) { ConvertFrom-WtDateText $parts[1] } else { $from }
+            }
+            $fromTicks = $from.Ticks; $toTicks = if ($null -ne $to) { $to.Ticks } else { 0L }
+            [long[]]$days = if ($field -eq 'updated') { $c.UpdatedDay.ToArray() } else { $c.CreatedDay.ToArray() }
+            if ($compare -eq '<') {
+                for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $days[$n] -ge 0 -and $days[$n] -lt $fromTicks } }
+            } elseif ($compare -eq '>') {
+                for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $days[$n] -gt $fromTicks } }
+            } else {
+                for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $days[$n] -ge $fromTicks -and $days[$n] -le $toTicks } }
+            }
+        }
     }
-    , $set
+    , $mask
 }
 
 function Get-WtMemoOpenedMap($State, $Index) {
@@ -395,86 +542,157 @@ function Get-WtMemoOpenedMap($State, $Index) {
     $hasItems = $isMap -and (@($State.Keys) -ccontains 'items') -and $State['items'] -is [array]
     $items = if ($hasItems) { $State['items'] } elseif ($State.PSObject.Properties['Items']) { $State.Items } else { $State }
     if ($isMap -and -not $hasItems) {
-        foreach ($key in $State.Keys) { if ($Index.Entries.ContainsKey([string]$key)) { $map[[string]$key] = $State[$key] } }
+        foreach ($key in $State.Keys) { if ($Index.Slots.ContainsKey([string]$key)) { $map[[string]$key] = $State[$key] } }
     } else {
-        foreach ($item in @($items)) { if ($item.id -and $Index.Entries.ContainsKey([string]$item.id) -and -not $map.ContainsKey([string]$item.id)) { $map[[string]$item.id] = $item.opened } }
+        foreach ($item in @($items)) { if ($item.id -and $Index.Slots.ContainsKey([string]$item.id) -and -not $map.ContainsKey([string]$item.id)) { $map[[string]$item.id] = $item.opened } }
     }
     , $map
 }
 
+# 같은 색인의 기본 정렬은 메모 번호 배열만 재사용한다. 결과 객체나 본문 일부는 캐시하지 않는다.
+function Get-WtMemoSortOrder($Index, [string]$Sort, [string]$Dir, [long[]]$OpenedTicks) {
+    $key = $Sort + '/' + $Dir
+    if ($Sort -ne 'opened' -and $Index.SortOrders.ContainsKey($key)) { return , $Index.SortOrders[$key] }
+    $c = $Index.Columns
+    $numbers = [Collections.Generic.List[int]]::new($Index.Slots.Count)
+    [bool[]]$alive = $c.Alive.ToArray()
+    for ($n = 0; $n -lt $alive.Length; $n++) { if ($alive[$n]) { $numbers.Add($n) } }
+    $items = $numbers.ToArray(); $keys = [Tuple[long,int,long,long,int,int][]]::new($items.Length)
+    [bool[]]$pins = $c.Pinned.ToArray(); [long[]]$orders = $c.PinOrder.ToArray()
+    [long[]]$updatedTicks = $c.UpdatedTicks.ToArray()
+    [int[]]$titleOrdinals = $c.TitleOrdinal.ToArray(); [int[]]$idOrdinals = $c.IdOrdinal.ToArray()
+    [long[]]$primaryValues = switch ($Sort) {
+        'title' { $c.TitleOrdinal.ToArray() }
+        'backlinks' { $c.BacklinkCount.ToArray() }
+        'updated' { $updatedTicks }
+        'created' { $c.CreatedTicks.ToArray() }
+        'opened' { $OpenedTicks }
+        default { [long[]]::new($alive.Length) }
+    }
+    $descending = $Dir -eq 'desc'
+    for ($at = 0; $at -lt $items.Length; $at++) {
+        $n = $items[$at]; [long]$primary = $primaryValues[$n]
+        if ($descending) { $primary = -$primary }
+        [long]$modified = [long]::MaxValue
+        if ($updatedTicks[$n] -ge 0) { $modified = -$updatedTicks[$n] }
+        [long]$pinOrder = 0
+        if ($pins[$n]) { $pinOrder = $orders[$n] }
+        $keys[$at] = [Tuple[long,int,long,long,int,int]]::new($primary, [int](-not $pins[$n]), $pinOrder, $modified, $titleOrdinals[$n], $idOrdinals[$n])
+    }
+    if ($items.Length -gt 1) { [Array]::Sort($keys, $items) }
+    if ($Sort -ne 'opened') { $Index.SortOrders[$key] = $items }
+    , $items
+}
+
 function Find-WtMemo {
     param([Parameter(Mandatory)]$Index, $Query = '', [ValidateSet('updated', 'created', 'title', 'opened', 'backlinks')][string]$Sort,
-        [ValidateSet('asc', 'desc')][string]$Dir, [ValidateSet('normal', 'pinned', 'recent', 'archived', 'all', '일반', '고정', '최근 열기', '보관', '모두')][string]$View = 'normal', $OpenedMap)
+        [ValidateSet('asc', 'desc')][string]$Dir, [ValidateSet('normal', 'pinned', 'recent', 'archived', 'all', '일반', '고정', '최근 열기', '보관', '모두')][string]$View = 'normal', $OpenedMap,
+        [ValidateRange(0, [int]::MaxValue)][int]$SnippetLimit = 200)
     $tree = if ($Query -is [string]) { ConvertFrom-WtMemoQuery $Query } else { $Query }
     if ($tree.Success -eq $false) { return [pscustomobject]@{ Success = $false; Items = @(); Count = 0; Error = $tree.Error } }
     try {
-        # 칩이 넘긴 구조도 문법 검사를 거쳐 동일한 해석을 사용한다.
         if ($Query -isnot [string]) { $tree = ConvertFrom-WtMemoQuery (ConvertTo-WtMemoQuery $tree) }
         $scope = $tree.Scope
         if ($scope -eq 'active') {
             if ($View -in 'archived', '보관') { $scope = 'archived' } elseif ($View -in 'all', '모두') { $scope = 'all' }
         }
-        $set = Get-WtMemoMatchSet $Index $tree.Root ([datetime]::Today)
+        $c = $Index.Columns; $count = $c.Id.Count
         $opened = Get-WtMemoOpenedMap $OpenedMap $Index
-        $terms = @(Get-WtMemoQueryTerms $tree.Root | Where-Object { $_.Field -in 'text', 'title', 'body' })
-        $joined = @($terms | ForEach-Object { [string]$_.Value }) -join ' '
-        if (-not $Sort -and $View -in 'recent', '최근 열기') { $Sort = 'opened' }
-        if ($Sort -and -not $Dir) { $Dir = if ($Sort -eq 'title') { 'asc' } else { 'desc' } }
-        $rows = [Collections.Generic.List[object]]::new()
-        $keys = [Collections.Generic.List[Tuple[long,int,long,long,int,int,object]]]::new()
-        foreach ($id in $set) {
-            $entry = $Index.Entries[$id]
-            if (($scope -eq 'active' -and $entry.Archived) -or ($scope -eq 'archived' -and -not $entry.Archived)) { continue }
-            if ($View -in 'pinned', '고정' -and -not $entry.Pinned) { continue }
-            if ($View -in 'recent', '최근 열기' -and -not $opened.ContainsKey($id)) { continue }
-            $locations = [Collections.Generic.List[object]]::new(); $rank = 3; $bodyAt = -1; $titleHits = 0; $matchedTerms = 0
-            foreach ($term in $terms) {
-                $needle = ([string]$term.Value).ToLowerInvariant()
-                $ti = if ($term.Field -eq 'body') { -1 } else { $entry.TitleLower.IndexOf($needle, [StringComparison]::Ordinal) }
-                $bi = if ($term.Field -eq 'title') { -1 } else { $entry.BodyLower.IndexOf($needle, [StringComparison]::Ordinal) }
-                if ($ti -ge 0 -or $bi -ge 0) { $matchedTerms++ }
-                if ($ti -ge 0) {
-                    $titleHits++; $locations.Add([pscustomobject]@{ Field = 'title'; Start = $ti; Length = $needle.Length })
-                    if ($entry.TitleLower -eq $needle) { $rank = 0 }
-                }
-                if ($bi -ge 0) {
-                    $locations.Add([pscustomobject]@{ Field = 'body'; Start = $bi; Length = $needle.Length })
-                    if ($bodyAt -lt 0 -or $bi -lt $bodyAt) { $bodyAt = $bi }
-                }
-            }
-            if ($terms.Count) {
-                if ([string]::Equals($entry.Title, $joined, [StringComparison]::OrdinalIgnoreCase) -and $titleHits -eq $terms.Count) { $rank = 0 }
-                elseif ($rank -ne 0) { $rank = if ($titleHits -gt 0 -and $titleHits -eq $matchedTerms) { 1 } else { 2 } }
-            }
-            $start = if ($bodyAt -ge 0) { [Math]::Max(0, $bodyAt - 24) } else { 0 }
-            $snippet = $entry.Body.Substring($start, [Math]::Min(80, $entry.Body.Length - $start))
-            $folder = $null
-            foreach ($candidate in $Index.Folders) { if ([string]::Equals([string]$candidate.id, $entry.Folder, [StringComparison]::Ordinal)) { $folder = $candidate; break } }
-            $openedAt = if ($opened.ContainsKey($id)) { Get-WtMemoIndexedTime ([string]$opened[$id]) } else { $null }
-            $rows.Add([pscustomobject]@{
-                Id = $id; Title = $entry.Title; Matches = $locations.ToArray(); Snippet = $snippet; SnippetStart = $start
-                Folder = $(if ($folder) { [string]$folder.id } else { $null }); FolderName = $(if ($folder) { [string]$folder.name } else { '폴더 없음' })
-                Tags = [string[]]@($entry.Tags); Pinned = $entry.Pinned; PinOrder = $entry.PinOrder; Archived = $entry.Archived
-                Rank = $rank; Updated = $entry.Updated; Created = $entry.Created; Opened = $openedAt; Backlinks = $entry.BacklinkCount
-            })
-            [long]$primary = if ($terms.Count) { $rank } else { 0 }
-            if ($Sort) {
-                $stamp = switch ($Sort) { 'updated' { $entry.Updated } 'created' { $entry.Created } 'opened' { $openedAt } }
-                $primary = switch ($Sort) {
-                    'title' { [long]$entry.TitleOrdinal }
-                    'backlinks' { [long]$entry.BacklinkCount }
-                    default { if ($null -eq $stamp) { -1L } else { $stamp.UtcTicks } }
-                }
-                if ($Dir -eq 'desc') { $primary = -$primary }
-            }
-            [long]$modified = if ($entry.Updated) { -$entry.Updated.UtcTicks } else { [long]::MaxValue }
-            [long]$pinOrder = if ($entry.Pinned) { $entry.PinOrder } else { 0 }
-            $keys.Add([Tuple[long,int,long,long,int,int,object]]::new($primary, [int](-not $entry.Pinned), $pinOrder, $modified, $entry.TitleOrdinal, $entry.IdOrdinal, $rows[$rows.Count - 1]))
+        $candidate = [bool[]]::new($count)
+        [bool[]]$pins = $c.Pinned.ToArray(); [bool[]]$archives = $c.Archived.ToArray(); [bool[]]$alive = $c.Alive.ToArray(); [string[]]$ids = $c.Id.ToArray()
+        $pinnedOnly = $View -in 'pinned', '고정'; $recentOnly = $View -in 'recent', '최근 열기'
+        for ($n = 0; $n -lt $count; $n++) {
+            $candidate[$n] = $alive[$n] -and ($scope -ne 'active' -or -not $archives[$n]) -and ($scope -ne 'archived' -or $archives[$n]) -and
+                (-not $pinnedOnly -or $pins[$n]) -and (-not $recentOnly -or $opened.ContainsKey($ids[$n]))
         }
-        $sortedKeys = $keys.ToArray()
-        if ($rows.Count -gt 1) { [Array]::Sort($sortedKeys) }
-        $resultRows = @(foreach ($key in $sortedKeys) { $key.Item7 })
-        [pscustomobject]@{ Success = $true; Items = $resultRows; Count = $rows.Count; Error = $null }
+        $mask = Get-WtMemoMatchSet $Index $tree.Root ([datetime]::Today) $candidate
+        if ($Index.OrderDirty) { Update-WtMemoIndexOrder $Index }
+        # Backlinks는 기존 결과의 공개 칸이다. 연결 조건이 없어도 실제 값을 반환해야 하므로 첫 결과 때 준비한다.
+        Initialize-WtMemoLinks $Index
+        $needles = [Collections.Generic.List[string]]::new(); $termFields = [Collections.Generic.List[string]]::new(); $words = [Collections.Generic.List[string]]::new()
+        foreach ($term in (Get-WtMemoQueryTerms $tree.Root)) {
+            if ($term.Field -in 'text', 'title', 'body') {
+                $needles.Add(([string]$term.Value).ToLowerInvariant()); $words.Add([string]$term.Value); $termFields.Add([string]$term.Field)
+            }
+        }
+        $joined = [string]::Join(' ', $words); $termCount = $needles.Count
+        if (-not $Sort -and $recentOnly) { $Sort = 'opened' }
+        if ($Sort -and -not $Dir) { $Dir = if ($Sort -eq 'title') { 'asc' } else { 'desc' } }
+        $openedTimes = [object[]]::new($count); $openedTicks = [long[]]::new($count)
+        [Array]::Fill[long]($openedTicks, -1L)
+        foreach ($id in $opened.Keys) {
+            $text = [string]$opened[$id]
+            if (-not $Index.TimeCache.ContainsKey($text)) { $Index.TimeCache[$text] = Get-WtMemoIndexedTime $text }
+            $stamp = $Index.TimeCache[$text]; $n = $Index.Slots[$id]; $openedTimes[$n] = $stamp
+            if ($null -ne $stamp) { $openedTicks[$n] = $stamp.UtcTicks }
+        }
+        $baseOrder = Get-WtMemoSortOrder $Index $Sort $Dir $openedTicks
+        $ranks = [int[]]::new($count); $starts = [int[]]::new($count); $locations = [object[]]::new($count)
+        [string[]]$tl = $c.TitleLower.ToArray(); [string[]]$bl = $c.BodyLower.ToArray(); [string[]]$titleText = $c.Title.ToArray()
+        if ($termCount) {
+            [string[]]$needleArray = $needles.ToArray(); [string[]]$fieldArray = $termFields.ToArray()
+            for ($n = 0; $n -lt $count; $n++) {
+                if (-not $mask[$n]) { continue }
+                $rank = 3; $bodyAt = -1; $titleHits = 0; $matchedTerms = 0
+                $hits = [Collections.Generic.List[object]]::new()
+                for ($t = 0; $t -lt $termCount; $t++) {
+                    $needle = $needleArray[$t]; $field = $fieldArray[$t]; $ti = -1; $bi = -1
+                    if ($field -ne 'body') { $ti = $tl[$n].IndexOf($needle, [StringComparison]::Ordinal) }
+                    if ($field -ne 'title') { $bi = $bl[$n].IndexOf($needle, [StringComparison]::Ordinal) }
+                    if ($ti -ge 0 -or $bi -ge 0) { $matchedTerms++ }
+                    if ($ti -ge 0) {
+                        $titleHits++; $hits.Add([pscustomobject]@{ Field = 'title'; Start = $ti; Length = $needle.Length })
+                        if ($tl[$n] -eq $needle) { $rank = 0 }
+                    }
+                    if ($bi -ge 0) {
+                        $hits.Add([pscustomobject]@{ Field = 'body'; Start = $bi; Length = $needle.Length })
+                        if ($bodyAt -lt 0 -or $bi -lt $bodyAt) { $bodyAt = $bi }
+                    }
+                }
+                if ([string]::Equals($titleText[$n], $joined, [StringComparison]::OrdinalIgnoreCase) -and $titleHits -eq $termCount) { $rank = 0 }
+                elseif ($rank -ne 0) {
+                    $rank = 2
+                    if ($titleHits -gt 0 -and $titleHits -eq $matchedTerms) { $rank = 1 }
+                }
+                $ranks[$n] = $rank; $locations[$n] = $hits.ToArray()
+                if ($bodyAt -ge 0) { $starts[$n] = [Math]::Max(0, $bodyAt - 24) }
+            }
+        }
+        $numbers = [Collections.Generic.List[int]]::new()
+        if ($termCount -and -not $Sort) {
+            # 안정된 기본 순서를 네 순위 칸으로 나눈다. 검색마다 tuple 키를 메모 수만큼 만들지 않는다.
+            $buckets = [Collections.Generic.List[int][]]::new(4)
+            for ($r = 0; $r -lt 4; $r++) { $buckets[$r] = [Collections.Generic.List[int]]::new() }
+            foreach ($n in $baseOrder) { if ($mask[$n]) { $buckets[$ranks[$n]].Add($n) } }
+            for ($r = 0; $r -lt 4; $r++) { $numbers.AddRange($buckets[$r]) }
+        } else {
+            foreach ($n in $baseOrder) { if ($mask[$n]) { $numbers.Add($n) } }
+        }
+        $items = $numbers.ToArray(); $length = $items.Length
+        $folderMap = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+        foreach ($folder in $Index.Folders) { if (-not $folderMap.ContainsKey([string]$folder.id)) { $folderMap[[string]$folder.id] = $folder } }
+        $rows = [object[]]::new($length)
+        [string[]]$bodies = $c.Body.ToArray(); [string[]]$folders = $c.Folder.ToArray(); [Collections.Generic.HashSet[string][]]$tags = $c.Tags.ToArray()
+        [object[]]$updated = $c.Updated.ToArray(); [object[]]$created = $c.Created.ToArray(); [long[]]$orders = $c.PinOrder.ToArray(); [int[]]$backlinks = $c.BacklinkCount.ToArray()
+        $emptyMatches = [object[]]::new(0)
+        for ($at = 0; $at -lt $length; $at++) {
+            $n = $items[$at]; $start = $starts[$n]; $snippet = ''
+            if ($at -lt $SnippetLimit) { $snippet = $bodies[$n].Substring($start, [Math]::Min(80, $bodies[$n].Length - $start)) }
+            $folderId = $null; $folderName = '폴더 없음'
+            if ($folderMap.ContainsKey($folders[$n])) {
+                $folder = $folderMap[$folders[$n]]
+                if ($folder) { $folderId = [string]$folder.id; $folderName = [string]$folder.name }
+            }
+            $matches = $emptyMatches; $rank = 3
+            if ($termCount) { $matches = $locations[$n]; $rank = $ranks[$n] }
+            $rows[$at] = [pscustomobject]@{
+                Id = $ids[$n]; Title = $titleText[$n]; Matches = $matches; Snippet = $snippet; SnippetStart = $start
+                Folder = $folderId; FolderName = $folderName
+                Tags = [string[]]@($tags[$n]); Pinned = $pins[$n]; PinOrder = $orders[$n]; Archived = $archives[$n]
+                Rank = $rank; Updated = $updated[$n]; Created = $created[$n]; Opened = $openedTimes[$n]; Backlinks = $backlinks[$n]
+            }
+        }
+        [pscustomobject]@{ Success = $true; Items = $rows; Count = $length; Error = $null }
     } catch {
         [pscustomobject]@{ Success = $false; Items = @(); Count = 0; Error = [pscustomobject]@{ Position = 0; Length = 0; Reason = $_.Exception.Message } }
     }
