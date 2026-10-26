@@ -54,6 +54,7 @@
 
 ## 목록
 
+- [office/New-OfficeTestFile.ps1](office/New-OfficeTestFile.ps1) — Office를 띄우지 않고 .NET만으로 xlsx · docx · pptx 시험 파일을 만듭니다. 기본은 내 문서, `-Type`으로 형식, `-OutFolder`로 기존 폴더, `-Open`으로 만든 파일 열기를 고릅니다.
 - [network/Watch-MultiPing.ps1](network/Watch-MultiPing.ps1) — 여러 서버에 ping을 계속 보내 응답 · 끊김을 한 화면에 보여 주고, 상태가 바뀐 시각을 CSV로 남깁니다. ping이 막힌 서버는 `주소:포트`로 적어 TCP 연결로 확인합니다.
   - 대상 목록은 스크립트 옆 `ping-hosts.txt`에 한 줄에 하나씩 `이름 주소`로 적습니다. Excel에서 이름 · 주소 두 열을 복사해 붙여 넣어도 됩니다.
 

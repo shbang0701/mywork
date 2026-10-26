@@ -6,6 +6,7 @@
 ## 구성
 
 - **[scripts/](scripts/)** — 복사 한 번으로 끝나는 단독 PowerShell 스크립트. 새로 만들 때는 [scripts/README.md](scripts/README.md)
+  - [office/New-OfficeTestFile.ps1](scripts/office/New-OfficeTestFile.ps1) — Office를 띄우지 않고 .NET만으로 xlsx · docx · pptx 시험 파일 생성 (Office 2016 열기 · DRM 적용 확인용)
   - [network/Watch-MultiPing.ps1](scripts/network/Watch-MultiPing.ps1) — 여러 서버에 ping(또는 TCP 포트)을 계속 보내 응답 · 끊김을 한 화면에 보고, 바뀐 시각을 CSV로 남김 (점검 · 재부팅 확인용)
   - 바로 쓰는 예제 (WorkTool 업무 탭에서 폼으로 실행, zip에도 들어 있음)
     - 사무: [files/Rename-FileBatch.ps1](scripts/files/Rename-FileBatch.ps1) 이름 한꺼번에 바꾸기 · [files/Find-OldLargeFile.ps1](scripts/files/Find-OldLargeFile.ps1) 큰 · 오래된 파일 · [files/Find-DuplicateFile.ps1](scripts/files/Find-DuplicateFile.ps1) 중복 파일 · [files/Compare-Folder.ps1](scripts/files/Compare-Folder.ps1) 두 폴더 비교
