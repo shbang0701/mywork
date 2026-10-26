@@ -229,6 +229,7 @@ wpf/
   ```
   - `-Help`는 도움말 「이 버전」 문단, `-Shortcuts`는 「단축키」 줄이 됩니다. 키와 설명이 다른 탭과 같으면 `문서 · 활성 작업: 새로 고침`처럼 한 줄로 묶입니다. 키 처리 자체는 탭 화면이 합니다.
   - 도움말에 카드를 따로 두려면 `-HelpCard { ... }`로 카드 요소를 돌려줍니다 (메모의 마크다운 예시).
+  - 달력 표시는 `-CalendarItems { param([datetime]$From, [datetime]$To) ... }`로 등록하고, 다른 출처는 `Get-WtCalendarItems -From -To -Exclude <자기 id>`의 `Items/Days/Errors`로 받습니다. 항목 약속은 [일정 · 근태 데이터 설계](../../../docs/plans/schedule-attendance-design.md) 6.1 · 9.1입니다.
   - `-WarmUp`은 미리 만들기 후보를 등록합니다. 기본 실행에서는 미리 만들지 않습니다. 진단 세션에 `WORKTOOL_WARMUP=1`을 준 경우에만, 비활성 창에서 한 번씩 만듭니다.
     - `-WarmUp Full`: `-NewView`와 `-Refresh`까지 미리 부릅니다. `-Refresh`가 그 탭의 데이터 파일만 읽을 때 씁니다(일정 · 근태 · 메모).
     - `-WarmUp View`: `-NewView`만 미리 부릅니다. `-Refresh`가 폴더 조회 · 다른 창 읽기처럼 느리거나 앱 밖에 닿을 때 씁니다(문서 · 활성 작업 · 업무).

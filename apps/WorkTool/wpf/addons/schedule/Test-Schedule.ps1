@@ -387,6 +387,112 @@ try {
             [System.IO.File]::ReadAllText((Get-WtStorePath 'schedule')) -ceq $bad[$k]) "$($data.Error) / $importError"
     }
 
+    # ---- 2a 편집 · 반복 예외 · 알람 (화면 없이) ----
+    $test = New-WtTestData 'schedule-edit'; $tests.Add($test)
+    $at = '2026-11-02T08:00:00+09:00'
+    $store = Open-WtScheduleStore
+    $r = Save-WtScheduleItem $store @{ title = '주간 점검'; start = @{ date = '2026-11-02'; time = '09:00'; zone = '남길 칸' }
+        repeat = @{ freq = 'weekly'; days = @('mon'); count = 5; skip = @(); changes = @{}; future = '남길 규칙' }; alarms = @(@{ before = 10 }, @{ before = 0 }) } -At $at
+    $id = $r.Id
+    Assert-WtTest '일정 편집: 새 항목 · rev 0 · 다음 핸들, 원래 핸들 목록은 그대로' ($r.Success -and $id -cmatch '^[a-f0-9]{12}$' -and $r.Store.Items[0].rev -eq 0 -and $store.Items.Count -eq 0) $r.Reason
+    $r = Save-WtScheduleItem $r.Store @{ title = '바꾼 점검'; start = @{ time = '09:00' }; repeat = @{ count = 6 } } -Id $id -At $at
+    Assert-WtTest '일정 편집: 제목 · count 변경은 같은 계열, 깊은 칸 보존 · rev 증가' ($r.Success -and $r.Id -ceq $id -and $r.Store.Items[0].rev -eq 1 -and
+        $r.Store.Items[0].start.zone -eq '남길 칸' -and $r.Store.Items[0].repeat.future -eq '남길 규칙') $r.Reason
+    $r = Set-WtScheduleOccurrence $r.Store $id '2026-11-09' -Skip -At $at
+    $r = Set-WtScheduleOccurrence $r.Store $id '2026-11-16' -Patch @{ start = @{ date = '2026-11-17'; time = '10:00' }; note = '이 회차만' } -At $at
+    $entry = ConvertFrom-WtScheduleItem $r.Store.Items[0]
+    $keys = Get-WtTestKeys (Get-WtScheduleOccurrences @($entry) (& $d '2026-11-01') (& $d '2026-12-31'))
+    Assert-WtTest '일정 편집: 회차만 빼기 · 다른 날로 옮기기, count는 skip도 센다' ($r.Success -and $keys -ceq "$id@2026-11-02,$id@2026-11-16,$id@2026-11-23,$id@2026-11-30,$id@2026-12-07") "$($r.Reason) $keys"
+    $bad = Set-WtScheduleOccurrence $r.Store $id '2026-11-10' -Skip -At $at
+    $night = Save-WtScheduleItem $r.Store @{ start = @{ date = '2026-11-02'; time = '23:00' }; end = @{ date = '2026-11-03'; time = '01:00' } } -At $at
+    $wrong = Save-WtScheduleItem $r.Store @{ start = @{ date = '2026-02-30'; time = $null } } -At $at
+    Assert-WtTest '일정 입력 거부: 없는 회차 · 밤샘 새 일정 · 없는 날짜는 예외 대신 이유' (-not $bad.Success -and $bad.Reason -and -not $night.Success -and $night.Reason -and -not $wrong.Success -and $wrong.Reason)
+
+    $state = Open-WtScheduleAlarmStore
+    $alarms = Get-WtScheduleAlarms -Now '2026-11-17T10:00:00+09:00' -Previous '2026-11-17T09:49:59+09:00' -Entries @($entry) -StateStore $state
+    Assert-WtTest '알람: 옮긴 회차 · 여러 알람 · 끝 시각 포함 (원래 회차 키 유지)' ($alarms.Success -and ($alarms.Alarms.Before -join ',') -ceq '10,0' -and
+        ($alarms.Alarms.OccurrenceKey -join ',') -ceq "$id@2026-11-16,$id@2026-11-16") $alarms.Reason
+    $sourceBytes = [IO.File]::ReadAllText((Get-WtStorePath 'schedule'))
+    $fired = Save-WtScheduleAlarms $state $alarms.Alarms -At '2026-11-17T10:00:00+09:00'
+    $again = Get-WtScheduleAlarms -Now '2026-11-17T10:00:00+09:00' -Previous '2026-11-17T09:49:59+09:00' -Entries @($entry) -StateStore $fired.Store
+    Assert-WtTest '알람 상태: 별도 파일에 저장 · 중복 방지 · 원자료 바이트 그대로' ($fired.Success -and -not $again.Alarms.Count -and
+        [IO.File]::ReadAllText((Get-WtStorePath 'schedule')) -ceq $sourceBytes -and (Test-Path (Get-WtStorePath 'schedule-state')))
+    $a = Get-WtScheduleAlarms -Now '2026-11-17T10:00:00+09:00' -Previous '2026-11-17T09:50:00+09:00' -Entries @($entry)
+    $first = Get-WtScheduleAlarms -Now '2026-11-17T10:00:00+09:00' -Entries @($entry)
+    $back = Get-WtScheduleAlarms -Now '2026-11-17T09:00:00+09:00' -Previous '2026-11-17T10:00:00+09:00' -Entries @($entry)
+    $skipAlarm = Get-WtScheduleAlarms -Now '2026-11-09T09:00:00+09:00' -Previous '2026-11-09T08:00:00+09:00' -Entries @($entry)
+    Assert-WtTest '알람 구간: 앞 시각 제외 · 첫 실행 지난 것 없음 · 시계 역행 이유 · skip 안 울림' (($a.Alarms.Before -join ',') -ceq '0' -and
+        -not $first.Alarms.Count -and -not $back.Success -and $back.Reason -and -not $skipAlarm.Alarms.Count)
+    $off = Set-WtHolidayDate (Get-WtHolidayData).Store '2026-11-17' 'personal' -At $at
+    $a = Get-WtScheduleAlarms -Now '2026-11-17T10:00:00+09:00' -Previous '2026-11-17T09:49:59+09:00' -Entries @($entry)
+    Assert-WtTest '알람: 휴무일이어도 그대로 울림' ($off.Success -and $a.Alarms.Count -eq 2)
+    $state = Save-WtStore $fired.Store @($fired.Store.Items + @([pscustomobject]@{ key = 'old'; at = '2026-11-01T10:00:00+09:00' }))
+    $pruned = Save-WtScheduleAlarms $state @() -At '2026-11-17T10:01:00+09:00'
+    Assert-WtTest '알람 상태: 7일 지난 기록만 정리하고 최근 두 알람은 보존' ($pruned.Success -and $pruned.Store.Items.Count -eq 2)
+
+    $priorStore = $r.Store
+    $r = Save-WtScheduleItem $r.Store @{ repeat = @{ interval = 2 } } -Id $id -FromDate '2026-11-23' -At $at
+    $oldSeries = @($r.Store.Items | Where-Object id -ceq $id)[0]
+    $newSeries = @($r.Store.Items | Where-Object id -ceq $r.Id)[0]
+    Assert-WtTest '일정 계열 나누기: 옛 계열 앞날 종료 · 예외 보존, 새 id · 출처 · 남은 횟수 · 새 예외 비움' ($r.Success -and $r.Id -cne $id -and
+        $oldSeries.repeat.until -ceq '2026-11-22' -and $null -eq $oldSeries.repeat.count -and ($oldSeries.repeat.skip -join ',') -ceq '2026-11-09' -and
+        $oldSeries.repeat.changes.'2026-11-16'.note -eq '이 회차만' -and $newSeries.origin.id -ceq $id -and $newSeries.origin.from -ceq 'split' -and
+        $newSeries.start.date -ceq '2026-11-23' -and $newSeries.repeat.count -eq 3 -and @($newSeries.repeat.skip).Count -eq 0 -and @($newSeries.repeat.changes.PSObject.Properties).Count -eq 0) $r.Reason
+    $staleError = $null
+    try { [void](Save-WtScheduleItem $priorStore @{ title = '옛 목록' } -Id $id -At $at) } catch { $staleError = $_.Exception.Message }
+    Assert-WtTest '일정 편집: 낡은 핸들의 예외는 그대로 (새 결과를 덮지 않음)' ($staleError -like '*바뀌었습니다*') $staleError
+    $newId = $r.Id
+    $r = Save-WtScheduleItem $r.Store @{ start = @{ time = '10:00' } } -Id $newId -At $at
+    Assert-WtTest '일정 계열 나누기: 첫 회차 규칙 변경도 새 id, 옛 계열은 지운 표시' ($r.Success -and $r.Id -cne $newId -and
+        (Test-WtDeleted @($r.Store.Items | Where-Object id -ceq $newId)[0])) $r.Reason
+    $r = Set-WtScheduleDeleted $r.Store $r.Id -At $at
+    $deletedId = $r.Id
+    $expired = Set-WtScheduleDeleted $r.Store $deletedId -Deleted $false -At '2027-01-31T08:00:00+09:00'
+    $restored = Set-WtScheduleDeleted $r.Store $deletedId -Deleted $false -At '2027-01-30T08:00:00+09:00'
+    Assert-WtTest '일정 되살리기: 89일은 가능 · 90일은 이유로 거부' (-not $expired.Success -and $expired.Reason -and $restored.Success) "$($expired.Reason) $($restored.Reason)"
+
+    # 다섯째 요일 없는 달 · 윤년 말일 · 하루 종일 알람 · 지운 항목/모르는 값 제외를 문화권 다섯 개에서 고정한다.
+    $fifth = ConvertTo-WtTestItem '{ "id":"fifth", "kind":"event", "start":{"date":"2026-01-01","time":null}, "repeat":{"freq":"monthly","days":["mon"],"nth":5,"count":3}, "alarms":[{"before":360}] }'
+    $lastDay = ConvertTo-WtTestItem '{ "id":"last", "kind":"event", "start":{"date":"2028-01-31","time":null}, "repeat":{"freq":"monthly","monthDay":-1,"count":3}, "alarms":[] }'
+    $thread = [Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture
+    $snapshots = @()
+    try {
+        foreach ($culture in 'ko-KR', 'en-US', 'th-TH', 'ar-SA', 'ja-JP') {
+            $thread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($culture)
+            $f = ConvertFrom-WtScheduleItem $fifth; $l = ConvertFrom-WtScheduleItem $lastDay
+            $fk = Get-WtTestKeys (Get-WtScheduleOccurrences @($f) (& $d '2026-01-01') (& $d '2026-12-31'))
+            $lk = Get-WtTestKeys (Get-WtScheduleOccurrences @($l) (& $d '2028-01-01') (& $d '2028-03-31'))
+            $al = Get-WtScheduleAlarms -Now '2026-03-29T18:00:00+09:00' -Previous '2026-03-29T17:59:59+09:00' -Entries @($f)
+            $snapshots += "$fk|$lk|$($al.Alarms.Key -join ',')"
+        }
+    } finally { $thread.CurrentCulture = $oldCulture }
+    $expected2a = 'fifth@2026-03-30,fifth@2026-06-29,fifth@2026-08-31|last@2028-01-31,last@2028-02-29,last@2028-03-31|fifth@2026-03-30/360'
+    Assert-WtTest '일정 2a 문화권 5개: 다섯째 요일 · 윤년 말일 · 하루 종일 전날 알람 기대값 동일' (@($snapshots | Where-Object { $_ -cne $expected2a }).Count -eq 0) ($snapshots -join "`n")
+    $hidden = Copy-WtItem $fifth; Set-WtField $hidden 'deleted' $at
+    $future = Copy-WtItem $fifth; $future.kind = 'future'
+    $a = Get-WtScheduleAlarms -Now '2026-03-29T18:00:00+09:00' -Previous '2026-03-29T17:59:59+09:00' -Entries @((ConvertFrom-WtScheduleItem $hidden), (ConvertFrom-WtScheduleItem $future))
+    Assert-WtTest '알람: 지운 항목 · 읽기 전용 항목 제외' (-not $a.Alarms.Count)
+
+    $test = New-WtTestData 'schedule-preserve-edit'; $tests.Add($test)
+    Copy-WtTestFixture 'v2-future.json'
+    $data = Get-WtScheduleData
+    $originalItems = Get-WtTestJson @($data.Items | Select-Object -Skip 1)
+    $r = Save-WtScheduleItem $data.Store @{ alarms = @(@{ before = 15 }); note = '알람만 고침' } -Id $data.Items[0].id -At $at
+    Assert-WtTest '일정 공개 편집: 알람 before를 바꿔도 sound · 모르는 알람 · 다른 읽기 전용 항목 보존' ($r.Success -and
+        $r.Store.Items[0].alarms[0].sound -ceq 'chime' -and $r.Store.Items[0].alarms[0].before -eq 15 -and $r.Store.Items[0].alarms[1].at -ceq '2026-10-29T08:00' -and
+        (Get-WtTestJson @($r.Store.Items | Select-Object -Skip 1)) -ceq $originalItems) $r.Reason
+    $r = Save-WtScheduleItem $r.Store @{ alarms = @() } -Id $r.Id -At $at
+    Assert-WtTest '일정 알람 끄기: before만 null, 더 새 앱의 칸은 그대로' ($r.Success -and $null -eq $r.Store.Items[0].alarms[0].before -and $r.Store.Items[0].alarms[0].sound -ceq 'chime' -and
+        $r.Store.Items[0].alarms[1].at -ceq '2026-10-29T08:00')
+    $r = Save-WtScheduleItem $r.Store @{ start = @{ date = '2026-11-02'; time = '09:00' }; repeat = @{ freq = 'weekly'; days = @('mon'); count = 3 } } -At $at
+    $resetId = $r.Id
+    $r = Set-WtScheduleOccurrence $r.Store $resetId '2026-11-09' -Patch @{ title = '임시 제목' } -At $at
+    $r = Set-WtScheduleOccurrence $r.Store $resetId '2026-11-09' -Skip -At $at
+    $r = Set-WtScheduleOccurrence $r.Store $resetId '2026-11-09' -Reset -At $at
+    $resetItem = @($r.Store.Items | Where-Object id -ceq $resetId)[0]
+    Assert-WtTest '일정 회차 Reset: skip · changes 예외를 모두 지우고 원래 회차 되돌림' ($r.Success -and @($resetItem.repeat.skip).Count -eq 0 -and
+        @($resetItem.repeat.changes.PSObject.Properties).Count -eq 0 -and @(Get-WtScheduleOccurrences @((ConvertFrom-WtScheduleItem $resetItem)) (& $d '2026-11-09') (& $d '2026-11-09')).Count -eq 1) $r.Reason
+
     if (Test-WtTestWpf) {
         $test = New-WtTestData 'schedule-view'; $tests.Add($test)
         [void][System.IO.Directory]::CreateDirectory($test.Legacy)

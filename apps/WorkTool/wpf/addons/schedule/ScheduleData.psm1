@@ -93,6 +93,7 @@ function Test-WtSchObject($Value) { $null -ne $Value -and $Value -isnot [string]
 
 # 객체의 칸 이름 · 값 쌍. 저장 파일에서 읽은 객체(PSCustomObject)와 앱이 만든 해시 테이블을 같게 다룬다
 function Get-WtSchPairs($Object) {
+    if ($null -eq $Object) { return }
     if ($Object -is [System.Collections.IDictionary]) { foreach ($k in @($Object.Keys)) { [pscustomobject]@{ Name = [string]$k; Value = $Object[$k] } } }
     else { foreach ($p in @($Object.PSObject.Properties)) { [pscustomobject]@{ Name = $p.Name; Value = $p.Value } } }
 }
@@ -138,10 +139,10 @@ function Read-WtSchAlarms($Alarms) {
     foreach ($a in @($Alarms)) {
         if ($null -eq $a) { continue }
         if (-not (Test-WtSchObject $a)) { return @{ List = @(); Problem = "알람 모양이 틀렸습니다: '$a'" } }
-        $b = $a.PSObject.Properties['before']
-        if (-not $b -or $null -eq $b.Value) { continue }
-        $m = ConvertFrom-WtWhole $b.Value $script:limits.before[0] $script:limits.before[1]
-        if ($null -eq $m) { return @{ List = @(); Problem = "알람을 읽지 못했습니다(0~$($script:limits.before[1])분 정수): '$($b.Value)'" } }
+        $b = Get-WtField $a 'before'
+        if ($null -eq $b) { continue }
+        $m = ConvertFrom-WtWhole $b $script:limits.before[0] $script:limits.before[1]
+        if ($null -eq $m) { return @{ List = @(); Problem = "알람을 읽지 못했습니다(0~$($script:limits.before[1])분 정수): '$b'" } }
         $list.Add([int]$m)
     }
     @{ List = $list.ToArray(); Problem = '' }
@@ -273,6 +274,8 @@ function ConvertFrom-WtScheduleItem($Item) {
         $entryView = [pscustomobject]$e
         foreach ($p in @(Get-WtSchPairs $e.Repeat.RawChanges)) {
             if ($null -eq (ConvertFrom-WtDateText $p.Name)) { $problem = "바꾼 회차 날짜를 읽지 못했습니다: '$($p.Name)'"; break }
+            $original = ConvertFrom-WtDateText $p.Name
+            if ($e.Repeat.Skip.Contains($p.Name) -or -not (Get-WtRepeatDates $e.Repeat $e.Start $original $original).Count) { continue }
             $c = Read-WtSchChange $entryView $p.Name $p.Value
             if ($c.Problem) { $problem = $c.Problem; break }
             $e.Repeat.Changes[$p.Name] = $c
@@ -590,6 +593,236 @@ function Import-WtScheduleLegacy([string]$Folder) {
 # 마지막 가져오기의 합친 결과 (Added · Updated · Unchanged · KeptDeleted · Conflicts · Missing · Duplicates)
 function Get-WtScheduleLastImport { $script:lastImport }
 
+# ---- 편집 (화면 없음) -------------------------------------------------------------------------
+
+# 알람의 아는 칸을 고칠 때 소리 등 모르는 칸은 남긴다. 줄을 줄이면 남은 before만 끈다.
+function Merge-WtSchPatch($Target, $Patch) {
+    $regular = [ordered]@{}
+    foreach ($pair in @(Get-WtSchPairs $Patch)) {
+        if ($pair.Name -cne 'alarms') { $regular[$pair.Name] = $pair.Value; continue }
+        $read = Read-WtSchAlarms $pair.Value
+        if ($read.Problem) { return $read.Problem }
+        $incoming = @($pair.Value | Where-Object { $null -ne $_ })
+        $existing = @()
+        if ($null -ne $Target.alarms) { $existing = @($Target.alarms) }
+        $alarms = [System.Collections.Generic.List[object]]::new()
+        for ($i = 0; $i -lt [Math]::Max($incoming.Count, $existing.Count); $i++) {
+            $alarm = if ($i -lt $existing.Count -and (Test-WtRecordObject $existing[$i])) { Copy-WtItem $existing[$i] } else { [pscustomobject]@{} }
+            if ($i -lt $incoming.Count) { Merge-WtRecordPatch $alarm $incoming[$i] }
+            elseif ($null -ne (Get-WtField $alarm 'before')) { Set-WtField $alarm 'before' $null }
+            $alarms.Add($alarm)
+        }
+        Set-WtField $Target 'alarms' $alarms.ToArray()
+    }
+    Merge-WtRecordPatch $Target $regular
+    ''
+}
+
+function Get-WtSchRuleKey($Entry) {
+    if (-not $Entry.Repeat) { return '' }
+    $r = $Entry.Repeat
+    @($r.Freq, $r.Interval, (@($r.Days | ForEach-Object { [int]$_ } | Sort-Object) -join ','), $r.MonthDay, $r.Nth,
+        $Entry.Start.Ticks, $Entry.AllDay) -join '|'
+}
+
+# Patch: title · note · start · end · repeat · alarms · tags. Id 없으면 새 일정.
+# FromDate는 원래 회차 날짜(이 회차부터 끝까지). 결과: Success · Reason · Id · Store(다음 저장 핸들).
+function Save-WtScheduleItem($Store, $Patch, [string]$Id, [string]$FromDate, [string]$At = (Get-WtStamp)) {
+    $fail = [pscustomobject]@{ Success = $false; Reason = ''; Id = $Id; Store = $Store }
+    if ($Store.Name -cne 'schedule') { $fail.Reason = '일정 저장소 핸들이 아닙니다'; return $fail }
+    if (-not (ConvertFrom-WtStamp $At)) { $fail.Reason = '앱 시각을 읽지 못했습니다'; return $fail }
+    if (-not (Test-WtRecordObject $Patch)) { $fail.Reason = '바꿀 칸은 객체여야 합니다'; return $fail }
+    $pairs = @(Get-WtSchPairs $Patch)
+    if (@($pairs | Where-Object { $_.Name -cnotin @('title', 'note', 'start', 'end', 'repeat', 'alarms', 'tags') }).Count) {
+        $fail.Reason = '편집할 수 없는 칸입니다'; return $fail
+    }
+    $edit = Get-WtRecordEdit $Store $Id
+    if (-not $edit.Success) { $fail.Reason = $edit.Reason; return $fail }
+    $old = $null
+    if ($Id) {
+        $old = ConvertFrom-WtScheduleItem (Copy-WtItem $edit.Item)
+        if ($old.State -in 'readonly', 'deleted') { $fail.Reason = '읽기 전용 · 지운 항목은 편집할 수 없습니다'; return $fail }
+    } else {
+        $edit.Item = [pscustomobject][ordered]@{ id = New-WtId; kind = 'event'; title = ''; note = ''; start = $null; end = $null
+            repeat = $null; alarms = @(); tags = @(); rev = 0; created = $At; updated = $At; deleted = $null; origin = $null }
+    }
+    $patchProblem = Merge-WtSchPatch $edit.Item $Patch
+    if ($patchProblem) { $fail.Reason = $patchProblem; return $fail }
+    foreach ($field in 'title', 'note') { Set-WtField $edit.Item $field ([string](Get-WtField $edit.Item $field)) }
+    $entry = ConvertFrom-WtScheduleItem $edit.Item
+    if ($entry.State -ne 'ok') { $fail.Reason = $entry.Problem; return $fail }
+    if ($entry.Repeat) {
+        foreach ($key in @($entry.Repeat.Changes.Keys)) {
+            $timing = $entry.Repeat.Changes[$key].Timing
+            if ($timing -and -not $timing.AllDay -and $timing.Start.Date -ne $timing.End.Date) {
+                $oldTiming = if ($old -and $old.Repeat) { $old.Repeat.Changes[$key].Timing } else { $null }
+                if (-not $oldTiming -or $oldTiming.Start -ne $timing.Start -or $oldTiming.End -ne $timing.End) {
+                    $fail.Reason = '날짜를 넘는 시각 기록은 근태의 업무외시간으로 적으세요'; return $fail
+                }
+            }
+        }
+    }
+    if (-not $entry.AllDay -and $entry.End.Date -ne $entry.Start.Date -and
+        (-not $old -or $old.Start -ne $entry.Start -or $old.End -ne $entry.End)) {
+        $fail.Reason = '날짜를 넘는 시각 기록은 근태의 업무외시간으로 적으세요'; return $fail
+    }
+    $split = $old -and ((Get-WtSchRuleKey $old) -cne (Get-WtSchRuleKey $entry)) -and ($old.Repeat -or $entry.Repeat)
+    if ($FromDate) { $split = $true }
+    if ($split) {
+        if (-not $old -or $old.State -ne 'ok') { $fail.Reason = '정상인 계열만 나눌 수 있습니다'; return $fail }
+        $cut = if ($FromDate) { ConvertFrom-WtDateText $FromDate } else { $old.Start.Date }
+        if (-not $cut -or ($old.Repeat -and -not (Get-WtRepeatDates $old.Repeat $old.Start $cut $cut).Count) -or
+            (-not $old.Repeat -and $cut -ne $old.Start.Date)) { $fail.Reason = '반복에 있는 원래 회차 날짜를 고르세요'; return $fail }
+        # 시작을 따로 바꾸지 않았으면 고른 회차로 옮기고 길이는 유지한다.
+        if ($entry.Start -eq $old.Start) {
+            $shift = $cut - $old.Start.Date
+            Set-WtField $edit.Item.start 'date' (ConvertTo-WtDateText ($entry.Start + $shift))
+            if ($null -ne $edit.Item.end) { Set-WtField $edit.Item.end 'date' (ConvertTo-WtDateText ($entry.End + $shift)) }
+        }
+        if ($edit.Item.repeat) {
+            Set-WtField $edit.Item.repeat 'skip' @()
+            Set-WtField $edit.Item.repeat 'changes' ([pscustomobject]@{})
+            # 횟수를 따로 고치지 않았다면 앞의 원래 회차 수만큼 뺀다(skip도 회차다).
+            $rp = Get-WtField $Patch 'repeat'
+            $hasCount = @(Get-WtSchPairs $rp | Where-Object Name -ceq 'count').Count -gt 0
+            if ($old.Repeat -and $null -ne $old.Repeat.Count -and -not $hasCount -and $cut -gt $old.Start.Date) {
+                $before = (Get-WtRepeatDates $old.Repeat $old.Start $old.Start $cut.AddDays(-1)).Count
+                Set-WtField $edit.Item.repeat 'count' ([Math]::Max(1, $old.Repeat.Count - $before))
+            }
+        }
+        $previous = Copy-WtItem $old.Item
+        $hasPrevious = $old.Repeat -and $cut -gt $old.Start.Date -and (Get-WtRepeatDates $old.Repeat $old.Start $old.Start $cut.AddDays(-1)).Count -gt 0
+        if ($hasPrevious) {
+            Set-WtField $previous.repeat 'until' (ConvertTo-WtDateText $cut.AddDays(-1))
+            Set-WtField $previous.repeat 'count' $null
+            Set-WtItemEdited $previous $At
+        } else { [void](Set-WtRecordDeleted $previous $true $At) }
+        $edit.Items[$edit.Index] = $previous
+        Set-WtField $edit.Item 'id' (New-WtId)
+        Set-WtField $edit.Item 'origin' ([pscustomobject]@{ from = 'split'; id = $Id; at = $At })
+        Set-WtField $edit.Item 'created' $At
+        Set-WtField $edit.Item 'rev' 0
+        $entry = ConvertFrom-WtScheduleItem $edit.Item
+        if ($entry.State -ne 'ok') { $fail.Reason = $entry.Problem; return $fail }
+        $edit.Items += , $edit.Item
+    } elseif ($Id) { Set-WtItemEdited $edit.Item $At }
+    else { $edit.Items += , $edit.Item }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At))
+    $script:cache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $edit.Item.id; Store = $next }
+}
+
+function Set-WtScheduleDeleted($Store, [string]$Id, [bool]$Deleted = $true, [string]$At = (Get-WtStamp)) {
+    $edit = Get-WtRecordEdit $Store $Id
+    $reason = $edit.Reason
+    if ($Store.Name -cne 'schedule') { $reason = '일정 저장소 핸들이 아닙니다' }
+    if (-not $Id) { $reason = 'id를 고르세요' }
+    if (-not $reason -and (ConvertFrom-WtScheduleItem $edit.Item).State -eq 'readonly') { $reason = '읽기 전용 항목입니다' }
+    if (-not $reason) { $reason = Set-WtRecordDeleted $edit.Item $Deleted $At }
+    if (-not $reason -and -not $Deleted -and (ConvertFrom-WtScheduleItem $edit.Item).State -ne 'ok') { $reason = '내용을 복구할 수 없는 항목입니다' }
+    if ($reason) { return [pscustomobject]@{ Success = $false; Reason = $reason; Id = $Id; Store = $Store } }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At))
+    $script:cache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $Id; Store = $next }
+}
+
+# 원래 회차 날짜 하나를 건너뛰거나 바꾼다. Reset이면 그 예외만 없앤다.
+function Set-WtScheduleOccurrence($Store, [string]$Id, [string]$OriginalDate, $Patch, [switch]$Skip, [switch]$Reset, [string]$At = (Get-WtStamp)) {
+    $edit = Get-WtRecordEdit $Store $Id
+    $reason = $edit.Reason
+    if ($Store.Name -cne 'schedule' -or -not (ConvertFrom-WtStamp $At)) { $reason = '일정 핸들 · 앱 시각을 확인하세요' }
+    $e = if ($edit.Success -and $Id) { ConvertFrom-WtScheduleItem $edit.Item } else { $null }
+    $day = ConvertFrom-WtDateText $OriginalDate
+    if (-not $e -or $e.State -ne 'ok' -or -not $e.Repeat -or -not $day) { $reason = '정상인 반복 회차를 고르세요' }
+    elseif (-not (Get-WtRepeatDates $e.Repeat $e.Start $day $day).Count) { $reason = '반복에 없는 회차입니다' }
+    if (-not $Skip -and -not $Reset) {
+        if (-not (Test-WtRecordObject $Patch) -or @(Get-WtSchPairs $Patch | Where-Object { $_.Name -cnotin @('start', 'end', 'title', 'note', 'alarms') }).Count) {
+            $reason = '회차에서 바꿀 수 없는 칸입니다'
+        }
+    }
+    if ($reason) { return [pscustomobject]@{ Success = $false; Reason = $reason; Id = $Id; Store = $Store } }
+    $r = $edit.Item.repeat
+    $skipDates = @($r.skip | Where-Object { $null -ne $_ -and $_ -cne $OriginalDate })
+    $changes = [ordered]@{}
+    foreach ($p in @(Get-WtSchPairs $r.changes)) { $changes[$p.Name] = $p.Value }
+    if ($Reset) { $changes.Remove($OriginalDate) }
+    elseif ($Skip) { $skipDates += $OriginalDate }
+    else {
+        if (-not $changes.Contains($OriginalDate)) { $changes[$OriginalDate] = [pscustomobject]@{} }
+        $patchProblem = Merge-WtSchPatch $changes[$OriginalDate] $Patch
+        if ($patchProblem) { return [pscustomobject]@{ Success = $false; Reason = $patchProblem; Id = $Id; Store = $Store } }
+        $c = Read-WtSchChange $e $OriginalDate $changes[$OriginalDate]
+        if ($c.Problem) { return [pscustomobject]@{ Success = $false; Reason = $c.Problem; Id = $Id; Store = $Store } }
+        if ($c.Timing -and -not $c.Timing.AllDay -and $c.Timing.Start.Date -ne $c.Timing.End.Date) {
+            return [pscustomobject]@{ Success = $false; Reason = '날짜를 넘는 시각 기록은 근태의 업무외시간으로 적으세요'; Id = $Id; Store = $Store }
+        }
+    }
+    Set-WtField $r 'skip' $skipDates
+    Set-WtField $r 'changes' (Copy-WtItem $changes)
+    Set-WtItemEdited $edit.Item $At
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At))
+    $script:cache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $Id; Store = $next }
+}
+
+# ---- 알람 (앱이 켜져 있는 동안, 소리 · 타이머 없음) --------------------------------------------
+
+function Open-WtScheduleAlarmStore { Open-WtStore -Name 'schedule-state' -Schema 1 }
+
+# (Previous, Now] 현지 벽시계 구간. Previous 없으면 첫 실행이라 지난 알람은 울리지 않는다.
+# 상태는 회차 키 + before로 구분한다(한 회차의 여러 알람이 서로 막지 않게).
+function Get-WtScheduleAlarms($Now, $Previous, [object[]]$Entries, $StateStore) {
+    $r = [pscustomobject]@{ Success = $true; Reason = ''; Alarms = @() }
+    $nowAt = ConvertFrom-WtStamp ([string]$Now)
+    $prevAt = ConvertFrom-WtStamp ([string]$Previous)
+    if (-not $nowAt -or ($Previous -and -not $prevAt)) { $r.Success = $false; $r.Reason = '앱 시각을 읽지 못했습니다'; return $r }
+    if (-not $prevAt) { return $r }
+    if ($nowAt -lt $prevAt -or $nowAt.DateTime -lt $prevAt.DateTime) { $r.Success = $false; $r.Reason = '지금 시각이 앞서 본 시각보다 이릅니다'; return $r }
+    if ($StateStore -and $StateStore.State -eq 'error') { $r.Success = $false; $r.Reason = $StateStore.Error; return $r }
+    $fired = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($i in @($StateStore.Items)) { if ($i.key) { [void]$fired.Add([string]$i.key) } }
+    $list = [System.Collections.Generic.List[object]]::new()
+    # 366일 앞의 일정도 미리 알람을 줄 수 있다. 옮긴 회차는 기존 펼치기 함수가 찾는다.
+    $lo = $prevAt.DateTime.Date
+    $hi = $nowAt.DateTime.Date.AddDays(366)
+    if ($hi -gt [datetime]::new(2199, 12, 31)) { $hi = [datetime]::new(2199, 12, 31) }
+    foreach ($o in @(Get-WtScheduleOccurrences $Entries $lo $hi)) {
+        foreach ($before in @($o.Alarms)) {
+            $due = $o.Start.AddMinutes(-$before)
+            $key = "$($o.Key)/$before"
+            if ($due -gt $prevAt.DateTime -and $due -le $nowAt.DateTime -and $fired.Add($key)) {
+                $list.Add([pscustomobject]@{ Key = $key; OccurrenceKey = $o.Key; Id = $o.Entry.Id; OriginalDate = ConvertTo-WtDateText $o.Original
+                    Before = $before; Due = $due; Title = $o.Title; Note = $o.Note; Start = $o.Start })
+            }
+        }
+    }
+    $r.Alarms = @($list | Sort-Object Due, Key -Culture 'ko-KR')
+    $r
+}
+
+# 실제 알림을 받아들인 뒤에만 호출한다. 실패 · 낡은 핸들은 Save-WtStore의 예외 그대로다.
+function Save-WtScheduleAlarms($Store, [object[]]$Alarms, [string]$At = (Get-WtStamp)) {
+    $now = ConvertFrom-WtStamp $At
+    if ($Store.Name -cne 'schedule-state' -or -not $now) { return [pscustomobject]@{ Success = $false; Reason = '알람 상태 핸들 · 시각을 확인하세요'; Store = $Store } }
+    $items = [System.Collections.Generic.List[object]]::new()
+    $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($i in @($Store.Items)) {
+        $atValue = ConvertFrom-WtStamp ([string]$i.at)
+        if ($atValue -and $atValue -lt $now.AddDays(-7)) { continue }
+        $items.Add((Copy-WtItem $i))
+        if ($i.key) { [void]$keys.Add([string]$i.key) }
+    }
+    foreach ($a in @($Alarms)) {
+        if (-not $a.Key -or -not $a.OccurrenceKey -or $null -eq (ConvertFrom-WtWhole $a.Before 0 527040)) {
+            return [pscustomobject]@{ Success = $false; Reason = '알람 결과 목록을 넘기세요'; Store = $Store }
+        }
+        if ($keys.Add([string]$a.Key)) { $items.Add([pscustomobject]@{ key = [string]$a.Key; occurrence = [string]$a.OccurrenceKey; before = $a.Before; at = $At }) }
+    }
+    $next = Save-WtStore $Store $items.ToArray()
+    [pscustomobject]@{ Success = $true; Reason = ''; Store = $next }
+}
+
 Export-ModuleMember -Function Open-WtScheduleStore, Save-WtScheduleItems, Get-WtScheduleData, ConvertFrom-WtScheduleItem,
     Get-WtRepeatDates, Get-WtScheduleOccurrences, Get-WtScheduleDays, ConvertFrom-WtScheduleRow, Update-WtScheduleSchema,
-    Import-WtScheduleLegacy, Get-WtScheduleLastImport
+    Import-WtScheduleLegacy, Get-WtScheduleLastImport, Save-WtScheduleItem, Set-WtScheduleDeleted, Set-WtScheduleOccurrence,
+    Open-WtScheduleAlarmStore, Get-WtScheduleAlarms, Save-WtScheduleAlarms

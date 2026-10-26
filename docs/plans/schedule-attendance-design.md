@@ -1,7 +1,7 @@
 # 일정 · 근태 데이터 설계 — 형식 · 이전 · 공통 규칙
 
 - 작성: 2026-10-26
-- 상태: **1단계(데이터 형식 · 이전) 구현됨, 2단계(기능 · 화면) 전 검토용.** 화면은 지금도 보기 전용입니다. 2026-10-26 형식 검토(막음 7 · 권고 3)와 재확인(덜 닫힘 5 · 새 권고 1)을 반영했습니다: 1.9 저장 계약(낙관적 잠금 · 끈질긴 거부), 1.5 `rev` · id 비교, 7.4 합치기(목록 원소 소유 · 같은 줄), 1.4 숫자 범위, 1.3 · 1.6 · 2.3의 계약.
+- 상태: **1단계(데이터 형식 · 이전)와 2a(기능 로직 · 등록 목록) 구현, 2b(화면) 전 검토용.** 화면은 지금도 보기 전용입니다. 2026-10-26 형식 검토(막음 7 · 권고 3)와 재확인(덜 닫힘 5 · 새 권고 1)을 반영했습니다: 1.9 저장 계약(낙관적 잠금 · 끈질긴 거부), 1.5 `rev` · id 비교, 7.4 합치기(목록 원소 소유 · 같은 줄), 1.4 숫자 범위, 1.3 · 1.6 · 2.3의 계약. 2a 호출 약속은 9.1입니다.
 - 범위: WorkTool WPF 일정 · 근태 탭이 저장하는 파일의 형식, 버전을 올리고 옛 파일을 읽는 규칙, 예전 WinForms 데이터 가져오기, 휴무일 · 달력 표시 자리.
 - 경로: `core/` · `addons/` · `tests/`로 시작하는 경로는 `apps/WorkTool/wpf/` 안입니다. 그 밖의 경로는 저장소 루트 기준입니다. 근거가 된 제안서는 로컬 `.work/plans/schedule-attendance-proposal.md`(저장소에 없음)입니다.
 - 용어
@@ -348,14 +348,14 @@ RFC 5545(iCalendar) 반복 규칙의 일부를 JSON 칸으로 씁니다. `FREQ=.
 
 - 등록: 탭이 `Register-WtAddon -CalendarItems { param([datetime]$From, [datetime]$To) … }`를 줍니다(홈 카드 `-HomeCard`와 같은 방식).
 - 돌려주는 항목 하나: `Date`(그날) · `Text`(예: `출근 08:47`) · `Kind`(탭 안 코드) · `Style`(공통 UI 모듈의 쓰임새 이름) · `AllDay` · `Time`(`HH:mm` 또는 `$null`) · `Id`(원본 id) · `Page`(누르면 갈 탭 id).
-- 모으기: 코어 `Get-WtCalendarItems -From -To -Exclude <부르는 탭 id>`가 휴무일(5장) + 등록한 탭들의 항목을 모읍니다. 탭 하나가 실패해도 그 탭 자리에 오류 한 줄만 두고 나머지는 보여 줍니다.
+- 모으기: 코어 `Get-WtCalendarItems -From -To -Exclude <부르는 탭 id>`가 휴무일(5장) + 등록한 탭들의 항목을 모읍니다. 결과의 `Items`는 모은 목록, `Days`는 `{ Date, Items }` 날짜별 목록, `Errors`는 `{ Source, Page, Reason }` 실패 출처입니다. 화면은 실패 출처마다 오류 한 줄을 표시하고 나머지는 그립니다.
 - 코어에는 탭 이름을 쓰지 않습니다. 코어 검사는 가짜 탭을 등록해서 합니다.
 - 고칠 파일: 코어 `Addons.psm1` · `Calendar.psm1`, 근태 `Attendance.psm1`(등록), 일정 `Schedule.psm1`(그리기), 검사 `Test-Core.ps1` · 두 탭 검사.
 
 ### 6.2 알람 상태 파일
 
 - 울린 알람 · 다시 알림은 사람이 쓴 데이터와 다른 파일(`schedule-state.json`, 일정 탭 소유)에 둡니다. 잃어도 데이터는 멀쩡합니다.
-- 회차 키 `"<id>@<원래 날짜>"`로 울린 시각을 적고, 7일 지난 것은 지웁니다.
+- 회차 키 `"<id>@<원래 날짜>"`와 알람의 `before`를 함께 써서 울린 시각을 적고, 7일 지난 것은 지웁니다. 여러 알람이 서로 막지 않게 하는 세부 약속은 9.1입니다.
 - 예전 CSV의 `LastAlarm`은 옮기지 않습니다(`origin.row`에만 남음). 처음 켤 때 지난 회차는 울리지 않습니다.
 
 ### 6.3 2차 후보가 형식을 바꾸지 않는지
@@ -465,9 +465,9 @@ RFC 5545(iCalendar) 반복 규칙의 일부를 JSON 칸으로 씁니다. `FREQ=.
 정할 것
 
 1. 휴무일 편집 화면의 자리: 설정 화면(코어, 추천) / 일정 탭(달력에서 바로) / 둘 다(일정 탭은 코어 함수만 부름).
-2. 공휴일 붙여 넣기 목록의 모양: 한 줄에 `2026-10-09 한글날`(추천) 등.
+2. 공휴일 붙여 넣기 목록의 모양: 2a에서 한 줄에 `2026-10-09 한글날`로 정했습니다(9.1).
 3. 「다시 가져오기」 확인 문구: 지금은 "새 버전에서 고친 내용은 사라집니다"(메모 기준)입니다. 일정 · 근태는 합치기라 탭마다 문구가 달라야 합니다(`core/Pages.psm1`).
-4. 근태 월 보고 복사의 열 순서.
+4. 근태 월 보고 복사의 열 순서: 2a에서 정했습니다(9.1).
 
 2단계 고칠 파일 수 예상(묶음 파일 제외, 검사 포함)
 
@@ -479,6 +479,33 @@ RFC 5545(iCalendar) 반복 규칙의 일부를 JSON 칸으로 씁니다. `FREQ=.
 - 새 모양(달력 칸 등)이 필요하면 `core/Ui.psm1` → 0~1개
 - 문서: 이 문서 · `apps/WorkTool/wpf/README.md` → 2개
 - 합계: 겹치는 파일을 한 번씩 세면 12~13개(코드 10~11 + 문서 2). 디자인 개편 때는 화면 파일만 바뀝니다.
+
+### 9.1 2a — 화면에서 부를 함수 (2026-10-26)
+
+schema와 고정 시험 자료는 그대로입니다. 편집 함수는 먼저 복사한 목록을 검사하고 핸들로 저장합니다. 결과는 `{ Success, Reason, Id, Store }`입니다(휴무일은 `Id` 없음). 성공하면 다음 편집에 결과의 새 `Store`를 씁니다. 입력 오류는 `Success = false`와 이유로 돌려주고, 저장 거부 · 낡은 핸들 예외는 그대로 올립니다. 디스크 쓰기 실패의 보유 · 재시도는 1.9와 같습니다. 앱 시각 `At`은 1.3의 시간대 붙은 문자열이고 생략하면 지금입니다.
+
+- 일정, `addons/schedule/ScheduleData.psm1`
+  - `Save-WtScheduleItem Store Patch [-Id] [-FromDate] [-At]`: 없으면 추가, 있으면 편집. `Patch`는 `title/note/start/end/repeat/alarms/tags` 중 적은 칸만 바꿉니다. 알람 목록은 자리별로 고치며 모르는 칸을 남깁니다. 목록을 줄이거나 `alarms = @()`를 주면 남은 알람의 `before`만 `null`로 꺼 둡니다. 반복 규칙 변경은 2.3대로 새 계열로 나눕니다. `FromDate`는 실제 표시 날짜가 아닌 **원래 회차 날짜**입니다. 생략한 규칙 변경은 첫 회차부터 나눕니다. 나눈 새 계열의 `count`를 따로 적지 않았다면 앞 회차 수(skip 포함)를 뺍니다.
+  - `Set-WtScheduleOccurrence Store Id OriginalDate [-Patch] [-Skip | -Reset] [-At]`: 회차만 바꾸기 · 빼기 · 예외 되돌리기입니다. `Patch`는 `start/end/title/note/alarms`만 받습니다. `start`만 바꾸면 길이를 유지합니다.
+  - `Set-WtScheduleDeleted Store Id [-Deleted false] [-At]`: 기본은 지운 표시, `false`면 90일 안 되살리기입니다. 정확히 90일이면 거부합니다. 읽기 전용 항목은 고치지 않습니다.
+  - 날짜를 넘는 시각 일정은 새로 만들지 않습니다(업무외시간 사용). 이미 저장된 기간 일정의 읽기 · 알람은 유지합니다.
+- 알람, 같은 모듈
+  - `Open-WtScheduleAlarmStore` → 별도 `schedule-state.json` 핸들(schema 1). `items` 하나는 `{ key: "<회차 키>/<before>", occurrence: "<회차 키>", before, at }`입니다. 원자료의 schema는 바뀌지 않습니다. 다시 알림은 이번에 구현하지 않았습니다.
+  - `Get-WtScheduleAlarms -Now -Previous -Entries [-StateStore]` → `{ Success, Reason, Alarms }`. `(Previous, Now]` 현지 벽시계 구간을 계산합니다. `Alarms` 하나는 `Key/OccurrenceKey/Id/OriginalDate/Before/Due/Title/Note/Start`입니다. `Due/Start`는 벽시계 `datetime`입니다. 첫 실행(`Previous` 없음)은 빈 목록, 시계가 뒤로 가면 이유를 돌려줍니다. 휴무일이어도 울립니다.
+  - `Save-WtScheduleAlarms Store Alarms [-At]` → `{ Success, Reason, Store }`. 알림을 받아들인 뒤 호출합니다. 울린 기록을 7일간 남겨 중복을 막습니다. 상태 파일을 못 읽으면 이유를 표시하고, 파일이 없어도 첫 실행에 지난 알람을 되살리지 않습니다. 타이머 · 소리 · 창은 2b가 맡습니다.
+- 근태, `addons/attendance/AttendanceData.psm1`
+  - `Save-WtAttendanceItem Store Patch [-Id] [-At]`: `Id` 생략은 추가, 있으면 `kind/start/end/place/note/tags/overtime/leave` 편집입니다. 직접 고친 점에서는 `at`을 지우고, 안 바꾼 점의 증거는 유지합니다.
+  - `Start-WtAttendanceRecord Store [-Kind work|overtime] [-How remote|onsite] [-Ref] [-Place] [-Note] [-At]`, `Stop-WtAttendanceRecord Store [-Kind] [-Id] [-At]`: 지금 출근/퇴근 · 업무외 시작/끝입니다. 벽시계와 `at`을 함께 찍습니다. 열린 같은 종류가 있으면 새 시작을 막고, 출근 버튼은 그날 이미 끝낸 출근도 중복으로 만들지 않습니다. 직접 입력으로 같은 날 여러 출근은 가능하며 요약에서는 하루입니다. 열린 기록이 여럿이면 끝낼 `Id`를 골라야 합니다.
+  - `Set-WtAttendanceDeleted`: 일정과 같은 지우기 · 되살리기 약속입니다. `Get-WtAttendanceSummary`의 `att-2`는 그대로 씁니다(3.3, 출장 설정 `attendance.tripDays`).
+  - `Get-WtAttendanceCalendarItems From To Entries`: 출근은 시작일, 휴가/출장은 걸친 날, 업무외는 실제 걸친 날마다 표시합니다(끝 0시는 앞날까지). `Attendance.psm1`은 이 함수를 코어 목록에 등록만 합니다. 화면 요소는 바꾸지 않았습니다.
+  - `Get-WtAttendanceReport Month Entries [-DayOff] [-TripDays]` → `{ Success, Reason, Text, Rows, Skipped, Summary }`. 출근/업무외는 시작한 달, 출장/휴가는 걸친 달입니다. 원래 기간을 그대로 적고 휴가 일수만 그 달 몫입니다. 확정 일수는 시작한 달에만 셉니다. 글은 탭 구분 · CRLF · 끝 줄바꿈 없음입니다. 열은 **종류/시작일/시작시각/종료일/종료시각/분/휴가일수/산정/장소/방식/관련번호/메모/상태**입니다. 빈 값은 빈 칸, 미완료 분은 빈 칸과 상태 글, 산정은 확정/잠정입니다. 자유 글의 탭/줄바꿈은 공백, 수식처럼 시작하는 글은 작은따옴표를 앞에 붙입니다. 클립보드는 호출하지 않습니다.
+- 휴무일, `core/Calendar.psm1`
+  - `Set-WtHolidayDate Store Date Kind [-Enabled false] [-Name] [-Note] [-At]`: 날짜 하나 · 종류 하나를 표시/해제합니다. 같은 날짜의 다른 종류는 남기며 같은 종류의 중복은 모두 해제합니다. 다시 표시는 새 id입니다(지운 id 재사용 안 함).
+  - `ConvertFrom-WtHolidayPaste Text Year` → `{ Success, Reason, Items, Errors, Year }`. 한 줄에 `2026-11-03 공휴일 이름`처럼 `yyyy-MM-dd`와 이름을 공백/탭으로 나눕니다. 빈 줄 무시, 날짜/이름이 같은 중복은 하나, 다른 이름의 같은 날짜 · 다른 해 · 틀린 줄은 `{ Line, Text, Reason }`입니다. `Import-WtHolidayPaste Store Text Year [-At]`는 오류나 빈 목록이면 저장하지 않고, 정상 목록이면 그해 `public`만 맞춥니다. 같은 날짜 기존 id · 모르는 칸 · 메모는 유지하고 빠진 날짜는 지운 표시입니다. 회사/개인 휴무 · 모르는 항목은 남습니다.
+- 달력 등록 목록, `core/Calendar.psm1` · `core/Addons.psm1`
+  - 탭은 `Register-WtAddon -CalendarItems { param([datetime]$From, [datetime]$To) ... }`로 등록합니다. 코어 출처는 `Register-WtCalendarSource Id CalendarItems [-Page]`입니다. 같은 id 재등록은 교체, 함수 `null`은 해제입니다. 휴무일은 `Calendar.psm1`이 직접 등록합니다.
+  - `Get-WtCalendarItems From To [-Exclude]`의 입력/항목은 6.1입니다. 끈 탭 · 제외한 탭은 호출하지 않으며 한 출처의 예외/잘못된 항목은 그 출처 오류로 격리합니다. 코어는 탭 이름을 알지 않습니다. `Style`은 기존 테마의 쓰임새 이름(`Att.Work/Att.Leave/Att.Trip/Att.Over`, 휴무일 `Sub`)입니다.
+- 검사: 탭별 `Test-Schedule.ps1` · `Test-Attendance.ps1`, 코어 `tests/Test-Core.ps1`. `-NoDesktop`은 WPF 화면/입력 · 활성 작업/업무 탭 · 전용 프로세스 강제 종료/GUI 실행 파일 검사를 제외하는 옵션입니다. 기본 전체 검사는 그대로입니다. 시험 데이터는 검사 실행이 만든 임시 폴더에만 둡니다.
 
 ## 10. 1단계에서 바꾼 파일
 

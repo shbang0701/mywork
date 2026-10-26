@@ -203,6 +203,11 @@ Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Order 30 -WarmUp
     -NewView { New-WtAttendanceView } `
     -Refresh { param($view) Update-WtAttendanceView } `
     -HomeCard { New-WtAttendanceHomeCard } `
+    -CalendarItems { param([datetime]$From, [datetime]$To)
+        $data = Get-WtAttendanceData
+        if ($data.Error) { throw $data.Error }
+        Get-WtAttendanceCalendarItems $From $To $data.Entries
+    } `
     -ImportLegacy { param($folder) Import-WtAttendanceLegacy $folder } `
     -Help '근태는 보기만 합니다. 기록 · 지금 출근은 2단계에서 옮깁니다.'
 

@@ -344,5 +344,159 @@ function Import-WtAttendanceLegacy([string]$Folder) {
 
 function Get-WtAttendanceLastImport { $script:lastImport }
 
+# ---- 편집 · 지금 기록 -------------------------------------------------------------------------
+
+# Patch: kind · start · end · place · note · tags · overtime · leave. Id 없으면 새 기록.
+# ClockPoint는 지금 기록 함수 전용(벽시계와 at을 함께 찍음). 직접 고친 점에서는 at을 지운다.
+function Save-WtAttendanceItem($Store, $Patch, [string]$Id, [string]$At = (Get-WtStamp), [string]$ClockPoint = '') {
+    $fail = [pscustomobject]@{ Success = $false; Reason = ''; Id = $Id; Store = $Store }
+    $now = ConvertFrom-WtStamp $At
+    if ($Store.Name -cne 'attendance') { $fail.Reason = '근태 저장소 핸들이 아닙니다'; return $fail }
+    if (-not $now) { $fail.Reason = '앱 시각을 읽지 못했습니다'; return $fail }
+    if (-not (Test-WtRecordObject $Patch)) { $fail.Reason = '바꿀 칸은 객체여야 합니다'; return $fail }
+    $names = if ($Patch -is [System.Collections.IDictionary]) { @($Patch.Keys) } else { @($Patch.PSObject.Properties.Name) }
+    if (@($names | Where-Object { $_ -cnotin @('kind', 'start', 'end', 'place', 'note', 'tags', 'overtime', 'leave') }).Count) {
+        $fail.Reason = '편집할 수 없는 칸입니다'; return $fail
+    }
+    if ($ClockPoint -cnotin @('', 'start', 'end')) { $fail.Reason = '찍을 점을 확인하세요'; return $fail }
+    $edit = Get-WtRecordEdit $Store $Id
+    if (-not $edit.Success) { $fail.Reason = $edit.Reason; return $fail }
+    $old = Copy-WtItem $edit.Item
+    if ($Id) {
+        if ((ConvertFrom-WtAttendanceItem $old).State -in 'readonly', 'deleted') { $fail.Reason = '읽기 전용 · 지운 항목은 편집할 수 없습니다'; return $fail }
+    } else {
+        $edit.Item = [pscustomobject][ordered]@{ id = New-WtId; kind = ''; start = $null; end = $null; place = ''; note = ''; tags = @()
+            rev = 0; created = $At; updated = $At; deleted = $null; origin = $null }
+    }
+    Merge-WtRecordPatch $edit.Item $Patch
+    foreach ($pointName in 'start', 'end') {
+        $point = Get-WtField $edit.Item $pointName
+        if (-not (Test-WtRecordObject $point)) { continue }
+        $oldPoint = Get-WtField $old $pointName
+        if ($ClockPoint -ceq $pointName) {
+            if ($point.date -cne (ConvertTo-WtDateText $now.DateTime) -or $point.time -cne $now.ToString('HH:mm', $script:inv)) {
+                $fail.Reason = '찍은 시각과 벽시계가 다릅니다'; return $fail
+            }
+            Set-WtField $point 'at' $At
+        } elseif ($oldPoint -and $point.date -ceq $oldPoint.date -and $point.time -ceq $oldPoint.time -and $null -ne $oldPoint.at) {
+            Set-WtField $point 'at' $oldPoint.at
+        } else { $point.PSObject.Properties.Remove('at') }
+    }
+    $entry = ConvertFrom-WtAttendanceItem $edit.Item
+    if ($entry.State -ne 'ok') { $fail.Reason = $entry.Problem; return $fail }
+    if (($entry.Kind -in 'work', 'overtime' -and -not $entry.HasTime) -or ($entry.Kind -in 'trip', 'leave' -and $entry.HasTime)) {
+        $fail.Reason = '출근 · 업무외는 시각, 출장 · 휴가는 날짜만 적으세요'; return $fail
+    }
+    foreach ($field in 'place', 'note') { Set-WtField $edit.Item $field ([string](Get-WtField $edit.Item $field)) }
+    if ($Id) { Set-WtItemEdited $edit.Item $At } else { $edit.Items += , $edit.Item }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now $now)
+    $script:cache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $edit.Item.id; Store = $next }
+}
+
+function Set-WtAttendanceDeleted($Store, [string]$Id, [bool]$Deleted = $true, [string]$At = (Get-WtStamp)) {
+    $edit = Get-WtRecordEdit $Store $Id
+    $reason = $edit.Reason
+    if ($Store.Name -cne 'attendance') { $reason = '근태 저장소 핸들이 아닙니다' }
+    if (-not $Id) { $reason = 'id를 고르세요' }
+    if (-not $reason -and (ConvertFrom-WtAttendanceItem $edit.Item).State -eq 'readonly') { $reason = '읽기 전용 항목입니다' }
+    if (-not $reason) { $reason = Set-WtRecordDeleted $edit.Item $Deleted $At }
+    if (-not $reason -and -not $Deleted -and (ConvertFrom-WtAttendanceItem $edit.Item).State -ne 'ok') { $reason = '내용을 복구할 수 없는 항목입니다' }
+    if ($reason) { return [pscustomobject]@{ Success = $false; Reason = $reason; Id = $Id; Store = $Store } }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At))
+    $script:cache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $Id; Store = $next }
+}
+
+# Kind work = 지금 출근, overtime = 업무외 시작. 열린 기록이 있거나 오늘 출근을 이미 찍었으면 이유로 돌려준다.
+function Start-WtAttendanceRecord($Store, [string]$Kind = 'work', [string]$How = '', [string]$Ref = '', [string]$Place = '', [string]$Note = '', [string]$At = (Get-WtStamp)) {
+    $now = ConvertFrom-WtStamp $At
+    $reason = ''
+    if (-not $now -or $Kind -cnotin @('work', 'overtime')) { $reason = '시각 · 기록 종류를 확인하세요' }
+    $entries = @(foreach ($i in @($Store.Items)) { ConvertFrom-WtAttendanceItem $i })
+    $open = @($entries | Where-Object { $_.State -eq 'ok' -and $_.Kind -ceq $Kind -and -not $_.HasEnd })
+    if ($open.Count) { $reason = '끝 시각 없는 기록을 먼저 마치거나 고치세요' }
+    if ($now -and $Kind -ceq 'work' -and @($entries | Where-Object { $_.State -eq 'ok' -and $_.Kind -ceq 'work' -and $_.StartDate -eq $now.Date }).Count) {
+        $reason = '오늘 출근 기록이 이미 있습니다'
+    }
+    if ($reason) { return [pscustomobject]@{ Success = $false; Reason = $reason; Id = ''; Store = $Store } }
+    $patch = @{ kind = $Kind; start = @{ date = ConvertTo-WtDateText $now.DateTime; time = $now.ToString('HH:mm', $script:inv) }; end = $null; place = $Place; note = $Note }
+    if ($Kind -ceq 'overtime') { $patch.overtime = @{ how = $(if ($How) { $How } else { $null }); ref = $Ref } }
+    Save-WtAttendanceItem $Store $patch -At $At -ClockPoint start
+}
+
+# Kind work = 지금 퇴근, overtime = 업무외 끝. 여러 열린 기록은 Id를 골라야 한다(추측하지 않음).
+function Stop-WtAttendanceRecord($Store, [string]$Kind = 'work', [string]$Id, [string]$At = (Get-WtStamp)) {
+    $now = ConvertFrom-WtStamp $At
+    $reason = ''
+    if (-not $now -or $Kind -cnotin @('work', 'overtime')) { $reason = '시각 · 기록 종류를 확인하세요' }
+    $open = @(foreach ($i in @($Store.Items)) {
+        $e = ConvertFrom-WtAttendanceItem $i
+        if ($e.State -eq 'ok' -and $e.Kind -ceq $Kind -and -not $e.HasEnd -and (-not $Id -or $e.Id -ceq $Id)) { $e }
+    })
+    if ($open.Count -ne 1) { $reason = '끝낼 기록 하나를 고르세요' }
+    if ($reason) { return [pscustomobject]@{ Success = $false; Reason = $reason; Id = $Id; Store = $Store } }
+    Save-WtAttendanceItem $Store @{ end = @{ date = ConvertTo-WtDateText $now.DateTime; time = $now.ToString('HH:mm', $script:inv) } } -Id $open[0].Id -At $At -ClockPoint end
+}
+
+# ---- 달력 · 월 보고 ---------------------------------------------------------------------------
+
+# 날짜 범위 안의 표시 항목. 출근은 시작한 날, 업무외는 실제 걸친 날(끝 0시는 앞날까지), 휴가 · 출장은 기간의 날마다.
+function Get-WtAttendanceCalendarItems([datetime]$From, [datetime]$To, [object[]]$Entries) {
+    foreach ($e in @($Entries)) {
+        if ($e.State -ne 'ok' -or $e.Kind -cnotin @('work', 'leave', 'trip', 'overtime')) { continue }
+        $last = $e.EndDate
+        if ($e.Kind -eq 'work') { $last = $e.StartDate }
+        elseif ($e.Kind -eq 'overtime' -and $e.HasEnd -and $e.End -gt $e.Start -and $e.End.TimeOfDay -eq [timespan]::Zero) { $last = $last.AddDays(-1) }
+        $a = if ($e.StartDate -lt $From.Date) { $From.Date } else { $e.StartDate }
+        $b = if ($last -gt $To.Date) { $To.Date } else { $last }
+        $label = switch ($e.Kind) { work { '출근' }; leave { '휴가' }; trip { '출장' }; overtime { '업무외' } }
+        $style = switch ($e.Kind) { work { 'Att.Work' }; leave { 'Att.Leave' }; trip { 'Att.Trip' }; overtime { 'Att.Over' } }
+        for ($day = $a; $day -le $b; $day = $day.AddDays(1)) {
+            $time = if ($e.HasTime -and $day -eq $e.StartDate) { $e.Start.ToString('HH:mm', $script:inv) } else { $null }
+            [pscustomobject]@{ Date = $day; Kind = $e.Kind; Text = $(if ($time) { "$label $time" } else { $label }); Style = $style
+                AllDay = $null -eq $time; Time = $time; Id = $e.Id; Page = 'attendance' }
+        }
+    }
+}
+
+# Excel 붙여 넣기용 글만 만든다. 탭 · 줄바꿈은 공백으로, 수식처럼 보이는 자유 글은 작은따옴표로 막는다.
+function ConvertTo-WtAttReportCell($Value) {
+    $text = ([string]$Value) -replace '[\t\r\n]+', ' '
+    if ($text -match '^\s*[=+@-]') { $text = "'$text" }
+    $text
+}
+
+# 열: 종류 · 시작일 · 시작시각 · 종료일 · 종료시각 · 분 · 휴가일수 · 산정 · 장소 · 방식 · 관련번호 · 메모 · 상태.
+# 출근/업무외는 시작한 달, 출장/휴가는 걸친 달. 휴가 일수만 월 몫이며 원래 기간은 그대로 적는다.
+function Get-WtAttendanceReport([datetime]$Month, [object[]]$Entries, $DayOff, [string]$TripDays) {
+    $first = [datetime]::new($Month.Year, $Month.Month, 1)
+    $last = $first.AddMonths(1).AddDays(-1)
+    if ($null -eq $DayOff) { $DayOff = Get-WtHolidayDates $first $last }
+    $summary = Get-WtAttendanceSummary $Month $Entries $DayOff $TripDays
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("종류`t시작일`t시작시각`t종료일`t종료시각`t분`t휴가일수`t산정`t장소`t방식`t관련번호`t메모`t상태")
+    $rows = @($Entries | Where-Object {
+        $_.State -eq 'ok' -and $(if ($_.Kind -in 'work', 'overtime') { $_.StartDate -ge $first -and $_.StartDate -le $last }
+            else { $_.StartDate -le $last -and $_.EndDate -ge $first })
+    } | Sort-Object Start, Id -Culture 'ko-KR')
+    foreach ($e in $rows) {
+        $kindName = switch ($e.Kind) { work { '출근' }; overtime { '업무외' }; trip { '출장' }; leave { '휴가' }; default { '기타' } }
+        $days = ''; $basis = ''; $status = ''
+        if ($e.Kind -eq 'leave') {
+            $days = (Get-WtLeaveDays $e $first $last $DayOff).ToString('0.##', $script:inv)
+            $basis = if ($null -ne $e.LeaveDays) { '확정' } else { '잠정' }
+        }
+        if ($e.Kind -in 'work', 'overtime' -and -not $e.HasEnd) { $status = if ($e.Kind -eq 'work') { '퇴근 기록 없음' } else { '끝 시각 없음' } }
+        $howName = switch ($e.How) { remote { '원격' }; onsite { '현장' }; default { '' } }
+        $cells = @($kindName, (ConvertTo-WtDateText $e.StartDate), $(if ($e.HasTime) { $e.Start.ToString('HH:mm', $script:inv) } else { '' }),
+            $(if ($e.HasEnd) { ConvertTo-WtDateText $e.EndDate } else { '' }), $(if ($e.HasEnd -and $e.HasTime) { $e.End.ToString('HH:mm', $script:inv) } else { '' }),
+            $(if ($null -ne $e.Minutes) { $e.Minutes.ToString($script:inv) } else { '' }), $days, $basis, $e.Place, $howName, $e.Ref, $e.Note, $status)
+        $lines.Add((@($cells | ForEach-Object { ConvertTo-WtAttReportCell $_ }) -join "`t"))
+    }
+    [pscustomobject]@{ Success = $true; Reason = ''; Text = ($lines -join "`r`n"); Rows = $rows.Count; Skipped = $summary.Skipped; Summary = $summary }
+}
+
 Export-ModuleMember -Function Open-WtAttendanceStore, Save-WtAttendanceItems, Get-WtAttendanceData, ConvertFrom-WtAttendanceItem,
-    Get-WtLeaveDays, Get-WtAttendanceSummary, ConvertFrom-WtAttendanceRow, Update-WtAttendanceSchema, Import-WtAttendanceLegacy, Get-WtAttendanceLastImport
+    Get-WtLeaveDays, Get-WtAttendanceSummary, ConvertFrom-WtAttendanceRow, Update-WtAttendanceSchema, Import-WtAttendanceLegacy, Get-WtAttendanceLastImport,
+    Save-WtAttendanceItem, Set-WtAttendanceDeleted, Start-WtAttendanceRecord, Stop-WtAttendanceRecord, Get-WtAttendanceCalendarItems, Get-WtAttendanceReport

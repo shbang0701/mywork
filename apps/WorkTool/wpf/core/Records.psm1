@@ -344,7 +344,53 @@ function Merge-WtLegacyItems([object[]]$Items, [object[]]$Incoming, [hashtable]$
     [pscustomobject]$r
 }
 
+# 편집할 목록의 복사본. id가 겹치면 어느 줄인지 추측하지 않는다.
+function Get-WtRecordEdit($Store, [string]$Id) {
+    if ($Store.State -notin 'ok', 'missing') { throw "$($Store.Name).json은 읽지 못해서 저장하지 않습니다. ($($Store.Error))" }
+    $r = [pscustomobject]@{ Success = $false; Reason = ''; Items = @(Copy-WtItem @($Store.Items)); Index = -1; Item = $null }
+    if (-not $Id) { $r.Success = $true; return $r }
+    for ($i = 0; $i -lt $r.Items.Count; $i++) {
+        if ((Test-WtRecordObject $r.Items[$i]) -and [string]$r.Items[$i].id -ceq $Id) {
+            if ($r.Index -ge 0) { $r.Reason = 'id가 겹쳐 편집할 줄을 정할 수 없습니다'; return $r }
+            $r.Index = $i; $r.Item = $r.Items[$i]
+        }
+    }
+    if ($r.Index -lt 0) { $r.Reason = '항목을 찾지 못했습니다'; return $r }
+    $r.Success = $true
+    $r
+}
+
+# 적은 칸만 깊게 바꾼다. 목록은 통째로, 객체의 모르는 칸은 남긴다.
+function Merge-WtRecordPatch($Target, $Patch) {
+    $names = if ($Patch -is [System.Collections.IDictionary]) { @($Patch.Keys) } else { @($Patch.PSObject.Properties.Name) }
+    foreach ($name in $names) {
+        $value = Get-WtField $Patch $name
+        $old = Get-WtField $Target $name
+        if ((Test-WtRecordObject $old) -and (Test-WtRecordObject $value)) { Merge-WtRecordPatch $old $value }
+        elseif ($value -is [array]) { Set-WtField $Target $name @(Copy-WtItem $value) }
+        else { Set-WtField $Target $name (Copy-WtItem $value) }
+    }
+}
+
+# 지우기 · 되살리기 계획. 저장은 부르는 모듈이 핸들로 한다.
+function Set-WtRecordDeleted($Item, [bool]$Deleted, [string]$At) {
+    $now = ConvertFrom-WtStamp $At
+    if (-not $now) { return '앱 시각을 읽지 못했습니다' }
+    if ($Deleted) {
+        if (Test-WtDeleted $Item) { return '이미 지운 항목입니다' }
+        Set-WtField $Item 'deleted' $At
+    } else {
+        if (-not (Test-WtDeleted $Item)) { return '지운 항목이 아닙니다' }
+        $when = ConvertFrom-WtStamp ([string]$Item.deleted)
+        if (-not $when -or $when -gt $now -or ($now - $when).TotalDays -ge 90) { return '지운 지 90일 안인 항목만 되살릴 수 있습니다' }
+        Set-WtField $Item 'deleted' $null
+    }
+    Set-WtItemEdited $Item $At
+    ''
+}
+
 Export-ModuleMember -Function Get-WtStamp, ConvertFrom-WtStamp, ConvertFrom-WtDateText, ConvertTo-WtDateText, ConvertFrom-WtTimeText,
     ConvertFrom-WtWhole, ConvertFrom-WtNumber, ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, ConvertFrom-WtLegacyStamp,
     Test-WtRecordObject, Get-WtField, Set-WtField, Copy-WtItem, Test-WtDeleted, Get-WtItemRevision, Set-WtItemEdited, Get-WtRecordProblem,
-    Compress-WtDeletedItems, Get-WtRowKey, Get-WtChangedColumns, Copy-WtPathValue, Merge-WtLegacyItems
+    Compress-WtDeletedItems, Get-WtRowKey, Get-WtChangedColumns, Copy-WtPathValue, Merge-WtLegacyItems,
+    Get-WtRecordEdit, Merge-WtRecordPatch, Set-WtRecordDeleted

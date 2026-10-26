@@ -14,6 +14,7 @@ $ErrorActionPreference = 'Stop'
 $script:holidaySchema = 1
 $script:holidayKinds = @('public', 'company', 'personal')
 $script:holidayCache = $null
+$script:calendarSources = [System.Collections.Generic.List[object]]::new()
 
 # 항목 하나를 계산용으로 읽는다. State: ok · readonly(새 버전 값) · broken(고칠 항목) · deleted
 function ConvertFrom-WtHolidayItem($Item) {
@@ -71,4 +72,110 @@ function Save-WtHolidayItems($Store, [object[]]$Items) {
     $script:holidayCache = $null
 }
 
-Export-ModuleMember -Function ConvertFrom-WtHolidayItem, Get-WtHolidayData, Get-WtHolidayDates, Save-WtHolidayItems
+# 날짜 하나 · 종류 하나를 표시하거나 해제한다. 다른 종류는 남기고, 같은 종류의 중복은 모두 해제한다.
+function Set-WtHolidayDate($Store, [string]$Date, [string]$Kind, [bool]$Enabled = $true, [string]$Name = '', [string]$Note = '', [string]$At = (Get-WtStamp)) {
+    $reason = ''
+    if ($Store.Name -cne 'holidays' -or -not (ConvertFrom-WtDateText $Date) -or $Kind -cnotin $script:holidayKinds -or -not (ConvertFrom-WtStamp $At)) {
+        $reason = '휴무일 핸들 · 날짜 · 종류 · 앱 시각을 확인하세요'
+    }
+    if ($reason) { return [pscustomobject]@{ Success = $false; Reason = $reason; Store = $Store } }
+    $edit = Get-WtRecordEdit $Store ''
+    $matches = @($edit.Items | Where-Object { (ConvertFrom-WtHolidayItem $_).State -eq 'ok' -and $_.date -ceq $Date -and $_.kind -ceq $Kind })
+    if ($Enabled) {
+        if ($matches.Count) {
+            foreach ($item in $matches) { Set-WtField $item 'name' $Name; Set-WtField $item 'note' $Note; Set-WtItemEdited $item $At }
+        } else {
+            $edit.Items += , [pscustomobject][ordered]@{ id = New-WtId; date = $Date; name = $Name; kind = $Kind; note = $Note; rev = 0
+                created = $At; updated = $At; deleted = $null; origin = $null }
+        }
+    } else { foreach ($item in $matches) { [void](Set-WtRecordDeleted $item $true $At) } }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At))
+    $script:holidayCache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Store = $next }
+}
+
+# 1년치 붙여 넣기를 먼저 확인한다. 빈 줄은 무시, 같은 날짜 · 같은 이름은 하나, 이름이 다르면 줄 오류.
+function ConvertFrom-WtHolidayPaste([string]$Text, [int]$Year) {
+    $items = [System.Collections.Generic.List[object]]::new()
+    $errors = [System.Collections.Generic.List[object]]::new()
+    $seen = @{}
+    $n = 0
+    foreach ($line in ($Text -split '\r\n|\n|\r')) {
+        $n++
+        if (-not $line.Trim()) { continue }
+        $reason = ''
+        if ($Year -lt 1900 -or $Year -gt 2199) { $reason = '연도는 1900~2199로 적으세요' }
+        elseif ($line -notmatch '^\s*([0-9]{4}-[0-9]{2}-[0-9]{2})[\t ]+(.+?)\s*$') { $reason = 'yyyy-MM-dd 이름 순서로 적으세요' }
+        else {
+            $dateText = $Matches[1]; $nameText = $Matches[2].Trim()
+            $dateValue = ConvertFrom-WtDateText $dateText
+            if (-not $dateValue) { $reason = '없는 날짜입니다' }
+            elseif ($dateValue.Year -ne $Year) { $reason = '고른 해의 날짜가 아닙니다' }
+            elseif (-not $nameText) { $reason = '공휴일 이름이 없습니다' }
+            elseif ($seen.ContainsKey($dateText) -and $seen[$dateText] -cne $nameText) { $reason = '같은 날짜에 다른 이름이 있습니다' }
+            elseif (-not $seen.ContainsKey($dateText)) {
+                $seen[$dateText] = $nameText
+                $items.Add([pscustomobject]@{ Date = $dateText; Name = $nameText })
+            }
+        }
+        if ($reason) { $errors.Add([pscustomobject]@{ Line = $n; Text = $line; Reason = $reason }) }
+    }
+    if (-not $n -or $Year -lt 1900 -or $Year -gt 2199) {
+        if (-not $errors.Count) { $errors.Add([pscustomobject]@{ Line = 0; Text = ''; Reason = '연도는 1900~2199로 적으세요' }) }
+    }
+    [pscustomobject]@{ Success = $errors.Count -eq 0; Reason = $(if ($errors.Count) { '잘못된 줄을 고친 뒤 다시 확인하세요' } else { '' })
+        Items = $items.ToArray(); Errors = $errors.ToArray(); Year = $Year }
+}
+
+# 틀린 줄 · 빈 목록은 저장하지 않는다. 고른 해의 public만 맞추며 회사 · 개인 휴무와 모르는 항목은 그대로다.
+function Import-WtHolidayPaste($Store, [string]$Text, [int]$Year, [string]$At = (Get-WtStamp)) {
+    $parsed = ConvertFrom-WtHolidayPaste $Text $Year
+    if ($Store.Name -cne 'holidays' -or -not (ConvertFrom-WtStamp $At)) { $parsed.Success = $false; $parsed.Reason = '휴무일 핸들 · 앱 시각을 확인하세요' }
+    if (-not $parsed.Items.Count -and $parsed.Success) { $parsed.Success = $false; $parsed.Reason = '빈 목록으로 공휴일을 지우지 않습니다' }
+    if (-not $parsed.Success) { return [pscustomobject]@{ Success = $false; Reason = $parsed.Reason; Errors = $parsed.Errors; Store = $Store } }
+    $edit = Get-WtRecordEdit $Store ''
+    $wanted = @{}
+    foreach ($entry in $parsed.Items) { $wanted[$entry.Date] = $entry.Name }
+    $kept = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($item in $edit.Items) {
+        $entry = ConvertFrom-WtHolidayItem $item
+        if ($entry.State -ne 'ok' -or $entry.Kind -cne 'public' -or $entry.Date.Year -ne $Year) { continue }
+        if ($wanted.ContainsKey($entry.DateText) -and $kept.Add($entry.DateText)) {
+            Set-WtField $item 'name' $wanted[$entry.DateText]
+            Set-WtItemEdited $item $At
+        } else { [void](Set-WtRecordDeleted $item $true $At) }
+    }
+    foreach ($entry in $parsed.Items) {
+        if (-not $kept.Add($entry.Date)) { continue }
+        $edit.Items += , [pscustomobject][ordered]@{ id = New-WtId; date = $entry.Date; name = $entry.Name; kind = 'public'; note = ''; rev = 0
+            created = $At; updated = $At; deleted = $null; origin = [pscustomobject]@{ from = 'paste'; at = $At } }
+    }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At))
+    $script:holidayCache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Errors = @(); Store = $next }
+}
+
+function Get-WtHolidayCalendarItems([datetime]$From, [datetime]$To) {
+    $data = Get-WtHolidayData
+    if ($data.Error) { throw $data.Error }
+    foreach ($entry in $data.Entries) {
+        if ($entry.State -ne 'ok' -or $entry.Date -lt $From.Date -or $entry.Date -gt $To.Date) { continue }
+        [pscustomobject]@{ Date = $entry.Date; Kind = $entry.Kind; Text = $entry.Name; Style = 'Sub'; AllDay = $true; Time = $null; Id = $entry.Id; Page = '' }
+    }
+}
+
+# 코어 · 탭의 공용 달력 출처. null이면 해제, 같은 Id는 바꿔 끼운다.
+function Register-WtCalendarSource([string]$Id, [scriptblock]$CalendarItems, [string]$Page = '') {
+    if (-not $Id) { throw '달력 출처 id가 필요합니다.' }
+    for ($i = $script:calendarSources.Count - 1; $i -ge 0; $i--) {
+        if ($script:calendarSources[$i].Id -ceq $Id) { $script:calendarSources.RemoveAt($i) }
+    }
+    if ($null -ne $CalendarItems) { $script:calendarSources.Add([pscustomobject]@{ Id = $Id; Page = $Page; CalendarItems = $CalendarItems }) }
+}
+
+function Get-WtCalendarSource { $script:calendarSources.ToArray() }
+
+Register-WtCalendarSource -Id 'holidays' -CalendarItems { param([datetime]$From, [datetime]$To) Get-WtHolidayCalendarItems $From $To }
+
+Export-ModuleMember -Function ConvertFrom-WtHolidayItem, Get-WtHolidayData, Get-WtHolidayDates, Save-WtHolidayItems,
+    Set-WtHolidayDate, ConvertFrom-WtHolidayPaste, Import-WtHolidayPaste, Get-WtHolidayCalendarItems, Register-WtCalendarSource, Get-WtCalendarSource

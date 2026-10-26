@@ -14,9 +14,10 @@
 #>
 #Requires -Version 7.0
 [CmdletBinding()]
-param()
+param([switch]$NoDesktop)
 
 $ErrorActionPreference = 'Stop'
+$global:wtTestNoDesktop = [bool]$NoDesktop   # 이번 검사 프로세스에서만. 창 · 입력 · 전용 프로세스 종료 검사를 뺀다.
 $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'TestKit.ps1')
 Import-WtTestCore
@@ -80,6 +81,7 @@ try {
     } finally { Remove-WtTestGate $gate }
     Assert-Wt '화면 밖 작업: 문을 열면 버린 작업도 끝나 치워진다' ((Get-WtWorkInfo).Abandoned -eq 0 -and -not (Test-WtWorkStuck 'path:\\wt-test\hang'))
     # 앱 전용 프로세스: 돌아오지 않는 작업이 남아도 Exit-WtOwnProcess로 끝난다. 부르지 않으면 PowerShell이 그 작업을 기다리느라 끝나지 않는다
+    if (-not $NoDesktop) {
     $exitChild = Join-Path $test.Root 'work-exit.ps1'
     Set-Content -LiteralPath $exitChild -Encoding utf8 -Value @"
 param([string]`$Mode)
@@ -107,6 +109,7 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Assert-Wt "앱 프로세스: 돌아오지 않는 작업이 남아도 Exit-WtOwnProcess로 끝난다 (${ownMs}ms) · 부르지 않으면 끝나지 않는다 (대조)" (
         $ownExited -and $exitRuns.own.Process.ExitCode -eq 7 -and -not $noneExited) "(끝남 $ownExited · 코드 $(if ($ownExited) { $exitRuns.own.Process.ExitCode }) · 대조 끝남 $noneExited)"
     foreach ($r in $exitRuns.Values) { $r.Process.Dispose() }
+    } else { Write-Host 'SKIP 앱 프로세스 강제 종료 검사 (-NoDesktop)' }
     Assert-Wt '앱 프로세스: 이 검사 프로세스(-File Test-Core.ps1)는 앱 전용이 아니라고 본다' (-not (Test-WtOwnProcess (Join-Path $root 'Start-WorkTool.ps1')))
 
     # ---- 저장 ----
@@ -411,6 +414,43 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     $hSet = Get-WtHolidayDates
     Assert-Wt '휴무일: 못 읽으면 예외 없이 오류만 알리고 계산에는 휴무일이 없다' ($hd.Error -like '*더 새 버전*' -and $hSet.Count -eq 0)
 
+    # ---- 2a 휴무일 편집 · 연간 붙여 넣기 ----
+    & $raw 'holidays' '{"schema":1,"future":"남길 맨 위 칸","items":[{"id":"pub","date":"2026-11-03","kind":"public","name":"옛 이름","note":"남길 메모","extra":7},{"id":"gone","date":"2026-11-04","kind":"public","name":"빠질 날"},{"id":"co","date":"2026-11-03","kind":"company","name":"회사 휴무"},{"id":"pe","date":"2026-11-03","kind":"personal","name":"개인 휴무"},{"id":"future","date":"2026-11-03","kind":"future","name":"새 값"},null]}'
+    $hd = Get-WtHolidayData
+    $pasteText = "2026-11-03 새 공휴일`r`n2026-11-03 새 공휴일`r`n2026-12-25 공휴일"
+    $parsed = ConvertFrom-WtHolidayPaste $pasteText 2026
+    $badPaste = ConvertFrom-WtHolidayPaste "2026-11-03 A`n2026-11-03 B`n2026-02-29 없음`n2027-01-01 다른 해`n틀린 줄" 2026
+    Assert-Wt '공휴일 해석: 같은 날짜 · 이름은 하나, 틀린 줄은 줄 번호 · 원문 · 이유' ($parsed.Success -and $parsed.Items.Count -eq 2 -and
+        -not $badPaste.Success -and ($badPaste.Errors.Line -join ',') -ceq '2,3,4,5' -and @($badPaste.Errors | Where-Object { -not $_.Reason -or -not $_.Text }).Count -eq 0)
+    $beforePaste = [IO.File]::ReadAllText((Get-WtStorePath 'holidays'))
+    $refusedPaste = Import-WtHolidayPaste $hd.Store '2026-02-29 없음' 2026
+    $emptyPaste = Import-WtHolidayPaste $hd.Store '' 2026
+    Assert-Wt '공휴일 붙여 넣기: 잘못된 줄 · 빈 목록은 저장하지 않음' (-not $refusedPaste.Success -and -not $emptyPaste.Success -and
+        [IO.File]::ReadAllText((Get-WtStorePath 'holidays')) -ceq $beforePaste)
+    $hr = Import-WtHolidayPaste $hd.Store $pasteText 2026 -At '2026-11-01T09:00:00+09:00'
+    $hdoc = [IO.File]::ReadAllText((Get-WtStorePath 'holidays')) | ConvertFrom-Json -Depth 20 -DateKind String
+    $pub = @($hr.Store.Items | Where-Object id -ceq 'pub')[0]
+    Assert-Wt '공휴일 붙여 넣기: 그해 public만 맞춤 · 기존 id/모르는 칸/메모 보존 · 빠진 날은 지운 표시' ($hr.Success -and $hdoc.future -ceq '남길 맨 위 칸' -and
+        $pub.name -ceq '새 공휴일' -and $pub.extra -eq 7 -and $pub.note -ceq '남길 메모' -and (Test-WtDeleted @($hr.Store.Items | Where-Object id -ceq 'gone')[0]) -and
+        @($hr.Store.Items | Where-Object { $_.kind -in 'company', 'personal', 'future' -and -not (Test-WtDeleted $_) }).Count -eq 3 -and $null -eq $hr.Store.Items[5]) $hr.Reason
+    $hr = Set-WtHolidayDate $hr.Store '2026-11-03' 'public' -Enabled $false -At '2026-11-01T09:00:00+09:00'
+    Assert-Wt '휴무일 해제: 같은 날의 다른 종류는 그대로, 계산에는 하루' ($hr.Success -and (Get-WtHolidayDates).Contains('2026-11-03')) $hr.Reason
+    $hd = Get-WtHolidayData
+    $hr = Set-WtHolidayDate $hd.Store '2026-11-03' 'company' -Enabled $false -At '2026-11-01T09:00:00+09:00'
+    $hr = Set-WtHolidayDate $hr.Store '2026-11-03' 'personal' -Enabled $false -At '2026-11-01T09:00:00+09:00'
+    Assert-Wt '휴무일 해제: 아는 종류를 모두 해제하면 모르는 종류는 날짜 계산에서 제외' ($hr.Success -and -not (Get-WtHolidayDates).Contains('2026-11-03')) $hr.Reason
+    $hr = Set-WtHolidayDate (Get-WtHolidayData).Store '2026-11-03' 'personal' -Name '개인 휴무' -At '2026-11-01T09:00:00+09:00'
+    $thread = [Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture
+    $holidaySnapshots = @()
+    try {
+        foreach ($culture in 'ko-KR', 'en-US', 'th-TH', 'ar-SA', 'ja-JP') {
+            $thread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($culture)
+            $hp = ConvertFrom-WtHolidayPaste "2028-02-29 윤일`n2028-02-30 없는 날" 2028
+            $holidaySnapshots += "$($hp.Items.Date -join ',')|$($hp.Errors.Line -join ',')|$($hp.Errors.Reason -join ',')"
+        }
+    } finally { $thread.CurrentCulture = $oldCulture }
+    Assert-Wt '휴무일 5개 문화권: 윤일 해석 · 오류 줄 동일' (@($holidaySnapshots | Where-Object { $_ -cne '2028-02-29|2|없는 날짜입니다' }).Count -eq 0)
+
     # ---- 설정 ----
     Initialize-WtSettings
     Assert-Wt '설정 기본값' ((Get-WtSetting 'theme.color') -eq 'sky' -and (Get-WtSetting 'ui.opacity') -eq 100)
@@ -437,6 +477,32 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Assert-Wt '메뉴 순서: Order가 같으면 ID 순서' ((@(Get-WtAddon | ForEach-Object Id) -join ',') -eq 'test-a,test-c,test-b') (@(Get-WtAddon | ForEach-Object Id) -join ',')
     Register-WtAddon -Id 'test-a' -Title '가2' -Order 10 -NewView { }
     Assert-Wt '같은 ID로 다시 등록하면 바꾼다' (@(Get-WtAddon -All | Where-Object Id -eq 'test-a').Count -eq 1 -and (Get-WtAddon -Id 'test-a').Title -eq '가2')
+
+    # ---- 달력 등록 목록 (가짜 탭) ----
+    Register-WtAddon -Id 'test-calendar' -Title '가짜 달력' -NewView { } -CalendarItems {
+        param([datetime]$From, [datetime]$To)
+        [pscustomobject]@{ Date = $From; Kind = 'test'; Text = '가짜 표시'; Style = 'Success'; AllDay = $false; Time = '09:00'; Id = 'test-item'; Page = 'test-calendar' }
+        [pscustomobject]@{ Date = $To.AddDays(1); Kind = 'test'; Text = '범위 밖'; Style = 'Success'; AllDay = $true; Time = $null; Id = 'outside' }
+    }
+    Register-WtAddon -Id 'test-calendar-bad' -Title '가짜 실패' -NewView { } -CalendarItems { throw '일부러 낸 달력 오류' }
+    $cr = Get-WtCalendarItems ([datetime]::new(2026, 11, 3)) ([datetime]::new(2026, 11, 4))
+    Assert-Wt '달력: 출처 하나 실패해도 휴무일 · 다른 탭은 날짜별로 반환, 범위 밖 제외' (-not $cr.Success -and $cr.Items.Count -eq 2 -and
+        $cr.Days.Count -eq 2 -and $cr.Days[0].Items.Count -eq 2 -and $cr.Days[1].Items.Count -eq 0 -and $cr.Errors.Count -eq 1 -and
+        $cr.Errors[0].Page -ceq 'test-calendar-bad' -and $cr.Errors[0].Reason -like '*일부러*') (Get-WtTestJsonCore $cr.Errors)
+    $cr = Get-WtCalendarItems ([datetime]::new(2026, 11, 3)) ([datetime]::new(2026, 11, 4)) -Exclude @('test-calendar', 'test-calendar-bad')
+    Assert-Wt '달력: 호출 탭 제외, 코어 공용 휴무일은 남음' ($cr.Success -and $cr.Items.Count -eq 1 -and $cr.Items[0].Source -ceq 'holidays')
+    Set-WtSetting 'addons.disabled' @('test-calendar-bad')
+    $cr = Get-WtCalendarItems ([datetime]::new(2026, 11, 3)) ([datetime]::new(2026, 11, 4))
+    Assert-Wt '달력: 끈 탭은 호출하지 않음' ($cr.Success -and $cr.Items.Count -eq 2)
+    Register-WtAddon -Id 'test-calendar' -Title '가짜 달력' -NewView { }
+    $cr = Get-WtCalendarItems ([datetime]::new(2026, 11, 3)) ([datetime]::new(2026, 11, 4))
+    Assert-Wt '달력: 표시 함수 없이 다시 등록하면 옛 출처 해제' ($cr.Success -and $cr.Items.Count -eq 1)
+    Register-WtCalendarSource -Id 'test-malformed' -CalendarItems { [pscustomobject]@{ Date = '내일' } }
+    $cr = Get-WtCalendarItems ([datetime]::new(2026, 11, 3)) ([datetime]::new(2026, 11, 4))
+    Assert-Wt '달력: 잘못된 항목 모양도 출처 오류로 격리' ($cr.Items.Count -eq 1 -and $cr.Errors[0].Source -ceq 'test-malformed')
+    Register-WtCalendarSource -Id 'test-malformed' -CalendarItems $null
+    Set-WtSetting 'addons.disabled' @()
+    Register-WtAddon -Id 'test-calendar-bad' -Title '가짜 실패' -NewView { }
 
     # ---- 도움말 단축키 (가짜 탭) ----
     Register-WtAddon -Id 'test-x' -Title '엑스' -Order 30 -NewView { } -Shortcuts @(@('F5', '새로 고침'), @('Enter', '열기'))
@@ -1007,7 +1073,14 @@ pie
 
 if ($script:failed) { Write-Host "실패 $script:failed 건" -ForegroundColor Red; exit 1 }
 # 탭 폴더의 검사를 모두 찾아서 돌린다. 하나라도 틀리면 그 자리에서 멈춘다
-foreach ($t in (Get-ChildItem (Join-Path $root 'addons') -Filter 'Test-*.ps1' -Recurse | Sort-Object FullName)) { & $t.FullName }
+foreach ($t in (Get-ChildItem (Join-Path $root 'addons') -Filter 'Test-*.ps1' -Recurse | Sort-Object FullName)) {
+    if ($NoDesktop -and $t.Directory.Name -in @('active-tasks', 'workflows')) {
+        Write-Host "SKIP $($t.Name) (전용 창 · 프로세스 종료 포함, -NoDesktop)"; continue
+    }
+    & $t.FullName
+}
 & (Join-Path $PSScriptRoot 'Test-Reliability.ps1')
-& (Join-Path $PSScriptRoot 'Test-Launcher.ps1')
+if (-not $NoDesktop) { & (Join-Path $PSScriptRoot 'Test-Launcher.ps1') }
+else { Write-Host 'SKIP 실행 파일 GUI 검사 (-NoDesktop)' }
+if ($NoDesktop) { Write-Host '제외: WPF 화면 · 입력, 활성 작업 · 업무 탭, 앱 강제 종료 · GUI 실행 파일' }
 Write-Host '모두 통과' -ForegroundColor Green

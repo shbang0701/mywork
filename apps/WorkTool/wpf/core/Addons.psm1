@@ -38,6 +38,7 @@ function Register-WtAddon {
         [Parameter(Mandatory)][scriptblock]$NewView,
         [scriptblock]$Refresh,
         [scriptblock]$HomeCard,
+        [scriptblock]$CalendarItems,
         [scriptblock]$ImportLegacy,
         [scriptblock]$OnExit,
         [scriptblock]$SavePending,
@@ -57,11 +58,13 @@ function Register-WtAddon {
     }
     $script:addons.Add(@{
             Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Required = [bool]$Required
-            NewView = $NewView; Refresh = $Refresh; HomeCard = $HomeCard; ImportLegacy = $ImportLegacy; OnExit = $OnExit
+            NewView = $NewView; Refresh = $Refresh; HomeCard = $HomeCard; CalendarItems = $CalendarItems; ImportLegacy = $ImportLegacy; OnExit = $OnExit
             Description = $Description
             SavePending = $SavePending; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
         })
+    # 같은 탭을 다시 등록하면서 표시 함수를 뺐으면 옛 등록도 없앤다.
+    Register-WtCalendarSource -Id "addon:$Id" -Page $Id -CalendarItems $CalendarItems
 }
 
 # 순서대로 돌려준다. -All이 없으면 설정에서 끈 탭은 뺀다.
@@ -74,4 +77,48 @@ function Get-WtAddon {
     $list | Where-Object { $_.Required -or $disabled -notcontains $_.Id }
 }
 
-Export-ModuleMember -Function Register-WtAddon, Get-WtAddon
+# From ~ To(그날 포함). 한 출처의 실패는 Errors에 남기고 나머지는 계속 모은다.
+function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude = @()) {
+    $items = [System.Collections.Generic.List[object]]::new()
+    $errors = [System.Collections.Generic.List[object]]::new()
+    $days = [System.Collections.Generic.List[object]]::new()
+    if ($From.Date -gt $To.Date -or -not (ConvertFrom-WtDateText (ConvertTo-WtDateText $From)) -or -not (ConvertFrom-WtDateText (ConvertTo-WtDateText $To))) {
+        return [pscustomobject]@{ Success = $false; Reason = '날짜 범위를 확인하세요'; Items = @(); Days = @(); Errors = @() }
+    }
+    $enabled = @(Get-WtAddon | ForEach-Object Id)
+    foreach ($source in @(Get-WtCalendarSource)) {
+        if ($source.Page -and ($source.Page -cnotin $enabled -or $source.Page -cin $Exclude)) { continue }
+        if ($source.Id -cin $Exclude) { continue }
+        try {
+            $batch = @(& $source.CalendarItems $From.Date $To.Date)
+            $accepted = [System.Collections.Generic.List[object]]::new()
+            foreach ($entry in $batch) {
+                if (-not (Test-WtRecordObject $entry) -or $entry.Date -isnot [datetime] -or -not $entry.Kind -or -not $entry.Style -or -not $entry.Id -or
+                    $entry.AllDay -isnot [bool] -or (-not $entry.AllDay -and $null -eq (ConvertFrom-WtTimeText ([string]$entry.Time)))) {
+                    throw '달력 표시 항목의 모양이 틀렸습니다.'
+                }
+                if ($entry.Date.Date -lt $From.Date -or $entry.Date.Date -gt $To.Date) { continue }
+                $accepted.Add([pscustomobject]@{ Date = $entry.Date.Date; Kind = [string]$entry.Kind; Text = [string]$entry.Text; Style = [string]$entry.Style
+                    AllDay = $entry.AllDay; Time = $entry.Time; Id = [string]$entry.Id; Page = $source.Page; Source = $source.Id })
+            }
+            $items.AddRange($accepted)
+        } catch { $errors.Add([pscustomobject]@{ Source = $source.Id; Page = $source.Page; Reason = $_.Exception.Message }) }
+    }
+    $sorted = @($items | Sort-Object Date, @{ Expression = { -not $_.AllDay } }, Time, Source, Id -Culture 'ko-KR')
+    $byDate = @{}
+    foreach ($entry in $sorted) {
+        $key = ConvertTo-WtDateText $entry.Date
+        if (-not $byDate.ContainsKey($key)) { $byDate[$key] = [System.Collections.Generic.List[object]]::new() }
+        $byDate[$key].Add($entry)
+    }
+    for ($day = $From.Date; $day -le $To.Date; $day = $day.AddDays(1)) {
+        $key = ConvertTo-WtDateText $day
+        $dayItems = @()
+        if ($byDate.ContainsKey($key)) { $dayItems = $byDate[$key].ToArray() }
+        $days.Add([pscustomobject]@{ Date = $day; Items = $dayItems })
+    }
+    [pscustomobject]@{ Success = $errors.Count -eq 0; Reason = $(if ($errors.Count) { '일부 출처를 읽지 못했습니다' } else { '' })
+        Items = $sorted; Days = $days.ToArray(); Errors = $errors.ToArray() }
+}
+
+Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems

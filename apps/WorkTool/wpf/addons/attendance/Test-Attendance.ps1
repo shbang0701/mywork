@@ -222,6 +222,85 @@ try {
     $data = Get-WtAttendanceData
     Assert-WtTest '근태 못 읽는 파일: 오류로 알리고 파일은 그대로' ($data.Error -like '*더 새 버전*' -and [System.IO.File]::ReadAllText((Get-WtStorePath 'attendance')) -ceq '{ "schema": 3, "items": [] }')
 
+    # ---- 2a 지금 기록 · 직접 편집 · 보고 글 ----
+    $test = New-WtTestData 'attendance-edit'; $tests.Add($test)
+    $store = Open-WtAttendanceStore
+    $r = Start-WtAttendanceRecord $store -At '2026-11-02T08:47:12+09:00'
+    $workId = $r.Id
+    $duplicate = Start-WtAttendanceRecord $r.Store -At '2026-11-02T08:48:00+09:00'
+    Assert-WtTest '지금 출근: 벽시계 · at 증거 · 원래 핸들 보존, 같은 날 두 번 누르면 이유로 거부' ($r.Success -and $r.Store.Items[0].start.date -ceq '2026-11-02' -and
+        $r.Store.Items[0].start.time -ceq '08:47' -and $r.Store.Items[0].start.at -ceq '2026-11-02T08:47:12+09:00' -and $store.Items.Count -eq 0 -and -not $duplicate.Success -and $duplicate.Reason)
+    $r = Stop-WtAttendanceRecord $r.Store -At '2026-11-02T18:10:24+09:00'
+    $e = ConvertFrom-WtAttendanceItem $r.Store.Items[0]
+    Assert-WtTest '지금 퇴근: 분 계산 · end.at · rev 증가' ($r.Success -and $e.Minutes -eq 563 -and $e.Item.end.at -ceq '2026-11-02T18:10:24+09:00' -and $e.Item.rev -eq 1) $r.Reason
+    $r = Save-WtAttendanceItem $r.Store @{ start = @{ time = '09:00'; zone = '남길 칸' }; note = '직접 고침' } -Id $workId -At '2026-11-03T09:00:00+09:00'
+    Assert-WtTest '근태 직접 편집: 바꾼 점의 at 삭제 · 안 바꾼 끝의 증거 보존' ($r.Success -and -not $r.Store.Items[0].start.PSObject.Properties['at'] -and
+        $r.Store.Items[0].end.at -ceq '2026-11-02T18:10:24+09:00' -and $r.Store.Items[0].start.zone -ceq '남길 칸') $r.Reason
+    $r = Save-WtAttendanceItem $r.Store @{ kind = 'work'; start = @{ date = '2026-11-02'; time = '20:00' } } -At '2026-11-03T09:00:00+09:00'
+    $entries = @(foreach ($i in $r.Store.Items) { ConvertFrom-WtAttendanceItem $i })
+    $s = Get-WtAttendanceSummary (& $d '2026-11-01') $entries
+    Assert-WtTest '근태 요약: 같은 날 출근 두 기록도 하루 · 퇴근 없는 기록은 0분 대신 미완료 수' ($r.Success -and $s.WorkDays -eq 1 -and $s.WorkMinutes -eq 550 -and $s.WorkOpen -eq 1)
+    $r = Start-WtAttendanceRecord $r.Store -Kind overtime -How onsite -Ref 'INC-0001' -Place '시험 현장' -At '2026-11-30T23:30:12+09:00'
+    $overId = $r.Id
+    $r = Stop-WtAttendanceRecord $r.Store -Kind overtime -At '2026-12-01T01:00:25+09:00'
+    $over = @($r.Store.Items | Where-Object id -ceq $overId)[0]
+    Assert-WtTest '업무외 두 번 기록: 자정 · 달 넘김 · 원격/현장 · 관련번호 · 양쪽 증거' ($r.Success -and $over.end.date -ceq '2026-12-01' -and
+        $over.overtime.how -ceq 'onsite' -and $over.overtime.ref -ceq 'INC-0001' -and $over.start.at -ceq '2026-11-30T23:30:12+09:00' -and $over.end.at -ceq '2026-12-01T01:00:25+09:00') $r.Reason
+    $entries = @(foreach ($i in $r.Store.Items) { ConvertFrom-WtAttendanceItem $i })
+    $nov = Get-WtAttendanceSummary (& $d '2026-11-01') $entries
+    $dec = Get-WtAttendanceSummary (& $d '2026-12-01') $entries
+    Assert-WtTest '업무외 월 귀속: 90분 전부 시작한 11월, 12월은 0건' ($nov.OverMinutes -eq 90 -and $nov.OverCount -eq 1 -and $dec.OverCount -eq 0)
+    $r = Save-WtAttendanceItem $r.Store @{ kind = 'overtime'; start = @{ date = '2026-11-10'; time = '09:00' }; overtime = @{ how = 'remote'; ref = 'CHG-0001' } } -At '2026-12-02T09:00:00+09:00'
+    $r = Save-WtAttendanceItem $r.Store @{ kind = 'overtime'; start = @{ date = '2026-11-11'; time = '09:00' } } -At '2026-12-02T09:00:00+09:00'
+    $ambiguous = Stop-WtAttendanceRecord $r.Store -Kind overtime -At '2026-11-11T10:00:00+09:00'
+    $earlier = Stop-WtAttendanceRecord $r.Store -Kind overtime -Id $r.Id -At '2026-11-10T10:00:00+09:00'
+    $tooLong = Save-WtAttendanceItem $r.Store @{ end = @{ date = '2026-12-13'; time = '09:00' } } -Id $r.Id -At '2026-12-13T09:00:00+09:00'
+    Assert-WtTest '업무외 입력 거부: 열린 두 기록 선택 · 끝 역행 · 31일 초과는 이유로' (-not $ambiguous.Success -and $ambiguous.Reason -and -not $earlier.Success -and $earlier.Reason -and -not $tooLong.Success -and $tooLong.Reason)
+    $r = Stop-WtAttendanceRecord $r.Store -Kind overtime -Id $r.Id -At '2026-11-11T10:00:00+09:00'
+    Assert-WtTest '업무외 끝: Id를 고르면 그 기록 하나만 닫음' ($r.Success -and @($r.Store.Items | Where-Object { $_.kind -eq 'overtime' -and $null -eq $_.end }).Count -eq 1) $r.Reason
+    $r = Set-WtAttendanceDeleted $r.Store $r.Id -At '2026-12-02T09:00:00+09:00'
+    $r = Set-WtAttendanceDeleted $r.Store $r.Id -Deleted $false -At '2026-12-03T09:00:00+09:00'
+    Assert-WtTest '근태 편집: 지운 표시 · 되살리기' ($r.Success -and -not (Test-WtDeleted @($r.Store.Items | Where-Object id -ceq $r.Id)[0])) $r.Reason
+    $calendar = Get-WtAttendanceCalendarItems (& $d '2026-11-30') (& $d '2026-12-01') @(foreach ($i in $r.Store.Items) { ConvertFrom-WtAttendanceItem $i })
+    Assert-WtTest '근태 달력: 월을 넘는 업무외는 두 날, 스타일은 쓰임새 이름' (((@($calendar).Date | ForEach-Object { ConvertTo-WtDateText $_ }) -join ',') -eq '2026-11-30,2026-12-01' -and
+        @($calendar | Where-Object Style -cne 'Att.Over').Count -eq 0)
+
+    $reportItems = @(
+        '{"id":"w","kind":"work","start":{"date":"2028-02-29","time":"08:00"},"end":null,"note":"미완료"}',
+        '{"id":"o","kind":"overtime","start":{"date":"2028-02-29","time":"23:30"},"end":{"date":"2028-03-01","time":"01:00"},"overtime":{"how":"remote","ref":"INC-0002"},"note":"=1+1\n두 줄"}',
+        '{"id":"l","kind":"leave","start":{"date":"2028-02-25","time":null},"end":{"date":"2028-02-29","time":null},"leave":{"type":"half-am","days":null}}',
+        '{"id":"f","kind":"leave","start":{"date":"2028-02-28","time":null},"leave":{"type":"half-pm","days":1.25}}',
+        '{"id":"t","kind":"trip","start":{"date":"2028-02-26","time":null},"end":{"date":"2028-02-29","time":null},"place":"시험 출장지"}'
+    ) | ForEach-Object { $_ | ConvertFrom-Json -DateKind String }
+    $reportEntries = @(foreach ($i in $reportItems) { ConvertFrom-WtAttendanceItem $i })
+    $reportOff = [Collections.Generic.HashSet[string]]::new([string[]]@('2028-02-28', '2028-02-29'))
+    $expectedReport = @(
+        "종류`t시작일`t시작시각`t종료일`t종료시각`t분`t휴가일수`t산정`t장소`t방식`t관련번호`t메모`t상태",
+        "휴가`t2028-02-25`t`t2028-02-29`t`t`t0.5`t잠정`t`t`t`t`t",
+        "출장`t2028-02-26`t`t2028-02-29`t`t`t`t`t시험 출장지`t`t`t`t",
+        "휴가`t2028-02-28`t`t`t`t`t1.25`t확정`t`t`t`t`t",
+        "출근`t2028-02-29`t08:00`t`t`t`t`t`t`t`t`t미완료`t퇴근 기록 없음",
+        "업무외`t2028-02-29`t23:30`t2028-03-01`t01:00`t90`t`t`t`t원격`tINC-0002`t'=1+1 두 줄`t"
+    ) -join "`r`n"
+    $thread = [Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture
+    $snapshots = @()
+    try {
+        foreach ($culture in 'ko-KR', 'en-US', 'th-TH', 'ar-SA', 'ja-JP') {
+            $thread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($culture)
+            $report = Get-WtAttendanceReport (& $d '2028-02-01') $reportEntries $reportOff 'workdays'
+            $snapshots += $report.Text
+            Assert-WtTest "근태 2a $culture : 윤일 · 반차와 휴무일 · 확정 일수 · 출장 건수/근무일 규칙" ($report.Summary.LeaveEstimated -eq 0.5 -and
+                $report.Summary.LeaveFixed -eq 1.25 -and $report.Summary.TripCount -eq 1 -and $report.Summary.TripDays -eq 0 -and $report.Summary.OverMinutes -eq 90)
+        }
+    } finally { $thread.CurrentCulture = $oldCulture }
+    Assert-WtTest '월 보고: 5개 문화권 모두 못 박은 탭 구분 글 (CRLF · 빈 칸 · 미완료 · 수식 방지)과 정확히 같음' (@($snapshots | Where-Object { $_ -cne $expectedReport }).Count -eq 0) $snapshots[0]
+    $march = Get-WtAttendanceReport (& $d '2028-03-01') $reportEntries $reportOff
+    Assert-WtTest '월 보고: 달 넘는 업무외는 시작 달에만, 다음 달 빈 보고는 제목 한 줄' ($march.Rows -eq 0 -and $march.Text -ceq ($expectedReport -split "`r`n")[0])
+    $onlyHoliday = ConvertFrom-WtAttendanceItem ('{"id":"h","kind":"leave","start":{"date":"2028-02-29","time":null},"leave":{"type":"half-pm","days":null}}' | ConvertFrom-Json -DateKind String)
+    Assert-WtTest '휴가: 휴무일 하루의 반차는 0일' ((Get-WtAttendanceSummary (& $d '2028-02-01') @($onlyHoliday) $reportOff).LeaveDays -eq 0)
+    $calendarResult = Get-WtCalendarItems (& $d '2026-11-30') (& $d '2026-12-01')
+    Assert-WtTest '근태 달력 등록: 코어 목록만 조회해도 근태 출처의 두 날짜를 받음' ($calendarResult.Success -and @($calendarResult.Items | Where-Object Page -ceq 'attendance').Count -eq 2) $calendarResult.Reason
+
     if (Test-WtTestWpf) {
         $test = New-WtTestData 'attendance-view'; $tests.Add($test)
         [void][System.IO.Directory]::CreateDirectory($test.Legacy)
