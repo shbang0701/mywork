@@ -14,9 +14,10 @@
 #>
 #Requires -Version 7.0
 [CmdletBinding()]
-param()
+param([switch]$NoDesktop)
 
 $ErrorActionPreference = 'Stop'
+$global:wtTestNoDesktop = [bool]$NoDesktop   # 이번 검사 프로세스에서만. 창 · 입력 · 전용 프로세스 종료 검사를 뺀다.
 $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'TestKit.ps1')
 Import-WtTestCore
@@ -25,6 +26,7 @@ $script:failed = 0
 function Assert-Wt([string]$Name, [bool]$Ok, $Detail = '') {
     if ($Ok) { Write-Host "PASS $Name" } else { Write-Host "FAIL $Name $Detail" -ForegroundColor Red; $script:failed++ }
 }
+function Get-WtTestJsonCore($Value) { ConvertTo-Json -InputObject $Value -Depth 20 -Compress }
 
 $test = New-WtTestData 'core'
 $wpf = Test-WtTestWpf
@@ -79,6 +81,7 @@ try {
     } finally { Remove-WtTestGate $gate }
     Assert-Wt '화면 밖 작업: 문을 열면 버린 작업도 끝나 치워진다' ((Get-WtWorkInfo).Abandoned -eq 0 -and -not (Test-WtWorkStuck 'path:\\wt-test\hang'))
     # 앱 전용 프로세스: 돌아오지 않는 작업이 남아도 Exit-WtOwnProcess로 끝난다. 부르지 않으면 PowerShell이 그 작업을 기다리느라 끝나지 않는다
+    if (-not $NoDesktop) {
     $exitChild = Join-Path $test.Root 'work-exit.ps1'
     Set-Content -LiteralPath $exitChild -Encoding utf8 -Value @"
 param([string]`$Mode)
@@ -106,6 +109,7 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Assert-Wt "앱 프로세스: 돌아오지 않는 작업이 남아도 Exit-WtOwnProcess로 끝난다 (${ownMs}ms) · 부르지 않으면 끝나지 않는다 (대조)" (
         $ownExited -and $exitRuns.own.Process.ExitCode -eq 7 -and -not $noneExited) "(끝남 $ownExited · 코드 $(if ($ownExited) { $exitRuns.own.Process.ExitCode }) · 대조 끝남 $noneExited)"
     foreach ($r in $exitRuns.Values) { $r.Process.Dispose() }
+    } else { Write-Host 'SKIP 앱 프로세스 강제 종료 검사 (-NoDesktop)' }
     Assert-Wt '앱 프로세스: 이 검사 프로세스(-File Test-Core.ps1)는 앱 전용이 아니라고 본다' (-not (Test-WtOwnProcess (Join-Path $root 'Start-WorkTool.ps1')))
 
     # ---- 저장 ----
@@ -139,10 +143,313 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
         $d
     }
     Assert-Wt '형식 변환: schema 1 → 2' ($doc.schema -eq 2 -and $doc.items[0].extra -eq 'from1')
-    Assert-Wt '형식 변환 전 원본을 남긴다' (Test-Path ((Get-WtStorePath 'mig') + '.schema1.bak'))
+    $migBackups = @(Get-ChildItem -LiteralPath $test.Data -Filter 'mig.json.schema1.*.bak' | ForEach-Object Name)
+    Assert-Wt '형식 변환 전 원본을 날짜 붙은 백업으로 남긴다' ($migBackups.Count -eq 1 -and $migBackups[0] -match '^mig\.json\.schema1\.\d{8}-\d{6}\.bak$') ($migBackups -join ', ')
     $threw = $false
     try { [void](Read-WtStore -Name 'mig' -Schema 1) } catch { $threw = $true }
     Assert-Wt '더 새 형식 파일은 읽지 않고 멈춘다' $threw
+
+    # 형식 규칙 (core\Records.psm1 · 저장 모듈): 가짜 저장소로 본다. 칸의 뜻은 탭이 정하고, 여기서는 모양만 본다
+    $raw = { param($name, $json) [System.IO.File]::WriteAllText((Get-WtStorePath $name), $json, [System.Text.UTF8Encoding]::new($false)) }
+    & $raw 'kind-text' '{ "schema": 1, "saved": "2026-10-25T21:54:29", "future": { "a": 1 }, "items": [ { "id": "k1", "at": "2026-10-25T21:54:29", "when": "2026-10-25T21:54:29+09:00", "n": 3 } ] }'
+    $kt = Get-WtStoreItems 'kind-text'
+    Assert-Wt '저장: 날짜처럼 보이는 글을 [datetime]으로 바꾸지 않는다 (-DateKind String)' ($kt[0].at -is [string] -and $kt[0].at -ceq '2026-10-25T21:54:29' -and $kt[0].when -ceq '2026-10-25T21:54:29+09:00')
+    Write-WtStore 'kind-text' -Items @($kt)
+    $ktDoc = [System.IO.File]::ReadAllText((Get-WtStorePath 'kind-text')) | ConvertFrom-Json -DateKind String
+    Assert-Wt '저장: 맨 위의 모르는 키는 다시 써도 남고, saved는 시간대 붙은 시각' ($ktDoc.future.a -eq 1 -and $ktDoc.items[0].at -ceq '2026-10-25T21:54:29' -and
+        $ktDoc.saved -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$') $ktDoc.saved
+    & $raw 'mig-top' '{ "schema": 1, "saved": "x", "importedFrom": "C:\\old", "future": [ 1, 2 ], "items": [ { "id": "t1" } ] }'
+    $mt = Read-WtStore -Name 'mig-top' -Schema 2 -Migrate { param($doc, $from) foreach ($i in $doc.items) { $i | Add-Member -NotePropertyName v -NotePropertyValue $from -Force }; $doc }
+    $mtDoc = [System.IO.File]::ReadAllText((Get-WtStorePath 'mig-top')) | ConvertFrom-Json -DateKind String
+    Assert-Wt '형식 변환: 맨 위의 모르는 키를 잃지 않고, 저장한 모양 그대로 돌려준다' ($mtDoc.schema -eq 2 -and $mtDoc.importedFrom -eq 'C:\old' -and ($mtDoc.future -join ',') -eq '1,2' -and
+        $mt.items[0].v -eq 1 -and $mt.importedFrom -eq 'C:\old')
+    $failText = '{ "schema": 1, "items": [ { "id": "f1" } ] }'
+    & $raw 'mig-fail' $failText
+    $failError = $null
+    try { [void](Read-WtStore -Name 'mig-fail' -Schema 2 -Migrate { param($doc, $from) throw '일부러 낸 변환 오류' }) } catch { $failError = $_.Exception.Message }
+    Assert-Wt '형식 변환: 실패하면 원본 파일 · 백업을 건드리지 않고 이유를 알린다' ($failError -like '*원본 파일은 그대로*일부러 낸 변환 오류*' -and
+        [System.IO.File]::ReadAllText((Get-WtStorePath 'mig-fail')) -ceq $failText -and -not @(Get-ChildItem -LiteralPath $test.Data -Filter 'mig-fail.json.*.bak').Count) $failError
+    $badSchema = foreach ($j in '{ "items": [] }', '{ "schema": "2", "items": [] }', '{ "schema": 1.5, "items": [] }', '[ 1, 2 ]') {
+        & $raw 'bad-schema' $j
+        $e = $null; try { [void](Get-WtStoreItems 'bad-schema') } catch { $e = $_.Exception.Message }
+        if ($e -notlike '*파일은 바꾸지 않았습니다*' -or ($j -ne '[ 1, 2 ]' -and $e -notlike '*형식 번호*') -or [System.IO.File]::ReadAllText((Get-WtStorePath 'bad-schema')) -cne $j) { $j }
+    }
+    Assert-Wt '저장: schema가 없거나 숫자가 아니거나 맨 위가 객체가 아니면 읽지 않고 파일도 그대로' (-not @($badSchema).Count) (@($badSchema) -join ' | ')
+    $storageModule = Get-Module Storage
+    $stem = Join-Path $test.Data 'backup-test.json.schema1.20261026-090000'
+    & $raw 'backup-test' '{ "schema": 1, "items": [] }'
+    $b1 = & $storageModule { param($p, $s) Invoke-WtDataIo Backup -Arguments $p, $s, $null } (Get-WtStorePath 'backup-test') $stem
+    $b2 = & $storageModule { param($p, $s) Invoke-WtDataIo Backup -Arguments $p, $s, '보류된 내용' } (Get-WtStorePath 'backup-test') $stem
+    Assert-Wt '저장: 변환 전 백업은 덮어쓰지 않고 -2를 붙이며, 아직 파일에 쓰이지 않은 내용은 그 글로 남긴다' ($b1 -eq "$stem.bak" -and $b2 -eq "$stem-2.bak" -and
+        [System.IO.File]::ReadAllText($b1) -ceq '{ "schema": 1, "items": [] }' -and [System.IO.File]::ReadAllText($b2) -ceq '보류된 내용')
+
+    # 저장소 읽기 결과 · 쓰기 거부 · 핸들 (2026-10-26 검토 반례: 빈 파일 · 목록 아닌 items · 거부 뒤 쓰기 · null 항목)
+    [System.IO.File]::Copy((Join-Path $PSScriptRoot 'fixtures\store-empty.json'), (Get-WtStorePath 'empty-store'), $true)
+    $emptyError = $null; try { [void](Read-WtStore 'empty-store') } catch { $emptyError = $_.Exception.Message }
+    $h = Open-WtStore 'empty-store'
+    $hError = $null; try { Save-WtStore $h @() } catch { $hError = $_.Exception.Message }
+    $wError = $null; try { Write-WtStore 'empty-store' -Items @() } catch { $wError = $_.Exception.Message }
+    Assert-Wt '저장: 빈 파일은 「없음」이 아니라 깨진 파일 (읽기 거부, 핸들 · 낮은 단계 저장 모두 거부, 파일 그대로)' ($emptyError -like '*비어 있습니다*' -and $h.State -eq 'error' -and
+        $hError -and $wError -and [System.IO.File]::ReadAllBytes((Get-WtStorePath 'empty-store')).Length -eq 0) "$emptyError / $hError / $wError"
+    & $raw 'newer-store' '{ "schema": 5, "items": [] }'
+    $nError = $null; try { [void](Get-WtStoreItems 'newer-store' -Schema 2) } catch { $nError = $_.Exception.Message }
+    $wError = $null; try { Write-WtStore 'newer-store' -Schema 2 -Items @() } catch { $wError = $_.Exception.Message }
+    & $raw 'list-store' '{ "schema": 1, "items": "글" }'
+    $lError = $null; try { [void](Read-WtStore 'list-store') } catch { $lError = $_.Exception.Message }
+    Assert-Wt '저장: 더 새 schema · items가 목록이 아닌 파일은 읽지 않고, 그 뒤 낮은 단계 저장도 거부' ($nError -like '*더 새 버전*' -and $wError -like '*읽지 못한 파일*' -and $lError -like '*목록이 아닙니다*' -and
+        [System.IO.File]::ReadAllText((Get-WtStorePath 'newer-store')) -ceq '{ "schema": 5, "items": [] }')
+    & $raw 'null-store' '{ "schema": 1, "items": [ { "id": "a" }, null, [ "raw1", "raw2" ], [], { "id": "b" } ] }'
+    $h = Open-WtStore 'null-store'
+    $h2 = Save-WtStore $h @(Compress-WtDeletedItems @($h.Items))
+    $nullDoc = [System.IO.File]::ReadAllText((Get-WtStorePath 'null-store')) | ConvertFrom-Json
+    $oldError = $null; try { [void](Save-WtStore $h @()) } catch { $oldError = $_.Exception.Message }
+    [void](Save-WtStore $h2 @($h2.Items[0]))
+    Assert-Wt '저장: 핸들은 null · 목록 · 빈 목록 항목도 같은 자리에 그대로 읽고 쓰고, 저장하면 새 핸들을 돌려준다(쓴 핸들은 다시 못 씀)' (@($h.Items).Count -eq 5 -and @($nullDoc.items).Count -eq 5 -and
+        $null -eq $nullDoc.items[1] -and ($nullDoc.items[2] -join ',') -eq 'raw1,raw2' -and $nullDoc.items[3] -is [array] -and @($nullDoc.items[3]).Count -eq 0 -and
+        $oldError -like '*바뀌었습니다*' -and @(([System.IO.File]::ReadAllText((Get-WtStorePath 'null-store')) | ConvertFrom-Json).items).Count -eq 1 -and (Get-WtStoreItems 'null-store').Count -eq 1) $oldError
+    $h1 = Open-WtStore 'null-store'
+    & $raw 'null-store' '{ "schema": 1, "items": [ { "id": "밖에서 바꿈" } ] }'
+    $h2 = Open-WtStore 'null-store'
+    $sError = $null; try { [void](Save-WtStore $h1 @()) } catch { $sError = $_.Exception.Message }
+    [void](Save-WtStore $h2 @($h2.Items))
+    $hm = Open-WtStore 'never-store'
+    $hmNew = Save-WtStore $hm @([pscustomobject]@{ id = 'n1' })
+    Assert-Wt '저장: 핸들로 읽은 뒤 다시 읽은 저장소에는 옛 핸들로 쓰지 않고(새 핸들은 됨), 없는 저장소는 핸들로 새로 만든다' ($sError -like '*바뀌었습니다*' -and
+        (Get-WtStoreItems 'null-store')[0].id -eq '밖에서 바꿈' -and $hm.State -eq 'missing' -and $hmNew.State -eq 'ok' -and (Get-WtStoreItems 'never-store')[0].id -eq 'n1') $sError
+    # 같은 핸들을 둘이 나눠 가져도(화면 · 홈 카드가 캐시를 같이 봄) 핸들은 열 때의 버전을 자기 것으로 든다: 먼저 저장한 쪽만 쓰이고 뒤의 옛 목록은 거부
+    $shared = Open-WtStore 'never-store'
+    [void](Save-WtStore $shared @([pscustomobject]@{ id = 'A' }))
+    $lateError = $null; try { [void](Save-WtStore $shared @([pscustomobject]@{ id = 'B' })) } catch { $lateError = $_.Exception.Message }
+    Assert-Wt '저장: 같은 핸들로 두 번째 저장(나눠 가진 옛 목록)은 거부하고 앞 저장이 남는다 (낙관적 잠금)' ($lateError -like '*바뀌었습니다*' -and (Get-WtStoreItems 'never-store')[0].id -eq 'A') $lateError
+    # 거부는 끈질기다: schema 3을 거부한 뒤 디스크 때문에 못 읽어도(잠긴 파일) 낮은 schema 저장은 여전히 거부
+    & $raw 'sticky-store' '{ "schema": 3, "items": [] }'
+    try { [void](Get-WtStoreItems 'sticky-store' -Schema 2) } catch { }
+    $lockFile = [System.IO.File]::Open((Get-WtStorePath 'sticky-store'), 'Open', 'ReadWrite', 'None')
+    $lockedError = $null
+    try { try { [void](Get-WtStoreItems 'sticky-store' -Schema 2) } catch { $lockedError = $_.Exception.Message } } finally { $lockFile.Dispose() }
+    $stickyError = $null; try { Write-WtStore 'sticky-store' -Schema 2 -Items @() } catch { $stickyError = $_.Exception.Message }
+    Assert-Wt '저장: 거부한 파일은 그 뒤 못 읽어도(잠김) 거부로 남아 낮은 schema로 쓰지 않는다 (다시 읽어 정상일 때만 풀림)' ($lockedError -and $stickyError -like '*읽지 못한 파일*' -and
+        [System.IO.File]::ReadAllText((Get-WtStorePath 'sticky-store')) -ceq '{ "schema": 3, "items": [] }') "$lockedError / $stickyError"
+    # 파일 교체 중 잠시 없어져도 정상 schema를 확인한 것이 아니다. 정상 파일을 읽은 뒤에만 저장을 허용한다
+    $stickyPath = Get-WtStorePath 'sticky-store'
+    [System.IO.File]::Move($stickyPath, "$stickyPath.hold")
+    try {
+        $missingHandle = Open-WtStore 'sticky-store' -Schema 2
+        $missingError = $null; try { Write-WtStore 'sticky-store' -Schema 2 -Items @() } catch { $missingError = $_.Exception.Message }
+        Assert-Wt '저장: 거부 뒤 파일이 없어져도 거부 유지 (정상 schema를 확인하기 전에는 새 파일도 만들지 않음)' (
+            $missingHandle.State -eq 'error' -and $missingError -like '*읽지 못한 파일*' -and -not [System.IO.File]::Exists($stickyPath)) $missingError
+    } finally { [System.IO.File]::Move("$stickyPath.hold", $stickyPath) }
+    & $raw 'sticky-store' '{ "schema": 2, "items": [ { "id": "정상" } ] }'
+    $normalHandle = Open-WtStore 'sticky-store' -Schema 2
+    [void](Save-WtStore $normalHandle @($normalHandle.Items))
+    Assert-Wt '저장: 거부는 정상 schema를 다시 읽으면 풀리고 그 핸들로 저장할 수 있다' (
+        $normalHandle.State -eq 'ok' -and (Get-WtStoreItems 'sticky-store' -Schema 2)[0].id -eq '정상')
+    $itemsBad = foreach ($f in 'store-items-null.json', 'store-no-items.json') {
+        [System.IO.File]::Copy((Join-Path $PSScriptRoot "fixtures\$f"), (Get-WtStorePath 'items-store'), $true)
+        $h = Open-WtStore 'items-store'
+        $e = $null; try { [void](Save-WtStore $h @()) } catch { $e = $_.Exception.Message }
+        if ($h.State -ne 'error' -or $h.Error -notlike '*items가 없거나*' -or -not $e) { "$f=$($h.State)" }
+    }
+    Assert-Wt '저장: items가 null이거나 없으면 빈 목록이 아니라 깨진 파일 (저장 거부)' (-not @($itemsBad).Count) (@($itemsBad) -join ', ')
+
+    Assert-Wt '형식: 앱이 찍는 시각은 시간대 포함 · 날짜 · 시각 글은 정한 모양만' (
+        (Get-WtStamp ([datetime]'2026-10-25 21:54:29')) -match '^2026-10-25T21:54:29[+-]\d{2}:\d{2}$' -and (ConvertFrom-WtStamp '2026-10-25T21:54:29+09:00').Offset.TotalHours -eq 9 -and
+        $null -eq (ConvertFrom-WtStamp '2026-10-25 21:54:29') -and (ConvertFrom-WtDateText '2026-02-28') -eq [datetime]'2026-02-28' -and $null -eq (ConvertFrom-WtDateText '2026-02-30') -and
+        $null -eq (ConvertFrom-WtDateText '2026-1-5') -and (ConvertFrom-WtTimeText '09:30') -eq [timespan]'09:30' -and $null -eq (ConvertFrom-WtTimeText '9:30') -and $null -eq (ConvertFrom-WtTimeText '24:00'))
+    $looseDates = @('2026-10-01', '2026-10-1', '2026/10/1', '2026.10.01', '2026. 10. 1.', '20261001', '10/1/2026', ' 2026-10-01 ') | ForEach-Object { ConvertFrom-WtLegacyDate $_ }
+    $looseTimes = @('9:30', '09:30', '09:30:00', '오전 9:30', '오후 2:30', '2:30 PM', '오후 2:30:00') | ForEach-Object { ConvertFrom-WtLegacyTime $_ }
+    Assert-Wt '형식: 예전 CSV 값은 Excel이 바꾼 모양도 읽고, 못 읽으면 $null' (
+        (@($looseDates | Sort-Object -Unique) -join ',') -eq '2026-10-01' -and @($looseDates).Count -eq 8 -and (($looseTimes | Select-Object -Unique) -join ',') -eq '09:30,14:30' -and
+        $null -eq (ConvertFrom-WtLegacyDate '내일') -and $null -eq (ConvertFrom-WtLegacyDate '2026-13-01') -and $null -eq (ConvertFrom-WtLegacyTime '25:00') -and
+        (ConvertFrom-WtLegacyStamp '2026-10-25 21:54:29') -match '^2026-10-25T21:54:29[+-]\d{2}:\d{2}$' -and (ConvertFrom-WtLegacyStamp '2026-10-25T21:54:29+09:00') -ceq '2026-10-25T21:54:29+09:00' -and
+        $null -eq (ConvertFrom-WtLegacyStamp '모름')) "$($looseDates -join ',') / $($looseTimes -join ',')"
+    $thread = [System.Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture
+    try {
+        $thread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('th-TH')
+        $thai = @((ConvertTo-WtDateText ([datetime]'2026-10-25')), (Get-WtStamp ([datetime]'2026-10-25 09:00')).Substring(0, 19), (ConvertFrom-WtLegacyDate '2026/10/25'))
+    } finally { $thread.CurrentCulture = $oldCulture }
+    Assert-Wt '형식: 불기 · 회교력 문화권에서도 그레고리력 글 (th-TH)' (($thai -join '|') -eq '2026-10-25|2026-10-25T09:00:00|2026-10-25') ($thai -join '|')
+    $fieldObj = [pscustomobject]@{ a = 1 }
+    Set-WtField $fieldObj 'b' @('x'); Set-WtField $fieldObj 'a' 2
+    $one = Get-WtField ([pscustomobject]@{ l = @('x') }) 'l'; $none = Get-WtField ([pscustomobject]@{ l = @() }) 'l'
+    Assert-Wt '형식: 칸 읽기 · 넣기 (없는 count는 PowerShell의 Count(1)가 아니라 $null, 목록은 하나짜리 · 빈 목록도 목록)' ($null -eq (Get-WtField $fieldObj 'count') -and $fieldObj.count -eq 1 -and $fieldObj.a -eq 2 -and
+        $fieldObj.b -is [array] -and (Get-WtField ([ordered]@{ count = 3 }) 'count') -eq 3 -and @(Copy-WtItem @($fieldObj, $fieldObj)).Count -eq 2 -and (Copy-WtItem $fieldObj).a -eq 2 -and
+        $one -is [array] -and $one.Count -eq 1 -and $none -is [array] -and $none.Count -eq 0 -and $null -eq (Get-WtField 'glue' 'Length'))
+    $nums = '{ "a": 2147483648, "b": 99999999999999999999, "c": 10.5, "d": 1e300, "e": "10", "f": true, "g": -1, "h": 5, "i": 1.0 }' | ConvertFrom-Json
+    $w = @('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i') | ForEach-Object { $v = ConvertFrom-WtWhole $nums.$_ 0 2147483647; if ($null -eq $v) { 'x' } else { "$v" } }
+    $n2 = @('c', 'd', 'e', 'g', 'h') | ForEach-Object { $v = ConvertFrom-WtNumber $nums.$_ 0 366; if ($null -eq $v) { 'x' } else { "$v" } }
+    Assert-Wt '형식: 숫자 칸은 정한 범위의 정수만 (Int32 · Int64 · BigInteger를 넘는 수 · 소수 · 글 · 참거짓은 $null, 예외 없음)' (($w -join ',') -eq 'x,x,x,x,x,x,x,5,1' -and ($n2 -join ',') -eq '10.5,x,x,x,5' -and
+        $null -eq (ConvertFrom-WtWhole 2147483648 0 2147483647) -and (ConvertFrom-WtWhole 2147483648 0 9999999999) -eq 2147483648) "$($w -join ',') / $($n2 -join ',')"
+    $tiny = '{ "a": 1e-30, "b": -1e-30, "c": 1.0000000000000002, "d": 0.9999999999999999, "e": 10.0 }' | ConvertFrom-Json
+    $tw = @('a', 'b', 'c', 'd', 'e') | ForEach-Object { $v = ConvertFrom-WtWhole $tiny.$_ -5 100; if ($null -eq $v) { 'x' } else { "$v" } }
+    Assert-Wt '형식: 정수 판정은 Decimal로 바꾸기 전에 (1e-30 · 1.0000000000000002 · 0.9999999999999999는 정수가 아님, 10.0은 정수)' (($tw -join ',') -eq 'x,x,x,x,10' -and
+        $null -eq (ConvertFrom-WtWhole ([decimal]'1.5') 0 9) -and (ConvertFrom-WtWhole ([decimal]'3') 0 9) -eq 3) ($tw -join ',')
+    Assert-Wt '형식: 정수의 범위는 호출자가 정한다 (큰 Double 정수도 정확히 변환, Int64 밖이면 예외 없이 거부)' (
+        (ConvertFrom-WtWhole ([double]9007199254740992) 0 ([long]::MaxValue)) -eq 9007199254740992 -and
+        $null -eq (ConvertFrom-WtWhole ([double]::MaxValue) 0 ([long]::MaxValue)) -and
+        $null -eq (ConvertFrom-WtWhole ([double][long]::MaxValue) 0 ([long]::MaxValue)))
+    Assert-Wt '형식: 날짜는 1900 ~ 2199년만' ((ConvertFrom-WtDateText '1900-01-01') -eq [datetime]'1900-01-01' -and (ConvertFrom-WtDateText '2199-12-31') -eq [datetime]'2199-12-31' -and
+        $null -eq (ConvertFrom-WtDateText '1899-12-31') -and $null -eq (ConvertFrom-WtDateText '2200-01-01'))
+    $now = [DateTimeOffset]::new(2026, 10, 26, 9, 0, 0, [timespan]::FromHours(9))
+    $del = @(Compress-WtDeletedItems @(
+            [pscustomobject]@{ id = 'old'; title = '지운 지 오래'; deleted = '2026-07-01T09:00:00+09:00' },
+            [pscustomobject]@{ id = 'new'; title = '최근에 지움'; deleted = '2026-10-01T09:00:00+09:00' },
+            [pscustomobject]@{ id = 'bad'; title = '시각 모름'; deleted = '언젠가' },
+            [pscustomobject]@{ id = 'live'; title = '살아 있음'; deleted = $null },
+            [pscustomobject]@{ id = 'no'; title = 'false'; deleted = $false }) -Days 90 -Now $now)
+    Assert-Wt '형식: 지운 지 90일 지난 기록은 { id, deleted }만 남기고, 나머지는 그대로' ((Get-WtTestJsonCore $del[0]) -ceq '{"id":"old","deleted":"2026-07-01T09:00:00+09:00"}' -and
+        $del[1].title -eq '최근에 지움' -and $del[2].title -eq '시각 모름' -and -not (Test-WtDeleted $del[3]) -and -not (Test-WtDeleted $del[4]) -and (Test-WtDeleted $del[2]) -and $del.Count -eq 5)
+    # 예전 데이터 합치기: id는 대소문자를 가린다. 「이 앱에서 고쳤는지」는 rev(사람이 고친 횟수)와 origin.rev로, 바뀐 예전 칸이 정하는 경로만 옮긴다
+    $row = { param($id, $t, $n) [pscustomobject][ordered]@{ Id = $id; T = $t; N = $n } }
+    $item = { param($id, $title, $note, $rev, $orow) [pscustomobject][ordered]@{ id = $id; title = $title; note = $note; deep = [pscustomobject]@{ keep = '앱 칸'; n = $note }; rev = $rev; updated = 't0'
+        origin = [pscustomobject][ordered]@{ from = 'winforms-csv'; at = 't0'; rev = 0; row = $orow; line = 7 } } }
+    $mOld = @(
+        (& $item 'same' 'A' 'a' 0 (& $row 'same' 'A' 'a')),
+        (& $item 'theirs' 'B' 'b' 0 (& $row 'theirs' 'B' 'b')),
+        (& $item 'both' '고침' 'c' 1 (& $row 'both' 'C' 'c')),
+        [pscustomobject]@{ id = 'gone'; deleted = 't9' },
+        [pscustomobject]@{ id = 'mine'; title = '이 앱에서 만듦'; rev = 0; origin = $null },
+        (& $item 'left' 'L' 'l' 0 (& $row 'left' 'L' 'l')),
+        $null,
+        'garbage')
+    $mOld[1] | Add-Member -NotePropertyName extra -NotePropertyValue '남길 칸'
+    $mNew = @(foreach ($p in @(@('same', 'A', 'a'), @('theirs', 'B', 'b2'), @('both', 'C2', 'c'), @('gone', 'G', 'g'), @('mine', 'M', 'm'), @('add', 'N', 'n'), @('ADD', '대문자', 'n'), @('add', '겹친 줄', 'x'), @('add', '겹친 줄', 'x'))) {
+            [pscustomobject][ordered]@{ id = $p[0]; title = $p[1]; note = $p[2]; deep = [pscustomobject]@{ n = $p[2] }; rev = 0; updated = 't1'
+                origin = [pscustomobject][ordered]@{ from = 'winforms-csv'; at = 't1'; rev = 0; row = (& $row $p[0] $p[1] $p[2]) } }
+        })
+    $owned = @{ T = @('title'); N = @('note', 'deep.n') }
+    $mr = Merge-WtLegacyItems -Items $mOld -Incoming $mNew -Owned $owned
+    $get = { param($id) @($mr.Items | Where-Object { (Test-WtRecordObject $_) -and $_.id -ceq $id })[0] }
+    $theirs = & $get 'theirs'
+    Assert-Wt '형식: 예전 데이터 합치기 (그대로 · 예전 쪽만 바뀜 · 양쪽 다 고침 · 지운 것 · 이 앱에서 만든 것 · 새 줄 · 대소문자 · 겹친 줄 · 없어진 줄 · null · 모양이 틀린 항목)' (
+        $mr.Unchanged -eq 1 -and $mr.Updated -eq 1 -and $mr.Added -eq 3 -and $mr.KeptDeleted -eq 1 -and ($mr.Conflicts -join ',') -eq 'both,mine' -and ($mr.Missing -join ',') -eq 'left' -and
+        $theirs.note -eq 'b2' -and $theirs.deep.n -eq 'b2' -and $theirs.deep.keep -eq '앱 칸' -and $theirs.extra -eq '남길 칸' -and $theirs.title -eq 'B' -and $theirs.origin.line -eq 7 -and
+        $theirs.origin.row.N -eq 'b2' -and $theirs.origin.at -eq 't1' -and $theirs.updated -eq 't1' -and $theirs.rev -eq 0 -and
+        (& $get 'both').title -eq '고침' -and $null -eq (& $get 'gone').title -and (& $get 'add').title -eq 'N' -and (& $get 'ADD').title -eq '대문자' -and
+        @($mr.Duplicates).Count -eq 1 -and (& $get $mr.Duplicates[0]).origin.dupOf -ceq 'add' -and (Get-WtRecordProblem (& $get $mr.Duplicates[0])) -like "*원래 id 'add'*" -and
+        $mr.Items.Count -eq 11 -and $null -eq $mr.Items[6] -and $mr.Items[7] -ceq 'garbage' -and
+        (Get-WtRowKey ([pscustomobject]@{ a = 1; b = 2 })) -ceq (Get-WtRowKey ([ordered]@{ b = 2; a = 1 }))) "(그대로 $($mr.Unchanged) · 바꿈 $($mr.Updated) · 더함 $($mr.Added) · 충돌 $($mr.Conflicts -join ',') · 항목 $($mr.Items.Count))"
+    $threw = $null; try { [void](Merge-WtLegacyItems -Items @() -Incoming @()) } catch { $threw = $_.Exception.Message }
+    Assert-Wt '형식: 합치기는 예전 칸 → 항목 칸 지도(-Owned) 없이 하지 않는다' ($threw -like '*-Owned*')
+    $edit = [pscustomobject]@{ id = 'e'; updated = 'x' }
+    Set-WtItemEdited $edit '2026-10-26T09:00:00+09:00'; Set-WtItemEdited $edit '2026-10-26T09:00:00+09:00'
+    Assert-Wt '형식: 사람이 고치면 rev가 1씩 오른다 (같은 초여도), 이상한 rev는 -1(고쳤음으로 봄)' ($edit.rev -eq 2 -and $edit.updated -eq '2026-10-26T09:00:00+09:00' -and
+        (Get-WtItemRevision ([pscustomobject]@{ rev = 'x' })) -eq -1 -and (Get-WtItemRevision ([pscustomobject]@{ id = 'n' })) -eq 0)
+    $pt = [pscustomobject]@{ a = [pscustomobject]@{ x = 1; keep = 'k' }; r = $null; l = @(1) }
+    Copy-WtPathValue $pt ([pscustomobject]@{ a = [pscustomobject]@{ x = 2 }; r = [pscustomobject]@{ f = 'w' }; l = @(5) }) 'a.x'
+    Copy-WtPathValue $pt ([pscustomobject]@{ r = [pscustomobject]@{ f = 'w' } }) 'r.f'
+    Copy-WtPathValue $pt ([pscustomobject]@{ l = @(5) }) 'l'
+    $pt2 = [pscustomobject]@{ r = [pscustomobject]@{ f = 'w'; extra = 1 } }
+    Copy-WtPathValue $pt2 ([pscustomobject]@{ r = $null }) 'r.f'
+    Assert-Wt '형식: 칸 경로 옮기기 (그 칸만 · 한쪽이 null이면 앞부분 통째로 · 목록은 목록으로)' ($pt.a.x -eq 2 -and $pt.a.keep -eq 'k' -and $pt.r.f -eq 'w' -and $pt.l -is [array] -and
+        $pt.l.Count -eq 1 -and $pt.l[0] -eq 5 -and $null -eq $pt2.r -and ((Get-WtChangedColumns ([pscustomobject]@{ a = 1; b = 2 }) ([pscustomobject]@{ a = 1; b = 3; c = 4 })) -join ',') -eq 'b,c')
+    # 목록 원소 경로: 첫 원소의 그 칸만 옮기고 다른 원소 · 다른 칸은 그대로. 원소가 없으면 끼워 넣고, 원본에서 없어지면 그 칸만 null
+    $al1 = [pscustomobject]@{ alarms = @([pscustomobject]@{ before = 10; sound = 'keep' }, [pscustomobject]@{ channel = 'future' }) }
+    Copy-WtPathValue $al1 ([pscustomobject]@{ alarms = @([pscustomobject]@{ before = 20 }) }) 'alarms[0].before'
+    $al2 = [pscustomobject]@{ alarms = @() }
+    Copy-WtPathValue $al2 ([pscustomobject]@{ alarms = @([pscustomobject]@{ before = 5 }) }) 'alarms[0].before'
+    $al3 = [pscustomobject]@{ alarms = @([pscustomobject]@{ before = 10; sound = 'keep' }) }
+    Copy-WtPathValue $al3 ([pscustomobject]@{ alarms = @() }) 'alarms[0].before'
+    $al4 = [pscustomobject]@{ alarms = @() }
+    Copy-WtPathValue $al4 ([pscustomobject]@{ alarms = @() }) 'alarms[0].before'
+    Assert-Wt '형식: 목록 원소 경로(alarms[0].before)는 그 원소의 그 칸만 (다른 원소 · 확장 칸 보존, 없으면 끼움, 원본에서 없어지면 그 칸만 null)' (
+        $al1.alarms.Count -eq 2 -and $al1.alarms[0].before -eq 20 -and $al1.alarms[0].sound -eq 'keep' -and $al1.alarms[1].channel -eq 'future' -and
+        @($al2.alarms).Count -eq 1 -and $al2.alarms[0].before -eq 5 -and @($al3.alarms).Count -eq 1 -and $null -eq $al3.alarms[0].before -and $al3.alarms[0].sound -eq 'keep' -and
+        @($al4.alarms).Count -eq 0)
+    $packed = @(Compress-WtDeletedItems @([pscustomobject]@{ id = 'a' }, @('r1', 'r2'), @(), $null, 'g'))
+    $same = @(foreach ($p in @(@('s', 'X'), @('s', 'X'), @('s', 'Y'))) { [pscustomobject]@{ id = $p[0]; title = $p[1]; rev = 0; origin = [pscustomobject]@{ from = 'winforms-csv'; at = 't'; rev = 0; row = [pscustomobject]@{ Id = $p[0]; T = $p[1] } } } })
+    $sr = Merge-WtLegacyItems -Items @() -Incoming $same -Owned @{ T = @('title') }
+    Assert-Wt '형식: 정리는 목록 · 빈 목록 · null 항목을 같은 자리에 보존한다' (
+        $packed.Count -eq 5 -and ($packed[1] -join ',') -eq 'r1,r2' -and $packed[2] -is [array] -and $packed[2].Count -eq 0 -and $null -eq $packed[3])
+    Assert-Wt '형식: 합치기는 id와 내용까지 같은 줄을 하나로 (내용이 다를 때만 dup)' (
+        $sr.Added -eq 2 -and @($sr.Duplicates).Count -eq 1 -and $sr.Items.Count -eq 2)
+    $badRevs = @(foreach ($pair in @(@(-1, -2), @(-1, 0), @(0, -1), @($null, 0), @(0, $null), @('0', 0), @(0, 1.5))) {
+        $bad = @([pscustomobject]@{ id = 'r'; title = '이 앱'; rev = $pair[0]; origin = [pscustomobject]@{ from = 'winforms-csv'; at = 't'; rev = $pair[1]; row = [pscustomobject]@{ Id = 'r'; T = '옛' } } })
+        $br = Merge-WtLegacyItems -Items $bad -Incoming @([pscustomobject]@{ id = 'r'; title = '새'; rev = 0; origin = [pscustomobject]@{ from = 'winforms-csv'; at = 't2'; rev = 0; row = [pscustomobject]@{ Id = 'r'; T = '새' } } }) -Owned @{ T = @('title') }
+        if ($br.Items[0].title -ne '이 앱' -or ($br.Conflicts -join ',') -ne 'r') { "$($pair -join ',')" }
+    })
+    Assert-Wt '형식: rev · origin.rev 중 하나라도 잘못되면 고쳤음으로 보고 보존 (둘 다 잘못됨 · null · 글 · 소수 포함)' (-not $badRevs.Count) ($badRevs -join '; ')
+    # 예전 CSV 인코딩: WinForms는 BOM 붙은 UTF-8, Excel로 다시 저장하면 BOM 없는 CP949가 될 수 있다. 어느 쪽이든 한글이 그대로 읽힌다
+    $csvText = "`"Id`",`"Title`"`r`n`"e1`",`"한글 제목, 쉼표`"`r`n"
+    $encDir = Join-Path $test.Root 'legacy-enc'
+    [void][System.IO.Directory]::CreateDirectory($encDir)
+    $encResults = foreach ($enc in @(@('bom', [System.Text.UTF8Encoding]::new($true)), @('utf8', [System.Text.UTF8Encoding]::new($false)), @('cp949', [System.Text.Encoding]::GetEncoding(949)))) {
+        [System.IO.File]::WriteAllBytes((Join-Path $encDir "$($enc[0]).csv"), [byte[]]@($enc[1].GetPreamble()) + $enc[1].GetBytes($csvText))
+        $rc = Read-WtLegacyCsv $encDir $enc[0]
+        "$($enc[0])=$($rc.Encoding):$($rc.Rows[0].Title):$($rc.Sha256.Length)"
+    }
+    Assert-Wt '예전 CSV: BOM UTF-8 · BOM 없는 UTF-8 · CP949 모두 한글이 그대로 읽힌다' (($encResults -join '|') -eq 'bom=utf-8:한글 제목, 쉼표:64|utf8=utf-8:한글 제목, 쉼표:64|cp949=cp949:한글 제목, 쉼표:64') ($encResults -join '|')
+    Assert-Wt '예전 CSV: 없으면 $null, 빈 파일이면 빈 줄 목록' ($null -eq (Read-WtLegacyCsv $encDir 'none') -and $(
+            [System.IO.File]::WriteAllText((Join-Path $encDir 'empty.csv'), ''); $e = Read-WtLegacyCsv $encDir 'empty'; $e.Rows.Count -eq 0 -and (Import-WtLegacyCsv $encDir 'empty').Count -eq 0))
+
+    # ---- 휴무일 (core\Calendar.psm1, 고정 시험 자료 tests\fixtures\holidays*.json: 더하기만 하고 고치지 않는다) ----
+    [System.IO.File]::Copy((Join-Path $PSScriptRoot 'fixtures\holidays.json'), (Get-WtStorePath 'holidays'), $true)
+    $hd = Get-WtHolidayData
+    $hStates = (@($hd.Entries) | ForEach-Object { "$($_.Id.Substring(0, 2))=$($_.State)" }) -join ','
+    $hSet = Get-WtHolidayDates   # 날짜 모음(HashSet) 하나를 돌려준다. 변수에 받은 뒤 펼친다
+    $hDates = @($hSet) | Sort-Object
+    $hOct = Get-WtHolidayDates ([datetime]'2026-10-05') ([datetime]'2026-10-31')
+    Assert-Wt '휴무일: 공휴일 · 개인 · 회사 휴무를 읽고, 지운 것 · 날짜가 깨진 것은 계산에서 뺀다' (-not $hd.Error -and $hStates -eq 'h2=ok,h2=ok,p1=ok,c1=ok,x1=deleted,b1=broken' -and
+        ($hDates -join ',') -eq '2026-10-03,2026-10-08,2026-10-09,2026-11-20' -and ((@($hOct) | Sort-Object) -join ',') -eq '2026-10-08,2026-10-09') "$hStates / $($hDates -join ',')"
+    [System.IO.File]::Copy((Join-Path $PSScriptRoot 'fixtures\holidays-future.json'), (Get-WtStorePath 'holidays'), $true)
+    $hBefore = [System.IO.File]::ReadAllText((Get-WtStorePath 'holidays')) | ConvertFrom-Json -Depth 20 -DateKind String
+    $hd = Get-WtHolidayData
+    $hSet = Get-WtHolidayDates
+    Assert-Wt '휴무일 새 버전: 모르는 종류는 읽기 전용(계산에서 뺌)' (((@($hd.Entries) | ForEach-Object State) -join ',') -eq 'ok,readonly' -and (@($hSet) -join ',') -eq '2026-12-25')
+    $hItems = @($hd.Items); $hItems[0].name = '고친 이름'; Set-WtItemEdited $hItems[0]
+    Save-WtHolidayItems $hd.Store $hItems
+    $hAfter = [System.IO.File]::ReadAllText((Get-WtStorePath 'holidays')) | ConvertFrom-Json -Depth 20 -DateKind String
+    Assert-Wt '휴무일 새 버전: 고쳐 저장해도 모르는 맨 위 키 · 칸 · 항목이 그대로' ((Get-WtTestJsonCore $hAfter.region) -ceq (Get-WtTestJsonCore $hBefore.region) -and $hAfter.items[0].name -eq '고친 이름' -and
+        $hAfter.items[0].observed -eq $true -and $hAfter.items[0].origin.line -eq 12 -and (Get-WtTestJsonCore $hAfter.items[1]) -ceq (Get-WtTestJsonCore $hBefore.items[1]))
+    $hd = Get-WtHolidayData; $otherHoliday = Get-WtHolidayData
+    $holidayA = @(Copy-WtItem @($hd.Items)); $holidayA[0].name = '먼저 고친 이름'
+    $holidayB = @(Copy-WtItem @($otherHoliday.Items)); $holidayB[0].note = '뒤의 옛 목록'
+    Save-WtHolidayItems $hd.Store $holidayA
+    $holidayError = $null; try { Save-WtHolidayItems $otherHoliday.Store $holidayB } catch { $holidayError = $_.Exception.Message }
+    Assert-Wt '휴무일 저장 거부: 공유 캐시의 옛 핸들은 먼저 저장한 내용을 덮지 않는다' (
+        [object]::ReferenceEquals($hd.Store, $otherHoliday.Store) -and $holidayError -like '*바뀌었습니다*' -and
+        ([System.IO.File]::ReadAllText((Get-WtStorePath 'holidays')) | ConvertFrom-Json).items[0].name -eq '먼저 고친 이름') $holidayError
+    & $raw 'holidays' '{ "schema": 2, "items": [] }'
+    $hd = Get-WtHolidayData
+    $hSet = Get-WtHolidayDates
+    Assert-Wt '휴무일: 못 읽으면 예외 없이 오류만 알리고 계산에는 휴무일이 없다' ($hd.Error -like '*더 새 버전*' -and $hSet.Count -eq 0)
+
+    # ---- 2a 휴무일 편집 · 연간 붙여 넣기 ----
+    & $raw 'holidays' '{"schema":1,"future":"남길 맨 위 칸","items":[{"id":"pub","date":"2026-11-03","kind":"public","name":"옛 이름","note":"남길 메모","extra":7},{"id":"gone","date":"2026-11-04","kind":"public","name":"빠질 날"},{"id":"co","date":"2026-11-03","kind":"company","name":"회사 휴무"},{"id":"pe","date":"2026-11-03","kind":"personal","name":"개인 휴무"},{"id":"future","date":"2026-11-03","kind":"future","name":"새 값"},null]}'
+    $hd = Get-WtHolidayData
+    $pasteText = "2026-11-03 새 공휴일`r`n2026-11-03 새 공휴일`r`n2026-12-25 공휴일"
+    $parsed = ConvertFrom-WtHolidayPaste $pasteText 2026
+    $badPaste = ConvertFrom-WtHolidayPaste "2026-11-03 A`n2026-11-03 B`n2026-02-29 없음`n2027-01-01 다른 해`n틀린 줄" 2026
+    Assert-Wt '공휴일 해석: 같은 날짜 · 이름은 하나, 틀린 줄은 줄 번호 · 원문 · 이유' ($parsed.Success -and $parsed.Items.Count -eq 2 -and
+        -not $badPaste.Success -and ($badPaste.Errors.Line -join ',') -ceq '2,3,4,5' -and @($badPaste.Errors | Where-Object { -not $_.Reason -or -not $_.Text }).Count -eq 0)
+    $beforePaste = [IO.File]::ReadAllText((Get-WtStorePath 'holidays'))
+    $refusedPaste = Import-WtHolidayPaste $hd.Store '2026-02-29 없음' 2026
+    $emptyPaste = Import-WtHolidayPaste $hd.Store '' 2026
+    Assert-Wt '공휴일 붙여 넣기: 잘못된 줄 · 빈 목록은 저장하지 않음' (-not $refusedPaste.Success -and -not $emptyPaste.Success -and
+        [IO.File]::ReadAllText((Get-WtStorePath 'holidays')) -ceq $beforePaste)
+    $hr = Import-WtHolidayPaste $hd.Store $pasteText 2026 -At '2026-11-01T09:00:00+09:00'
+    $hdoc = [IO.File]::ReadAllText((Get-WtStorePath 'holidays')) | ConvertFrom-Json -Depth 20 -DateKind String
+    $pub = @($hr.Store.Items | Where-Object id -ceq 'pub')[0]
+    Assert-Wt '공휴일 붙여 넣기: 그해 public만 맞춤 · 기존 id/모르는 칸/메모 보존 · 빠진 날은 지운 표시' ($hr.Success -and $hdoc.future -ceq '남길 맨 위 칸' -and
+        $pub.name -ceq '새 공휴일' -and $pub.extra -eq 7 -and $pub.note -ceq '남길 메모' -and (Test-WtDeleted @($hr.Store.Items | Where-Object id -ceq 'gone')[0]) -and
+        @($hr.Store.Items | Where-Object { $_.kind -in 'company', 'personal', 'future' -and -not (Test-WtDeleted $_) }).Count -eq 3 -and $null -eq $hr.Store.Items[5]) $hr.Reason
+    $hr = Set-WtHolidayDate $hr.Store '2026-11-03' 'public' -Enabled $false -At '2026-11-01T09:00:00+09:00'
+    Assert-Wt '휴무일 해제: 같은 날의 다른 종류는 그대로, 계산에는 하루' ($hr.Success -and (Get-WtHolidayDates).Contains('2026-11-03')) $hr.Reason
+    $hd = Get-WtHolidayData
+    $hr = Set-WtHolidayDate $hd.Store '2026-11-03' 'company' -Enabled $false -At '2026-11-01T09:00:00+09:00'
+    $hr = Set-WtHolidayDate $hr.Store '2026-11-03' 'personal' -Enabled $false -At '2026-11-01T09:00:00+09:00'
+    Assert-Wt '휴무일 해제: 아는 종류를 모두 해제하면 모르는 종류는 날짜 계산에서 제외' ($hr.Success -and -not (Get-WtHolidayDates).Contains('2026-11-03')) $hr.Reason
+    $hr = Set-WtHolidayDate (Get-WtHolidayData).Store '2026-11-03' 'personal' -Name '개인 휴무' -At '2026-11-01T09:00:00+09:00'
+    $thread = [Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture
+    $holidaySnapshots = @()
+    try {
+        foreach ($culture in 'ko-KR', 'en-US', 'th-TH', 'ar-SA', 'ja-JP') {
+            $thread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($culture)
+            $hp = ConvertFrom-WtHolidayPaste "2028-02-29 윤일`n2028-02-30 없는 날" 2028
+            $holidaySnapshots += "$($hp.Items.Date -join ',')|$($hp.Errors.Line -join ',')|$($hp.Errors.Reason -join ',')"
+        }
+    } finally { $thread.CurrentCulture = $oldCulture }
+    Assert-Wt '휴무일 5개 문화권: 윤일 해석 · 오류 줄 동일' (@($holidaySnapshots | Where-Object { $_ -cne '2028-02-29|2|없는 날짜입니다' }).Count -eq 0)
 
     # ---- 설정 ----
     Initialize-WtSettings
@@ -170,6 +477,32 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Assert-Wt '메뉴 순서: Order가 같으면 ID 순서' ((@(Get-WtAddon | ForEach-Object Id) -join ',') -eq 'test-a,test-c,test-b') (@(Get-WtAddon | ForEach-Object Id) -join ',')
     Register-WtAddon -Id 'test-a' -Title '가2' -Order 10 -NewView { }
     Assert-Wt '같은 ID로 다시 등록하면 바꾼다' (@(Get-WtAddon -All | Where-Object Id -eq 'test-a').Count -eq 1 -and (Get-WtAddon -Id 'test-a').Title -eq '가2')
+
+    # ---- 달력 등록 목록 (가짜 탭) ----
+    Register-WtAddon -Id 'test-calendar' -Title '가짜 달력' -NewView { } -CalendarItems {
+        param([datetime]$From, [datetime]$To)
+        [pscustomobject]@{ Date = $From; Kind = 'test'; Text = '가짜 표시'; Style = 'Success'; AllDay = $false; Time = '09:00'; Id = 'test-item'; Page = 'test-calendar' }
+        [pscustomobject]@{ Date = $To.AddDays(1); Kind = 'test'; Text = '범위 밖'; Style = 'Success'; AllDay = $true; Time = $null; Id = 'outside' }
+    }
+    Register-WtAddon -Id 'test-calendar-bad' -Title '가짜 실패' -NewView { } -CalendarItems { throw '일부러 낸 달력 오류' }
+    $cr = Get-WtCalendarItems ([datetime]::new(2026, 11, 3)) ([datetime]::new(2026, 11, 4))
+    Assert-Wt '달력: 출처 하나 실패해도 휴무일 · 다른 탭은 날짜별로 반환, 범위 밖 제외' (-not $cr.Success -and $cr.Items.Count -eq 2 -and
+        $cr.Days.Count -eq 2 -and $cr.Days[0].Items.Count -eq 2 -and $cr.Days[1].Items.Count -eq 0 -and $cr.Errors.Count -eq 1 -and
+        $cr.Errors[0].Page -ceq 'test-calendar-bad' -and $cr.Errors[0].Reason -like '*일부러*') (Get-WtTestJsonCore $cr.Errors)
+    $cr = Get-WtCalendarItems ([datetime]::new(2026, 11, 3)) ([datetime]::new(2026, 11, 4)) -Exclude @('test-calendar', 'test-calendar-bad')
+    Assert-Wt '달력: 호출 탭 제외, 코어 공용 휴무일은 남음' ($cr.Success -and $cr.Items.Count -eq 1 -and $cr.Items[0].Source -ceq 'holidays')
+    Set-WtSetting 'addons.disabled' @('test-calendar-bad')
+    $cr = Get-WtCalendarItems ([datetime]::new(2026, 11, 3)) ([datetime]::new(2026, 11, 4))
+    Assert-Wt '달력: 끈 탭은 호출하지 않음' ($cr.Success -and $cr.Items.Count -eq 2)
+    Register-WtAddon -Id 'test-calendar' -Title '가짜 달력' -NewView { }
+    $cr = Get-WtCalendarItems ([datetime]::new(2026, 11, 3)) ([datetime]::new(2026, 11, 4))
+    Assert-Wt '달력: 표시 함수 없이 다시 등록하면 옛 출처 해제' ($cr.Success -and $cr.Items.Count -eq 1)
+    Register-WtCalendarSource -Id 'test-malformed' -CalendarItems { [pscustomobject]@{ Date = '내일' } }
+    $cr = Get-WtCalendarItems ([datetime]::new(2026, 11, 3)) ([datetime]::new(2026, 11, 4))
+    Assert-Wt '달력: 잘못된 항목 모양도 출처 오류로 격리' ($cr.Items.Count -eq 1 -and $cr.Errors[0].Source -ceq 'test-malformed')
+    Register-WtCalendarSource -Id 'test-malformed' -CalendarItems $null
+    Set-WtSetting 'addons.disabled' @()
+    Register-WtAddon -Id 'test-calendar-bad' -Title '가짜 실패' -NewView { }
 
     # ---- 도움말 단축키 (가짜 탭) ----
     Register-WtAddon -Id 'test-x' -Title '엑스' -Order 30 -NewView { } -Shortcuts @(@('F5', '새로 고침'), @('Enter', '열기'))
@@ -740,7 +1073,14 @@ pie
 
 if ($script:failed) { Write-Host "실패 $script:failed 건" -ForegroundColor Red; exit 1 }
 # 탭 폴더의 검사를 모두 찾아서 돌린다. 하나라도 틀리면 그 자리에서 멈춘다
-foreach ($t in (Get-ChildItem (Join-Path $root 'addons') -Filter 'Test-*.ps1' -Recurse | Sort-Object FullName)) { & $t.FullName }
+foreach ($t in (Get-ChildItem (Join-Path $root 'addons') -Filter 'Test-*.ps1' -Recurse | Sort-Object FullName)) {
+    if ($NoDesktop -and $t.Directory.Name -in @('active-tasks', 'workflows')) {
+        Write-Host "SKIP $($t.Name) (전용 창 · 프로세스 종료 포함, -NoDesktop)"; continue
+    }
+    & $t.FullName
+}
 & (Join-Path $PSScriptRoot 'Test-Reliability.ps1')
-& (Join-Path $PSScriptRoot 'Test-Launcher.ps1')
+if (-not $NoDesktop) { & (Join-Path $PSScriptRoot 'Test-Launcher.ps1') }
+else { Write-Host 'SKIP 실행 파일 GUI 검사 (-NoDesktop)' }
+if ($NoDesktop) { Write-Host '제외: WPF 화면 · 입력, 활성 작업 · 업무 탭, 앱 강제 종료 · GUI 실행 파일' }
 Write-Host '모두 통과' -ForegroundColor Green

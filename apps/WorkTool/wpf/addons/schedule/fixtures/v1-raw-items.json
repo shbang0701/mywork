@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "saved": "2026-10-25T21:54:29",
+  "_fixture": "고정 시험 자료(가짜 값): schema 1의 items 안에 목록 · 빈 목록 · null · 글 항목. 이전하고 저장해도 같은 자리에 그대로 남아야 한다. 더하기만 하고 고치지 않는다.",
+  "items": [
+    { "id": "r1", "title": "보통 일정", "startDate": "2026-10-01", "endDate": "2026-10-01", "time": "09:00", "endTime": "", "note": "", "alarm": 10, "repeat": "", "tags": [], "lastAlarm": "", "updated": "" },
+    [ "raw1", "raw2" ],
+    [],
+    null,
+    "글 하나"
+  ]
+}

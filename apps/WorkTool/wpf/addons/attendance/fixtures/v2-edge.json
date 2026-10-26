@@ -1,0 +1,20 @@
+{
+  "schema": 2,
+  "saved": "2026-11-30T09:00:00+09:00",
+  "_fixture": "고정 시험 자료(가짜 값): 경계 값. null 항목, 31일 넘는 출동, 범위 밖 휴가 일수, 범위 밖 날짜, rev. 더하기만 하고 고치지 않는다.",
+  "items": [
+    { "id": "w1e2b3c4d5e6", "kind": "work", "start": { "date": "2026-11-02", "time": "09:00" }, "end": { "date": "2026-11-02", "time": "18:00" }, "place": "", "note": "", "tags": [], "rev": 2,
+      "created": "2026-11-02T09:00:00+09:00", "updated": "2026-11-02T18:00:00+09:00", "deleted": null, "origin": null },
+    null,
+    { "id": "o1e2b3c4d5e6", "kind": "overtime", "start": { "date": "2026-11-01", "time": "09:00" }, "end": { "date": "2026-12-15", "time": "09:00" }, "place": "", "note": "31일이 넘는 기록", "tags": [],
+      "overtime": { "how": "onsite", "ref": "" }, "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "l1e2b3c4d5e6", "kind": "leave", "start": { "date": "2026-11-05", "time": null }, "end": null, "place": "", "note": "", "tags": [],
+      "leave": { "type": "annual", "days": 99999999999999999999 }, "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "l2e2b3c4d5e6", "kind": "leave", "start": { "date": "2026-11-06", "time": null }, "end": null, "place": "", "note": "", "tags": [],
+      "leave": { "type": "annual", "days": -1 }, "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "l3e2b3c4d5e6", "kind": "leave", "start": { "date": "2026-11-09", "time": null }, "end": null, "place": "", "note": "확정 일수 0.5", "tags": [],
+      "leave": { "type": "annual", "days": 0.5 }, "created": null, "updated": null, "deleted": null, "origin": null },
+    { "id": "r1e2b3c4d5e6", "kind": "trip", "start": { "date": "2200-01-01", "time": null }, "end": null, "place": "", "note": "2199년 뒤", "tags": [],
+      "created": null, "updated": null, "deleted": null, "origin": null }
+  ]
+}

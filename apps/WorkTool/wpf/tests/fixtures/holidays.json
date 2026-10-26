@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "saved": "2026-10-26T09:00:00+09:00",
+  "_fixture": "고정 시험 자료(가짜 값). 더하기만 하고 고치지 않는다. 형식을 바꾸면 이 파일은 그대로 두고 새 자료를 더한다.",
+  "items": [
+    { "id": "h20261003", "date": "2026-10-03", "name": "개천절", "kind": "public", "note": "", "created": "2026-01-02T09:00:00+09:00", "updated": "2026-01-02T09:00:00+09:00", "deleted": null, "origin": { "from": "paste", "at": "2026-01-02T09:00:00+09:00" } },
+    { "id": "h20261009", "date": "2026-10-09", "name": "한글날", "kind": "public", "note": "", "created": "2026-01-02T09:00:00+09:00", "updated": "2026-01-02T09:00:00+09:00", "deleted": null, "origin": { "from": "paste", "at": "2026-01-02T09:00:00+09:00" } },
+    { "id": "p1a2b3c4d5e6", "date": "2026-10-08", "name": "개인 휴무", "kind": "personal", "note": "교대 휴무", "created": "2026-10-01T18:00:00+09:00", "updated": "2026-10-01T18:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "c1a2b3c4d5e6", "date": "2026-11-20", "name": "창립 기념일", "kind": "company", "note": "", "created": "2026-10-01T18:00:00+09:00", "updated": "2026-10-01T18:00:00+09:00", "deleted": null, "origin": null },
+    { "id": "x1a2b3c4d5e6", "date": "2026-10-16", "name": "지운 휴무", "kind": "personal", "note": "", "created": "2026-10-01T18:00:00+09:00", "updated": "2026-10-02T18:00:00+09:00", "deleted": "2026-10-02T18:00:00+09:00", "origin": null },
+    { "id": "b1a2b3c4d5e6", "date": "2026/10/30", "name": "날짜가 깨진 휴무", "kind": "personal", "note": "", "created": null, "updated": null, "deleted": null, "origin": null }
+  ]
+}

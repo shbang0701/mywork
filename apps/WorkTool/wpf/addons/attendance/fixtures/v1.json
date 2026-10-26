@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "saved": "2026-10-25T21:54:29",
+  "_fixture": "고정 시험 자료(가짜 값): 1단계 WPF가 쓴 schema 1. 더하기만 하고 고치지 않는다. 형식을 바꾸면 이 파일은 그대로 두고 새 자료를 더한다.",
+  "importedFrom": "C:\\WorkTool\\data",
+  "items": [
+    { "id": "t1", "type": "출근", "startDate": "2026-10-21", "endDate": "2026-10-21", "startTime": "08:47", "endTime": "", "place": "", "detail": "", "updated": "" },
+    { "id": "t4", "type": "업무외시간 근무", "startDate": "2026-10-13", "endDate": "2026-10-13", "startTime": "23:00", "endTime": "01:00", "place": "", "detail": "야간 장애 대응", "updated": "" },
+    { "id": "t5", "type": "출장", "startDate": "2026-10-16", "endDate": "2026-10-17", "startTime": "", "endTime": "", "place": "데이터센터", "detail": "점검", "updated": "" },
+    { "id": "t6", "type": "휴가", "startDate": "2026-10-17", "endDate": "2026-10-17", "startTime": "", "endTime": "", "place": "", "detail": "오후 반차", "updated": "" },
+    { "id": "t7", "type": "휴가", "startDate": "2026-09-30", "endDate": "2026-10-02", "startTime": "", "endTime": "", "place": "", "detail": "연차", "updated": "2026-09-29 18:00:00", "approved": "모르는 칸" }
+  ]
+}

@@ -84,9 +84,8 @@ try {
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml, System.Windows.Forms, System.Drawing
 $source = '__SOURCE__'
-foreach ($name in 'Work','Storage','Settings','Theme','Ui','Highlight','Markdown','Mermaid','Addons','Pages','Shell') {
-    Import-Module (Join-Path $source "core/$name.psm1") -Force -DisableNameChecking
-}
+. (Join-Path $source 'tests/TestKit.ps1')
+Import-WtTestCore
 Import-Module (Join-Path $source 'addons/home/Home.psm1') -Force -DisableNameChecking
 $script:sampleRoot = $PSScriptRoot
 $script:sampleShell = Get-Module Shell

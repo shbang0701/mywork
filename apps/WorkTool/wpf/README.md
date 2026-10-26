@@ -20,7 +20,7 @@
 - 아이콘: 강조색 둥근 사각형에 W. 제목 줄 왼쪽 · 작업 표시줄 · 트레이에 같은 모양으로 보이고, 테마 색을 바꾸면 같이 바뀐다
 
 일정 · 근태 편집, 알람, 지금 출근, 메모별 잠금은 2단계에서 옮깁니다. 그때까지는 예전 WorkTool을 계속 쓰세요.
-새 버전에서 쓴 메모는 예전 WorkTool에 보이지 않고, 설정의 「다시 가져오기」를 누르면 예전 데이터로 덮어씁니다(직전 파일은 `.bak`).
+새 버전에서 쓴 메모는 예전 WorkTool에 보이지 않고, 설정의 「다시 가져오기」를 누르면 메모는 예전 데이터로 덮어씁니다(직전 파일은 `.bak`). 일정 · 근태는 덮어쓰지 않고 합칩니다(새 줄은 더하고, 새 버전에서 고치거나 지운 것은 그대로). 규칙은 [일정 · 근태 데이터 설계](../../../docs/plans/schedule-attendance-design.md) 7장에 있습니다.
 
 ## 개인 PC에서 실행하기
 
@@ -168,11 +168,12 @@ Obsidian과 비슷하게 씁니다. 단축키 전체는 도움말(F1) → 「단
   - 남는 것: 파일 · 폴더 선택 창(Windows 기본 창) 안에서 응답 없는 공유로 옮겨 가면 그 창은 Windows가 기다립니다. 앱은 선택 창의 처음 폴더를 1.5초 안에 확인된 것만 넘깁니다. 선택 창은 앱 창에 붙은 모달 창이라, 다른 스레드로 옮기면 창 순서 · 포커스가 어긋나서 그대로 둡니다.
 - 새 버전 데이터는 앱 폴더 밖, **문서\WorkTool**에 저장합니다. 앱 파일을 새로 덮어써도 데이터는 그대로입니다.
   - 위치를 바꾸려면 앱 파일 옆에 `datapath.txt`를 만들고 첫 줄에 경로를 적습니다.
-- 파일: `memo.json` · `schedule.json` · `attendance.json` · `workflows.json`(저장한 업무) · `workflow-runs.json`(실행 기록) · `settings.json`. 저장할 때마다 직전 파일을 `.bak`으로 하나 남깁니다.
+- 파일: `memo.json` · `schedule.json` · `attendance.json` · `holidays.json`(휴무일, 일정 · 근태가 같이 씀) · `workflows.json`(저장한 업무) · `workflow-runs.json`(실행 기록) · `settings.json`. 저장할 때마다 직전 파일을 `.bak`으로 하나 남깁니다.
 - 폴더: `scripts`(업무 탭의 「내 스크립트」). 사용자가 넣은 스크립트를 두는 곳이고, 앱은 폴더만 만들고 안의 파일을 바꾸지 않습니다.
-- 각 파일에 `schema` 번호가 있습니다. 형식이 바뀌면 읽을 때 자동으로 변환하고, 변환 전 원본은 `.schema<번호>.bak`으로 남깁니다.
+- 각 파일에 `schema` 번호가 있습니다. 형식이 바뀌면 읽을 때 자동으로 변환하고, 변환 전 원본은 `<이름>.json.schema<번호>.<날짜-시각>.bak`으로 남깁니다(덮어쓰지 않음). 변환에 실패하면 원본을 건드리지 않고 그 탭에 이유를 보여 줍니다. 더 새 버전이 쓴 파일(높은 `schema`)은 읽지 않고 바꾸지도 않습니다.
+- 이 버전이 모르는 칸 · 값(더 새 버전이 더한 것)은 지우지 않고 저장할 때 그대로 둡니다. 모르는 값이 든 일정 · 근태 항목은 「새 버전에서 만든 항목」, 날짜를 못 읽는 항목은 「고칠 항목」으로 따로 보이고 계산에서 빠집니다. 형식 전체는 [일정 · 근태 데이터 설계](../../../docs/plans/schedule-attendance-design.md)에 있습니다.
 - `settings.json`에는 기본값과 다른 설정만 저장합니다.
-- 예전 WorkTool의 CSV는 읽기만 하고 바꾸지 않습니다.
+- 예전 WorkTool의 CSV는 읽기만 하고 바꾸지 않습니다. Excel에서 다시 저장해 CP949가 된 CSV · 바뀐 날짜 모양(2026/10/1 · 9:30)도 읽습니다.
 
 ## 구조
 
@@ -182,7 +183,9 @@ wpf/
   start-dev.cmd           저장소를 받아 둔 PC에서 원본을 콘솔 없이 바로 띄운다 (build/start-launcher.ps1 사용)
   core/
     Work.psm1             화면 밖 작업 (디스크 · 네트워크 · 다른 앱에 닿는 일, 파일 · 폴더 열기, 앱 전용 프로세스 끝내기)
-    Storage.psm1          저장 (데이터 폴더, JSON 저장소, schema 변환, 예전 CSV 읽기)
+    Records.psm1          기록 형식의 공통 틀 (날짜 · 시각 세 모양, 예전 CSV 값 읽기, 지운 표시, 예전 데이터 합치기). 디스크에 닿지 않는다
+    Storage.psm1          저장 (데이터 폴더, JSON 저장소, schema 변환 · 백업, 모르는 맨 위 키 보존, 예전 CSV 읽기)
+    Calendar.psm1         달력 공용 데이터 (휴무일 holidays.json. 여러 탭이 같이 쓰는 날짜라 코어에 둔다)
     Settings.psm1         설정 (기본값 + 바꾼 값만 저장, 바뀌면 처리기 호출)
     Theme.psm1            색 · 글자 크기 · 글꼴 (팔레트 7개, 대비 계산)
     Ui.psm1               공통 부품 (스타일, 버튼 · 카드 · 태그 · 숫자 칸 · 목록 줄 · 나눔 버튼 …)
@@ -194,8 +197,8 @@ wpf/
     Shell.psm1            창 틀 · 메뉴 · 트레이 · 단축키 · 화면 전환
   addons/                 탭 하나 = 폴더 하나. 모듈과 그 탭의 검사(Test-*.ps1)가 같이 있다
     home/Home.psm1        홈: 다른 탭의 홈 카드를 모아 보여 줌
-    schedule/             일정 (Schedule.psm1 · Test-Schedule.ps1)
-    attendance/           근태 (Attendance.psm1 · Test-Attendance.ps1)
+    schedule/             일정: ScheduleData.psm1(형식 · 이전 · 가져오기 · 반복 펼치기, 화면 없음) · Schedule.psm1(화면) · Test-Schedule.ps1 · fixtures/(고정 시험 자료)
+    attendance/           근태: AttendanceData.psm1(형식 · 이전 · 가져오기 · 월 요약 규칙, 화면 없음) · Attendance.psm1(화면) · Test-Attendance.ps1 · fixtures/
     memo/                 메모: Memo.psm1(화면 · 탭 · 칸 · 저장) · MemoEditor.psm1(본문 편집기: 편집 · 원문 · 읽기) · MemoText.psm1(편집 명령, WPF 없음)
                           검사: Test-Memo.ps1(쓰기 · 탭 · 저장 실패) · Test-MemoEditor.ps1(편집기) · Test-MemoText.ps1(편집 명령)
     docs/                 문서: 폴더 트리 + 파일 목록, 원래 프로그램으로 열기 · 즐겨찾기 (Docs.psm1 · Test-Docs.ps1: 조회 취소 · 목록 가상화)
@@ -205,6 +208,7 @@ wpf/
   build/start-worktool.cmd · start-launcher.ps1  개인 PC ZIP의 콘솔 없는 실행 보조 파일 (start-launcher.ps1은 start-dev.cmd도 씀)
   tests/Test-Core.ps1     전체 검사. 코어를 가짜 탭으로 검사하고, 모든 탭을 함께 불러 겹침을 본 뒤, 탭 폴더의 Test-*.ps1을 찾아서 돌린다
   tests/TestKit.ps1       검사 공통 준비 (core 불러오기 · 임시 데이터 폴더 · PASS 표시 · 응답 없는 공유 폴더 흉내)
+  tests/fixtures/         코어 고정 시험 자료 (휴무일). 탭의 시험 자료는 그 탭 폴더의 fixtures/. 더하기만 하고 고치지 않는다
   tests/Test-Reliability.ps1  셸 · 저장: 중복 실행 · 설정 저장 실패 · 저장 실패 때 묻는 흐름 · 늦게 답하는 데이터 폴더(저장 중 · 끝낼 때 기다림) · 끝낼 때 남은 작업 · 예전 버전 종료 저장 (임시 데이터만 사용)
   tests/Test-Launcher.ps1 실행 보조 종료·콘솔 없는 GUI·전체 아이콘·시작 오류·start-dev.cmd · 끝나지 않는 작업이 남아도 GUI 종료 뒤 프로세스 종료 검사 (전용 테스트 창)
 ```
@@ -225,6 +229,7 @@ wpf/
   ```
   - `-Help`는 도움말 「이 버전」 문단, `-Shortcuts`는 「단축키」 줄이 됩니다. 키와 설명이 다른 탭과 같으면 `문서 · 활성 작업: 새로 고침`처럼 한 줄로 묶입니다. 키 처리 자체는 탭 화면이 합니다.
   - 도움말에 카드를 따로 두려면 `-HelpCard { ... }`로 카드 요소를 돌려줍니다 (메모의 마크다운 예시).
+  - 달력 표시는 `-CalendarItems { param([datetime]$From, [datetime]$To) ... }`로 등록하고, 다른 출처는 `Get-WtCalendarItems -From -To -Exclude <자기 id>`의 `Items/Days/Errors`로 받습니다. 항목 약속은 [일정 · 근태 데이터 설계](../../../docs/plans/schedule-attendance-design.md) 6.1 · 9.1입니다.
   - `-WarmUp`은 미리 만들기 후보를 등록합니다. 기본 실행에서는 미리 만들지 않습니다. 진단 세션에 `WORKTOOL_WARMUP=1`을 준 경우에만, 비활성 창에서 한 번씩 만듭니다.
     - `-WarmUp Full`: `-NewView`와 `-Refresh`까지 미리 부릅니다. `-Refresh`가 그 탭의 데이터 파일만 읽을 때 씁니다(일정 · 근태 · 메모).
     - `-WarmUp View`: `-NewView`만 미리 부릅니다. `-Refresh`가 폴더 조회 · 다른 창 읽기처럼 느리거나 앱 밖에 닿을 때 씁니다(문서 · 활성 작업 · 업무).
@@ -236,6 +241,10 @@ wpf/
   - 예외 2: 예전 WorkTool(WinForms) 데이터 폴더를 알아보는 CSV 이름(`memo.csv` 등)입니다. 이미 정해진 예전 형식이라서입니다.
 - 화면은 `core/Ui.psm1`의 `New-Wt*` 함수와 스타일 이름만 써서 만듭니다. 색 값이나 글꼴 이름을 직접 쓰지 않습니다.
 - 저장은 `Get-WtStoreItems` · `Write-WtStore`만 씁니다. 형식을 바꿀 때는 `-Schema`를 올리고 `-Migrate`로 변환을 줍니다.
+  - 항목을 고쳐 저장하는 새 코드(일정 · 근태 · 휴무일)는 저장소 핸들 `Open-WtStore` · `Save-WtStore`만 씁니다. 읽지 못한 파일(빈 파일 · 깨진 JSON · `items` 없음 · 더 새 `schema` 등)과, 핸들을 연 뒤 버전이 바뀐 파일(다시 읽음 · 같은 핸들로 누가 먼저 저장함)에는 쓰지 않고 예외를 올립니다(낙관적 잠금). 저장하면 새 핸들을 돌려줍니다. `null` · 깨진 항목도 같은 자리에 그대로 씁니다. 고칠 항목은 `Copy-WtItem`으로 복사해서 고칩니다. `Write-WtStore`도 읽기를 거부한 파일과 더 높은 `schema` 파일에는 쓰지 않습니다. 계약은 [일정 · 근태 데이터 설계](../../../docs/plans/schedule-attendance-design.md) 1.9.
+  - `-Schema`는 옛 버전이 잘못 읽게 되는 변경에만 올립니다. 칸을 더하는 것은 올리지 않습니다. 읽은 항목 객체를 그대로 두고 아는 칸만 고쳐서 저장하면 모르는 칸이 남습니다(아는 칸만으로 새 객체를 만들지 않습니다). 규칙 전체는 [일정 · 근태 데이터 설계](../../../docs/plans/schedule-attendance-design.md) 1장.
+  - 날짜 · 시각 모양, 지운 표시, 예전 데이터 합치기 같은 형식 도우미는 `core/Records.psm1`에 있습니다(`Get-WtStamp` · `ConvertFrom-WtDateText` · `Test-WtDeleted` · `Merge-WtLegacyItems` 등). 칸이 없을 수 있는 `count`는 `$obj.count` 대신 `Get-WtField $obj 'count'`로 읽습니다(PowerShell이 붙인 Count가 나옴).
+  - 형식이 있는 탭은 데이터 모듈(화면 없음)과 화면 모듈을 나누고, 고정 시험 자료를 탭 폴더 `fixtures/`에 둡니다(일정 · 근태 참고).
   - `Write-WtStore`는 쓰기 실패로 예외를 올리지 않습니다. 넣은 내용은 저장 통로가 파일에 쓰일 때까지 가지고 있고, 실패하면 다시 시도하거나 사용자가 버리기를 고를 때까지 둡니다. 바로 실패 · 쓰기 시작 실패 · 늦은 실패가 모두 같은 길(`Set-WtDataWriteFailed`)로 남습니다. 탭은 저장한 내용대로 상태를 바꾸고, 따로 다시 저장하지 않습니다.
   - 저장 표시는 시간으로 정하지 않고 `Get-WtDataWriteStatus (Get-WtStorePath $name)`의 `State`(saved · writing · failed)로 정합니다. 바뀌면 `Register-WtDataWriteHandler { param($path, $state) ... }`가 불립니다. 쓰지 못한 내용을 다시 쓰려면 `Resume-WtDataWrites $path`(메모 탭의 Ctrl+S 참고). 끝낼 때 묻는 것은 셸이 합니다.
 - 이벤트 처리기 안에서는 `$script:` 변수와 보낸 요소(`$s`)의 `Tag`만 씁니다. 처리기는 나중에 불리므로, 만든 함수의 지역 변수는 보이지 않습니다.
