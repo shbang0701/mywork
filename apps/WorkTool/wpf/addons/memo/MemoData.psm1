@@ -199,6 +199,204 @@ function ConvertTo-WtMemoQuery {
     $text
 }
 
+# .NET 식 트리는 아래에 적힌 배열 반복/객체 생성만 실행한다. 문자열 코드를 해석하거나 형식을 정의하지 않는다.
+# 공개 결과는 여전히 독립된 PSObject + NoteProperty다. 속성 용량을 미리 잡고 Properties를 한 번만 얻는다.
+function New-WtMemoObjectExpression([string[]]$Names, [Linq.Expressions.Expression[]]$Values) {
+    $expr = [Linq.Expressions.Expression]
+    $rowVar = $expr::Variable([Management.Automation.PSObject], 'row')
+    $propertiesVar = $expr::Variable([Management.Automation.PSMemberInfoCollection[Management.Automation.PSPropertyInfo]], 'properties')
+    $steps = [Collections.Generic.List[Linq.Expressions.Expression]]::new()
+    $constructor = [Management.Automation.PSObject].GetConstructor([type[]]@([int]))
+    $steps.Add($expr::Assign($rowVar, $script:memoNewExpression.Invoke($constructor, [Linq.Expressions.Expression[]]@($expr::Constant($Names.Length)))))
+    $steps.Add($expr::Assign($propertiesVar, $expr::Property($rowVar, 'Properties')))
+    $noteConstructor = [Management.Automation.PSNoteProperty].GetConstructor([type[]]@([string], [object]))
+    $addProperty = [Management.Automation.PSMemberInfoCollection[Management.Automation.PSPropertyInfo]].GetMethod('Add', [type[]]@([Management.Automation.PSPropertyInfo], [bool]))
+    for ($property = 0; $property -lt $Names.Length; $property++) {
+        $note = $script:memoNewExpression.Invoke($noteConstructor, [Linq.Expressions.Expression[]]@($expr::Constant($Names[$property]), $expr::Convert($Values[$property], [object])))
+        # 속성 이름은 위에서 정한 서로 다른 상수다. preValidated는 이름 검사를 되풀이하지 않게 한다.
+        $steps.Add($expr::Call($propertiesVar, $addProperty, [Linq.Expressions.Expression[]]@($note, $expr::Constant($true))))
+    }
+    $steps.Add($expr::Convert($rowVar, [object]))
+    $expr::Block([Linq.Expressions.ParameterExpression[]]@($rowVar, $propertiesVar), $steps)
+}
+
+function New-WtMemoLoopExpression($Iterator, $Length, $Body) {
+    $expr = [Linq.Expressions.Expression]; $finish = $expr::Label()
+    $step = $expr::Block([Linq.Expressions.Expression[]]@($Body, $expr::PostIncrementAssign($Iterator), $expr::Empty()))
+    $expr::Loop($expr::IfThenElse($expr::LessThan($Iterator, $Length), $step, $expr::Break($finish)), $finish)
+}
+
+function New-WtMemoArrayFactory([type]$ElementType, $Arguments, $Number, $Length, $Element) {
+    $expr = [Linq.Expressions.Expression]; $arrayType = $ElementType.MakeArrayType()
+    $arrayVar = $expr::Variable($arrayType, 'result')
+    $body = $expr::Block([Linq.Expressions.ParameterExpression[]]@($arrayVar, $Number), [Linq.Expressions.Expression[]]@(
+        $expr::Assign($arrayVar, $expr::NewArrayBounds($ElementType, [Linq.Expressions.Expression[]]@($Length))),
+        (New-WtMemoLoopExpression $Number $Length ($expr::Assign($expr::ArrayAccess($arrayVar, [Linq.Expressions.Expression[]]@($Number)), $Element))), $arrayVar))
+    $delegateType = [Func``2].MakeGenericType([type[]]@([object[]], $arrayType))
+    $expr::Lambda($delegateType, $body, [Linq.Expressions.ParameterExpression[]]@($Arguments)).Compile()
+}
+
+function Initialize-WtMemoSearchEngine {
+    if ($script:memoRowsFactory) { return }
+    $expr = [Linq.Expressions.Expression]
+    # Expression.New는 PowerShell의 ::new 생성자 표기와 겹치므로 공개 메서드의 대리자를 한 번 얻는다.
+    $script:memoNewExpression = $expr.GetMethod('New', [type[]]@([Reflection.ConstructorInfo], [Collections.Generic.IEnumerable[Linq.Expressions.Expression]])).CreateDelegate(
+        [Func[Reflection.ConstructorInfo, Collections.Generic.IEnumerable[Linq.Expressions.Expression], Linq.Expressions.NewExpression]])
+
+    $textsArg = $expr::Parameter([string[]], 'texts'); $needleArg = $expr::Parameter([string], 'needle')
+    $foundVar = $expr::Variable([int[]], 'found'); $numberVar = $expr::Variable([int], 'number')
+    $textAt = $expr::ArrayIndex($textsArg, $numberVar)
+    $indexOf = [string].GetMethod('IndexOf', [type[]]@([string], [StringComparison]))
+    $position = $expr::Condition($expr::Equal($textAt, $expr::Constant($null, [string])), $expr::Constant(-1),
+        $expr::Call($textAt, $indexOf, [Linq.Expressions.Expression[]]@($needleArg, $expr::Constant([StringComparison]::Ordinal))))
+    $body = $expr::Block([Linq.Expressions.ParameterExpression[]]@($foundVar, $numberVar), [Linq.Expressions.Expression[]]@(
+        $expr::Assign($foundVar, $expr::NewArrayBounds([int], [Linq.Expressions.Expression[]]@($expr::ArrayLength($textsArg)))),
+        (New-WtMemoLoopExpression $numberVar ($expr::ArrayLength($textsArg)) ($expr::Assign($expr::ArrayAccess($foundVar, [Linq.Expressions.Expression[]]@($numberVar)), $position))), $foundVar))
+    $script:memoPositionsFactory = $expr::Lambda([Func[string[], string, int[]]], $body, [Linq.Expressions.ParameterExpression[]]@($textsArg, $needleArg)).Compile()
+
+    # 조건 잎의 배열 판정. 해석/날짜 검증/연결 대상 오류는 PowerShell 경로에 그대로 둔다.
+    $maskInput = $expr::Parameter([object[]], 'input')
+    $candidateColumn = $expr::Convert($expr::ArrayIndex($maskInput, $expr::Constant(0)), [bool[]])
+    $candidateAt = $expr::ArrayIndex($candidateColumn, $numberVar)
+    $secondArg = $expr::ArrayIndex($maskInput, $expr::Constant(1)); $thirdArg = $expr::ArrayIndex($maskInput, $expr::Constant(2))
+    $boolAt = $expr::ArrayIndex($expr::Convert($secondArg, [bool[]]), $numberVar)
+    $intAt = $expr::ArrayIndex($expr::Convert($secondArg, [int[]]), $numberVar)
+    $dayAt = $expr::ArrayIndex($expr::Convert($secondArg, [long[]]), $numberVar)
+    $tagsAt = $expr::ArrayIndex($expr::Convert($secondArg, [Collections.Generic.HashSet[string][]]), $numberVar)
+    $fromValue = $expr::Convert($thirdArg, [long])
+    $positiveInt = $expr::GreaterThanOrEqual($intAt, $expr::Constant(0))
+    $predicates = @{
+        position = $positiveInt
+        text = $expr::OrElse($positiveInt, $expr::GreaterThanOrEqual($expr::ArrayIndex($expr::Convert($thirdArg, [int[]]), $numberVar), $expr::Constant(0)))
+        tag = $expr::Call($tagsAt, [Collections.Generic.HashSet[string]].GetMethod('Contains'), [Linq.Expressions.Expression[]]@($expr::Convert($thirdArg, [string])))
+        no = $expr::Equal($expr::Property($tagsAt, 'Count'), $expr::Constant(0))
+        flag = $boolAt
+        backlink = $expr::GreaterThan($intAt, $expr::Constant(0))
+        folder = $expr::Call($expr::Convert($thirdArg, [Collections.Generic.HashSet[string]]), [Collections.Generic.HashSet[string]].GetMethod('Contains'), [Linq.Expressions.Expression[]]@($expr::ArrayIndex($expr::Convert($secondArg, [string[]]), $numberVar)))
+        before = $expr::AndAlso($expr::GreaterThanOrEqual($dayAt, $expr::Constant(0L)), $expr::LessThan($dayAt, $fromValue))
+        after = $expr::GreaterThan($dayAt, $fromValue)
+        range = $expr::AndAlso($expr::GreaterThanOrEqual($dayAt, $fromValue), $expr::LessThanOrEqual($dayAt, $expr::Convert($expr::ArrayIndex($maskInput, $expr::Constant(3)), [long])))
+        not = $expr::Not($boolAt)
+    }
+    $script:memoMaskFactories = @{}
+    foreach ($name in $predicates.Keys) {
+        $script:memoMaskFactories[$name] = New-WtMemoArrayFactory ([bool]) $maskInput $numberVar ($expr::ArrayLength($candidateColumn)) ($expr::AndAlso($candidateAt, $predicates[$name]))
+    }
+    $script:memoMaskFactories.or = New-WtMemoArrayFactory ([bool]) $maskInput $numberVar ($expr::ArrayLength($candidateColumn)) ($expr::OrElse($candidateAt, $boolAt))
+
+    # 순위/일치 위치: 행마다 PowerShell 객체 변환을 반복하지 않고 같은 규칙을 배열에 적용한다.
+    $rankArg = $expr::Parameter([object[]], 'input')
+    $rankTypes = [type[]]@([string[]], [string[]], [string[]], [int[][]], [int[][]], [bool[]], [string])
+    $rankColumns = @(for ($column = 0; $column -lt $rankTypes.Length; $column++) {
+        $expr::Convert($expr::ArrayIndex($rankArg, $expr::Constant($column)), $rankTypes[$column])
+    })
+    $ranksVar = $expr::Variable([int[]], 'ranks'); $startsVar = $expr::Variable([int[]], 'starts'); $locationsVar = $expr::Variable([object[]], 'locations')
+    $termVar = $expr::Variable([int], 'term'); $titleAtVar = $expr::Variable([int], 'titleAt'); $bodyAtVar = $expr::Variable([int], 'bodyAt')
+    $rankVar = $expr::Variable([int], 'rank'); $bodyStartVar = $expr::Variable([int], 'bodyStart')
+    $titleHitsVar = $expr::Variable([int], 'titleHits'); $matchedVar = $expr::Variable([int], 'matched')
+    $hitsVar = $expr::Variable([Collections.Generic.List[object]], 'hits')
+    $needleAt = $expr::ArrayIndex($rankColumns[2], $termVar)
+    $termLength = $expr::Property($needleAt, 'Length'); $termCount = $expr::ArrayLength($rankColumns[2])
+    $titleLocations = $expr::ArrayIndex($rankColumns[3], $termVar); $bodyLocations = $expr::ArrayIndex($rankColumns[4], $termVar)
+    $titleFound = $expr::GreaterThanOrEqual($titleAtVar, $expr::Constant(0)); $bodyFound = $expr::GreaterThanOrEqual($bodyAtVar, $expr::Constant(0))
+    $equalText = [string].GetMethod('Equals', [type[]]@([string], [string], [StringComparison]))
+    $addHit = [Collections.Generic.List[object]].GetMethod('Add')
+    $termStep = $expr::Block([Linq.Expressions.Expression[]]@(
+        $expr::Assign($titleAtVar, $expr::Condition($expr::Equal($titleLocations, $expr::Constant($null, [int[]])), $expr::Constant(-1), $expr::ArrayIndex($titleLocations, $numberVar))),
+        $expr::Assign($bodyAtVar, $expr::Condition($expr::Equal($bodyLocations, $expr::Constant($null, [int[]])), $expr::Constant(-1), $expr::ArrayIndex($bodyLocations, $numberVar))),
+        $expr::IfThen($expr::OrElse($titleFound, $bodyFound), $expr::PostIncrementAssign($matchedVar)),
+        $expr::IfThen($titleFound, $expr::Block([Linq.Expressions.Expression[]]@(
+            $expr::PostIncrementAssign($titleHitsVar),
+            $expr::Call($hitsVar, $addHit, [Linq.Expressions.Expression[]]@((New-WtMemoObjectExpression @('Field', 'Start', 'Length') @($expr::Constant('title'), $titleAtVar, $termLength)))),
+            $expr::IfThen($expr::Call($equalText, [Linq.Expressions.Expression[]]@($expr::ArrayIndex($rankColumns[0], $numberVar), $needleAt, $expr::Constant([StringComparison]::InvariantCultureIgnoreCase))), $expr::Assign($rankVar, $expr::Constant(0)))))),
+        $expr::IfThen($bodyFound, $expr::Block([Linq.Expressions.Expression[]]@(
+            $expr::Call($hitsVar, $addHit, [Linq.Expressions.Expression[]]@((New-WtMemoObjectExpression @('Field', 'Start', 'Length') @($expr::Constant('body'), $bodyAtVar, $termLength)))),
+            $expr::IfThen($expr::OrElse($expr::LessThan($bodyStartVar, $expr::Constant(0)), $expr::LessThan($bodyAtVar, $bodyStartVar)), $expr::Assign($bodyStartVar, $bodyAtVar)))))))
+    $exactTitle = $expr::AndAlso($expr::Equal($titleHitsVar, $termCount), $expr::Call($equalText, [Linq.Expressions.Expression[]]@(
+        $expr::ArrayIndex($rankColumns[1], $numberVar), $rankColumns[6], $expr::Constant([StringComparison]::OrdinalIgnoreCase))))
+    $rankStep = $expr::Block([Linq.Expressions.Expression[]]@(
+        $expr::Assign($rankVar, $expr::Constant(3)), $expr::Assign($bodyStartVar, $expr::Constant(-1)),
+        $expr::Assign($titleHitsVar, $expr::Constant(0)), $expr::Assign($matchedVar, $expr::Constant(0)), $expr::Assign($termVar, $expr::Constant(0)),
+        $expr::Assign($hitsVar, $script:memoNewExpression.Invoke([Collections.Generic.List[object]].GetConstructor([type[]]@([int])), [Linq.Expressions.Expression[]]@($expr::Multiply($termCount, $expr::Constant(2))))),
+        (New-WtMemoLoopExpression $termVar $termCount $termStep),
+        $expr::IfThenElse($exactTitle, $expr::Assign($rankVar, $expr::Constant(0)),
+            $expr::IfThen($expr::NotEqual($rankVar, $expr::Constant(0)), $expr::Assign($rankVar, $expr::Condition(
+                $expr::AndAlso($expr::GreaterThan($titleHitsVar, $expr::Constant(0)), $expr::Equal($titleHitsVar, $matchedVar)), $expr::Constant(1), $expr::Constant(2))))),
+        $expr::Assign($expr::ArrayAccess($ranksVar, [Linq.Expressions.Expression[]]@($numberVar)), $rankVar),
+        $expr::Assign($expr::ArrayAccess($locationsVar, [Linq.Expressions.Expression[]]@($numberVar)), $expr::Call($hitsVar, [Collections.Generic.List[object]].GetMethod('ToArray'))),
+        $expr::Assign($expr::ArrayAccess($startsVar, [Linq.Expressions.Expression[]]@($numberVar)),
+            $expr::Call([Math].GetMethod('Max', [type[]]@([int], [int])), [Linq.Expressions.Expression[]]@($expr::Constant(0), $expr::Subtract($bodyStartVar, $expr::Constant(24)))))))
+    $rankCount = $expr::ArrayLength($rankColumns[5])
+    $rankBody = $expr::Block([Linq.Expressions.ParameterExpression[]]@($ranksVar, $startsVar, $locationsVar, $numberVar, $termVar, $titleAtVar, $bodyAtVar, $rankVar, $bodyStartVar, $titleHitsVar, $matchedVar, $hitsVar), [Linq.Expressions.Expression[]]@(
+        $expr::Assign($ranksVar, $expr::NewArrayBounds([int], [Linq.Expressions.Expression[]]@($rankCount))),
+        $expr::Assign($startsVar, $expr::NewArrayBounds([int], [Linq.Expressions.Expression[]]@($rankCount))),
+        $expr::Assign($locationsVar, $expr::NewArrayBounds([object], [Linq.Expressions.Expression[]]@($rankCount))),
+        (New-WtMemoLoopExpression $numberVar $rankCount ($expr::IfThen($expr::ArrayIndex($rankColumns[5], $numberVar), $rankStep))),
+        $expr::NewArrayInit([object], [Linq.Expressions.Expression[]]@($expr::Convert($ranksVar, [object]), $expr::Convert($startsVar, [object]), $expr::Convert($locationsVar, [object])))))
+    $script:memoRanksFactory = $expr::Lambda([Func[object[], object[]]], $rankBody, [Linq.Expressions.ParameterExpression[]]@($rankArg)).Compile()
+
+    # 기본 순서를 유지하면서 일치 번호만 모은다. 검색어 순위가 있으면 0~3 네 번의 짧은 배열 순회다.
+    $orderArg = $expr::Parameter([int[]], 'order'); $maskArg = $expr::Parameter([bool[]], 'mask'); $ranksArg = $expr::Parameter([int[]], 'ranks'); $rankedArg = $expr::Parameter([bool], 'ranked')
+    $selectedVar = $expr::Variable([Collections.Generic.List[int]], 'selected'); $passVar = $expr::Variable([int], 'pass')
+    $orderAt = $expr::ArrayIndex($orderArg, $numberVar)
+    $selectedStep = $expr::IfThen($expr::AndAlso($expr::ArrayIndex($maskArg, $orderAt),
+        $expr::OrElse($expr::Not($rankedArg), $expr::Equal($expr::ArrayIndex($ranksArg, $orderAt), $passVar))),
+        $expr::Call($selectedVar, [Collections.Generic.List[int]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($orderAt)))
+    $selectBody = $expr::Block([Linq.Expressions.ParameterExpression[]]@($selectedVar, $numberVar, $passVar), [Linq.Expressions.Expression[]]@(
+        $expr::Assign($selectedVar, $script:memoNewExpression.Invoke([Collections.Generic.List[int]].GetConstructor([type[]]@([int])), [Linq.Expressions.Expression[]]@($expr::ArrayLength($orderArg)))),
+        (New-WtMemoLoopExpression $passVar ($expr::Condition($rankedArg, $expr::Constant(4), $expr::Constant(1))) ($expr::Block([Linq.Expressions.Expression[]]@(
+            $expr::Assign($numberVar, $expr::Constant(0)), (New-WtMemoLoopExpression $numberVar ($expr::ArrayLength($orderArg)) $selectedStep))))),
+        $expr::Call($selectedVar, [Collections.Generic.List[int]].GetMethod('ToArray'))))
+    $script:memoSelectFactory = $expr::Lambda([Func[int[], bool[], int[], bool, int[]]], $selectBody, [Linq.Expressions.ParameterExpression[]]@($orderArg, $maskArg, $ranksArg, $rankedArg)).Compile()
+
+    # 정렬 키는 원래의 여섯 칸 Tuple이며 비교도 .NET 기본 비교기를 그대로 사용한다.
+    $sortInput = $expr::Parameter([object[]], 'input')
+    $sortTypes = [type[]]@([bool[]], [long[]], [long[]], [int[]], [int[]], [long[]], [bool], [int[]])
+    $sortColumns = @(for ($column = 0; $column -lt $sortTypes.Length; $column++) {
+        $expr::Convert($expr::ArrayIndex($sortInput, $expr::Constant($column)), $sortTypes[$column])
+    })
+    $sortSlot = $expr::ArrayIndex($sortColumns[7], $numberVar)
+    $pinAt = $expr::ArrayIndex($sortColumns[0], $sortSlot); $updatedAt = $expr::ArrayIndex($sortColumns[2], $sortSlot)
+    $primaryAt = $expr::ArrayIndex($sortColumns[5], $sortSlot)
+    $keyType = [Tuple[long, int, long, long, int, int]]
+    $sortKey = $script:memoNewExpression.Invoke($keyType.GetConstructors()[0], [Linq.Expressions.Expression[]]@(
+        $expr::Condition($sortColumns[6], $expr::Negate($primaryAt), $primaryAt),
+        $expr::Condition($pinAt, $expr::Constant(0), $expr::Constant(1)),
+        $expr::Condition($pinAt, $expr::ArrayIndex($sortColumns[1], $sortSlot), $expr::Constant(0L)),
+        $expr::Condition($expr::GreaterThanOrEqual($updatedAt, $expr::Constant(0L)), $expr::Negate($updatedAt), $expr::Constant([long]::MaxValue)),
+        $expr::ArrayIndex($sortColumns[3], $sortSlot), $expr::ArrayIndex($sortColumns[4], $sortSlot)))
+    $script:memoSortFactory = New-WtMemoArrayFactory $keyType $sortInput $numberVar ($expr::ArrayLength($sortColumns[7])) $sortKey
+
+    # 칸 순서는 Find-WtMemo의 rowColumns와 같다. 원문/태그/일치 위치도 결과끼리 공유하지 않는다.
+    $columnsArg = $expr::Parameter([object[]], 'columns'); $itemsArg = $expr::Parameter([int[]], 'items'); $limitArg = $expr::Parameter([int], 'limit')
+    $rowsVar = $expr::Variable([object[]], 'rows'); $atVar = $expr::Variable([int], 'at'); $slotVar = $expr::Variable([int], 'slot')
+    $folderVar = $expr::Variable([string[]], 'folder')
+    $types = [type[]]@([string[]], [string[]], [object[]], [string[]], [int[]], [string[]], [object[]], [Collections.Generic.HashSet[string][]], [bool[]], [long[]], [bool[]], [int[]], [object[]], [object[]], [object[]], [int[]])
+    $values = [Linq.Expressions.Expression[]]::new($types.Length)
+    for ($column = 0; $column -lt $types.Length; $column++) {
+        $values[$column] = $expr::ArrayIndex($expr::Convert($expr::ArrayIndex($columnsArg, $expr::Constant($column)), $types[$column]), $slotVar)
+    }
+    $bodyText = $values[3]; $start = $values[4]
+    $snippetLength = $expr::Call([Math].GetMethod('Min', [type[]]@([int], [int])), [Linq.Expressions.Expression[]]@(
+        $expr::Constant(80), $expr::Subtract($expr::Property($bodyText, 'Length'), $start)))
+    $values[3] = $expr::Condition($expr::LessThan($atVar, $limitArg),
+        $expr::Call($bodyText, [string].GetMethod('Substring', [type[]]@([int], [int])), [Linq.Expressions.Expression[]]@($start, $snippetLength)), $expr::Constant(''))
+    $values[7] = $expr::Call([Linq.Enumerable].GetMethod('ToArray').MakeGenericMethod([string]), [Linq.Expressions.Expression[]]@($values[7]))
+    $folderMapType = [Collections.Generic.Dictionary[string, string[]]]
+    $folderMap = $expr::Convert($expr::ArrayIndex($columnsArg, $expr::Constant(6)), $folderMapType)
+    $missingFolder = [string[]]::new(2); $missingFolder[1] = '폴더 없음'
+    $folderStep = $expr::IfThen($expr::Not($expr::Call($folderMap, $folderMapType.GetMethod('TryGetValue'), [Linq.Expressions.Expression[]]@($values[5], $folderVar))),
+        $expr::Assign($folderVar, $expr::Constant($missingFolder)))
+    $values[5] = $expr::ArrayIndex($folderVar, $expr::Constant(0)); $values[6] = $expr::ArrayIndex($folderVar, $expr::Constant(1))
+    $rowExpression = New-WtMemoObjectExpression @('Id', 'Title', 'Matches', 'Snippet', 'SnippetStart', 'Folder', 'FolderName', 'Tags', 'Pinned', 'PinOrder', 'Archived', 'Rank', 'Updated', 'Created', 'Opened', 'Backlinks') $values
+    $rowStep = $expr::Block([Linq.Expressions.Expression[]]@(
+        $expr::Assign($slotVar, $expr::ArrayIndex($itemsArg, $atVar)), $folderStep, $expr::Assign($expr::ArrayAccess($rowsVar, [Linq.Expressions.Expression[]]@($atVar)), $rowExpression)))
+    $body = $expr::Block([Linq.Expressions.ParameterExpression[]]@($rowsVar, $atVar, $slotVar, $folderVar), [Linq.Expressions.Expression[]]@(
+        $expr::Assign($rowsVar, $expr::NewArrayBounds([object], [Linq.Expressions.Expression[]]@($expr::ArrayLength($itemsArg)))),
+        (New-WtMemoLoopExpression $atVar ($expr::ArrayLength($itemsArg)) $rowStep), $rowsVar))
+    $script:memoRowsFactory = $expr::Lambda([Func[object[], int[], int, object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($columnsArg, $itemsArg, $limitArg)).Compile()
+}
+
 # ---- 색인: 나란한 칸 목록. 메모 번호는 갱신/삭제 후에도 바꾸지 않는다. -------------------------
 function New-WtMemoStringSet { , [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
 
@@ -276,7 +474,8 @@ function Initialize-WtMemoLinks($Index) {
         }
     }
     $Index.LinksReady = $true
-    foreach ($target in $Index.Titles.Keys) { Update-WtMemoBacklinks $Index $target }
+    # 처음의 받는 연결 수는 모두 0이다. 실제로 연결을 받는 제목만 갱신하면 된다.
+    foreach ($target in $Index.LinkSources.Keys) { Update-WtMemoBacklinks $Index $target }
 }
 
 # 정렬용 ordinal은 제목/id가 바뀐 다음 검색에서만 다시 만든다. 갱신 자체는 한 칸만 고친다.
@@ -296,6 +495,8 @@ function Set-WtMemoIndexEntry($Index, [object[]]$Memos) {
     $c = $Index.Columns; $slots = $Index.Slots; $titles = $Index.Titles; $sources = $Index.LinkSources
     $Index.SortOrders.Clear()
     $affected = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $bodyLowers = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+    $timeParts = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
     foreach ($memo in $Memos) {
         if ($null -eq $memo -or $memo -is [string] -or $memo -is [ValueType] -or $memo -is [array]) { continue }
         $id = $memo.id
@@ -332,7 +533,8 @@ function Set-WtMemoIndexEntry($Index, [object[]]$Memos) {
         }
         $title = [string]$memo.title; $body = [string]$memo.body; $titleLower = $title.ToLowerInvariant()
         $c.Id[$n] = $id; $c.Title[$n] = $title; $c.Body[$n] = $body
-        $c.TitleLower[$n] = $titleLower; $c.BodyLower[$n] = $body.ToLowerInvariant()
+        if (-not $bodyLowers.ContainsKey($body)) { $bodyLowers[$body] = $body.ToLowerInvariant() }
+        $c.TitleLower[$n] = $titleLower; $c.BodyLower[$n] = $bodyLowers[$body]
         $tags = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($tag in $memo.tags) { if ($tag -is [string]) { [void]$tags.Add($tag.ToLowerInvariant()) } }
         $c.Tags[$n] = $tags; $c.Folder[$n] = [string]$memo.folder; $c.Pinned[$n] = ($memo.pinned -eq $true)
@@ -342,14 +544,17 @@ function Set-WtMemoIndexEntry($Index, [object[]]$Memos) {
         $c.PinOrder[$n] = if ($null -eq $order) { [long]::MaxValue } else { [long]$order }
         foreach ($name in 'Created', 'Updated') {
             $text = [string]$memo.$name
-            if (-not $Index.TimeCache.ContainsKey($text)) {
-                $stamp = [DateTimeOffset]::MinValue
-                $valid = [DateTimeOffset]::TryParseExact($text, "yyyy-MM-dd'T'HH:mm:sszzz", $script:memoInv, [Globalization.DateTimeStyles]::None, [ref]$stamp)
-                $Index.TimeCache[$text] = if ($valid) { $stamp } elseif ($text) { Get-WtMemoIndexedTime $text } else { $null }
+            if (-not $timeParts.ContainsKey($text)) {
+                if (-not $Index.TimeCache.ContainsKey($text)) {
+                    $stamp = [DateTimeOffset]::MinValue
+                    $valid = [DateTimeOffset]::TryParseExact($text, "yyyy-MM-dd'T'HH:mm:sszzz", $script:memoInv, [Globalization.DateTimeStyles]::None, [ref]$stamp)
+                    $Index.TimeCache[$text] = if ($valid) { $stamp } elseif ($text) { Get-WtMemoIndexedTime $text } else { $null }
+                }
+                $stamp = $Index.TimeCache[$text]
+                $timeParts[$text] = if ($null -eq $stamp) { [object[]]@($null, -1L, -1L) } else { [object[]]@($stamp, $stamp.UtcTicks, $stamp.LocalDateTime.Date.Ticks) }
             }
-            $stamp = $Index.TimeCache[$text]; $c[$name][$n] = $stamp
-            $c[$name + 'Ticks'][$n] = if ($null -eq $stamp) { -1L } else { $stamp.UtcTicks }
-            $c[$name + 'Day'][$n] = if ($null -eq $stamp) { -1L } else { $stamp.LocalDateTime.Date.Ticks }
+            $parts = $timeParts[$text]; $c[$name][$n] = $parts[0]
+            $c[$name + 'Ticks'][$n] = $parts[1]; $c[$name + 'Day'][$n] = $parts[2]
         }
         if (-not $titles.ContainsKey($titleLower)) { $titles[$titleLower] = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
         [void]$titles[$titleLower].Add($id); [void]$affected.Add($titleLower)
@@ -391,7 +596,7 @@ function New-WtMemoIndex {
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $unique = [Collections.Generic.List[object]]::new($Memos.Count)
     foreach ($memo in $Memos) {
-        $id = if ($memo -is [Collections.IDictionary]) { $memo['id'] } elseif ($null -ne $memo) { $memo.PSObject.Properties['id'].Value } else { $null }
+        $id = if ($memo -is [Collections.IDictionary]) { $memo['id'] } elseif ($memo -is [pscustomobject]) { $memo.id } elseif ($null -ne $memo) { $memo.PSObject.Properties['id'].Value } else { $null }
         if ($id -is [string] -and $seen.Add($id)) { $unique.Add($memo) }
     }
     Set-WtMemoIndexEntry $index $unique.ToArray()
@@ -425,17 +630,26 @@ function Get-WtMemoQueryTerms($Node, [switch]$Negated) {
     foreach ($child in @($Node.Children)) { if ($child) { Get-WtMemoQueryTerms $child -Negated:$Negated } }
 }
 
+# 한 검색 안에서 조건 판정과 순위/문맥 계산이 같은 위치 배열을 쓴다.
+function Get-WtMemoTextPositions($Index, [string]$Field, [string]$Needle, $Positions) {
+    $key = $Field + ':' + $Needle
+    if ($Positions.ContainsKey($key)) { return , $Positions[$key] }
+    [string[]]$texts = if ($Field -eq 'title') { $Index.Columns.TitleLower.ToArray() } else { $Index.Columns.BodyLower.ToArray() }
+    $found = $script:memoPositionsFactory.Invoke($texts, $Needle)
+    $Positions[$key] = $found
+    , $found
+}
+
 # 재귀는 조건 트리의 노드마다 한 번. 메모 반복문에는 함수/파이프라인/스크립트 블록이 없다.
 # Candidate는 상위 AND에서 살아 있는 번호만 담는다. NOT도 그 범위 안에서 뒤집는다.
-function Get-WtMemoMatchSet($Index, $Node, [datetime]$Today, [bool[]]$Candidate) {
+function Get-WtMemoMatchSet($Index, $Node, [datetime]$Today, [bool[]]$Candidate, $Positions) {
     $c = $Index.Columns; $count = $c.Id.Count
     $mask = [bool[]]::new($count)
     switch ($Node.Kind) {
         'all' { return , $Candidate.Clone() }
         'not' {
-            $part = Get-WtMemoMatchSet $Index $Node.Child $Today $Candidate
-            for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $Candidate[$n] -and -not $part[$n] }
-            return , $mask
+            $part = Get-WtMemoMatchSet $Index $Node.Child $Today $Candidate $Positions
+            return , $script:memoMaskFactories.not.Invoke([object[]]@($Candidate, $part))
         }
         'and' {
             $mask = $Candidate.Clone()
@@ -444,15 +658,15 @@ function Get-WtMemoMatchSet($Index, $Node, [datetime]$Today, [bool[]]$Candidate)
                 foreach ($child in $Node.Children) {
                     $cheap = $child.Kind -eq 'term' -and $child.Field -in 'folder', 'is', 'tag', 'no', 'created', 'updated'
                     if (($pass -eq 0) -ne $cheap) { continue }
-                    $mask = Get-WtMemoMatchSet $Index $child $Today $mask
+                    $mask = Get-WtMemoMatchSet $Index $child $Today $mask $Positions
                 }
             }
             return , $mask
         }
         'or' {
             foreach ($child in $Node.Children) {
-                $part = Get-WtMemoMatchSet $Index $child $Today $Candidate
-                for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $mask[$n] -or $part[$n] }
+                $part = Get-WtMemoMatchSet $Index $child $Today $Candidate $Positions
+                $mask = $script:memoMaskFactories.or.Invoke([object[]]@($mask, $part))
             }
             return , $mask
         }
@@ -460,28 +674,29 @@ function Get-WtMemoMatchSet($Index, $Node, [datetime]$Today, [bool[]]$Candidate)
     $value = ([string]$Node.Value).ToLowerInvariant(); $field = [string]$Node.Field
     switch ($field) {
         'text' {
-            [string[]]$tl = $c.TitleLower.ToArray(); [string[]]$bl = $c.BodyLower.ToArray()
-            for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $tl[$n].IndexOf($value, [StringComparison]::Ordinal) -ge 0 -or $bl[$n].IndexOf($value, [StringComparison]::Ordinal) -ge 0 } }
+            [int[]]$titleAt = Get-WtMemoTextPositions $Index 'title' $value $Positions
+            [int[]]$bodyAt = Get-WtMemoTextPositions $Index 'body' $value $Positions
+            $mask = $script:memoMaskFactories.text.Invoke([object[]]@($Candidate, $titleAt, $bodyAt))
         }
         'title' {
-            [string[]]$tl = $c.TitleLower.ToArray()
-            for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $tl[$n].IndexOf($value, [StringComparison]::Ordinal) -ge 0 } }
+            [int[]]$titleAt = Get-WtMemoTextPositions $Index 'title' $value $Positions
+            $mask = $script:memoMaskFactories.position.Invoke([object[]]@($Candidate, $titleAt))
         }
         'body' {
-            [string[]]$bl = $c.BodyLower.ToArray()
-            for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $bl[$n].IndexOf($value, [StringComparison]::Ordinal) -ge 0 } }
+            [int[]]$bodyAt = Get-WtMemoTextPositions $Index 'body' $value $Positions
+            $mask = $script:memoMaskFactories.position.Invoke([object[]]@($Candidate, $bodyAt))
         }
         'tag' {
             [Collections.Generic.HashSet[string][]]$tags = $c.Tags.ToArray()
-            for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $tags[$n].Contains($value) } }
+            $mask = $script:memoMaskFactories.tag.Invoke([object[]]@($Candidate, $tags, $value))
         }
         'no' {
             [Collections.Generic.HashSet[string][]]$tags = $c.Tags.ToArray()
-            for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $Candidate[$n] -and $tags[$n].Count -eq 0 }
+            $mask = $script:memoMaskFactories.no.Invoke([object[]]@($Candidate, $tags))
         }
         'is' {
             [bool[]]$pins = $c.Pinned.ToArray()
-            for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $Candidate[$n] -and $pins[$n] }
+            $mask = $script:memoMaskFactories.flag.Invoke([object[]]@($Candidate, $pins))
         }
         'folder' {
             $folderIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -489,16 +704,16 @@ function Get-WtMemoMatchSet($Index, $Node, [datetime]$Today, [bool[]]$Candidate)
                 if ([string]::Equals([string]$folder.id, [string]$Node.Value, [StringComparison]::Ordinal) -or [string]::Equals([string]$folder.name, $value, [StringComparison]::OrdinalIgnoreCase)) { [void]$folderIds.Add([string]$folder.id) }
             }
             [string[]]$folders = $c.Folder.ToArray()
-            for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $folderIds.Contains($folders[$n]) } }
+            $mask = $script:memoMaskFactories.folder.Invoke([object[]]@($Candidate, $folders, $folderIds))
         }
         'has' {
             Initialize-WtMemoLinks $Index
             if ($value -eq 'link') {
                 [bool[]]$links = $c.HasLink.ToArray()
-                for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $Candidate[$n] -and $links[$n] }
+                $mask = $script:memoMaskFactories.flag.Invoke([object[]]@($Candidate, $links))
             } else {
                 [int[]]$backlinks = $c.BacklinkCount.ToArray()
-                for ($n = 0; $n -lt $count; $n++) { $mask[$n] = $Candidate[$n] -and $backlinks[$n] -gt 0 }
+                $mask = $script:memoMaskFactories.backlink.Invoke([object[]]@($Candidate, $backlinks))
             }
         }
         'linksto' {
@@ -524,11 +739,11 @@ function Get-WtMemoMatchSet($Index, $Node, [datetime]$Today, [bool[]]$Candidate)
             $fromTicks = $from.Ticks; $toTicks = if ($null -ne $to) { $to.Ticks } else { 0L }
             [long[]]$days = if ($field -eq 'updated') { $c.UpdatedDay.ToArray() } else { $c.CreatedDay.ToArray() }
             if ($compare -eq '<') {
-                for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $days[$n] -ge 0 -and $days[$n] -lt $fromTicks } }
+                $mask = $script:memoMaskFactories.before.Invoke([object[]]@($Candidate, $days, $fromTicks))
             } elseif ($compare -eq '>') {
-                for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $days[$n] -gt $fromTicks } }
+                $mask = $script:memoMaskFactories.after.Invoke([object[]]@($Candidate, $days, $fromTicks))
             } else {
-                for ($n = 0; $n -lt $count; $n++) { if ($Candidate[$n]) { $mask[$n] = $days[$n] -ge $fromTicks -and $days[$n] -le $toTicks } }
+                $mask = $script:memoMaskFactories.range.Invoke([object[]]@($Candidate, $days, $fromTicks, $toTicks))
             }
         }
     }
@@ -554,31 +769,21 @@ function Get-WtMemoSortOrder($Index, [string]$Sort, [string]$Dir, [long[]]$Opene
     $key = $Sort + '/' + $Dir
     if ($Sort -ne 'opened' -and $Index.SortOrders.ContainsKey($key)) { return , $Index.SortOrders[$key] }
     $c = $Index.Columns
-    $numbers = [Collections.Generic.List[int]]::new($Index.Slots.Count)
     [bool[]]$alive = $c.Alive.ToArray()
-    for ($n = 0; $n -lt $alive.Length; $n++) { if ($alive[$n]) { $numbers.Add($n) } }
-    $items = $numbers.ToArray(); $keys = [Tuple[long,int,long,long,int,int][]]::new($items.Length)
-    [bool[]]$pins = $c.Pinned.ToArray(); [long[]]$orders = $c.PinOrder.ToArray()
-    [long[]]$updatedTicks = $c.UpdatedTicks.ToArray()
-    [int[]]$titleOrdinals = $c.TitleOrdinal.ToArray(); [int[]]$idOrdinals = $c.IdOrdinal.ToArray()
-    [long[]]$primaryValues = switch ($Sort) {
-        'title' { $c.TitleOrdinal.ToArray() }
-        'backlinks' { $c.BacklinkCount.ToArray() }
-        'updated' { $updatedTicks }
-        'created' { $c.CreatedTicks.ToArray() }
-        'opened' { $OpenedTicks }
-        default { [long[]]::new($alive.Length) }
+    $allSlots = [Linq.Enumerable]::ToArray[int]([Linq.Enumerable]::Range(0, $alive.Length))
+    $items = $script:memoSelectFactory.Invoke($allSlots, $alive, [int[]]::new(0), $false)
+    [long[]]$primaryValues = $null
+    switch ($Sort) {
+        'title' { $primaryValues = $c.TitleOrdinal.ToArray() }
+        'backlinks' { $primaryValues = $c.BacklinkCount.ToArray() }
+        'updated' { $primaryValues = $c.UpdatedTicks.ToArray() }
+        'created' { $primaryValues = $c.CreatedTicks.ToArray() }
+        'opened' { $primaryValues = $OpenedTicks }
+        default { $primaryValues = [long[]]::new($alive.Length) }
     }
-    $descending = $Dir -eq 'desc'
-    for ($at = 0; $at -lt $items.Length; $at++) {
-        $n = $items[$at]; [long]$primary = $primaryValues[$n]
-        if ($descending) { $primary = -$primary }
-        [long]$modified = [long]::MaxValue
-        if ($updatedTicks[$n] -ge 0) { $modified = -$updatedTicks[$n] }
-        [long]$pinOrder = 0
-        if ($pins[$n]) { $pinOrder = $orders[$n] }
-        $keys[$at] = [Tuple[long,int,long,long,int,int]]::new($primary, [int](-not $pins[$n]), $pinOrder, $modified, $titleOrdinals[$n], $idOrdinals[$n])
-    }
+    $sortColumns = [object[]]@($c.Pinned.ToArray(), $c.PinOrder.ToArray(), $c.UpdatedTicks.ToArray(),
+        $c.TitleOrdinal.ToArray(), $c.IdOrdinal.ToArray(), $primaryValues, ($Dir -eq 'desc'), $items)
+    $keys = $script:memoSortFactory.Invoke($sortColumns)
     if ($items.Length -gt 1) { [Array]::Sort($keys, $items) }
     if ($Sort -ne 'opened') { $Index.SortOrders[$key] = $items }
     , $items
@@ -605,7 +810,8 @@ function Find-WtMemo {
             $candidate[$n] = $alive[$n] -and ($scope -ne 'active' -or -not $archives[$n]) -and ($scope -ne 'archived' -or $archives[$n]) -and
                 (-not $pinnedOnly -or $pins[$n]) -and (-not $recentOnly -or $opened.ContainsKey($ids[$n]))
         }
-        $mask = Get-WtMemoMatchSet $Index $tree.Root ([datetime]::Today) $candidate
+        $positions = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+        $mask = Get-WtMemoMatchSet $Index $tree.Root ([datetime]::Today) $candidate $positions
         if ($Index.OrderDirty) { Update-WtMemoIndexOrder $Index }
         # Backlinks는 기존 결과의 공개 칸이다. 연결 조건이 없어도 실제 값을 반환해야 하므로 첫 결과 때 준비한다.
         Initialize-WtMemoLinks $Index
@@ -631,67 +837,29 @@ function Find-WtMemo {
         [string[]]$tl = $c.TitleLower.ToArray(); [string[]]$bl = $c.BodyLower.ToArray(); [string[]]$titleText = $c.Title.ToArray()
         if ($termCount) {
             [string[]]$needleArray = $needles.ToArray(); [string[]]$fieldArray = $termFields.ToArray()
-            for ($n = 0; $n -lt $count; $n++) {
-                if (-not $mask[$n]) { continue }
-                $rank = 3; $bodyAt = -1; $titleHits = 0; $matchedTerms = 0
-                $hits = [Collections.Generic.List[object]]::new()
-                for ($t = 0; $t -lt $termCount; $t++) {
-                    $needle = $needleArray[$t]; $field = $fieldArray[$t]; $ti = -1; $bi = -1
-                    if ($field -ne 'body') { $ti = $tl[$n].IndexOf($needle, [StringComparison]::Ordinal) }
-                    if ($field -ne 'title') { $bi = $bl[$n].IndexOf($needle, [StringComparison]::Ordinal) }
-                    if ($ti -ge 0 -or $bi -ge 0) { $matchedTerms++ }
-                    if ($ti -ge 0) {
-                        $titleHits++; $hits.Add([pscustomobject]@{ Field = 'title'; Start = $ti; Length = $needle.Length })
-                        if ($tl[$n] -eq $needle) { $rank = 0 }
-                    }
-                    if ($bi -ge 0) {
-                        $hits.Add([pscustomobject]@{ Field = 'body'; Start = $bi; Length = $needle.Length })
-                        if ($bodyAt -lt 0 -or $bi -lt $bodyAt) { $bodyAt = $bi }
-                    }
-                }
-                if ([string]::Equals($titleText[$n], $joined, [StringComparison]::OrdinalIgnoreCase) -and $titleHits -eq $termCount) { $rank = 0 }
-                elseif ($rank -ne 0) {
-                    $rank = 2
-                    if ($titleHits -gt 0 -and $titleHits -eq $matchedTerms) { $rank = 1 }
-                }
-                $ranks[$n] = $rank; $locations[$n] = $hits.ToArray()
-                if ($bodyAt -ge 0) { $starts[$n] = [Math]::Max(0, $bodyAt - 24) }
+            $titlePositions = [int[][]]::new($termCount); $bodyPositions = [int[][]]::new($termCount)
+            for ($t = 0; $t -lt $termCount; $t++) {
+                if ($fieldArray[$t] -ne 'body') { $titlePositions[$t] = Get-WtMemoTextPositions $Index 'title' $needleArray[$t] $positions }
+                if ($fieldArray[$t] -ne 'title') { $bodyPositions[$t] = Get-WtMemoTextPositions $Index 'body' $needleArray[$t] $positions }
             }
-        }
-        $numbers = [Collections.Generic.List[int]]::new()
-        if ($termCount -and -not $Sort) {
-            # 안정된 기본 순서를 네 순위 칸으로 나눈다. 검색마다 tuple 키를 메모 수만큼 만들지 않는다.
-            $buckets = [Collections.Generic.List[int][]]::new(4)
-            for ($r = 0; $r -lt 4; $r++) { $buckets[$r] = [Collections.Generic.List[int]]::new() }
-            foreach ($n in $baseOrder) { if ($mask[$n]) { $buckets[$ranks[$n]].Add($n) } }
-            for ($r = 0; $r -lt 4; $r++) { $numbers.AddRange($buckets[$r]) }
+            $rankColumns = [object[]]@($tl, $titleText, $needleArray, $titlePositions, $bodyPositions, $mask, $joined)
+            $rankResult = $script:memoRanksFactory.Invoke($rankColumns)
+            $ranks = $rankResult[0]; $starts = $rankResult[1]; $locations = $rankResult[2]
         } else {
-            foreach ($n in $baseOrder) { if ($mask[$n]) { $numbers.Add($n) } }
+            [Array]::Fill[int]($ranks, 3); [Array]::Fill[object]($locations, [object[]]::new(0))
         }
-        $items = $numbers.ToArray(); $length = $items.Length
-        $folderMap = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-        foreach ($folder in $Index.Folders) { if (-not $folderMap.ContainsKey([string]$folder.id)) { $folderMap[[string]$folder.id] = $folder } }
-        $rows = [object[]]::new($length)
-        [string[]]$bodies = $c.Body.ToArray(); [string[]]$folders = $c.Folder.ToArray(); [Collections.Generic.HashSet[string][]]$tags = $c.Tags.ToArray()
-        [object[]]$updated = $c.Updated.ToArray(); [object[]]$created = $c.Created.ToArray(); [long[]]$orders = $c.PinOrder.ToArray(); [int[]]$backlinks = $c.BacklinkCount.ToArray()
-        $emptyMatches = [object[]]::new(0)
-        for ($at = 0; $at -lt $length; $at++) {
-            $n = $items[$at]; $start = $starts[$n]; $snippet = ''
-            if ($at -lt $SnippetLimit) { $snippet = $bodies[$n].Substring($start, [Math]::Min(80, $bodies[$n].Length - $start)) }
-            $folderId = $null; $folderName = '폴더 없음'
-            if ($folderMap.ContainsKey($folders[$n])) {
-                $folder = $folderMap[$folders[$n]]
-                if ($folder) { $folderId = [string]$folder.id; $folderName = [string]$folder.name }
-            }
-            $matches = $emptyMatches; $rank = 3
-            if ($termCount) { $matches = $locations[$n]; $rank = $ranks[$n] }
-            $rows[$at] = [pscustomobject]@{
-                Id = $ids[$n]; Title = $titleText[$n]; Matches = $matches; Snippet = $snippet; SnippetStart = $start
-                Folder = $folderId; FolderName = $folderName
-                Tags = [string[]]@($tags[$n]); Pinned = $pins[$n]; PinOrder = $orders[$n]; Archived = $archives[$n]
-                Rank = $rank; Updated = $updated[$n]; Created = $created[$n]; Opened = $openedTimes[$n]; Backlinks = $backlinks[$n]
+        $items = $script:memoSelectFactory.Invoke($baseOrder, $mask, $ranks, ($termCount -gt 0 -and -not $Sort)); $length = $items.Length
+        $folderMap = [Collections.Generic.Dictionary[string, string[]]]::new([StringComparer]::Ordinal)
+        foreach ($folder in $Index.Folders) {
+            if (-not $folderMap.ContainsKey([string]$folder.id)) {
+                $folderValue = [string[]]::new(2); $folderValue[1] = '폴더 없음'
+                if ($folder) { $folderValue[0] = [string]$folder.id; $folderValue[1] = [string]$folder.name }
+                $folderMap[[string]$folder.id] = $folderValue
             }
         }
+        $rowColumns = [object[]]@($ids, $titleText, $locations, $c.Body.ToArray(), $starts, $c.Folder.ToArray(), $folderMap,
+            [Collections.Generic.HashSet[string][]]$c.Tags.ToArray(), $pins, $c.PinOrder.ToArray(), $archives, $ranks, $c.Updated.ToArray(), $c.Created.ToArray(), $openedTimes, $c.BacklinkCount.ToArray())
+        $rows = $script:memoRowsFactory.Invoke($rowColumns, $items, $SnippetLimit)
         [pscustomobject]@{ Success = $true; Items = $rows; Count = $length; Error = $null }
     } catch {
         [pscustomobject]@{ Success = $false; Items = @(); Count = 0; Error = [pscustomobject]@{ Position = 0; Length = 0; Reason = $_.Exception.Message } }
@@ -893,6 +1061,9 @@ function Set-WtMemoViewDeleted {
     if ($reason) { throw $reason }
     Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items)
 }
+
+# 입력 자료와 무관한 대리자는 모듈을 읽을 때 한 번 준비한다(검색 중 컴파일하지 않는다).
+Initialize-WtMemoSearchEngine
 
 Export-ModuleMember -Function ConvertFrom-WtMemoQuery, ConvertTo-WtMemoQuery, New-WtMemoIndex, Update-WtMemoIndex, Find-WtMemo,
     Set-WtMemoFolder, Set-WtMemoPinned, Set-WtMemoArchived, Get-WtMemoFolders, Save-WtMemoFolders, Set-WtMemoOpened,

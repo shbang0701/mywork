@@ -262,7 +262,12 @@ try {
         }
     } finally { [Globalization.CultureInfo]::CurrentCulture = $cultureBefore; [Globalization.CultureInfo]::CurrentUICulture = $uiCultureBefore }
 
-    # 함수 단위 Stopwatch, 창 없음. 고정 씨앗/자료와 10회 중앙값만 보고하며 실패 조건으로 삼지 않는다.
+    # 함수 단위 Stopwatch, 창 없음. GC는 측정 밖에서만 한다. 실행 환경 차이가 있어 시간은 실패 조건으로 삼지 않는다.
+    function Write-MemoPerf([string]$Label, [double[]]$Samples, [string]$Unit = 'ms') {
+        $firstSample = $Samples[0]; $orderedSamples = [double[]]$Samples.Clone(); [Array]::Sort($orderedSamples)
+        $medianSample = ($orderedSamples[4] + $orderedSamples[5]) / 2
+        Write-Host ('PERF {0} 10회 중앙값 {1:F1}{4} 최댓값 {2:F1}{4} 첫 회 {3:F1}{4}' -f $Label, $medianSample, $orderedSamples[-1], $firstSample, $Unit)
+    }
     $perfSeed = 5061581; $perfRandom = [Random]::new($perfSeed)
     $perfBodies = [string[]]::new(32)
     for ($variant = 0; $variant -lt $perfBodies.Length; $variant++) {
@@ -273,8 +278,23 @@ try {
         id = "perf$i"; title = "메모 $i"; body = $perfBodies[$perfRandom.Next($perfBodies.Length)]; tags = @('백업'); folder = 'work'; pinned = ($i % 100 -eq 0)
         created = '2026-10-01T09:00:00+09:00'; updated = '2026-10-26T09:00:00+09:00'
     } })
-    $watch = [Diagnostics.Stopwatch]::StartNew(); $perfIndex = New-WtMemoIndex $perfMemos; $watch.Stop()
-    Write-Host "PERF 씨앗 $perfSeed 메모 3000개 본문 UTF-8 각각 2048B 색인 $($watch.Elapsed.TotalMilliseconds.ToString('F1', [Globalization.CultureInfo]::InvariantCulture))ms"
+    $watch = [Diagnostics.Stopwatch]::new()
+    $indexTimes = [double[]]::new(10); $firstTimes = [double[]]::new(10); $indexMemory = [double[]]::new(10)
+    $validFirst = $true
+    for ($repeat = 0; $repeat -lt $indexTimes.Length; $repeat++) {
+        $perfIndex = $null; $perfResult = $null
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers(); $memoryBefore = [GC]::GetTotalMemory($true)
+        $watch.Restart(); $perfIndex = New-WtMemoIndex $perfMemos; $watch.Stop(); $indexTimes[$repeat] = $watch.Elapsed.TotalMilliseconds
+        # 매번 새 색인에서 검색한다. 정렬/연결 준비를 이전 검색에서 빌려 오지 않는다.
+        $watch.Restart(); $perfResult = Find-WtMemo -Index $perfIndex -Query '권한 오류'; $watch.Stop(); $firstTimes[$repeat] = $watch.Elapsed.TotalMilliseconds
+        $validFirst = $validFirst -and $perfResult.Success -and $perfResult.Count -eq 3000
+        $perfResult = $null; $indexMemory[$repeat] = ([GC]::GetTotalMemory($true) - $memoryBefore) / 1MB
+    }
+    Assert-WtTest '5a 속도 자료: 새 색인 10개 첫 검색 결과 개수' $validFirst
+    Write-Host "PERF 씨앗 $perfSeed 메모 3000개 본문 UTF-8 각각 2048B (메모리는 입력 자료를 제외한 GC 후 색인 보유량)"
+    Write-MemoPerf '색인 (연결은 첫 검색에 포함)' $indexTimes
+    Write-MemoPerf '새 색인의 첫 검색 [권한 오류]' $firstTimes
+    Write-MemoPerf '색인 관리 힙' $indexMemory 'MiB'
     foreach ($perfQuery in '권한 오류', 'title:메모', '#백업', 'folder:업무 updated:2026-10-01..2026-10-31', 'has:link -is:pinned') {
         $times = [double[]]::new(10); $validPerf = $true
         for ($repeat = 0; $repeat -lt $times.Length; $repeat++) {
@@ -283,8 +303,7 @@ try {
             $validPerf = $validPerf -and $perfResult.Success -and $perfResult.Count -eq $(if ($perfQuery -eq 'has:link -is:pinned') { 2970 } else { 3000 })
         }
         Assert-WtTest "5a 속도 자료: [$perfQuery] 10회 결과 개수" $validPerf
-        $first = $times[0]; [Array]::Sort($times); $median = ($times[4] + $times[5]) / 2
-        Write-Host "PERF 검색 [$perfQuery] 10회 중앙값 $($median.ToString('F1', [Globalization.CultureInfo]::InvariantCulture))ms 첫 회 $($first.ToString('F1', [Globalization.CultureInfo]::InvariantCulture))ms"
+        Write-MemoPerf "검색 [$perfQuery]" $times
     }
     $full = Find-WtMemo -Index $perfIndex -Query 'body:오류' -SnippetLimit ([int]::MaxValue)
     $limited = Find-WtMemo -Index $perfIndex -Query 'body:오류'
@@ -305,8 +324,7 @@ try {
         $watch.Restart(); Update-WtMemoIndex -Index $perfIndex -Memo $perfChanged; $watch.Stop()
         $times[$repeat] = $watch.Elapsed.TotalMilliseconds
     }
-    [Array]::Sort($times); $median = ($times[4] + $times[5]) / 2
-    Write-Host "PERF 메모 하나 본문/연결 갱신 10회 중앙값 $($median.ToString('F1', [Globalization.CultureInfo]::InvariantCulture))ms"
+    Write-MemoPerf '메모 하나 본문/연결 갱신' $times
     # 아래 기존 화면 검사는 새 목록을 저장하며 시작한다. 데이터 검사에서 직접 연 핸들 대신 지금 원자료를 읽어 준비한다.
     $null = Get-WtMemoItems
 
