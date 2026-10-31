@@ -76,6 +76,10 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
         Assert-WtTest '안정성: 저장 중인 파일을 읽으면 저장 중인 내용이 나오고, 표식도 다 쓴 뒤와 같다' (
             (Get-WtStoreItems 'hang-test')[0].id -eq 'h1' -and (Get-WtSetting 'test.mode') -eq 'hang' -and (Test-WtStore 'hang-test') -and
             [System.IO.File]::ReadAllText($filePath) -match '"h0"')
+        $firstPendingStamp = Get-WtStoreStamp 'hang-test'
+        Assert-WtTest '안정성: 저장 대기 중인 같은 버전의 표식은 반복해서 같고 경로 대소문자는 유지한다' (
+            $firstPendingStamp -ceq (Get-WtStoreStamp 'hang-test') -and
+            (Get-WtStoreStamp 'HANG-TEST') -ceq $firstPendingStamp.Replace('hang-test.json', 'HANG-TEST.json'))
         # 오래 걸리면(검사에서는 300ms) 「응답 없음」으로 보이지만 실패로 정하지 않는다. 같은 파일을 또 저장해도 바로 돌아온다
         & $storage { $script:writeSlowMs = 300 }
         Start-Sleep -Milliseconds 350; Update-WtWork
@@ -83,6 +87,8 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
         $againError = $null; try { Write-WtStore -Name 'hang-test' -Items @([ordered]@{ id = 'h2' }) } catch { $againError = $_.Exception }
         $againMs = $watch.ElapsedMilliseconds
         $pendingStamp = Get-WtStoreStamp 'hang-test'
+        Assert-WtTest '안정성: 같은 크기의 다음 저장 버전은 새 표식을 쓰며 반복 조회도 같다' (
+            $pendingStamp -cne $firstPendingStamp -and $pendingStamp -ceq (Get-WtStoreStamp 'hang-test'))
         $slow = Get-WtDataWriteState
         Assert-WtTest "안정성: 「응답 없음」이 돼도 실패로 정하지 않고, 그동안 저장은 기다리지 않는다 (${againMs}ms)" (
             $slow.Slow -and $slow.Count -eq 3 -and -not $againError -and (Get-WtDataWriteStatus $filePath).State -eq 'writing' -and $againMs -lt 150 -and (Get-WtStoreItems 'hang-test')[0].id -eq 'h2')
