@@ -195,10 +195,10 @@ $script:stylesXaml = @'
         <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
       </Trigger>
       <Trigger Property="IsEnabled" Value="False">
-        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
-    <Setter Property="Opacity" Value="1"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+        <Setter Property="Opacity" Value="1"/>
       </Trigger>
     </Style.Triggers>
   </Style>
@@ -217,10 +217,10 @@ $script:stylesXaml = @'
         <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
       </Trigger>
       <Trigger Property="IsEnabled" Value="False">
-        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
-    <Setter Property="Opacity" Value="1"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+        <Setter Property="Opacity" Value="1"/>
       </Trigger>
     </Style.Triggers>
   </Style>
@@ -240,10 +240,10 @@ $script:stylesXaml = @'
         <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
       </Trigger>
       <Trigger Property="IsEnabled" Value="False">
-        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
-    <Setter Property="Opacity" Value="1"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
+        <Setter Property="Opacity" Value="1"/>
       </Trigger>
     </Style.Triggers>
   </Style>
@@ -632,10 +632,10 @@ $script:stylesXaml = @'
   <DataTemplate x:Key="Memo.Item">
     <StackPanel>
       <DockPanel>
-        <TextBlock DockPanel.Dock="Right" Text="{Binding Stamp}" Style="{DynamicResource T.CaptionMuted}" Margin="8,0,0,0"/>
+        <TextBlock DockPanel.Dock="Right" Text="&#xE718;" Visibility="{Binding PinShown}" Style="{DynamicResource T.Icon}" FontSize="12" Foreground="{DynamicResource B.Text.Tertiary}" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="고정"/>
         <TextBlock Text="{Binding Title}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
       </DockPanel>
-      <TextBlock Text="{Binding Snippet}" Style="{DynamicResource T.CaptionMuted}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+      <TextBlock Text="{Binding Sub}" Style="{DynamicResource T.CaptionMuted}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
     </StackPanel>
   </DataTemplate>
   <Style x:Key="Memo.List" TargetType="ListBox" BasedOn="{StaticResource List}">
@@ -652,7 +652,7 @@ $script:stylesXaml = @'
     <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
     <Setter Property="BorderThickness" Value="0,0,0,1"/>
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.MemoTabBar}"/>
-    <Setter Property="Padding" Value="9,6,0,6"/>
+    <Setter Property="Padding" Value="9,6,8,6"/>
 
   </Style>
   <!-- 메모 탭 하나. 선택 표시는 바탕 + 아래 가운데 막대(3 × 16). 막대 색은 BorderBrush로 받는다
@@ -747,9 +747,42 @@ $script:stylesXaml = @'
     </ControlTemplate></Setter.Value></Setter>
 
   </Style>
-  <!-- 두 칸 사이 경계: 폭 16(칸 사이 간격)을 끌어 폭을 바꾼다. 마우스를 올리거나 끌 때만 가운데 선이 보인다 -->
+  <Style x:Key="Memo.ListBody" TargetType="DockPanel"><Setter Property="Margin" Value="12,0,12,8"/></Style>
+  <Style x:Key="Memo.SearchRow" TargetType="DockPanel"><Setter Property="Margin" Value="0,0,0,8"/></Style>
+  <Style x:Key="Memo.Chips" TargetType="WrapPanel"><Setter Property="Margin" Value="0,0,0,4"/></Style>
+  <Style x:Key="Memo.ViewRow" TargetType="DockPanel"><Setter Property="Margin" Value="0,0,0,4"/></Style>
+  <Style x:Key="Memo.ViewPick" TargetType="Button" BasedOn="{StaticResource Btn}">
+    <Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="Transparent"/><Setter Property="Padding" Value="4,0"/>
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Compact}"/><Setter Property="HorizontalAlignment" Value="Left"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
+  </Style>
+  <Style x:Key="Memo.Tag" TargetType="Button">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/><Setter Property="FontSize" Value="{DynamicResource F.Small}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Accent.Text}"/><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/>
+    <Setter Property="Height" Value="{DynamicResource F.Height.Chip}"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="0,0,4,0"/>
+    <Setter Property="Cursor" Value="Hand"/><Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+      <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}" Padding="{TemplateBinding Padding}"><ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/></Border>
+    </ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Canvas}"/></Trigger>
+      <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Canvas}"/></Trigger>
+    </Style.Triggers>
+  </Style>
+  <DataTemplate x:Key="Memo.TocItem">
+    <TextBlock Text="{Binding Text}" Margin="{Binding Indent}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTip="{Binding Text}"/>
+  </DataTemplate>
+  <Style x:Key="Memo.TocRow" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
+    <Setter Property="MinHeight" Value="{DynamicResource F.Height.Checklist}"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="8,0"/>
+  </Style>
+  <Style x:Key="Memo.Toc" TargetType="ListBox" BasedOn="{StaticResource List}">
+    <Setter Property="ItemTemplate" Value="{StaticResource Memo.TocItem}"/>
+    <Setter Property="ItemContainerStyle" Value="{DynamicResource Memo.TocRow}"/>
+    <Setter Property="Margin" Value="8,0,8,8"/>
+  </Style>
+  <!-- 두 칸 사이 경계: 폭 8(칸 사이 간격)을 끌어 폭을 바꾼다. 마우스를 올리거나 끌 때만 가운데 선이 보인다 -->
   <Style x:Key="Memo.Splitter" TargetType="GridSplitter">
-    <Setter Property="Width" Value="16"/>
+    <Setter Property="Width" Value="8"/>
     <Setter Property="HorizontalAlignment" Value="Stretch"/>
     <Setter Property="VerticalAlignment" Value="Stretch"/>
     <Setter Property="ResizeDirection" Value="Columns"/>
@@ -804,8 +837,15 @@ $script:stylesXaml = @'
     <Setter Property="MaxHeight" Value="400"/>
     <Setter Property="Margin" Value="0,8,0,0"/>
   </Style>
+  <!-- 카드 안 머리줄 56: 문서 · 활성 작업. 일정 · 근태는 전용 스타일에 같은 값을 쓴다 -->
+  <Style x:Key="Card.Head" TargetType="DockPanel"><Setter Property="Height" Value="{DynamicResource F.Height.Header}"/><Setter Property="Margin" Value="16,0,16,0"/></Style>
+  <Style x:Key="Card.Body" TargetType="Grid"><Setter Property="Margin" Value="16,0,16,0"/></Style>
+  <Style x:Key="Card.Foot" TargetType="DockPanel"><Setter Property="Margin" Value="16,8,16,12"/></Style>
+  <Style x:Key="Doc.TreeHead" TargetType="DockPanel"><Setter Property="Height" Value="{DynamicResource F.Height.Header}"/><Setter Property="Margin" Value="16,0,8,0"/></Style>
+  <Style x:Key="Doc.TreeFoot" TargetType="Button" BasedOn="{StaticResource Btn.Link}"><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="8,8,8,8"/></Style>
+  <Style x:Key="Doc.Columns" TargetType="Border"><Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/><Setter Property="BorderThickness" Value="0,0,0,1"/><Setter Property="Padding" Value="12,0"/></Style>
+  <Style x:Key="Doc.Column" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="12,0,0,0"/></Style>
   <Style x:Key="Doc.Row" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
-    <Setter Property="Padding" Value="12,6"/>
     <Setter Property="Tag" Value="{Binding}"/>
     <Setter Property="ToolTip" Value="{Binding Path}"/>
   </Style>
@@ -855,20 +895,23 @@ $script:stylesXaml = @'
     <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
     <Setter Property="Background" Value="Transparent"/>
-    <Setter Property="Padding" Value="4,6,10,6"/>
+    <Setter Property="Padding" Value="8,0"/>
     <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="TreeViewItem">
           <StackPanel>
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}" Margin="0,1"
-                    BorderBrush="Transparent" BorderThickness="1">
-              <DockPanel>
-                <ToggleButton x:Name="Expander" DockPanel.Dock="Left" Style="{StaticResource TreeExpander}" ClickMode="Press"
-                              IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"/>
-                <ContentPresenter ContentSource="Header" VerticalAlignment="Center" Margin="4,0,0,0" RecognizesAccessKey="False"/>
-              </DockPanel>
-            </Border>
+            <Grid>
+              <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}" Padding="{TemplateBinding Padding}"
+                      MinHeight="{DynamicResource F.Height.Compact}" BorderBrush="Transparent" BorderThickness="1">
+                <DockPanel>
+                  <ToggleButton x:Name="Expander" DockPanel.Dock="Left" Style="{StaticResource TreeExpander}" ClickMode="Press"
+                                IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"/>
+                  <ContentPresenter ContentSource="Header" VerticalAlignment="Center" Margin="4,0,0,0" RecognizesAccessKey="False"/>
+                </DockPanel>
+              </Border>
+              <Border x:Name="SelectedBar" Width="3" Height="16" CornerRadius="1.5" Background="{DynamicResource B.Accent}" HorizontalAlignment="Left" VerticalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False"/>
+            </Grid>
             <ItemsPresenter x:Name="ItemsHost" Margin="16,0,0,0" Visibility="Collapsed"/>
           </StackPanel>
           <ControlTemplate.Triggers>
@@ -883,6 +926,7 @@ $script:stylesXaml = @'
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
               <Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.AccentSoft}"/>
+              <Setter TargetName="SelectedBar" Property="Visibility" Value="Visible"/>
             </Trigger>
             <MultiTrigger>
               <MultiTrigger.Conditions>
@@ -902,6 +946,7 @@ $script:stylesXaml = @'
     <Setter Property="ItemContainerStyle" Value="{StaticResource TreeItem}"/>
     <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
   </Style>
+  <Style x:Key="Doc.Tree" TargetType="TreeView" BasedOn="{StaticResource Tree}"><Setter Property="Margin" Value="8,0,8,0"/></Style>
 
   <!-- 체크 상자: 표의 선택 상자(Task.Check)와 같은 16 상자 + 오른쪽 글자. 글자를 눌러도 바뀐다 -->
   <Style x:Key="Check" TargetType="CheckBox">
@@ -929,7 +974,7 @@ $script:stylesXaml = @'
         <Trigger Property="IsPressed" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
         <Trigger Property="IsChecked" Value="True"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Accent}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter TargetName="Mark" Property="Visibility" Value="Visible"/></Trigger>
         <Trigger Property="IsChecked" Value="{x:Null}"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Accent}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter TargetName="Dash" Property="Visibility" Value="Visible"/></Trigger>
-        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter TargetName="Mark" Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
+        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter TargetName="Mark" Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers>      <Trigger Property="IsEnabled" Value="False">
@@ -1411,6 +1456,7 @@ $script:stylesXaml = @'
     <Setter Property="Margin" Value="0,0,0,12"/>
   </Style>
 
+  <!-- 활성 작업 표. 고르기 열 60: 체크 상자가 왼쪽 32, 이름이 72에 온다. 묶음 머리도 같은 자리에 맞춘다 (값 문서 8절) -->
   <Style x:Key="Task.Check" TargetType="CheckBox">
     <Setter Property="VerticalAlignment" Value="Center"/>
     <Setter Property="HorizontalAlignment" Value="Stretch"/>
@@ -1437,45 +1483,88 @@ $script:stylesXaml = @'
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
+  <Style x:Key="Task.GroupCheck" TargetType="CheckBox" BasedOn="{StaticResource Task.Check}"><Setter Property="Padding" Value="4,8,12,8"/></Style>
+  <Style x:Key="Task.GroupToggle" TargetType="ToggleButton">
+    <Setter Property="Width" Value="{DynamicResource F.Height.Compact}"/><Setter Property="Height" Value="{DynamicResource F.Height.Compact}"/><Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/><Setter Property="AutomationProperties.Name" Value="묶음 펼치기"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToggleButton">
+      <Border x:Name="Bd" Background="Transparent" CornerRadius="{DynamicResource F.Radius.Control}">
+        <TextBlock x:Name="Glyph" Text="&#xE76C;" FontFamily="{DynamicResource Font.Icon}" FontSize="10" Foreground="{DynamicResource B.Text.Secondary}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsChecked" Value="True"><Setter TargetName="Glyph" Property="Text" Value="&#xE70D;"/></Trigger>
+        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+        <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <!-- 묶음 머리: 평평한 한 줄. 펼침 단추 · 체크 상자 · 이름 · 개수 -->
+  <Style x:Key="Task.Group" TargetType="Expander">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Expander">
+      <DockPanel>
+        <Border DockPanel.Dock="Top" MinHeight="{DynamicResource F.Height.Control}" BorderBrush="{DynamicResource B.Border.Muted}" BorderThickness="0,0,0,1">
+          <DockPanel>
+            <ToggleButton DockPanel.Dock="Left" Style="{StaticResource Task.GroupToggle}" VerticalAlignment="Center" IsChecked="{Binding IsExpanded, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"/>
+            <ContentPresenter ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="False"/>
+          </DockPanel>
+        </Border>
+        <ContentPresenter x:Name="Body" Visibility="Collapsed"/>
+      </DockPanel>
+      <ControlTemplate.Triggers><Trigger Property="IsExpanded" Value="True"><Setter TargetName="Body" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
   <Style x:Key="Task.Row" TargetType="DataGridRow">
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="DataGridRow">
+      <Border Background="{TemplateBinding Background}"><Grid>
+        <DataGridCellsPresenter/>
+        <Border x:Name="SelectionMark" Width="3" Height="16" CornerRadius="1.5" HorizontalAlignment="Left" VerticalAlignment="Center" Background="{DynamicResource B.Accent}" Visibility="Collapsed" IsHitTestVisible="False"/>
+      </Grid></Border>
+      <ControlTemplate.Triggers><DataTrigger Binding="{Binding Selected}" Value="True"><Setter TargetName="SelectionMark" Property="Visibility" Value="Visible"/></DataTrigger></ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
     <Setter Property="MinHeight" Value="32"/>
-    <Setter Property="Background" Value="{DynamicResource B.Card}"/>
-    <Setter Property="BorderThickness" Value="3,0,0,0"/>
-    <Setter Property="BorderBrush" Value="Transparent"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
+    <Setter Property="BorderThickness" Value="0"/>
     <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Hover}"/></Trigger>
-      <DataTrigger Binding="{Binding Selected}" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
-      </DataTrigger>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <DataTrigger Binding="{Binding Selected}" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/></DataTrigger>
     </Style.Triggers>
   </Style>
+  <!-- 표 칸: 바탕은 행이 칠한다. 활성 작업 · 근태가 같이 쓴다 -->
   <Style x:Key="Task.Cell" TargetType="DataGridCell">
-    <Setter Property="Padding" Value="12,4"/>
-    <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="BorderBrush" Value="Transparent"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
+    <Setter Property="Padding" Value="12,0"/>
     <Setter Property="Background" Value="Transparent"/>
-    <Style.Triggers>
-      <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/></Trigger>
-      <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{DynamicResource B.AccentSoft}"/></Trigger>
-    </Style.Triggers>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="DataGridCell"><Border Padding="{TemplateBinding Padding}" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"><ContentPresenter VerticalAlignment="Center"/></Border></ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers><Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderThickness" Value="2"/><Setter Property="BorderBrush" Value="{DynamicResource B.Text.Primary}"/></Trigger></Style.Triggers>
   </Style>
+  <Style x:Key="Task.CheckCell" TargetType="DataGridCell" BasedOn="{StaticResource Task.Cell}"><Setter Property="Padding" Value="20,0,0,0"/></Style>
+  <!-- 표 머리: 바탕 없이 작은 글자 + 아래 선. 활성 작업 · 근태가 같이 쓴다 -->
   <Style x:Key="Task.Header" TargetType="DataGridColumnHeader">
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/>
-    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Caption}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Caption.Weight}"/>
     <Setter Property="Padding" Value="12,0"/>
-    <Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
     <Setter Property="BorderThickness" Value="0,0,0,1"/>
   </Style>
+  <Style x:Key="Task.HeaderRight" TargetType="DataGridColumnHeader" BasedOn="{StaticResource Task.Header}"><Setter Property="HorizontalContentAlignment" Value="Right"/></Style>
   <Style x:Key="Task.Text" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
     <Setter Property="TextWrapping" Value="NoWrap"/>
     <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
     <Setter Property="VerticalAlignment" Value="Center"/>
     <Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=Text}"/>
+    <Style.Triggers><Trigger Property="Text" Value=""><Setter Property="ToolTip" Value="{x:Null}"/></Trigger></Style.Triggers>
   </Style>
+  <Style x:Key="Task.Title" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0,16,0"/></Style>
+  <Style x:Key="Task.Filter" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Margin" Value="8,0,0,0"/></Style>
+  <!-- 설정 행: 라벨↔값 12, 행 사이 12 (값 문서 8절 설정·도움말) -->
+  <Style x:Key="Setting.Row" TargetType="Grid"><Setter Property="Margin" Value="0,6"/><Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/></Style>
+  <Style x:Key="Setting.Label" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,12,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Setting.Time" TargetType="TextBox" BasedOn="{StaticResource Input}"><Setter Property="Width" Value="120"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/></Style>
   <Style x:Key="Btn.Compact" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.Compact}"/>
 
@@ -1662,7 +1751,7 @@ $script:stylesXaml = @'
   <Style x:Key="Attendance.SummaryRow" TargetType="DockPanel"><Setter Property="MinHeight" Value="32"/></Style>
   <Style x:Key="Attendance.SummaryChild" TargetType="DockPanel" BasedOn="{StaticResource Attendance.SummaryRow}"><Setter Property="Margin" Value="12,0,0,0"/></Style>
   <Style x:Key="Attendance.Note" TargetType="TextBox" BasedOn="{StaticResource Input}"><Setter Property="AcceptsReturn" Value="True"/><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="VerticalScrollBarVisibility" Value="Auto"/></Style>
-  <Style x:Key="Attendance.CellText" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=Text}"/></Style>
+  <Style x:Key="Attendance.CellText" TargetType="TextBlock" BasedOn="{StaticResource Task.Text}"/>
   <Style x:Key="Attendance.Number" TargetType="TextBlock" BasedOn="{StaticResource Attendance.CellText}"><Setter Property="TextAlignment" Value="Right"/></Style>
   <Style x:Key="Attendance.Row" TargetType="DataGridRow">
     <Setter Property="AutomationProperties.Name" Value="{Binding Note}"/>
@@ -1680,31 +1769,23 @@ $script:stylesXaml = @'
       <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/></Trigger>
     </Style.Triggers>
   </Style>
-  <Style x:Key="Attendance.Cell" TargetType="DataGridCell">
-    <Setter Property="Padding" Value="12,0"/><Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="BorderThickness" Value="0"/>
-    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="DataGridCell"><Border Padding="{TemplateBinding Padding}" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"><ContentPresenter VerticalAlignment="Center"/></Border></ControlTemplate></Setter.Value></Setter>
-    <Style.Triggers><Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderThickness" Value="2"/><Setter Property="BorderBrush" Value="{DynamicResource B.Text.Primary}"/></Trigger></Style.Triggers>
-  </Style>
-  <Style x:Key="Attendance.HeaderCell" TargetType="DataGridColumnHeader" BasedOn="{StaticResource Task.Header}">
-    <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="FontWeight" Value="{DynamicResource F.Caption.Weight}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
-  </Style>
   <Style x:Key="Attendance.Table" TargetType="DataGrid">
     <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="FontSize" Value="{DynamicResource F.Body}"/><Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="BorderThickness" Value="0"/><Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="GridLinesVisibility" Value="Horizontal"/><Setter Property="HeadersVisibility" Value="Column"/>
-    <Setter Property="RowStyle" Value="{StaticResource Attendance.Row}"/><Setter Property="CellStyle" Value="{StaticResource Attendance.Cell}"/><Setter Property="ColumnHeaderStyle" Value="{StaticResource Attendance.HeaderCell}"/>
+    <Setter Property="RowStyle" Value="{StaticResource Attendance.Row}"/><Setter Property="CellStyle" Value="{StaticResource Task.Cell}"/><Setter Property="ColumnHeaderStyle" Value="{StaticResource Task.Header}"/>
     <Setter Property="RowHeight" Value="32"/><Setter Property="ColumnHeaderHeight" Value="32"/>
   </Style>
   <DataTemplate x:Key="Attendance.TableView">
     <DataGrid Style="{DynamicResource Attendance.Table}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" CanUserReorderColumns="False" CanUserResizeRows="False" CanUserSortColumns="False" SelectionMode="Single" SelectionUnit="FullRow" AutomationProperties.Name="근태 기록">
       <DataGrid.Columns>
-        <DataGridTextColumn Header="날짜" Binding="{Binding Date}" Width="100" ElementStyle="{DynamicResource Attendance.CellText}"/>
-        <DataGridTextColumn Header="종류" Binding="{Binding Kind}" Width="72" ElementStyle="{DynamicResource Attendance.CellText}"/>
-        <DataGridTextColumn Header="시작" Binding="{Binding Start}" Width="64" ElementStyle="{DynamicResource Attendance.CellText}"/>
-        <DataGridTextColumn Header="끝" Binding="{Binding End}" Width="64" ElementStyle="{DynamicResource Attendance.CellText}"/>
-        <DataGridTextColumn Header="장소" Binding="{Binding Place}" Width="72" ElementStyle="{DynamicResource Attendance.CellText}"/>
-        <DataGridTextColumn Header="이동" Binding="{Binding Travel}" Width="56" ElementStyle="{DynamicResource Attendance.Number}"/>
-        <DataGridTextColumn Header="시간" Binding="{Binding Duration}" Width="64" ElementStyle="{DynamicResource Attendance.Number}"/>
-        <DataGridTextColumn Header="메모" Binding="{Binding Note}" Width="*" ElementStyle="{DynamicResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="날짜" Binding="{Binding Date}" Width="100" ElementStyle="{StaticResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="종류" Binding="{Binding Kind}" Width="72" ElementStyle="{StaticResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="시작" Binding="{Binding Start}" Width="64" ElementStyle="{StaticResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="끝" Binding="{Binding End}" Width="64" ElementStyle="{StaticResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="장소" Binding="{Binding Place}" Width="72" ElementStyle="{StaticResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="이동" Binding="{Binding Travel}" Width="56" HeaderStyle="{StaticResource Task.HeaderRight}" ElementStyle="{StaticResource Attendance.Number}"/>
+        <DataGridTextColumn Header="시간" Binding="{Binding Duration}" Width="64" HeaderStyle="{StaticResource Task.HeaderRight}" ElementStyle="{StaticResource Attendance.Number}"/>
+        <DataGridTextColumn Header="메모" Binding="{Binding Note}" Width="*" ElementStyle="{StaticResource Attendance.CellText}"/>
       </DataGrid.Columns>
     </DataGrid>
   </DataTemplate>
@@ -2011,10 +2092,12 @@ function New-WtSegmented([object[]]$Options, [string]$Selected, [string]$Group, 
 }
 
 # 검색 칸: 돋보기 + 비어 있을 때 안내 글. @{ Root = 화면에 넣을 요소; Box = TextBox } 를 돌려준다
-function New-WtSearchBox([string]$Hint = '검색') {
+# -Compact: 머리줄에 넣는 높이 28 칸
+function New-WtSearchBox([string]$Hint = '검색', [switch]$Compact) {
     $g = [System.Windows.Controls.Grid]::new()
     $box = [System.Windows.Controls.TextBox]::new()
     Set-WtStyle $box 'Input'
+    if ($Compact) { Set-WtResource $box 'MinHeight' 'F.Height.Compact'; Set-WtResource $box 'Height' 'F.Height.Compact' }
     $box.Padding = [System.Windows.Thickness]::new(32, 0, 10, 0)
     $icon = New-WtIcon 0xE721
     Set-WtResource $icon 'Foreground' 'B.Text.Tertiary'
@@ -2194,34 +2277,34 @@ function Show-WtError($ErrorRecord, [string]$Where = '') {
 function New-WtTaskGrid {
     $grid = ConvertFrom-WtXaml @'
 <DataGrid {NS} AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
-  HeadersVisibility="Column" SelectionMode="Single" SelectionUnit="FullRow" BorderThickness="0"
-  Background="{DynamicResource B.Card}" Foreground="{DynamicResource B.Text}"
+  HeadersVisibility="Column" SelectionMode="Single" SelectionUnit="FullRow" BorderThickness="0" IsSynchronizedWithCurrentItem="False"
+  Background="{DynamicResource B.Bg.Surface}" Foreground="{DynamicResource B.Text.Primary}"
   FontFamily="{DynamicResource Font.UI}" FontSize="{DynamicResource F.Body}"
   RowStyle="{DynamicResource Task.Row}" CellStyle="{DynamicResource Task.Cell}" ColumnHeaderStyle="{DynamicResource Task.Header}"
-  GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{DynamicResource B.Divider}"
+  GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="{DynamicResource B.Border.Muted}"
+  RowHeight="{DynamicResource F.Height.Control}" ColumnHeaderHeight="{DynamicResource F.Height.Control}"
   EnableRowVirtualization="True" EnableColumnVirtualization="True"
   VirtualizingPanel.IsVirtualizingWhenGrouping="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True">
   <DataGrid.Columns>
-    <DataGridTemplateColumn Header="선택" Width="48" CanUserSort="False">
+    <DataGridTemplateColumn Header="" Width="60" CanUserSort="False">
       <DataGridTemplateColumn.CellTemplate><DataTemplate>
         <CheckBox Tag="task" Style="{DynamicResource Task.Check}" IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
           IsEnabled="{Binding CanClose}" ToolTip="{Binding CloseHint}" AutomationProperties.Name="{Binding DisplayTitle}"/>
       </DataTemplate></DataGridTemplateColumn.CellTemplate>
     </DataGridTemplateColumn>
-    <DataGridTextColumn Header="이름" Binding="{Binding DisplayTitle}" SortMemberPath="DisplayTitle" Width="*" MinWidth="200" ElementStyle="{DynamicResource Task.Text}"/>
-    <DataGridTextColumn Header="종류" Binding="{Binding KindLabel}" SortMemberPath="KindLabel" Width="80" ElementStyle="{DynamicResource Task.Text}"/>
-    <DataGridTextColumn Header="창" Binding="{Binding WindowLabel}" SortMemberPath="WindowNumber" Width="96" ElementStyle="{DynamicResource Task.Text}"/>
-    <DataGridTextColumn Header="상태" Binding="{Binding Status}" SortMemberPath="Status" Width="240" ElementStyle="{DynamicResource Task.Text}"/>
+    <DataGridTextColumn Header="이름" Binding="{Binding DisplayTitle}" SortMemberPath="DisplayTitle" Width="*" MinWidth="200" />
+    <DataGridTextColumn Header="종류" Binding="{Binding KindLabel}" SortMemberPath="KindLabel" Width="72" />
+    <DataGridTextColumn Header="창" Binding="{Binding WindowLabel}" SortMemberPath="WindowNumber" Width="72" />
+    <DataGridTextColumn Header="상태" Binding="{Binding Status}" SortMemberPath="Status" Width="200" />
   </DataGrid.Columns>
   <DataGrid.GroupStyle><GroupStyle>
     <GroupStyle.ContainerStyle><Style TargetType="GroupItem"><Setter Property="Template"><Setter.Value>
       <ControlTemplate TargetType="GroupItem">
-        <Expander Tag="task-group" IsExpanded="True" Background="{DynamicResource B.Sidebar}" Foreground="{DynamicResource B.Text}">
+        <Expander Tag="task-group" IsExpanded="True" Style="{DynamicResource Task.Group}">
           <Expander.Header><StackPanel Orientation="Horizontal">
-            <CheckBox Tag="group" IsThreeState="True" Style="{DynamicResource Task.Check}" AutomationProperties.Name="{Binding Name}"/>
-            <TextBlock Text="{Binding Name}" Style="{DynamicResource T.Strong}" VerticalAlignment="Center"/>
-            <TextBlock Text="{Binding ItemCount}" Style="{DynamicResource T.Sub}" Margin="16,0,4,0" VerticalAlignment="Center"/>
-            <TextBlock Text="개 표시" Style="{DynamicResource T.Sub}" VerticalAlignment="Center"/>
+            <CheckBox Tag="group" IsThreeState="True" Style="{DynamicResource Task.GroupCheck}" AutomationProperties.Name="{Binding Name}"/>
+            <TextBlock Text="{Binding Name}" Style="{DynamicResource T.Strong}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding ItemCount}" Style="{DynamicResource T.CaptionMuted}" Margin="8,0,0,0" VerticalAlignment="Center"/>
           </StackPanel></Expander.Header>
           <ItemsPresenter/>
         </Expander>
@@ -2230,14 +2313,20 @@ function New-WtTaskGrid {
   </GroupStyle></DataGrid.GroupStyle>
 </DataGrid>
 '@
+    # 열은 시각 트리 밖이라 DynamicResource가 듣지 않는다. 스타일 안의 색은 자원 이름으로 남아 테마를 따른다.
+    $styles = Get-WtStyleDictionary
+    $grid.Columns[0].CellStyle = $styles['Task.CheckCell']
+    foreach ($column in @($grid.Columns)[1..4]) { $column.ElementStyle = $styles['Task.Text'] }
     # 그룹 행의 ItemsPresenter가 무한 폭으로 측정돼도 이름 열이 남는 폭을 채운다.
-    $grid.Add_SizeChanged({ param($s, $e) $s.Columns[1].Width = [System.Windows.Controls.DataGridLength]::new([Math]::Max(200, $s.ActualWidth - 48 - 80 - 96 - 240 - 24)) })
+    $grid.Add_SizeChanged({ param($s, $e) $s.Columns[1].Width = [System.Windows.Controls.DataGridLength]::new([Math]::Max(200, $s.ActualWidth - 60 - 72 - 72 - 200 - 24)) })
     $grid
 }
 
+# 카드 한 장을 채우는 화면. 머리줄 · 표 · 아래 줄의 여백은 Card.Head · Card.Body · Card.Foot으로 준다
 function New-WtTaskPage {
     $page = New-WtPage -Fill
     $card = New-WtCard
+    Set-WtStyle $card 'Panel.Surface'
     $inner = [System.Windows.Controls.DockPanel]::new()
     $card.Child = $inner
     [void]$page.Panel.Children.Add($card)

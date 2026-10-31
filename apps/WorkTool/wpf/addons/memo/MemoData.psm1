@@ -400,9 +400,13 @@ function Initialize-WtMemoSearchEngine {
 # ---- 색인: 나란한 칸 목록. 메모 번호는 갱신/삭제 후에도 바꾸지 않는다. -------------------------
 function New-WtMemoStringSet { , [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) }
 
+# 연결이 될 수 있는 글자가 하나도 없으면 마크다운을 읽지 않는다. 아래 해석은 메모 하나에 약 12ms다
+$script:memoLinkHint = [regex]::new('[\[<]|://|www\.|mailto:|tel:', [Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+
 function Get-WtMemoLinkInfo([string]$Body) {
     $outgoing = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $hasLink = $false
+    if (-not $script:memoLinkHint.IsMatch($Body)) { return @{ Outgoing = $outgoing; HasLink = $false } }
     $stack = [Collections.Generic.Stack[object]]::new()
     $stack.Push((ConvertTo-WtMarkdownModel $Body).Blocks)
     while ($stack.Count) {
@@ -462,7 +466,7 @@ function Initialize-WtMemoLinks($Index) {
     if ($Index.LinksReady) { return }
     $c = $Index.Columns
     # 같은 본문은 한 번만 해석한다. Markdown의 코드/위키 연결 규칙은 기존 해석기를 그대로 쓴다.
-    $cache = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    $cache = $Index.LinkCache
     for ($n = 0; $n -lt $c.Id.Count; $n++) {
         if (-not $c.Alive[$n]) { continue }
         $body = $c.Body[$n]
@@ -474,8 +478,33 @@ function Initialize-WtMemoLinks($Index) {
         }
     }
     $Index.LinksReady = $true
+    $cache.Clear()
     # 처음의 받는 연결 수는 모두 0이다. 실제로 연결을 받는 제목만 갱신하면 된다.
     foreach ($target in $Index.LinkSources.Keys) { Update-WtMemoBacklinks $Index $target }
+}
+
+# 연결 해석을 정한 시간만큼만 한다. 화면을 세우지 않으려고 화면이 쉴 때 나눠서 부른다.
+# 결과는 본문별로 남고 Initialize-WtMemoLinks가 그대로 쓴다. 그사이 고친 본문은 그때 해석한다. 다 끝나면 $true
+function Step-WtMemoLinks {
+    param([Parameter(Mandatory)]$Index, [int]$Milliseconds = 8)
+    if ($Index.LinksReady) { return $true }
+    $c = $Index.Columns; $cache = $Index.LinkCache
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while ($Index.LinkCursor -lt $c.Id.Count) {
+        $n = $Index.LinkCursor; $Index.LinkCursor = $n + 1
+        if ($c.Alive[$n] -and -not $cache.ContainsKey($c.Body[$n])) { $cache[$c.Body[$n]] = Get-WtMemoLinkInfo $c.Body[$n] }
+        if ($watch.ElapsedMilliseconds -ge $Milliseconds) { return $false }
+    }
+    Initialize-WtMemoLinks $Index
+    $true
+}
+
+# 이 검색이 연결 정보를 쓰는지 (빼는 조건 포함)
+function Test-WtMemoQueryLinks($Node) {
+    if ($Node.Kind -eq 'term') { return $Node.Field -in 'has', 'linksto' }
+    if ($Node.Kind -eq 'not') { return Test-WtMemoQueryLinks $Node.Child }
+    foreach ($child in @($Node.Children)) { if ($child -and (Test-WtMemoQueryLinks $child)) { return $true } }
+    $false
 }
 
 # 정렬용 ordinal은 제목/id가 바뀐 다음 검색에서만 다시 만든다. 갱신 자체는 한 칸만 고친다.
@@ -587,6 +616,7 @@ function New-WtMemoIndex {
         Titles = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
         LinkSources = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
         Folders = @($Folders); LinksReady = $false; OrderDirty = $true; NextSlot = 0
+        LinkCache = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal); LinkCursor = 0
         SortOrders = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
         TimeCache = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
     }
@@ -789,10 +819,31 @@ function Get-WtMemoSortOrder($Index, [string]$Sort, [string]$Dir, [long[]]$Opene
     , $items
 }
 
+function Get-WtMemoOrderPage([int[]]$Order, [int]$Skip, [int]$Take) {
+    $count = [Math]::Max(0, [Math]::Min($Take, $Order.Length - $Skip))
+    $page = [int[]]::new($count)
+    if ($count) { [Array]::Copy($Order, $Skip, $page, 0, $count) }
+    , $page
+}
+
+# -First로 앞만 만든 결과의 다음 줄을 만든다. 화면에 보일 줄만 만들어 긴 목록에서도 입력이 멈칫하지 않는다.
+function Get-WtMemoResultRows {
+    param([Parameter(Mandatory)]$Result, [int]$Skip = 0, [int]$First = 40)
+    $script:memoRowsFactory.Invoke($Result.Columns, (Get-WtMemoOrderPage $Result.Order $Skip $First), [int]::MaxValue)
+}
+
+# 빈 색인에 메모를 조금씩 넣는다. 처음 열 때 화면을 막지 않으려고 쓴다.
+function Add-WtMemoIndexEntries {
+    param([Parameter(Mandatory)]$Index, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Memos)
+    Set-WtMemoIndexEntry $Index $Memos
+    $Index.OrderDirty = $true
+}
+
 function Find-WtMemo {
     param([Parameter(Mandatory)]$Index, $Query = '', [ValidateSet('updated', 'created', 'title', 'opened', 'backlinks')][string]$Sort,
         [ValidateSet('asc', 'desc')][string]$Dir, [ValidateSet('normal', 'pinned', 'recent', 'archived', 'all', '일반', '고정', '최근 열기', '보관', '모두')][string]$View = 'normal', $OpenedMap,
-        [ValidateRange(0, [int]::MaxValue)][int]$SnippetLimit = 200)
+        [ValidateRange(0, [int]::MaxValue)][int]$SnippetLimit = 200, [ValidateRange(0, [int]::MaxValue)][int]$First = [int]::MaxValue,
+        [switch]$SkipBacklinks)
     $tree = if ($Query -is [string]) { ConvertFrom-WtMemoQuery $Query } else { $Query }
     if ($tree.Success -eq $false) { return [pscustomobject]@{ Success = $false; Items = @(); Count = 0; Error = $tree.Error } }
     try {
@@ -814,7 +865,8 @@ function Find-WtMemo {
         $mask = Get-WtMemoMatchSet $Index $tree.Root ([datetime]::Today) $candidate $positions
         if ($Index.OrderDirty) { Update-WtMemoIndexOrder $Index }
         # Backlinks는 기존 결과의 공개 칸이다. 연결 조건이 없어도 실제 값을 반환해야 하므로 첫 결과 때 준비한다.
-        Initialize-WtMemoLinks $Index
+        # 화면 목록은 이 칸을 쓰지 않으므로 -SkipBacklinks로 기다리지 않는다. 메모 3,000개면 준비에 36초가 걸린다
+        if (-not $SkipBacklinks -or $Sort -ceq 'backlinks') { Initialize-WtMemoLinks $Index }
         $needles = [Collections.Generic.List[string]]::new(); $termFields = [Collections.Generic.List[string]]::new(); $words = [Collections.Generic.List[string]]::new()
         foreach ($term in (Get-WtMemoQueryTerms $tree.Root)) {
             if ($term.Field -in 'text', 'title', 'body') {
@@ -859,8 +911,10 @@ function Find-WtMemo {
         }
         $rowColumns = [object[]]@($ids, $titleText, $locations, $c.Body.ToArray(), $starts, $c.Folder.ToArray(), $folderMap,
             [Collections.Generic.HashSet[string][]]$c.Tags.ToArray(), $pins, $c.PinOrder.ToArray(), $archives, $ranks, $c.Updated.ToArray(), $c.Created.ToArray(), $openedTimes, $c.BacklinkCount.ToArray())
-        $rows = $script:memoRowsFactory.Invoke($rowColumns, $items, $SnippetLimit)
-        [pscustomobject]@{ Success = $true; Items = $rows; Count = $length; Error = $null }
+        $page = $items   # if 식으로 받으면 빈 배열이 $null로 풀린다
+        if ($First -lt $length) { $page = Get-WtMemoOrderPage $items 0 $First }
+        $rows = $script:memoRowsFactory.Invoke($rowColumns, $page, $SnippetLimit)
+        [pscustomobject]@{ Success = $true; Items = $rows; Count = $length; Error = $null; Order = $items; Columns = $rowColumns }
     } catch {
         [pscustomobject]@{ Success = $false; Items = @(); Count = 0; Error = [pscustomobject]@{ Position = 0; Length = 0; Reason = $_.Exception.Message } }
     }
@@ -979,8 +1033,14 @@ function Save-WtMemoDataItems {
     foreach ($item in $Items) {
         $id = [string]$item.id
         if ($original.ContainsKey($id)) {
-            $copy = Copy-WtItem $original[$id]; Merge-WtRecordPatch $copy $item
-            if (Test-WtDeleted $original[$id]) { Set-WtField $copy 'deleted' $null; Set-WtItemEdited $copy (Get-WtMemoDataStamp) }
+            $old = $original[$id]
+            # 안 고친 메모는 원자료 그대로 둔다. 메모마다 복사 · 병합하면 메모 3,000개에서 저장 한 번에 화면이 20초 멈춘다.
+            # 고칠 때마다 rev · updated가 바뀌고, 같은 초에 다시 저장하면 제목 · 본문이 다르다
+            $same = [object]::ReferenceEquals($old, $item) -or ($old.rev -eq $item.rev -and [string]$old.updated -ceq [string]$item.updated -and
+                [string]$old.title -ceq [string]$item.title -and [string]$old.body -ceq [string]$item.body)
+            if ($same -and ($null -eq $old.deleted -or -not (Test-WtDeleted $old))) { $active.Add($old); continue }
+            $copy = Copy-WtItem $old; Merge-WtRecordPatch $copy $item
+            if (Test-WtDeleted $old) { Set-WtField $copy 'deleted' $null; Set-WtItemEdited $copy (Get-WtMemoDataStamp) }
             $active.Add($copy)
         } else { $active.Add((Copy-WtItem $item)) }
     }
@@ -1002,10 +1062,23 @@ function Save-WtMemoDataItems {
     Save-WtMemoStoreItems $Store $next.ToArray() -Extra $Extra
 }
 
+# 열람 기록은 메모를 고치지 않는다. Get-WtMemoEditable은 메모 전체를 JSON으로 복사하므로 여기서 쓰면 메모를 열 때마다 화면이 멈춘다
+function Assert-WtMemoOpenable($Store, [string]$Id) {
+    if ($Store.State -notin 'ok', 'missing') { throw $Store.Error }
+    $found = $null
+    foreach ($item in $Store.Items) {
+        if ([string]$item.id -cne $Id -or -not (Test-WtRecordObject $item)) { continue }
+        if ($null -ne $found) { throw 'id가 겹쳐 편집할 줄을 정할 수 없습니다' }
+        $found = $item
+    }
+    if ($null -eq $found) { throw '항목을 찾지 못했습니다' }
+    if (Test-WtDeleted $found) { throw '지운 메모는 정리할 수 없습니다.' }
+}
+
 function Set-WtMemoOpened {
     param([Parameter(Mandatory)][string]$Id, $Store = (Open-WtStore -Name 'memo-state' -Schema 1),
         $MemoStore = (Open-WtMemoStore), [string]$At = (Get-WtMemoDataStamp))
-    [void](Get-WtMemoEditable $MemoStore $Id)
+    Assert-WtMemoOpenable $MemoStore $Id
     $now = ConvertFrom-WtStamp $At
     if (-not $now) { throw '열람 시각이 앱 시각 모양이 아닙니다.' }
     if ($Store.State -notin 'ok', 'missing') { throw $Store.Error }
@@ -1065,6 +1138,6 @@ function Set-WtMemoViewDeleted {
 # 입력 자료와 무관한 대리자는 모듈을 읽을 때 한 번 준비한다(검색 중 컴파일하지 않는다).
 Initialize-WtMemoSearchEngine
 
-Export-ModuleMember -Function ConvertFrom-WtMemoQuery, ConvertTo-WtMemoQuery, New-WtMemoIndex, Update-WtMemoIndex, Find-WtMemo,
+Export-ModuleMember -Function ConvertFrom-WtMemoQuery, ConvertTo-WtMemoQuery, New-WtMemoIndex, Update-WtMemoIndex, Add-WtMemoIndexEntries, Find-WtMemo, Get-WtMemoResultRows, Step-WtMemoLinks, Test-WtMemoQueryLinks,
     Set-WtMemoFolder, Set-WtMemoPinned, Set-WtMemoArchived, Get-WtMemoFolders, Save-WtMemoFolders, Set-WtMemoOpened,
     Get-WtMemoViews, Save-WtMemoView, Set-WtMemoViewDeleted, Open-WtMemoStore, Save-WtMemoDataItems

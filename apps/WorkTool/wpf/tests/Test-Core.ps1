@@ -1384,6 +1384,9 @@ pie
                 $leftPanel = @(Get-WtSidePanels $left)[0]
                 $leftOk = $left.Width -eq 220 -and $leftPanel.CollapseGlyph.Text -eq [string][char]0xE76B -and
                     [System.Windows.Controls.DockPanel]::GetDock($leftPanel.Collapse) -eq 'Right' -and $leftPanel.Independent
+                $script:window.Width = 1100; Update-WtSidePanel $leftPanel
+                $leftOk = $leftOk -and -not $leftPanel.Collapsed -and $left.Width -eq 220
+                $script:window.Width = 1280; Update-WtSidePanel $leftPanel
                 # 화면을 바꾼 직후에도 배지를 다시 평가한다.
                 $badge['shell-count'].Addon.Badge = { 0 }
                 Select-WtPage 'shell-dot'
@@ -1454,7 +1457,7 @@ pie
         Assert-Wt '창 짜임: 보조 칸 접기·설정 저장·다시 만들기' $shellChecks.Saved
         Assert-Wt '창 짜임: Ctrl+Shift+B 네 단계·없는 칸 건너뛰기' ($shellChecks.Cycle -eq 'False/True,True/True,False/True,False/False' -and $shellChecks.OnlyNav -eq 'True,False') "$($shellChecks.Cycle) / $($shellChecks.OnlyNav)"
         Assert-Wt '창 짜임: 1200 미만 레일 시작·겹쳐 열기·늘리면 저장 상태' ($shellChecks.Narrow -and $shellChecks.Overlay -and $shellChecks.Restore) "$($shellChecks.Narrow)/$($shellChecks.Overlay)/$($shellChecks.Restore)"
-        Assert-Wt '창 짜임: 왼쪽 보조 칸·독립 접기' $shellChecks.Left
+        Assert-Wt '창 짜임: 왼쪽 보조 칸·독립 접기·좁아도 접지 않음' $shellChecks.Left
         Assert-Wt '창 짜임: 최소 크기·타이틀바·예약 단축키' ($shellChecks.Chrome -and $shellChecks.Reserved)
         Assert-Wt '첫 설정: work.start가 없을 때만 창 안에 기본값 입력을 연다' ($shellChecks.FirstShown -and $shellChecks.FirstOnlyMissing)
         Assert-Wt '첫 설정: 잘못된 시각은 칸 아래 오류 · 저장 거부' $shellChecks.FirstInvalid

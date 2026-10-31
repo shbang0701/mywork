@@ -26,7 +26,7 @@
 
 `updated:` · `created:`는 `7d`, `yyyy-MM-dd`, `시작..끝`, `<날짜`, `>날짜`를 받습니다. 최근 7일은 PC 현지 날짜로 오늘 포함 7일이고, 범위는 양끝 포함입니다. `<` · `>`는 기준일을 제외합니다. 범위는 공통 날짜 규칙(1900~2199년)을 따릅니다.
 
-`New-WtMemoIndex $memos -Folders $folders`는 소문자 제목·본문 사본, 저장된 태그 집합, 폴더·고정·보관·날짜, 나가는 위키 연결과 받는 연결 수를 만듭니다. 사용자 폴더가 바뀌면 `Get-WtMemoFolders`의 목록을 넘깁니다. `Update-WtMemoIndex -Index $index -Memo $memo` 또는 `-Remove $id`로 한 항목과 관련 연결을 갱신합니다. 받은 연결은 같은 출발 메모의 반복 연결을 한 번만 셉니다. 코드 안 태그·연결은 기존 Markdown 해석기로 제외합니다. 제목이 겹치는 연결 대상은 임의로 확정하지 않고 검색 오류로 돌려줍니다.
+`New-WtMemoIndex $memos -Folders $folders`는 소문자 제목·본문 사본, 저장된 태그 집합, 폴더·고정·보관·날짜, 나가는 위키 연결과 받는 연결 수를 만듭니다. 사용자 폴더가 바뀌면 `Get-WtMemoFolders`의 목록을 넘깁니다. `Update-WtMemoIndex -Index $index -Memo $memo` 또는 `-Remove $id`로 한 항목과 관련 연결을 갱신합니다. 받은 연결은 같은 출발 메모의 반복 연결을 한 번만 셉니다. 코드 안 태그·연결은 기존 Markdown 해석기로 제외합니다. 이 해석은 메모마다 Markdown을 읽어 비싸므로 첫 결과 때 한꺼번에 하지 않을 수 있습니다: 화면 목록은 `Find-WtMemo -SkipBacklinks`로 기다리지 않고, `Step-WtMemoLinks -Index $index -Milliseconds 8`을 화면이 쉴 때 부릅니다. 제목이 겹치는 연결 대상은 임의로 확정하지 않고 검색 오류로 돌려줍니다.
 
 `Find-WtMemo -Index $index -Query $textOrTree`는 `{ Success, Items, Count, Error }`입니다. 결과 항목에는 id · 제목 · 일치 위치(`Field, Start, Length`) · 80자 이내 원문 문맥(`Snippet, SnippetStart`) · 폴더 · 태그 · 고정 상태가 있습니다. 오류 때는 빈 결과와 이유를 돌려주고, 이전 결과 유지 여부는 화면이 정합니다. 지운 메모는 모든 범위에서 제외합니다.
 

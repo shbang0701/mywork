@@ -160,6 +160,9 @@ try {
         try {
             $testHost.Show(); $testHost.UpdateLayout(); $testHost.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::ContextIdle)
             Assert-Active '실제 그룹 머리글 체크 상태' ((& $module { $script:ui.GroupChecks.Count }) -eq 2 -and $null -eq (& $module { $script:ui.GroupChecks['Google Chrome'].IsChecked }))
+            # 열은 시각 트리 밖이라 DynamicResource로 준 스타일이 조용히 안 먹는다
+            $table = & $module { $g = $script:ui.Grid; @{ Text = $null -ne $g.Columns[1].ElementStyle; Check = $null -ne $g.Columns[0].CellStyle; Row = $g.RowHeight; Head = $g.ColumnHeaderHeight; Picked = $g.SelectedItem; Cancel = $script:ui.Cancel.Visibility } }
+            Assert-Active '표: 열 스타일이 들어가고 행 · 머리 32, 저절로 골린 행 없음, 취소는 처리 중에만 보임' ($table.Text -and $table.Check -and $table.Row -eq 32 -and $table.Head -eq 32 -and -not $table.Picked -and $table.Cancel -eq 'Collapsed')
             & $module {
                 $check = $script:ui.GroupChecks['Google Chrome']; $check.IsChecked = $true
                 $check.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))

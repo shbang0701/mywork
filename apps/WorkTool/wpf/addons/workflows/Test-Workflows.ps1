@@ -221,11 +221,25 @@ exit $ExitWith
     Assert-WtTest '업무: [취소]는 프로세스를 끝내고 취소로 기록한다' ($status -eq 'cancelled' -and $run.Process -and @($run.Lines) -contains '시작' -and @($run.Lines) -notcontains '끝')
     # 출력이 많아도 읽기가 스크립트를 붙잡지 않는다 (20,000줄 · 약 1.8MB)
     $manyInfo = Read-WtFlowScript (Write-WtTestScript 'more\Many-Lines.ps1' "<#`n.SYNOPSIS`n    출력을 많이 낸다`n#>`n1..20000 | ForEach-Object { ('line {0:d5} ' -f `$_) + ('x' * 80) }")
-    $run = Start-WtFlowProcess (New-WtFlowStartInfo $manyInfo @{} 'app') (New-WtFlowRecord $manyInfo @{} 'app' $false '')
-    $running.Add($run)
-    $watch = [System.Diagnostics.Stopwatch]::StartNew()
-    $status = Wait-WtTestRun $run 90
-    Assert-WtTest '업무: 출력이 많아도 늦지 않게 끝까지 읽고, 메모리에는 최근 줄만 둔다' ($status -eq 'success' -and $watch.Elapsed.TotalSeconds -lt 20 -and @($run.Lines)[-1] -like 'line 20000 *' -and @($run.Lines).Count -le 2500) "($([Math]::Round($watch.Elapsed.TotalSeconds, 1))초 · 마지막 $(@($run.Lines)[-1].Substring(0, 10)))"
+    # 다른 프로그램이 CPU를 다 쓰면 자식이 CPU를 못 받아 벽시계만 늦어진다 (자식 CPU 4.8초 · 벽시계 51.6초를 쟀다).
+    # 읽기가 정말 늦으면 다시 재도 늦으므로, 기준을 넘기면 한 번 더 재서 빠른 쪽으로 판단한다. 메시지의 자식 CPU가 벽시계보다 훨씬 작으면 PC 부하다
+    $tries = [System.Collections.Generic.List[string]]::new()
+    for ($try = 1; $try -le 2; $try++) {
+        $run = Start-WtFlowProcess (New-WtFlowStartInfo $manyInfo @{} 'app') (New-WtFlowRecord $manyInfo @{} 'app' $false '')
+        $running.Add($run)
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        while (-not (Test-WtFlowRunDone $run)) {
+            [void](Read-WtFlowOutput $run)
+            if ($watch.Elapsed.TotalSeconds -gt 90) { throw '가짜 스크립트가 제때 끝나지 않았습니다.' }
+            Start-Sleep -Milliseconds 50
+        }
+        [void](Read-WtFlowOutput $run)
+        $childCpu = $run.Process.TotalProcessorTime.TotalSeconds   # Complete-WtFlowRun이 프로세스를 닫기 전에 읽는다
+        $status = Complete-WtFlowRun $run
+        $tries.Add(('벽시계 {0:N1}초 · 자식 CPU {1:N1}초' -f $watch.Elapsed.TotalSeconds, $childCpu))
+        if ($status -ne 'success' -or $watch.Elapsed.TotalSeconds -lt 20) { break }
+    }
+    Assert-WtTest '업무: 출력이 많아도 늦지 않게 끝까지 읽고, 메모리에는 최근 줄만 둔다' ($status -eq 'success' -and $watch.Elapsed.TotalSeconds -lt 20 -and @($run.Lines)[-1] -like 'line 20000 *' -and @($run.Lines).Count -le 2500) "($($tries -join ' / ') · 마지막 $(@($run.Lines)[-1].Substring(0, 10)))"
     # 화면이 밀린 경우: 프로세스가 끝나고 2초가 넘도록 꺼내지 않은 출력이 있어도, 다 꺼낸 뒤에 끝낸다
     $backlogInfo = Read-WtFlowScript (Write-WtTestScript 'more\Backlog.ps1' "<#`n.SYNOPSIS`n    출력을 한꺼번에 낸다`n#>`n1..8000 | ForEach-Object { 'line {0:d4}' -f `$_ }")
     $run = Start-WtFlowProcess (New-WtFlowStartInfo $backlogInfo @{} 'app') (New-WtFlowRecord $backlogInfo @{} 'app' $false '')

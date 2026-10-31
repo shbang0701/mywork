@@ -376,10 +376,12 @@ function Update-WtTaskStatus {
     $script:ui.Mode.Text = if ($option.mode -eq 'auto') { "자동 · $($option.minutes)분" } else { '수동' }
     $script:ui.Manual.IsChecked = $option.mode -eq 'manual'; $script:ui.Auto.IsChecked = $option.mode -eq 'auto'
     $picked = @($script:items | Where-Object { $_.Selected -and $_.CanClose })
-    $script:ui.Close.Content = "선택 닫기 $($picked.Count)"
+    $script:ui.Close.Content = if ($picked.Count) { "선택 닫기 $($picked.Count)" } else { '선택 닫기' }
+    $script:ui.Close.ToolTip = if ($picked.Count) { $null } else { '닫을 항목을 먼저 고르세요' }
     $script:ui.Close.IsEnabled = $picked.Count -gt 0 -and -not $script:job
     $script:ui.Refresh.IsEnabled = -not $script:job
     $script:ui.Cancel.IsEnabled = [bool]$script:job
+    $script:ui.Cancel.Visibility = if ($script:job) { 'Visible' } else { 'Collapsed' }
     $script:ui.Status.Text = if ($script:job) { if ($script:job.Cancel.Value) { '취소 요청됨 · 현재 항목의 응답을 기다립니다' } else { '처리 중…' } }
         elseif ($script:lastError) { $script:lastError }
         elseif ($script:lastScan) { '{0}개 선택 · {1}개 표시 · 마지막 수집 {2:HH:mm:ss}' -f $picked.Count, $script:visible.Count, $script:lastScan }
@@ -504,14 +506,29 @@ function New-WtActiveTasksView {
     $script:listKey = $null
     $script:ui = @{}
     $page = New-WtTaskPage
-    $header = New-WtPageHeader '활성 작업' '' $null
-    $header.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
-    [System.Windows.Controls.DockPanel]::SetDock($header, 'Top'); [void]$page.Panel.Children.Add($header)
-    $tools = [System.Windows.Controls.WrapPanel]::new(); $tools.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
-    $search = New-WtSearchBox '이름으로 찾기'; $search.Root.Width = 280; $search.Root.Margin = [System.Windows.Thickness]::new(0, 0, 12, 8)
+    # 머리줄: 제목 · 찾기 · 프로그램 고르기 + 오른쪽 명령 (값 문서 8절 활성 작업)
+    $head = [System.Windows.Controls.DockPanel]::new(); Set-WtStyle $head 'Card.Head'
+    [System.Windows.Controls.DockPanel]::SetDock($head, 'Top'); [void]$page.Panel.Children.Add($head)
+    $title = New-WtText '활성 작업' 'Task.Title'
+    [System.Windows.Controls.DockPanel]::SetDock($title, 'Left'); [void]$head.Children.Add($title)
+    $actions = New-WtStack Horizontal 8; $actions.VerticalAlignment = 'Center'
+    [System.Windows.Controls.DockPanel]::SetDock($actions, 'Right'); [void]$head.Children.Add($actions)
+    $tools = [System.Windows.Controls.Grid]::new(); $tools.VerticalAlignment = 'Center'
+    $toolColumns = @([System.Windows.Controls.ColumnDefinition]::new(), [System.Windows.Controls.ColumnDefinition]::new(), [System.Windows.Controls.ColumnDefinition]::new())
+    $toolColumns[0].Width = [System.Windows.GridLength]::new(3, 'Star'); $toolColumns[0].MaxWidth = 280
+    $toolColumns[1].Width = [System.Windows.GridLength]::Auto
+    $toolColumns[2].Width = [System.Windows.GridLength]::new(1, 'Star')
+    foreach ($column in $toolColumns) { $tools.ColumnDefinitions.Add($column) }
+    [void]$head.Children.Add($tools)
+    $search = New-WtSearchBox '이름으로 찾기'
     $search.Box.Add_TextChanged({ Update-WtTaskList })
     [void]$tools.Children.Add($search.Root)
-    $filter = New-WtButton '모든 프로그램'; $filter.Margin = [System.Windows.Thickness]::new(0, 0, 12, 8)
+    $filter = New-WtButton ''; Set-WtStyle $filter 'Task.Filter'
+    $filterText = New-WtText '모든 프로그램'; $filterText.VerticalAlignment = 'Center'
+    $filterChevron = New-WtIcon 0xE70D; Set-WtResource $filterChevron 'FontSize' 'F.Small'
+    $filterRow = New-WtStack Horizontal 8; [void](Add-WtChild $filterRow $filterText); [void](Add-WtChild $filterRow $filterChevron)
+    $filter.Content = $filterRow
+    [System.Windows.Controls.Grid]::SetColumn($filter, 1)
     $filter.Add_Click({
         param($s, $e)
         $menu = New-WtContextMenu
@@ -519,16 +536,15 @@ function New-WtActiveTasksView {
         foreach ($option in $options) {
             $mi = [System.Windows.Controls.MenuItem]::new(); $mi.Header = $option.AppLabel; $mi.Tag = $option.AppKey
             $mi.IsChecked = $script:appFilter -eq $option.AppKey
-            $mi.Add_Click({ param($sender, $event) $script:appFilter = $sender.Tag; $script:ui.Filter.Content = $sender.Header; Update-WtTaskList })
+            $mi.Add_Click({ param($sender, $event) $script:appFilter = $sender.Tag; $script:ui.FilterText.Text = $sender.Header; Update-WtTaskList })
             [void]$menu.Items.Add($mi)
         }
         $s.ContextMenu = $menu; $menu.PlacementTarget = $s; $menu.IsOpen = $true
     })
     [void]$tools.Children.Add($filter)
-    $mode = New-WtText '' 'T.Sub'; $mode.VerticalAlignment = 'Center'; $mode.Margin = [System.Windows.Thickness]::new(0, 0, 12, 8)
-    [void]$tools.Children.Add($mode)
+    $mode = New-WtText '' 'T.Sub'; $mode.VerticalAlignment = 'Center'
+    [void](Add-WtChild $actions $mode)
     $refresh = New-WtButton '새로 고침' -Kind Primary -Icon 0xE72C -ToolTip "새로 고침 (F5)`n우클릭: 수동 / 자동"
-    $refresh.Margin = [System.Windows.Thickness]::new(0, 0, 12, 8)
     $refresh.Add_Click({ Start-WtTaskJob 'scan' })
     $menu = New-WtContextMenu
     $manual = [System.Windows.Controls.MenuItem]::new(); $manual.Header = '수동'
@@ -538,21 +554,24 @@ function New-WtActiveTasksView {
     $menu.Add_Opened({ Update-WtTaskStatus })
     [System.Windows.Controls.ContextMenuService]::SetShowOnDisabled($refresh, $true)
     [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($refresh, $true)
-    [void]$tools.Children.Add($refresh)
-    $close = New-WtButton '선택 닫기' -Kind Danger; $close.Margin = [System.Windows.Thickness]::new(0, 0, 12, 8)
-    $close.Add_Click({ Close-WtSelectedTasks }); [void]$tools.Children.Add($close)
-    $cancel = New-WtButton '취소'; $cancel.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
-    $cancel.Add_Click({ if ($script:job) { $script:job.Cancel.Value = $true; Update-WtTaskStatus } }); [void]$tools.Children.Add($cancel)
-    [System.Windows.Controls.DockPanel]::SetDock($tools, 'Top'); [void]$page.Panel.Children.Add($tools)
-    $bottom = New-WtStack Vertical 4; $bottom.Margin = [System.Windows.Thickness]::new(0, 8, 0, 0)
+    [void](Add-WtChild $actions $refresh)
+    $close = New-WtButton '선택 닫기' -Kind Danger
+    $close.Add_Click({ Close-WtSelectedTasks }); [void](Add-WtChild $actions $close)
+    # 아래 줄: 상태 + 처리 중에만 보이는 취소
+    $bottom = [System.Windows.Controls.DockPanel]::new(); Set-WtStyle $bottom 'Card.Foot'
+    $cancel = New-WtButton '취소' -Kind Link; $cancel.Visibility = 'Collapsed'
+    $cancel.Add_Click({ if ($script:job) { $script:job.Cancel.Value = $true; Update-WtTaskStatus } })
+    [System.Windows.Controls.DockPanel]::SetDock($cancel, 'Right'); [void]$bottom.Children.Add($cancel)
+    $lines = New-WtStack Vertical 4; $lines.VerticalAlignment = 'Center'
     $status = New-WtText '' 'T.Sub'; $result = New-WtText '' 'T.Sub'
-    [void](Add-WtChild $bottom $status); [void](Add-WtChild $bottom $result)
+    [void](Add-WtChild $lines $status); [void](Add-WtChild $lines $result)
+    [void]$bottom.Children.Add($lines)
     [System.Windows.Controls.DockPanel]::SetDock($bottom, 'Bottom'); [void]$page.Panel.Children.Add($bottom)
-    $area = [System.Windows.Controls.Grid]::new()
+    $area = [System.Windows.Controls.Grid]::new(); Set-WtStyle $area 'Card.Body'
     $grid = New-WtTaskGrid; [void]$area.Children.Add($grid)
     $empty = New-WtText '' 'T.Sub'; $empty.HorizontalAlignment = 'Center'; $empty.VerticalAlignment = 'Center'; $empty.IsHitTestVisible = $false
     [void]$area.Children.Add($empty); [void]$page.Panel.Children.Add($area)
-    $script:ui = @{ Root = $page.Root; Grid = $grid; Empty = $empty; Search = $search.Box; Filter = $filter; Mode = $mode; Refresh = $refresh; Manual = $manual; Auto = $auto; Close = $close; Cancel = $cancel; Status = $status; Result = $result; GroupChecks = @{} }
+    $script:ui = @{ Root = $page.Root; Grid = $grid; Empty = $empty; Search = $search.Box; Filter = $filter; FilterText = $filterText; Mode = $mode; Refresh = $refresh; Manual = $manual; Auto = $auto; Close = $close; Cancel = $cancel; Status = $status; Result = $result; GroupChecks = @{} }
     $grid.AddHandler([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent, [System.Windows.RoutedEventHandler]{
         param($s, $e)
         $check = $e.OriginalSource

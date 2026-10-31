@@ -57,6 +57,12 @@ function Remove-WtTestData($Test) {
     catch { Write-Warning "검사 임시 폴더를 지우지 못했습니다: $safe" }
 }
 
+# 저장 통로가 빌 때까지 기다린다. PC가 바쁘면 쓰기가 화면이 기다리는 시간을 넘길 수 있어, 파일을 바로 읽는 검사 앞에서 부른다
+function Wait-WtTestWrites([int]$Milliseconds = 5000) {
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ((Test-WtDataWriting) -and $watch.ElapsedMilliseconds -lt $Milliseconds) { Update-WtWork; Start-Sleep -Milliseconds 10 }
+}
+
 # 화면 요소 아래의 글(TextBlock)을 모두 모은다. 화면에 무엇이 실렸는지 볼 때 쓴다
 function Get-WtTestTexts($Element) {
     if ($Element -is [System.Windows.Controls.TextBlock]) { $Element.Text }

@@ -305,7 +305,7 @@ function New-WtSidePanel {
 
 function Update-WtSidePanel($Panel) {
     $width = if ($script:window) { if ($script:window.ActualWidth -gt 0) { $script:window.ActualWidth } else { $script:window.Width } } else { (Get-WtStyleDictionary)['F.SidePanel.Breakpoint'] }
-    $narrow = $width -lt (Get-WtStyleDictionary)['F.SidePanel.Breakpoint']
+    $narrow = $Panel.Side -eq 'Right' -and $width -lt (Get-WtStyleDictionary)['F.SidePanel.Breakpoint']
     if ($Panel.Narrow -ne $narrow) { $Panel.NarrowOpen = $false }
     $Panel.Narrow = $narrow
     $Panel.Collapsed = if ($narrow) { -not $Panel.NarrowOpen } else { [bool](Get-WtSetting $Panel.Key) }

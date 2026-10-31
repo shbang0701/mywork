@@ -646,7 +646,7 @@ function New-WtMarkdownView {
     $v.VerticalScrollBarVisibility = if ($Scroll) { 'Auto' } else { 'Disabled' }
     $v.Tag = @{
         Text = ''; BaseDir = $BaseDir; OnLink = $OnLink; OnTask = $OnTask; Strict = [bool]$StrictLineBreaks
-        Anchors = @{}; Remeasure = $false; Error = $null; ListDepth = 0
+        Anchors = @{}; HeadingBlocks = @{}; Remeasure = $false; Error = $null; ListDepth = 0
         Images = [System.Collections.Generic.List[object]]::new()   # 이번에 그리면서 읽기 시작한 그림 (끝내기 전에 잠깐 기다린다)
     }
     for ($i = $script:views.Count - 1; $i -ge 0; $i--) { if (-not $script:views[$i].IsAlive) { $script:views.RemoveAt($i) } }
@@ -660,6 +660,7 @@ function Set-WtMarkdownText {
     $st.Text = [string]$Text
     if ($PSBoundParameters.ContainsKey('BaseDir')) { $st.BaseDir = $BaseDir }
     $st.Anchors = @{}
+    $st.HeadingBlocks = @{}
     $st.Remeasure = $false
     $st.Error = $null
     $st.ListDepth = 0
@@ -822,6 +823,7 @@ function Add-WtMdBlock($Blocks, $B, $St, [bool]$Tight = $false) {
             Add-WtMdInlines $p.Inlines $B.Inl $St
             $key = Get-WtMdAnchorKey $B.Text
             if ($key -and -not $St.Anchors.ContainsKey($key)) { $St.Anchors[$key] = $p }
+            if ($St.HeadingBlocks -is [hashtable]) { $St.HeadingBlocks[[int]$B.Line] = $p }
             $Blocks.Add($p)
         }
         'para' {
