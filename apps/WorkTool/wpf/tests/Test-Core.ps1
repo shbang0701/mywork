@@ -451,6 +451,19 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     } finally { $thread.CurrentCulture = $oldCulture }
     Assert-Wt '휴무일 5개 문화권: 윤일 해석 · 오류 줄 동일' (@($holidaySnapshots | Where-Object { $_ -cne '2028-02-29|2|없는 날짜입니다' }).Count -eq 0)
 
+    # 같은 프로세스에서 앱을 다시 시작하면 파일 내용이 같아도 옛 저장 핸들을 재사용하지 않는다.
+    $beforeRestartHoliday = Get-WtHolidayData
+    $beforeRestartStamp = Get-WtStoreStamp 'holidays'
+    Set-WtAppRoot $test.App
+    $afterRestartHoliday = Get-WtHolidayData
+    $restartSaveError = $null
+    try { [void](Save-WtStore $afterRestartHoliday.Store -Items @($afterRestartHoliday.Items)) } catch { $restartSaveError = $_ }
+    Assert-Wt '저장 세션: 같은 폴더로 재시작해도 캐시를 다시 읽고 새 핸들로 저장한다' (
+        $beforeRestartStamp -cne (Get-WtStoreStamp 'holidays') -and -not [object]::ReferenceEquals($beforeRestartHoliday, $afterRestartHoliday) -and $null -eq $restartSaveError) $restartSaveError
+    $oldSessionRejected = $false
+    try { [void](Save-WtStore $beforeRestartHoliday.Store -Items @($beforeRestartHoliday.Items)) } catch { $oldSessionRejected = $true }
+    Assert-Wt '저장 세션: 다시 시작하기 전 핸들로 덮어쓰지 않는다' $oldSessionRejected
+
     # ---- 설정 ----
     Initialize-WtSettings
     Assert-Wt '설정 기본값' ((Get-WtSetting 'theme.accent') -eq 'blue' -and (Get-WtSetting 'ui.opacity') -eq 100)
@@ -465,6 +478,34 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Assert-Wt '기본값으로 돌리면 파일에서 빠진다' (-not ($saved.values.PSObject.Properties.Name -contains 'theme.accent'))
     Initialize-WtSettings
     Assert-Wt '배열 설정을 다시 읽는다' (@(Get-WtSetting 'addons.disabled') -contains 'test-b')
+
+    foreach ($caseValue in @(
+        @{ Key = 'test.case.text'; Default = 'SRV-A'; Value = 'srv-a' },
+        @{ Key = 'test.case.array'; Default = @('A','B'); Value = @('a','B') },
+        @{ Key = 'test.case.nested'; Default = @{ mode = 'ABC' }; Value = @{ mode = 'abc' } }
+    )) {
+        Register-WtSettingDefault $caseValue.Key $caseValue.Default
+        Set-WtSetting $caseValue.Key $caseValue.Value
+        Initialize-WtSettings
+        Assert-Wt "설정 확장: 기본값과 대소문자만 다른 명시값 보존 ($($caseValue.Key))" (
+            (ConvertTo-Json -InputObject (Get-WtSetting $caseValue.Key) -Compress) -ceq (ConvertTo-Json -InputObject $caseValue.Value -Compress))
+    }
+    $observerEvents = [System.Collections.Generic.List[string]]::new()
+    $observerFirst = { param($key,$value) if ($key -eq 'test.notify') { $observerEvents.Add('first') } }.GetNewClosure()
+    $observerBad = { param($key,$value) if ($key -eq 'test.notify') { $observerEvents.Add('bad'); throw 'first observer error' } }.GetNewClosure()
+    $observerLast = { param($key,$value) if ($key -eq 'test.notify') { $observerEvents.Add('last') } }.GetNewClosure()
+    $observerBadLast = { param($key,$value) if ($key -eq 'test.notify') { $observerEvents.Add('bad-last'); throw 'second observer error' } }.GetNewClosure()
+    $observerHandlers = @($observerFirst,$observerBad,$observerLast,$observerBadLast)
+    foreach ($handler in $observerHandlers) { Register-WtSettingHandler $handler }
+    try {
+        $observerError = $null
+        try { Set-WtSetting 'test.notify' 'saved' } catch { $observerError = $_.Exception.Message }
+        Assert-Wt '설정 확장: 처리기 실패를 격리하고 나머지를 한 번씩 호출한 뒤 첫 오류를 알린다' (
+            ($observerEvents -join ',') -ceq 'first,bad,last,bad-last' -and $observerError -ceq 'first observer error' -and
+            (Get-WtSetting 'test.notify') -ceq 'saved' -and (Read-WtJsonFile (Get-WtSettingsPath)).values.'test.notify' -ceq 'saved')
+    } finally {
+        & (Get-Module Settings) { param($remove) foreach ($handler in $remove) { [void]$script:handlers.Remove($handler) } } $observerHandlers
+    }
 
     # 업무시간은 다섯 값을 함께 검사하고, 기본값도 명시적으로 저장한다.
     $settingsBeforeHours = Read-WtJsonFile (Get-WtSettingsPath)
@@ -516,6 +557,10 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Assert-Wt '끈 탭은 메뉴 목록에서 빠진다' (-not (@(Get-WtAddon | ForEach-Object Id) -contains 'test-b') -and (@(Get-WtAddon -All | ForEach-Object Id) -contains 'test-b'))
     Set-WtSetting 'addons.disabled' @('test-c')
     Assert-Wt '꼭 있어야 하는 탭은 꺼도 메뉴에 남는다' (@(Get-WtAddon | ForEach-Object Id) -contains 'test-c')
+    Assert-Wt '탭 ID 조회: 필수 탭은 숨김 목록에 있어도 찾는다' ($null -ne (Get-WtAddon -Id 'test-c'))
+    Set-WtSetting 'addons.disabled' @('test-b')
+    Assert-Wt '탭 ID 조회: 꺼진 탭은 제외하고 -All에서만 찾는다' (
+        $null -eq (Get-WtAddon -Id 'test-b') -and (Get-WtAddon -All -Id 'test-b').Title -ceq '나' -and $null -eq (Get-WtAddon -Id 'not-registered'))
     Set-WtSetting 'addons.disabled' @()
     Assert-Wt '메뉴 순서: Order가 같으면 ID 순서' ((@(Get-WtAddon | ForEach-Object Id) -join ',') -eq 'test-a,test-c,test-b') (@(Get-WtAddon | ForEach-Object Id) -join ',')
     Register-WtAddon -Id 'test-a' -Title '가2' -Order 10 -NewView { }
@@ -839,6 +884,64 @@ flowchart LR
     if ($wpf) {
         # 공통 부품만 검사한다. 실제 탭의 배치·문구 기대는 바꾸지 않는다.
         $v2Theme = New-WtThemeDictionary
+        # 자원 재사용 뒤에도 각 컨트롤의 동적 연결과 여러 테마 사전의 독립성을 유지한다.
+        $resourceText = [System.Windows.Controls.TextBlock]::new()
+        $resourceBorder = [System.Windows.Controls.Border]::new()
+        $resourceText.Resources.MergedDictionaries.Add($v2Theme)
+        $resourceBorder.Resources.MergedDictionaries.Add($v2Theme)
+        Set-WtResource $resourceText Background B.Bg.Canvas
+        Set-WtResource $resourceBorder Background B.Bg.Surface
+        Set-WtResource $resourceText Foreground B.Accent
+        Set-WtResource $resourceText FontSize F.Body
+        Assert-Wt '공통 자원: 같은 속성 이름도 컨트롤 형식·자원 키별 연결을 유지한다' (
+            $resourceText.Background.Color.ToString() -ceq '#FFF3F4F6' -and $resourceBorder.Background.Color.ToString() -ceq '#FFFFFFFF')
+        Set-WtResource $resourceText Background B.Bg.Surface
+        Assert-Wt '공통 자원: 같은 컨트롤의 자원 키를 바꿀 수 있다' ([object]::ReferenceEquals($resourceText.Background, $resourceBorder.Background))
+        $resourceCaseRejected = $false
+        try { Set-WtResource $resourceText foreground B.Text } catch { $resourceCaseRejected = $_.Exception.Message -like '*foreground*' }
+        Assert-Wt '공통 자원: 반복 연결 뒤에도 잘못된 속성 대소문자를 거부한다' $resourceCaseRejected
+        $resourceMissingRejected = $false
+        try { Set-WtResource $resourceBorder NoSuchProperty B.Text } catch { $resourceMissingRejected = $true }
+        Assert-Wt '공통 자원: 없는 속성을 거부한다' $resourceMissingRejected
+
+        $themeRefs = @{}
+        foreach ($resourceKey in $v2Theme.Keys) { $themeRefs[$resourceKey] = $v2Theme[$resourceKey] }
+        $v2Theme['Addon.Custom'] = '보존'
+        Update-WtThemeDictionary $v2Theme
+        $sameResources = $true
+        foreach ($resourceKey in $themeRefs.Keys) {
+            if (-not [object]::ReferenceEquals($themeRefs[$resourceKey], $v2Theme[$resourceKey])) { $sameResources = $false }
+        }
+        Assert-Wt '테마 재사용: 같은 설정은 자원을 교체하지 않고 애드온 자원도 보존한다' ($sameResources -and $v2Theme['Addon.Custom'] -ceq '보존')
+        $secondTheme = New-WtThemeDictionary
+        Assert-Wt '테마 재사용: 사전은 독립이고 변경 불가 브러시만 공유한다' (
+            -not [object]::ReferenceEquals($v2Theme, $secondTheme) -and $v2Theme['B.Accent'].IsFrozen -and
+            [object]::ReferenceEquals($v2Theme['B.Accent'], $secondTheme['B.Accent']))
+        Set-WtSetting 'theme.accent' 'teal'
+        Assert-Wt '테마 재사용: 여러 사전과 이미 연결한 컨트롤의 강조색을 함께 바꾼다' (
+            $resourceText.Foreground.Color.ToString() -ceq '#FF0B6B69' -and $secondTheme['B.Accent'].Color.ToString() -ceq '#FF0B6B69' -and
+            [object]::ReferenceEquals($themeRefs['B.Bg.Canvas'], $v2Theme['B.Bg.Canvas']) -and
+            [object]::ReferenceEquals($themeRefs['Font.UI'], $v2Theme['Font.UI']))
+        Set-WtSetting 'ui.fontScale' 'l'
+        Assert-Wt '테마 재사용: 글자 확대는 연결된 글자·별칭·줄 높이·컨트롤 높이에 반영한다' (
+            $resourceText.FontSize -eq 15.7 -and $secondTheme['F.Small'] -eq 13.4 -and $v2Theme['F.Body.LineHeight'] -eq 22.4 -and
+            $v2Theme['F.Height.Control'] -eq 35.8 -and [object]::ReferenceEquals($themeRefs['B.Bg.Canvas'], $v2Theme['B.Bg.Canvas']))
+        $v2Theme['B.Accent'] = [System.Windows.Media.Brushes]::Black
+        $v2Theme.Remove('F.Body')
+        Update-WtThemeDictionary $v2Theme
+        Assert-Wt '테마 재사용: 바뀌거나 빠진 자원도 현재 설정대로 복구한다' (
+            $resourceText.Foreground.Color.ToString() -ceq '#FF0B6B69' -and $resourceText.FontSize -eq 15.7)
+        Set-WtSetting 'ui.fontScale' 'm'
+        Set-WtSetting 'theme.accent' 'blue'
+        $mergedTheme = [System.Windows.ResourceDictionary]::new()
+        $mergedTheme.MergedDictionaries.Add($secondTheme)
+        Update-WtThemeDictionary $mergedTheme
+        $secondTheme['F.Body'] = 99.0
+        $mergedTheme.MergedDictionaries.Clear()
+        Assert-Wt '테마 재사용: 병합 원본을 바꾸거나 빼도 갱신한 사전의 로컬 자원을 유지한다' (
+            $mergedTheme.Keys.Count -eq $secondTheme.Keys.Count -and $mergedTheme['F.Body'] -eq 14 -and
+            $mergedTheme['B.Accent'].Color.ToString() -ceq '#FF1A5BBE')
+        Update-WtThemeDictionary $secondTheme
         $v2Styles = Get-WtStyleDictionary
         $styleErrors = foreach ($styleKey in @($v2Styles.Keys)) {
             $itemStyle = $v2Styles[$styleKey]
@@ -1132,6 +1235,68 @@ pie
         $k3 = (Test-WtKeyOwned 'Ctrl+B' $deep) -and (Test-WtKeyOwned 'Ctrl+I' $deep) -and -not (Test-WtKeyOwned 'Ctrl+B' $null)
         Assert-Wt 'WPF 단축키 넘기기: 등록한 칸 · 그 안에서만 셸이 키를 넘긴다' ($k1 -and $k2 -and $k3) "($k1 · $k2 · $k3)"
 
+        # 기능 추가·숨김·복원·실패를 가짜 탭으로 검사한다. 실제 탭 이름이나 모듈에는 의존하지 않는다.
+        $lifecycleChecks = & (Get-Module Shell) {
+            $savedLife = @{ Ui=$script:ui; Current=$script:current; Views=$script:views; Buttons=$script:navButtons
+                Exiting=$script:exiting; HandlerRegistered=$script:settingHandlerRegistered; ErrorHandler=${function:Show-WtError}; CollapsedHandler=${function:Update-WtCollapsed} }
+            $savedLifeAddons = & (Get-Module Addons) { ,$script:addons.ToArray() }
+            $savedLifeHandlers = & (Get-Module Settings) { ,$script:handlers.ToArray() }
+            $disabledBeforeLife = @(Get-WtSetting 'addons.disabled')
+            try {
+                & (Get-Module Addons) { $script:addons.Clear() }
+                $script:ui=@{PageHost=[System.Windows.Controls.ContentControl]::new()}; $script:navButtons=@{}
+                $script:views=@{}; $script:current=$null; $script:exiting=$false
+                $script:lifeNew=0; $script:lifeOpened=0; $script:lifeFail=$false; $script:lifeSettings=0
+                function script:Show-WtError { param($ErrorRecord,$Where) }
+                function script:Update-WtCollapsed { $script:lifeSettings++ }
+                Register-WtAddon -Id 'life-cache' -Title '가짜 캐시' -NewView { $script:lifeNew++; [System.Windows.Controls.Border]::new() } `
+                    -Refresh { if ($script:lifeFail) { throw '가짜 조회 실패' } } -OnOpen { param($OpenArgs) $script:lifeOpened++ }
+                Register-WtAddon -Id 'life-other' -Title '가짜 다른 화면' -NewView { [System.Windows.Controls.Border]::new() }
+                Open-WtPage -Id 'life-cache'
+                $firstLife=$script:views['life-cache'].View
+                $reuseLife=$true
+                foreach ($cycle in 1..20) {
+                    Select-WtPage 'life-other'
+                    Set-WtSetting 'addons.disabled' @('life-cache')
+                    Select-WtPage 'life-cache'
+                    if ($script:current -cne 'life-other' -or $null -ne (Get-WtPageView 'life-cache')) { $reuseLife=$false }
+                    Set-WtSetting 'addons.disabled' @()
+                    Select-WtPage 'life-cache'
+                    if (-not [object]::ReferenceEquals($firstLife,$script:ui.PageHost.Content)) { $reuseLife=$false }
+                }
+                $reuseLife=$reuseLife -and $script:lifeNew -eq 1 -and $script:views.Count -eq 2
+                $script:lifeFail=$true
+                Open-WtPage -Id 'life-cache'
+                $failLife=$script:lifeOpened -eq 1 -and [object]::ReferenceEquals($firstLife,$script:ui.PageHost.Content)
+                $script:lifeFail=$false
+                Open-WtPage -Id 'life-cache'
+                Open-WtPage -Id 'LIFE-CACHE'
+                $retryLife=$script:lifeOpened -eq 2 -and @(Select-WtPage 'life-cache').Count -eq 0
+                $script:settingHandlerRegistered=$false
+                $handlerCount=& (Get-Module Settings) { $script:handlers.Count }
+                Initialize-WtShellSettings; Initialize-WtShellSettings
+                $script:lifeSettings=0
+                Set-WtSetting 'nav.collapsed' (Get-WtSetting 'nav.collapsed')
+                $oneHandler=((& (Get-Module Settings) { $script:handlers.Count }) -eq $handlerCount+1) -and $script:lifeSettings -eq 1
+                $script:exiting=$true
+                Set-WtSetting 'nav.collapsed' (Get-WtSetting 'nav.collapsed')
+                @{ Reuse=$reuseLife; FailedOpen=$failLife; Retry=$retryLife; OneHandler=$oneHandler; NoClosedUpdates=($script:lifeSettings -eq 1) }
+            } finally {
+                & (Get-Module Settings) { param($restore) $script:handlers.Clear(); foreach ($handler in $restore) { $script:handlers.Add($handler) } } $savedLifeHandlers
+                & (Get-Module Addons) { param($restore) $script:addons.Clear(); foreach ($addon in $restore) { $script:addons.Add($addon) } } $savedLifeAddons
+                $script:ui=$savedLife.Ui; $script:current=$savedLife.Current; $script:views=$savedLife.Views; $script:navButtons=$savedLife.Buttons
+                $script:exiting=$savedLife.Exiting; $script:settingHandlerRegistered=$savedLife.HandlerRegistered
+                Set-Item Function:script:Show-WtError $savedLife.ErrorHandler
+                Set-Item Function:script:Update-WtCollapsed $savedLife.CollapsedHandler
+                Set-WtSetting 'addons.disabled' $disabledBeforeLife
+            }
+        }
+        Assert-Wt '기능 수명: 숨김·복원을 20번 반복해도 열린 화면을 재사용하고 캐시 수가 늘지 않는다' $lifecycleChecks.Reuse
+        Assert-Wt '기능 수명: 현재 탭 조회 실패 뒤에는 항목 열기 콜백을 실행하지 않는다' $lifecycleChecks.FailedOpen
+        Assert-Wt '기능 수명: 실패 뒤 재시도 가능·ID 대소문자·공개 전환 출력 약속 유지' $lifecycleChecks.Retry
+        Assert-Wt '기능 수명: 셸 초기화를 반복해도 설정 처리기는 한 번만 실행한다' $lifecycleChecks.OneHandler
+        Assert-Wt '기능 수명: 종료한 셸에는 설정 변경을 반영하지 않는다' $lifecycleChecks.NoClosedUpdates
+
         # 창 짜임은 가짜 등록·가짜 보조 칸으로만 본다. 실제 탭은 아래 탭 모아 보기/각 탭 검사에서 맡는다.
         $shellChecks = & (Get-Module Shell) {
             $saved = @{ Window = $script:window; Ui = $script:ui; Current = $script:current; Views = $script:views
@@ -1319,6 +1484,11 @@ pie
         $settings1 = & $shell { Get-WtPageView '_settings' }
         $settings2 = & $shell { Get-WtPageView '_settings' }
         Assert-Wt 'WPF 설정: 같은 조건이면 화면 재사용' ([object]::ReferenceEquals($settings1.View, $settings2.View))
+        $accentBefore = Get-WtSetting 'theme.accent'
+        Set-WtSetting 'theme.accent' $(if ($accentBefore -eq 'teal') { 'blue' } else { 'teal' })
+        $settingsAccent = & $shell { Get-WtPageView '_settings' }
+        Assert-Wt 'WPF 설정: 외부에서 바꾼 강조색도 재진입 때 선택 상태에 반영한다' (-not [object]::ReferenceEquals($settings2.View,$settingsAccent.View))
+        Set-WtSetting 'theme.accent' $accentBefore
         $close = Get-WtSetting 'window.closeToTray'; Set-WtSetting 'window.closeToTray' (-not $close)
         $settings3 = & $shell { Get-WtPageView '_settings' }
         Assert-Wt 'WPF 설정: 바뀐 설정은 재진입 때 다시 읽는다' (-not [object]::ReferenceEquals($settings2.View, $settings3.View))

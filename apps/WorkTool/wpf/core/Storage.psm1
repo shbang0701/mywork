@@ -20,6 +20,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:appRoot = $null
 $script:dataRoot = $null
+$script:storeSession = 0       # 같은 경로로 다시 시작해도 이전 세션의 데이터 캐시·핸들은 다시 읽는다
 $script:ioTimeoutMs = 5000       # 데이터 폴더가 이 시간 안에 답하지 않으면 기다리지 않고 오류로 올린다
 $script:legacyTimeoutMs = 3000   # 예전 데이터 위치 찾기
 $script:writeWaitMs = 400        # 저장할 때 화면이 기다리는 시간. 로컬 저장은 이 안에 끝난다. 넘으면 저장 통로가 끝까지 맡는다
@@ -107,6 +108,7 @@ function Set-WtAppRoot([string]$Path) {
     $script:dataRoot = $null
     $script:storeTops = @{}
     $script:storeRead = @{}
+    $script:storeSession++
 }
 
 function Get-WtAppRoot { $script:appRoot }
@@ -212,7 +214,7 @@ function Submit-WtDataWrite([string]$Path, [string]$Json) {
         if ($script:writeQueue[$i].Path -ieq $Path) { $script:writeQueue[$i].State = 'superseded'; $script:writeQueue.RemoveAt($i) }
     }
     $rec.Version++
-    $entry = @{ Path = $Path; Json = $Json; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
+    $entry = @{ Path = $Path; Json = $Json; ContentStamp = $null; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
     $rec.Accepted = $entry
     $rec.Failed = $null   # 실패로 남아 있던 앞 내용은 이 내용이 담고 있다. 이 쓰기도 실패하면 이 내용이 남는다
     $script:writeQueue.Add($entry)
@@ -422,16 +424,22 @@ function Get-WtDataFolder {
 # (읽기 실패는 다시 읽을 때 알린다)
 function Get-WtStoreStamp([string]$Name) {
     $path = Get-WtStorePath $Name
+    $scope = "$path|session:$script:storeSession"
     # 저장 중인 내용은 다 쓴 뒤의 파일과 같은 표식이 되게 같은 바이트(UTF-8, BOM 없음)로 잰다
     $pending = Get-WtDataWritePending $path
     if ($pending) {
-        $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($pending.Json)
-        return "$path|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)))"
+        # 받아들인 버전의 Json은 변하지 않는다. 새 쓰기는 새 항목이므로 이전 표식을 재사용하지 않는다.
+        # 바이트 배열은 보관하지 않고, 경로는 호출 때 붙여 기존 대소문자 동작을 유지한다.
+        if (-not $pending.ContentStamp) {
+            $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($pending.Json)
+            $pending.ContentStamp = "$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)))"
+        }
+        return "$scope|$($pending.ContentStamp)"
     }
     try { $bytes = Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllBytes $path) }
-    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return "$path|missing" }
-    catch { return "$path|unread-$([guid]::NewGuid().ToString('N'))" }
-    "$path|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return "$scope|missing" }
+    catch { return "$scope|unread-$([guid]::NewGuid().ToString('N'))" }
+    "$scope|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
 }
 
 # 문서 맨 위의 키 중 schema · saved · items가 아닌 것 (importedFrom · 더 새 앱이 더한 키 등)

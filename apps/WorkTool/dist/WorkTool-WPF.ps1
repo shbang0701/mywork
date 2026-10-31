@@ -1057,6 +1057,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:appRoot = $null
 $script:dataRoot = $null
+$script:storeSession = 0       # 같은 경로로 다시 시작해도 이전 세션의 데이터 캐시·핸들은 다시 읽는다
 $script:ioTimeoutMs = 5000       # 데이터 폴더가 이 시간 안에 답하지 않으면 기다리지 않고 오류로 올린다
 $script:legacyTimeoutMs = 3000   # 예전 데이터 위치 찾기
 $script:writeWaitMs = 400        # 저장할 때 화면이 기다리는 시간. 로컬 저장은 이 안에 끝난다. 넘으면 저장 통로가 끝까지 맡는다
@@ -1144,6 +1145,7 @@ function Set-WtAppRoot([string]$Path) {
     $script:dataRoot = $null
     $script:storeTops = @{}
     $script:storeRead = @{}
+    $script:storeSession++
 }
 
 function Get-WtAppRoot { $script:appRoot }
@@ -1249,7 +1251,7 @@ function Submit-WtDataWrite([string]$Path, [string]$Json) {
         if ($script:writeQueue[$i].Path -ieq $Path) { $script:writeQueue[$i].State = 'superseded'; $script:writeQueue.RemoveAt($i) }
     }
     $rec.Version++
-    $entry = @{ Path = $Path; Json = $Json; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
+    $entry = @{ Path = $Path; Json = $Json; ContentStamp = $null; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
     $rec.Accepted = $entry
     $rec.Failed = $null   # 실패로 남아 있던 앞 내용은 이 내용이 담고 있다. 이 쓰기도 실패하면 이 내용이 남는다
     $script:writeQueue.Add($entry)
@@ -1459,16 +1461,22 @@ function Get-WtDataFolder {
 # (읽기 실패는 다시 읽을 때 알린다)
 function Get-WtStoreStamp([string]$Name) {
     $path = Get-WtStorePath $Name
+    $scope = "$path|session:$script:storeSession"
     # 저장 중인 내용은 다 쓴 뒤의 파일과 같은 표식이 되게 같은 바이트(UTF-8, BOM 없음)로 잰다
     $pending = Get-WtDataWritePending $path
     if ($pending) {
-        $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($pending.Json)
-        return "$path|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)))"
+        # 받아들인 버전의 Json은 변하지 않는다. 새 쓰기는 새 항목이므로 이전 표식을 재사용하지 않는다.
+        # 바이트 배열은 보관하지 않고, 경로는 호출 때 붙여 기존 대소문자 동작을 유지한다.
+        if (-not $pending.ContentStamp) {
+            $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($pending.Json)
+            $pending.ContentStamp = "$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)))"
+        }
+        return "$scope|$($pending.ContentStamp)"
     }
     try { $bytes = Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllBytes $path) }
-    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return "$path|missing" }
-    catch { return "$path|unread-$([guid]::NewGuid().ToString('N'))" }
-    "$path|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return "$scope|missing" }
+    catch { return "$scope|unread-$([guid]::NewGuid().ToString('N'))" }
+    "$scope|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
 }
 
 # 문서 맨 위의 키 중 schema · saved · items가 아닌 것 (importedFrom · 더 새 앱이 더한 키 등)
@@ -1737,7 +1745,7 @@ function Get-WtSetting([string]$Key) {
 }
 
 function Test-WtSameValue($A, $B) {
-    (ConvertTo-Json -InputObject $A -Compress -Depth 5) -eq (ConvertTo-Json -InputObject $B -Compress -Depth 5)
+    (ConvertTo-Json -InputObject $A -Compress -Depth 5) -ceq (ConvertTo-Json -InputObject $B -Compress -Depth 5)
 }
 
 function Get-WtWorkHours([switch]$Defaults) {
@@ -1819,7 +1827,15 @@ function Save-WtSettings([hashtable]$Next, [hashtable]$Changes) {
     # 저장 통로가 이 내용을 맡는다. 쓰지 못해도 버리지 않고 가지고 있다가(다시 읽어도 나온다) 끝내기 전에 셸이 묻는다
     Write-WtJsonFile (Get-WtSettingsPath) ([ordered]@{ schema = 1; values = $sorted })
     $script:values = $Next
-    foreach ($k in $Changes.Keys) { foreach ($h in @($script:handlers)) { & $h $k $Changes[$k] } }
+    $firstError = $null
+    foreach ($k in $Changes.Keys) {
+        foreach ($h in @($script:handlers)) {
+            try { & $h $k $Changes[$k] }
+            catch { if ($null -eq $firstError) { $firstError = $_ } }
+        }
+    }
+    # 값은 이미 저장됐다. 한 기능의 오류가 다른 화면의 반영을 막지 않게 모두 알린 뒤 오류를 전달한다.
+    if ($null -ne $firstError) { throw $firstError }
 }
 
 # 설정이 바뀔 때 부를 처리기. { param($key, $value) ... }
@@ -2021,6 +2037,8 @@ New-Module -Name 'WorkTool.Theme' -ScriptBlock {
 # 밝은 테마의 값. 기준: apps/WorkTool/design/README.md 2판 2~5절.
 # 기존 B.* · F.* 키는 호환 별칭으로 남긴다. 바탕은 중성색이며 강조색만 고른다.
 $ErrorActionPreference = 'Stop'
+$script:themeBrushes = @{} # 고정된 브러시만 공유한다. 사전과 DynamicResource 연결은 각각 유지한다.
+$script:themeMetrics = @{} # 글자 배율별 불변 값. 정의는 아래 typeRamp · fonts · dimensions 한 곳을 따른다.
 
 $script:palettes = [ordered]@{
     blue   = @{ Label = '파랑'; Accent = '#1A5BBE'; Hover = '#174FA6'; Pressed = '#144690' }
@@ -2135,8 +2153,9 @@ function Get-WtThemeColors([string]$Name, [string]$Accent = [string](Get-WtSetti
     if (-not $p) { $p = $script:palettes['blue'] }
     $c = $script:fixed.Clone()
     $c.Accent = $p.Accent; $c['Accent.Text'] = $p.Accent; $c['Accent.Hover'] = $p.Hover; $c['Accent.Pressed'] = $p.Pressed
+    $textInfo = (Get-Culture).TextInfo
     foreach ($key in $script:palettes.Keys) {
-        $suffix = (Get-Culture).TextInfo.ToTitleCase($key)
+        $suffix = $textInfo.ToTitleCase($key)
         $c["Accent.$suffix"] = $script:palettes[$key].Accent
         $c["Accent.$suffix.Hover"] = $script:palettes[$key].Hover
         $c["Accent.$suffix.Pressed"] = $script:palettes[$key].Pressed
@@ -2159,27 +2178,58 @@ function Get-WtFontSize([string]$Name) {
     [double][Math]::Round($size * (Get-WtFontScale), 1)
 }
 function Get-WtFontName([string]$Name) { $script:fonts[$Name] }
-function Update-WtThemeDictionary([System.Windows.ResourceDictionary]$Dictionary) {
-    $colors = Get-WtThemeColors
-    foreach ($key in $colors.Keys) {
-        $brush = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($colors[$key]))
-        $brush.Freeze()
-        $Dictionary["B.$key"] = $brush
-    }
+function Get-WtThemeMetrics {
+    $scale = Get-WtFontScale
+    if ($script:themeMetrics.ContainsKey($scale)) { return $script:themeMetrics[$scale] }
+    $resources = @{}
     foreach ($key in $script:typeRamp.Keys) {
         $ramp = $script:typeRamp[$key]
-        $Dictionary["F.$key"] = Get-WtFontSize $key
-        $Dictionary["F.$key.Weight"] = [System.Windows.FontWeight]::FromOpenTypeWeight($ramp[1])
-        $Dictionary["F.$key.LineHeight"] = [double][Math]::Round($ramp[2] * (Get-WtFontScale), 1)
+        $resources["F.$key"] = [double][Math]::Round($ramp[0] * $scale, 1)
+        $resources["F.$key.Weight"] = [System.Windows.FontWeight]::FromOpenTypeWeight($ramp[1])
+        $resources["F.$key.LineHeight"] = [double][Math]::Round($ramp[2] * $scale, 1)
     }
-    foreach ($key in @($script:fontAliases.Keys) + @('Icon', 'BodyLine')) { $Dictionary["F.$key"] = Get-WtFontSize $key }
-    foreach ($key in $script:fonts.Keys) { $Dictionary["Font.$key"] = [System.Windows.Media.FontFamily]::new($script:fonts[$key]) }
+    foreach ($key in $script:fontAliases.Keys) { $resources["F.$key"] = $resources["F.$($script:fontAliases[$key])"] }
+    foreach ($key in 'Icon', 'BodyLine') { $resources["F.$key"] = Get-WtFontSize $key }
+    foreach ($key in $script:fonts.Keys) {
+        $resources["Font.$key"] = [System.Windows.Media.FontFamily]::new($script:fonts[$key])
+    }
     foreach ($key in $script:dimensions.Keys) {
         $value = [double]$script:dimensions[$key]
-        $Dictionary["F.$key"] = if ($key.StartsWith('Radius.')) { [System.Windows.CornerRadius]::new($value) }
+        $resources["F.$key"] = if ($key.StartsWith('Radius.')) { [System.Windows.CornerRadius]::new($value) }
             elseif ($key.StartsWith('Padding.')) { [System.Windows.Thickness]::new($value) }
-            elseif ($key.StartsWith('Height.')) { [double][Math]::Round($value * (Get-WtFontScale), 1) }
+            elseif ($key.StartsWith('Height.')) { [double][Math]::Round($value * $scale, 1) }
             elseif ($key.EndsWith('Delay')) { [int]$value } else { $value }
+    }
+    $script:themeMetrics[$scale] = $resources
+    $resources
+}
+function Update-WtThemeDictionary([System.Windows.ResourceDictionary]$Dictionary) {
+    # 같은 값을 다시 넣으면 연결된 컨트롤도 다시 갱신된다. 바뀐 자원만 교체한다.
+    # 병합된 사전에서 찾은 값은 대상 사전의 값이 아니다. 로컬 키는 종전처럼 모두 채운다.
+    $localKeys = $null
+    if ($Dictionary.MergedDictionaries.Count) {
+        $localKeys = [System.Collections.Generic.HashSet[object]]::new()
+        foreach ($key in $Dictionary.Keys) { [void]$localKeys.Add($key) }
+    }
+    $colors = Get-WtThemeColors
+    foreach ($key in $colors.Keys) {
+        $hex = $colors[$key]
+        if (-not $script:themeBrushes.ContainsKey($hex)) {
+            $brush = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($hex))
+            $brush.Freeze()
+            $script:themeBrushes[$hex] = $brush
+        }
+        $resourceKey = "B.$key"
+        $brush = $script:themeBrushes[$hex]
+        if (($null -ne $localKeys -and -not $localKeys.Contains($resourceKey)) -or -not [object]::ReferenceEquals($Dictionary[$resourceKey], $brush)) {
+            $Dictionary[$resourceKey] = $brush
+        }
+    }
+    $resources = Get-WtThemeMetrics
+    foreach ($key in $resources.Keys) {
+        if (($null -ne $localKeys -and -not $localKeys.Contains($key)) -or -not [object]::Equals($Dictionary[$key], $resources[$key])) {
+            $Dictionary[$key] = $resources[$key]
+        }
     }
 }
 function New-WtThemeDictionary {
@@ -7885,8 +7935,16 @@ function Get-WtCalendarMark([datetime]$Date, [object[]]$Items) {
 function Get-WtAddon {
     param([switch]$All, [string]$Id)
     $disabled = @(Get-WtSetting 'addons.disabled')
+    # ID 하나를 찾을 때는 전체 정렬을 하지 않는다. 목록과 같은 활성 규칙을 적용한다.
+    if ($Id) {
+        foreach ($addon in $script:addons) {
+            if ($addon.Id -ne $Id) { continue }
+            if ($All -or $addon.Required -or $disabled -notcontains $addon.Id) { return $addon }
+            return
+        }
+        return
+    }
     $list = $script:addons | Sort-Object { $_.Order }, { $_.Id }
-    if ($Id) { return $list | Where-Object { $_.Id -eq $Id } | Select-Object -First 1 }
     if ($All) { return $list }
     $list | Where-Object { $_.Required -or $disabled -notcontains $_.Id }
 }
@@ -8555,6 +8613,7 @@ $script:badgeTimer = $null
 $script:sidePanels = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
 $script:current = $null
 $script:selecting = $false
+$script:settingHandlerRegistered = $false
 $script:exiting = $false
 $script:trayTipShown = $false
 $script:maxed = $false
@@ -8589,7 +8648,7 @@ function Get-WtPageView([string]$Id) {
             [ordered]@{ Identity = [Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($a); Id = $a.Id; Title = $a.Title
                 Description = $a.Description; Required = $a.Required; Order = $a.Order; Help = $a.Help; Shortcuts = $a.Shortcuts }
         })
-        $settings = @(foreach ($name in 'theme.color','ui.opacity','ui.fontScale','window.closeToTray','addons.disabled','legacy.path') {
+        $settings = @(foreach ($name in 'theme.color','theme.accent','ui.opacity','ui.fontScale','window.closeToTray','addons.disabled','legacy.path') {
             [ordered]@{ Key = $name; Value = (Get-WtSetting $name) }
         })
         $key = ConvertTo-Json -Compress -Depth 8 -InputObject @(
@@ -8600,9 +8659,10 @@ function Get-WtPageView([string]$Id) {
         }
         return $script:views[$Id]
     }
+    # 화면을 만든 뒤 숨긴 탭도 열지 않는다. 다시 켜면 같은 화면을 재사용해 편집 상태를 유지한다.
+    $a = Get-WtAddon -Id $Id
+    if (-not $a) { return $null }
     if (-not $script:views.ContainsKey($Id)) {
-        $a = Get-WtAddon -Id $Id
-        if (-not $a) { return $null }
         $view = Get-WtElements (& $a.NewView) | Select-Object -Last 1
         if (-not $view) { throw "애드온 '$Id'가 화면을 돌려주지 않았습니다." }
         $script:views[$Id] = @{ View = $view; Addon = $a }
@@ -8611,22 +8671,29 @@ function Get-WtPageView([string]$Id) {
 }
 
 function Select-WtPage([string]$Id) {
-    if ($script:selecting -or -not $Id) { return }
+    [void](Invoke-WtPageSelection $Id)
+}
+
+# 공개된 Select-WtPage의 출력은 그대로 두고, 항목 열기는 전환 성공 여부까지 확인한다.
+function Invoke-WtPageSelection([string]$Id) {
+    if ($script:selecting -or -not $Id) { return $false }
     $script:selecting = $true
     try {
         # 떠나는 화면에 저장하지 못한 내용이 있으면 묻는다 (다른 화면의 저장 상태는 그 화면을 떠날 때 묻는다)
-        if ($script:current -and $Id -ne $script:current -and -not (Save-WtPendingChanges -Purpose switch -Only $script:current)) { return }
+        if ($script:current -and $Id -ne $script:current -and -not (Save-WtPendingChanges -Purpose switch -Only $script:current)) { return $false }
         $page = Get-WtPageView $Id
-        if (-not $page) { return }
+        if (-not $page) { return $false }
         if ($page.Addon -and $page.Addon.Refresh) { [void](& $page.Addon.Refresh $page.View) }
         $script:ui.PageHost.Content = $page.View
         foreach ($k in @($script:navButtons.Keys)) { $script:navButtons[$k].Button.IsChecked = ($k -eq $Id) }
         $script:current = $Id
         Update-WtCurrentSidePanels
         Update-WtNavBadges
+        return $true
     } catch {
         foreach ($k in @($script:navButtons.Keys)) { $script:navButtons[$k].Button.IsChecked = ($k -eq $script:current) }
         Show-WtError $_ "화면 열기: $Id"
+        return $false
     } finally {
         foreach ($k in @($script:navButtons.Keys)) { $script:navButtons[$k].Button.IsChecked = ($k -eq $script:current) }
         $script:selecting = $false
@@ -8636,10 +8703,10 @@ function Select-WtPage([string]$Id) {
 # 데이터를 다시 가져온 뒤 현재 화면을 갱신한다. 숨긴 화면도 재진입할 때 갱신한다.
 function Open-WtPage {
     param([Parameter(Mandatory)][string]$Id, [hashtable]$Args = @{})
-    $addon = Get-WtAddon | Where-Object { $_.Id -ceq $Id } | Select-Object -First 1
-    if (-not $addon) { return }
-    Select-WtPage $Id
-    if ($script:current -ceq $Id -and $addon.OnOpen) {
+    $addon = Get-WtAddon -Id $Id
+    if (-not $addon -or $addon.Id -cne $Id) { return }
+    $selected = Invoke-WtPageSelection $Id
+    if ($selected -and $script:current -ceq $Id -and $addon.OnOpen) {
         try { [void](& $addon.OnOpen $Args) } catch { Write-Warning "항목 열기: $($_.Exception.Message)" }
     }
 }
@@ -9240,6 +9307,22 @@ function Get-WtLastImport { $script:lastImport }
 
 # ---- 시작 -------------------------------------------------------------------------------------
 
+function Initialize-WtShellSettings {
+    if ($script:settingHandlerRegistered) { return }
+    Register-WtSettingHandler {
+        param($key, $value)
+        if (-not $script:ui -or $script:exiting) { return }
+        switch -Wildcard ($key) {
+            'theme.color' { Update-WtThemeDictionary $script:themeDict; Update-WtAppIcon }
+            'ui.opacity' { Set-WtOpacity }
+            'nav.collapsed' { Update-WtCollapsed }
+            'window.closeToTray' { Update-WtCloseTip }
+            'addons.disabled' { Update-WtNav }
+        }
+    }
+    $script:settingHandlerRegistered = $true
+}
+
 function Start-WtApp {
     param([Parameter(Mandatory)][string]$AppRoot)
 
@@ -9348,17 +9431,7 @@ function Start-WtApp {
     $w.Dispatcher.add_UnhandledException($global:WorkToolUnhandledHandler)
 
     # 설정이 바뀌면 바로 반영한다
-    Register-WtSettingHandler {
-        param($key, $value)
-        switch -Wildcard ($key) {
-            'theme.color' { Update-WtThemeDictionary $script:themeDict; Update-WtAppIcon }
-            'ui.fontScale' { Update-WtThemeDictionary $script:themeDict }
-            'ui.opacity' { Set-WtOpacity }
-            'nav.collapsed' { Update-WtCollapsed }
-            'window.closeToTray' { Update-WtCloseTip }
-            'addons.disabled' { Update-WtNav }
-        }
-    }
+    Initialize-WtShellSettings
 
     # 처음 실행이면 예전 WorkTool 데이터를 가져온다 (이미 가져온 탭은 건너뜀)
     try { [void](Import-WtLegacyData) } catch { Show-WtError $_ '예전 데이터 가져오기' }

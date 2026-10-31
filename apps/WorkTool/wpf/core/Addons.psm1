@@ -126,8 +126,16 @@ function Get-WtCalendarMark([datetime]$Date, [object[]]$Items) {
 function Get-WtAddon {
     param([switch]$All, [string]$Id)
     $disabled = @(Get-WtSetting 'addons.disabled')
+    # ID 하나를 찾을 때는 전체 정렬을 하지 않는다. 목록과 같은 활성 규칙을 적용한다.
+    if ($Id) {
+        foreach ($addon in $script:addons) {
+            if ($addon.Id -ne $Id) { continue }
+            if ($All -or $addon.Required -or $disabled -notcontains $addon.Id) { return $addon }
+            return
+        }
+        return
+    }
     $list = $script:addons | Sort-Object { $_.Order }, { $_.Id }
-    if ($Id) { return $list | Where-Object { $_.Id -eq $Id } | Select-Object -First 1 }
     if ($All) { return $list }
     $list | Where-Object { $_.Required -or $disabled -notcontains $_.Id }
 }

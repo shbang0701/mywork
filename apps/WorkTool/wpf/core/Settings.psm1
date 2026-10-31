@@ -40,7 +40,7 @@ function Get-WtSetting([string]$Key) {
 }
 
 function Test-WtSameValue($A, $B) {
-    (ConvertTo-Json -InputObject $A -Compress -Depth 5) -eq (ConvertTo-Json -InputObject $B -Compress -Depth 5)
+    (ConvertTo-Json -InputObject $A -Compress -Depth 5) -ceq (ConvertTo-Json -InputObject $B -Compress -Depth 5)
 }
 
 function Get-WtWorkHours([switch]$Defaults) {
@@ -122,7 +122,15 @@ function Save-WtSettings([hashtable]$Next, [hashtable]$Changes) {
     # 저장 통로가 이 내용을 맡는다. 쓰지 못해도 버리지 않고 가지고 있다가(다시 읽어도 나온다) 끝내기 전에 셸이 묻는다
     Write-WtJsonFile (Get-WtSettingsPath) ([ordered]@{ schema = 1; values = $sorted })
     $script:values = $Next
-    foreach ($k in $Changes.Keys) { foreach ($h in @($script:handlers)) { & $h $k $Changes[$k] } }
+    $firstError = $null
+    foreach ($k in $Changes.Keys) {
+        foreach ($h in @($script:handlers)) {
+            try { & $h $k $Changes[$k] }
+            catch { if ($null -eq $firstError) { $firstError = $_ } }
+        }
+    }
+    # 값은 이미 저장됐다. 한 기능의 오류가 다른 화면의 반영을 막지 않게 모두 알린 뒤 오류를 전달한다.
+    if ($null -ne $firstError) { throw $firstError }
 }
 
 # 설정이 바뀔 때 부를 처리기. { param($key, $value) ... }

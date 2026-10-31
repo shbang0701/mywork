@@ -22,6 +22,7 @@ $script:badgeTimer = $null
 $script:sidePanels = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
 $script:current = $null
 $script:selecting = $false
+$script:settingHandlerRegistered = $false
 $script:exiting = $false
 $script:trayTipShown = $false
 $script:maxed = $false
@@ -56,7 +57,7 @@ function Get-WtPageView([string]$Id) {
             [ordered]@{ Identity = [Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($a); Id = $a.Id; Title = $a.Title
                 Description = $a.Description; Required = $a.Required; Order = $a.Order; Help = $a.Help; Shortcuts = $a.Shortcuts }
         })
-        $settings = @(foreach ($name in 'theme.color','ui.opacity','ui.fontScale','window.closeToTray','addons.disabled','legacy.path') {
+        $settings = @(foreach ($name in 'theme.color','theme.accent','ui.opacity','ui.fontScale','window.closeToTray','addons.disabled','legacy.path') {
             [ordered]@{ Key = $name; Value = (Get-WtSetting $name) }
         })
         $key = ConvertTo-Json -Compress -Depth 8 -InputObject @(
@@ -67,9 +68,10 @@ function Get-WtPageView([string]$Id) {
         }
         return $script:views[$Id]
     }
+    # 화면을 만든 뒤 숨긴 탭도 열지 않는다. 다시 켜면 같은 화면을 재사용해 편집 상태를 유지한다.
+    $a = Get-WtAddon -Id $Id
+    if (-not $a) { return $null }
     if (-not $script:views.ContainsKey($Id)) {
-        $a = Get-WtAddon -Id $Id
-        if (-not $a) { return $null }
         $view = Get-WtElements (& $a.NewView) | Select-Object -Last 1
         if (-not $view) { throw "애드온 '$Id'가 화면을 돌려주지 않았습니다." }
         $script:views[$Id] = @{ View = $view; Addon = $a }
@@ -78,22 +80,29 @@ function Get-WtPageView([string]$Id) {
 }
 
 function Select-WtPage([string]$Id) {
-    if ($script:selecting -or -not $Id) { return }
+    [void](Invoke-WtPageSelection $Id)
+}
+
+# 공개된 Select-WtPage의 출력은 그대로 두고, 항목 열기는 전환 성공 여부까지 확인한다.
+function Invoke-WtPageSelection([string]$Id) {
+    if ($script:selecting -or -not $Id) { return $false }
     $script:selecting = $true
     try {
         # 떠나는 화면에 저장하지 못한 내용이 있으면 묻는다 (다른 화면의 저장 상태는 그 화면을 떠날 때 묻는다)
-        if ($script:current -and $Id -ne $script:current -and -not (Save-WtPendingChanges -Purpose switch -Only $script:current)) { return }
+        if ($script:current -and $Id -ne $script:current -and -not (Save-WtPendingChanges -Purpose switch -Only $script:current)) { return $false }
         $page = Get-WtPageView $Id
-        if (-not $page) { return }
+        if (-not $page) { return $false }
         if ($page.Addon -and $page.Addon.Refresh) { [void](& $page.Addon.Refresh $page.View) }
         $script:ui.PageHost.Content = $page.View
         foreach ($k in @($script:navButtons.Keys)) { $script:navButtons[$k].Button.IsChecked = ($k -eq $Id) }
         $script:current = $Id
         Update-WtCurrentSidePanels
         Update-WtNavBadges
+        return $true
     } catch {
         foreach ($k in @($script:navButtons.Keys)) { $script:navButtons[$k].Button.IsChecked = ($k -eq $script:current) }
         Show-WtError $_ "화면 열기: $Id"
+        return $false
     } finally {
         foreach ($k in @($script:navButtons.Keys)) { $script:navButtons[$k].Button.IsChecked = ($k -eq $script:current) }
         $script:selecting = $false
@@ -103,10 +112,10 @@ function Select-WtPage([string]$Id) {
 # 데이터를 다시 가져온 뒤 현재 화면을 갱신한다. 숨긴 화면도 재진입할 때 갱신한다.
 function Open-WtPage {
     param([Parameter(Mandatory)][string]$Id, [hashtable]$Args = @{})
-    $addon = Get-WtAddon | Where-Object { $_.Id -ceq $Id } | Select-Object -First 1
-    if (-not $addon) { return }
-    Select-WtPage $Id
-    if ($script:current -ceq $Id -and $addon.OnOpen) {
+    $addon = Get-WtAddon -Id $Id
+    if (-not $addon -or $addon.Id -cne $Id) { return }
+    $selected = Invoke-WtPageSelection $Id
+    if ($selected -and $script:current -ceq $Id -and $addon.OnOpen) {
         try { [void](& $addon.OnOpen $Args) } catch { Write-Warning "항목 열기: $($_.Exception.Message)" }
     }
 }
@@ -707,6 +716,22 @@ function Get-WtLastImport { $script:lastImport }
 
 # ---- 시작 -------------------------------------------------------------------------------------
 
+function Initialize-WtShellSettings {
+    if ($script:settingHandlerRegistered) { return }
+    Register-WtSettingHandler {
+        param($key, $value)
+        if (-not $script:ui -or $script:exiting) { return }
+        switch -Wildcard ($key) {
+            'theme.color' { Update-WtThemeDictionary $script:themeDict; Update-WtAppIcon }
+            'ui.opacity' { Set-WtOpacity }
+            'nav.collapsed' { Update-WtCollapsed }
+            'window.closeToTray' { Update-WtCloseTip }
+            'addons.disabled' { Update-WtNav }
+        }
+    }
+    $script:settingHandlerRegistered = $true
+}
+
 function Start-WtApp {
     param([Parameter(Mandatory)][string]$AppRoot)
 
@@ -815,17 +840,7 @@ function Start-WtApp {
     $w.Dispatcher.add_UnhandledException($global:WorkToolUnhandledHandler)
 
     # 설정이 바뀌면 바로 반영한다
-    Register-WtSettingHandler {
-        param($key, $value)
-        switch -Wildcard ($key) {
-            'theme.color' { Update-WtThemeDictionary $script:themeDict; Update-WtAppIcon }
-            'ui.fontScale' { Update-WtThemeDictionary $script:themeDict }
-            'ui.opacity' { Set-WtOpacity }
-            'nav.collapsed' { Update-WtCollapsed }
-            'window.closeToTray' { Update-WtCloseTip }
-            'addons.disabled' { Update-WtNav }
-        }
-    }
+    Initialize-WtShellSettings
 
     # 처음 실행이면 예전 WorkTool 데이터를 가져온다 (이미 가져온 탭은 건너뜀)
     try { [void](Import-WtLegacyData) } catch { Show-WtError $_ '예전 데이터 가져오기' }

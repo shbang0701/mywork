@@ -1,6 +1,8 @@
 # 밝은 테마의 값. 기준: apps/WorkTool/design/README.md 2판 2~5절.
 # 기존 B.* · F.* 키는 호환 별칭으로 남긴다. 바탕은 중성색이며 강조색만 고른다.
 $ErrorActionPreference = 'Stop'
+$script:themeBrushes = @{} # 고정된 브러시만 공유한다. 사전과 DynamicResource 연결은 각각 유지한다.
+$script:themeMetrics = @{} # 글자 배율별 불변 값. 정의는 아래 typeRamp · fonts · dimensions 한 곳을 따른다.
 
 $script:palettes = [ordered]@{
     blue   = @{ Label = '파랑'; Accent = '#1A5BBE'; Hover = '#174FA6'; Pressed = '#144690' }
@@ -115,8 +117,9 @@ function Get-WtThemeColors([string]$Name, [string]$Accent = [string](Get-WtSetti
     if (-not $p) { $p = $script:palettes['blue'] }
     $c = $script:fixed.Clone()
     $c.Accent = $p.Accent; $c['Accent.Text'] = $p.Accent; $c['Accent.Hover'] = $p.Hover; $c['Accent.Pressed'] = $p.Pressed
+    $textInfo = (Get-Culture).TextInfo
     foreach ($key in $script:palettes.Keys) {
-        $suffix = (Get-Culture).TextInfo.ToTitleCase($key)
+        $suffix = $textInfo.ToTitleCase($key)
         $c["Accent.$suffix"] = $script:palettes[$key].Accent
         $c["Accent.$suffix.Hover"] = $script:palettes[$key].Hover
         $c["Accent.$suffix.Pressed"] = $script:palettes[$key].Pressed
@@ -139,27 +142,58 @@ function Get-WtFontSize([string]$Name) {
     [double][Math]::Round($size * (Get-WtFontScale), 1)
 }
 function Get-WtFontName([string]$Name) { $script:fonts[$Name] }
-function Update-WtThemeDictionary([System.Windows.ResourceDictionary]$Dictionary) {
-    $colors = Get-WtThemeColors
-    foreach ($key in $colors.Keys) {
-        $brush = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($colors[$key]))
-        $brush.Freeze()
-        $Dictionary["B.$key"] = $brush
-    }
+function Get-WtThemeMetrics {
+    $scale = Get-WtFontScale
+    if ($script:themeMetrics.ContainsKey($scale)) { return $script:themeMetrics[$scale] }
+    $resources = @{}
     foreach ($key in $script:typeRamp.Keys) {
         $ramp = $script:typeRamp[$key]
-        $Dictionary["F.$key"] = Get-WtFontSize $key
-        $Dictionary["F.$key.Weight"] = [System.Windows.FontWeight]::FromOpenTypeWeight($ramp[1])
-        $Dictionary["F.$key.LineHeight"] = [double][Math]::Round($ramp[2] * (Get-WtFontScale), 1)
+        $resources["F.$key"] = [double][Math]::Round($ramp[0] * $scale, 1)
+        $resources["F.$key.Weight"] = [System.Windows.FontWeight]::FromOpenTypeWeight($ramp[1])
+        $resources["F.$key.LineHeight"] = [double][Math]::Round($ramp[2] * $scale, 1)
     }
-    foreach ($key in @($script:fontAliases.Keys) + @('Icon', 'BodyLine')) { $Dictionary["F.$key"] = Get-WtFontSize $key }
-    foreach ($key in $script:fonts.Keys) { $Dictionary["Font.$key"] = [System.Windows.Media.FontFamily]::new($script:fonts[$key]) }
+    foreach ($key in $script:fontAliases.Keys) { $resources["F.$key"] = $resources["F.$($script:fontAliases[$key])"] }
+    foreach ($key in 'Icon', 'BodyLine') { $resources["F.$key"] = Get-WtFontSize $key }
+    foreach ($key in $script:fonts.Keys) {
+        $resources["Font.$key"] = [System.Windows.Media.FontFamily]::new($script:fonts[$key])
+    }
     foreach ($key in $script:dimensions.Keys) {
         $value = [double]$script:dimensions[$key]
-        $Dictionary["F.$key"] = if ($key.StartsWith('Radius.')) { [System.Windows.CornerRadius]::new($value) }
+        $resources["F.$key"] = if ($key.StartsWith('Radius.')) { [System.Windows.CornerRadius]::new($value) }
             elseif ($key.StartsWith('Padding.')) { [System.Windows.Thickness]::new($value) }
-            elseif ($key.StartsWith('Height.')) { [double][Math]::Round($value * (Get-WtFontScale), 1) }
+            elseif ($key.StartsWith('Height.')) { [double][Math]::Round($value * $scale, 1) }
             elseif ($key.EndsWith('Delay')) { [int]$value } else { $value }
+    }
+    $script:themeMetrics[$scale] = $resources
+    $resources
+}
+function Update-WtThemeDictionary([System.Windows.ResourceDictionary]$Dictionary) {
+    # 같은 값을 다시 넣으면 연결된 컨트롤도 다시 갱신된다. 바뀐 자원만 교체한다.
+    # 병합된 사전에서 찾은 값은 대상 사전의 값이 아니다. 로컬 키는 종전처럼 모두 채운다.
+    $localKeys = $null
+    if ($Dictionary.MergedDictionaries.Count) {
+        $localKeys = [System.Collections.Generic.HashSet[object]]::new()
+        foreach ($key in $Dictionary.Keys) { [void]$localKeys.Add($key) }
+    }
+    $colors = Get-WtThemeColors
+    foreach ($key in $colors.Keys) {
+        $hex = $colors[$key]
+        if (-not $script:themeBrushes.ContainsKey($hex)) {
+            $brush = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.ColorConverter]::ConvertFromString($hex))
+            $brush.Freeze()
+            $script:themeBrushes[$hex] = $brush
+        }
+        $resourceKey = "B.$key"
+        $brush = $script:themeBrushes[$hex]
+        if (($null -ne $localKeys -and -not $localKeys.Contains($resourceKey)) -or -not [object]::ReferenceEquals($Dictionary[$resourceKey], $brush)) {
+            $Dictionary[$resourceKey] = $brush
+        }
+    }
+    $resources = Get-WtThemeMetrics
+    foreach ($key in $resources.Keys) {
+        if (($null -ne $localKeys -and -not $localKeys.Contains($key)) -or -not [object]::Equals($Dictionary[$key], $resources[$key])) {
+            $Dictionary[$key] = $resources[$key]
+        }
     }
 }
 function New-WtThemeDictionary {
