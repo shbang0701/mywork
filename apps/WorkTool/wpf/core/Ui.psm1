@@ -16,6 +16,7 @@ $script:stylesXaml = @'
   <sys:Double x:Key="F.Nav.Width">200</sys:Double>
   <sys:Double x:Key="F.Nav.CollapsedWidth">48</sys:Double>
   <sys:Double x:Key="F.SidePanel.RailWidth">28</sys:Double>
+  <sys:Double x:Key="F.SidePanel.Gap">8</sys:Double>
   <sys:Double x:Key="F.SidePanel.Breakpoint">1200</sys:Double>
   <Style x:Key="Shell.Window" TargetType="Window">
     <Setter Property="Width" Value="1280"/><Setter Property="Height" Value="800"/>
@@ -75,6 +76,11 @@ $script:stylesXaml = @'
     <Setter Property="LineHeight" Value="{DynamicResource F.Title.LineHeight}"/>
 
   </Style>
+  <Style x:Key="T.Display" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
+    <Setter Property="FontSize" Value="{DynamicResource F.Display}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Display.Weight}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Display.LineHeight}"/>
+  </Style>
   <Style x:Key="T.H2" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
     <Setter Property="FontSize" Value="{DynamicResource F.BodyStrong}"/>
     <Setter Property="FontWeight" Value="{DynamicResource F.BodyStrong.Weight}"/>
@@ -108,11 +114,11 @@ $script:stylesXaml = @'
 
   <Style x:Key="Card" TargetType="Border">
     <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
-    <Setter Property="BorderThickness" Value="1"/>
-    <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/>
-    <Setter Property="Padding" Value="{DynamicResource F.Padding.Panel}"/>
-
+    <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Card}"/>
+    <Setter Property="Padding" Value="{DynamicResource F.Padding.Card}"/>
+  </Style>
+  <Style x:Key="Panel.Surface" TargetType="Border" BasedOn="{StaticResource Card}">
+    <Setter Property="Padding" Value="0"/>
   </Style>
   <Style x:Key="Tile" TargetType="Border">
     <Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/>
@@ -306,20 +312,20 @@ $script:stylesXaml = @'
   </DataTemplate>
   <DataTemplate x:Key="Shell.SidePanel">
     <Grid Panel.ZIndex="1">
-      <Border x:Name="Expanded" Background="{DynamicResource B.Bg.Surface}" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1,0,0,0">
+      <Border x:Name="Expanded" Background="{DynamicResource B.Bg.Surface}" BorderBrush="{DynamicResource B.Border.Default}" CornerRadius="{DynamicResource F.Radius.Card}">
         <DockPanel>
-          <DockPanel x:Name="Header" DockPanel.Dock="Top" Height="{DynamicResource F.Height.PanelHeader}" LastChildFill="True">
+          <DockPanel x:Name="Header" DockPanel.Dock="Top" Height="{DynamicResource F.Height.Header}" LastChildFill="True" Margin="8,0,8,0">
             <Button x:Name="Collapse" DockPanel.Dock="Left" Style="{DynamicResource Btn.Icon}" VerticalAlignment="Center">
               <TextBlock x:Name="CollapseGlyph" Style="{DynamicResource T.Icon}"/>
             </Button>
-            <TextBlock x:Name="Title" Style="{DynamicResource T.Strong}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            <TextBlock x:Name="Title" Style="{DynamicResource T.Dialog}" Margin="4,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
           </DockPanel>
           <ContentControl x:Name="Content" Focusable="False"/>
         </DockPanel>
       </Border>
-      <Border x:Name="Rail" Width="{DynamicResource F.SidePanel.RailWidth}" Background="{DynamicResource B.Bg.Canvas}" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1,0,0,0">
-        <Grid Height="{DynamicResource F.Height.PanelHeader}" VerticalAlignment="Top">
-          <Button x:Name="Open" Style="{DynamicResource Btn.Canvas}" VerticalAlignment="Center">
+      <Border x:Name="Rail" Width="{DynamicResource F.SidePanel.RailWidth}" Background="{DynamicResource B.Bg.Surface}" CornerRadius="{DynamicResource F.Radius.Card}">
+        <Grid Height="{DynamicResource F.Height.Header}" VerticalAlignment="Top">
+          <Button x:Name="Open" Style="{DynamicResource Btn.Icon}" VerticalAlignment="Center">
             <TextBlock x:Name="OpenGlyph" Style="{DynamicResource T.Icon}"/>
           </Button>
         </Grid>
@@ -1525,6 +1531,16 @@ $script:stylesXaml = @'
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
 
   </Style>
+  <Style x:Key="Tabs" TargetType="TabControl">
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TabControl">
+      <DockPanel KeyboardNavigation.TabNavigation="Local">
+        <TabPanel DockPanel.Dock="Top" IsItemsHost="True" Margin="8,0,8,0" KeyboardNavigation.TabIndex="1"/>
+        <Border Background="{DynamicResource B.Bg.Surface}" CornerRadius="{DynamicResource F.Radius.Card}">
+          <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" Margin="0,8,0,8"/>
+        </Border>
+      </DockPanel>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
   <Style x:Key="Tab" TargetType="TabItem">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
@@ -1573,26 +1589,24 @@ $script:stylesXaml = @'
 
   </Style>
   <!-- 홈 2판 7·8절 전용 부품. 기능 모듈은 이 모양과 치수만 쓴다. -->
-  <Style x:Key="Home.Page" TargetType="StackPanel"><Setter Property="Margin" Value="16"/></Style>
-  <Style x:Key="Home.Card" TargetType="Border" BasedOn="{StaticResource Card}"><Setter Property="Padding" Value="12"/></Style>
+  <Style x:Key="Home.Head" TargetType="StackPanel"><Setter Property="Margin" Value="8,20,8,16"/></Style>
+  <Style x:Key="Home.Card" TargetType="Border" BasedOn="{StaticResource Card}"/>
+  <Style x:Key="Home.NextPill" TargetType="Border"><Setter Property="Height" Value="22"/><Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/><Setter Property="Padding" Value="8,0"/><Setter Property="Background" Value="{DynamicResource B.Accent}"/></Style>
+  <Style x:Key="Home.NextPillText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Foreground" Value="{DynamicResource B.OnAccent}"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Home.Tile" TargetType="Button" BasedOn="{StaticResource Btn}">
-    <Setter Property="Width" Value="320"/><Setter Property="Height" Value="60"/>
-    <Setter Property="Padding" Value="0"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
-    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+    <Setter Property="Height" Value="48"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="-8,0"/>
+    <Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
-      <Grid><Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="4"/>
-        <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
-        <Border x:Name="SelectedBar" Width="3" Height="16" CornerRadius="1.5" Background="{DynamicResource B.Accent}" HorizontalAlignment="Left" Visibility="Collapsed"/>
-      </Grid><ControlTemplate.Triggers><Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="SelectedBar" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
+      <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/></Border>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
   <Style x:Key="Home.CalendarDay" TargetType="Button" BasedOn="{StaticResource Btn}">
-    <Setter Property="Width" Value="36"/><Setter Property="Height" Value="32"/><Setter Property="MinHeight" Value="32"/>
-    <Setter Property="Padding" Value="0"/><Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Width" Value="40"/><Setter Property="Height" Value="32"/><Setter Property="MinHeight" Value="32"/>
+    <Setter Property="Padding" Value="0"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="Transparent"/>
     <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
     <Style.Triggers><Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter Property="BorderThickness" Value="1"/></Trigger></Style.Triggers>
   </Style>
-  <Style x:Key="Home.CalendarDayOff" TargetType="Button" BasedOn="{StaticResource Home.CalendarDay}"><Setter Property="Background" Value="{DynamicResource B.Cal.DayOff}"/></Style>
   <Style x:Key="Home.PinMenuItem" TargetType="MenuItem">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/><Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/>
@@ -1635,11 +1649,13 @@ $script:stylesXaml = @'
   </Style>
   <!-- 일정 2판: 월 달력·사이드바·편집 폼. 값은 7·8절과 U4/U13. -->
   <!-- 근태 표·폼: 디자인 2판 U14. 탭은 값 대신 이 쓰임새 스타일을 쓴다. -->
-  <Style x:Key="Attendance.Page" TargetType="Grid"><Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/></Style>
-  <Style x:Key="Attendance.Header" TargetType="DockPanel"><Setter Property="MinHeight" Value="40"/><Setter Property="Margin" Value="12,0"/></Style>
+  <Style x:Key="Attendance.Page" TargetType="Grid"/>
+  <Style x:Key="Attendance.Header" TargetType="DockPanel"><Setter Property="Height" Value="{DynamicResource F.Height.Header}"/><Setter Property="Margin" Value="16,0,16,0"/></Style>
+  <Style x:Key="Attendance.TableHost" TargetType="Grid"><Setter Property="Margin" Value="16,0,16,16"/></Style>
   <Style x:Key="Attendance.Action" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Height" Value="32"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
-  <Style x:Key="Attendance.Month" TargetType="TextBlock" BasedOn="{StaticResource T.Dialog}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0"/></Style>
-  <Style x:Key="Attendance.Body" TargetType="DockPanel"><Setter Property="Margin" Value="12"/></Style>
+  <Style x:Key="Attendance.Action.Primary" TargetType="Button" BasedOn="{StaticResource Btn.Primary}"><Setter Property="Height" Value="32"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Attendance.Month" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="4,0"/></Style>
+  <Style x:Key="Attendance.Body" TargetType="DockPanel"><Setter Property="Margin" Value="16,0,16,16"/></Style>
   <Style x:Key="Attendance.Field" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
   <Style x:Key="Attendance.Label" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,0,8"/></Style>
   <Style x:Key="Attendance.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="0,4,0,0"/></Style>
@@ -1669,7 +1685,9 @@ $script:stylesXaml = @'
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="DataGridCell"><Border Padding="{TemplateBinding Padding}" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"><ContentPresenter VerticalAlignment="Center"/></Border></ControlTemplate></Setter.Value></Setter>
     <Style.Triggers><Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderThickness" Value="2"/><Setter Property="BorderBrush" Value="{DynamicResource B.Text.Primary}"/></Trigger></Style.Triggers>
   </Style>
-  <Style x:Key="Attendance.HeaderCell" TargetType="DataGridColumnHeader" BasedOn="{StaticResource Task.Header}"/>
+  <Style x:Key="Attendance.HeaderCell" TargetType="DataGridColumnHeader" BasedOn="{StaticResource Task.Header}">
+    <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="FontWeight" Value="{DynamicResource F.Caption.Weight}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
+  </Style>
   <Style x:Key="Attendance.Table" TargetType="DataGrid">
     <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="FontSize" Value="{DynamicResource F.Body}"/><Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
     <Setter Property="BorderThickness" Value="0"/><Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="GridLinesVisibility" Value="Horizontal"/><Setter Property="HeadersVisibility" Value="Column"/>
@@ -1679,8 +1697,8 @@ $script:stylesXaml = @'
   <DataTemplate x:Key="Attendance.TableView">
     <DataGrid Style="{DynamicResource Attendance.Table}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" CanUserReorderColumns="False" CanUserResizeRows="False" CanUserSortColumns="False" SelectionMode="Single" SelectionUnit="FullRow" AutomationProperties.Name="근태 기록">
       <DataGrid.Columns>
-        <DataGridTextColumn Header="날짜" Binding="{Binding Date}" Width="90" ElementStyle="{DynamicResource Attendance.CellText}"/>
-        <DataGridTextColumn Header="종류" Binding="{Binding Kind}" Width="80" ElementStyle="{DynamicResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="날짜" Binding="{Binding Date}" Width="100" ElementStyle="{DynamicResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="종류" Binding="{Binding Kind}" Width="72" ElementStyle="{DynamicResource Attendance.CellText}"/>
         <DataGridTextColumn Header="시작" Binding="{Binding Start}" Width="64" ElementStyle="{DynamicResource Attendance.CellText}"/>
         <DataGridTextColumn Header="끝" Binding="{Binding End}" Width="64" ElementStyle="{DynamicResource Attendance.CellText}"/>
         <DataGridTextColumn Header="장소" Binding="{Binding Place}" Width="72" ElementStyle="{DynamicResource Attendance.CellText}"/>
@@ -1690,14 +1708,15 @@ $script:stylesXaml = @'
       </DataGrid.Columns>
     </DataGrid>
   </DataTemplate>
-  <Style x:Key="Schedule.Page" TargetType="Grid"><Setter Property="Margin" Value="16"/></Style>
-  <Style x:Key="Schedule.Header" TargetType="DockPanel"><Setter Property="Height" Value="40"/></Style>
-  <Style x:Key="Schedule.Month" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="0,0,16,0"/></Style>
-  <Style x:Key="Schedule.MonthMove" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="0,0,8,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.Page" TargetType="Grid"/>
+  <Style x:Key="Schedule.Header" TargetType="DockPanel"><Setter Property="Height" Value="{DynamicResource F.Height.Header}"/><Setter Property="Margin" Value="24,0,16,0"/></Style>
+  <Style x:Key="Schedule.Body" TargetType="DockPanel"><Setter Property="Margin" Value="16,0,16,16"/></Style>
+  <Style x:Key="Schedule.Month" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="0,0,8,0"/></Style>
+  <Style x:Key="Schedule.MonthMove" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.MonthToday" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Height" Value="32"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
-  <Style x:Key="Schedule.Weekday" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Height" Value="32"/><Setter Property="TextAlignment" Value="Center"/><Setter Property="Padding" Value="0,8,0,0"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></Style>
+  <Style x:Key="Schedule.Weekday" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Height" Value="28"/><Setter Property="Padding" Value="8,6,0,0"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></Style>
   <Style x:Key="Schedule.Day" TargetType="Button" BasedOn="{StaticResource Btn}">
-    <Setter Property="Padding" Value="0"/><Setter Property="MinHeight" Value="100"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="BorderThickness" Value="0,0,1,1"/>
+    <Setter Property="Padding" Value="0"/><Setter Property="MinHeight" Value="88"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="BorderThickness" Value="0,0,1,1"/>
     <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="VerticalContentAlignment" Value="Top"/><Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Grid>
       <Border Background="{TemplateBinding Background}" BorderBrush="{DynamicResource B.Border.Muted}" BorderThickness="{TemplateBinding BorderThickness}"/>
@@ -1707,31 +1726,31 @@ $script:stylesXaml = @'
   </Style>
   <Style x:Key="Schedule.DayOff" TargetType="Button" BasedOn="{StaticResource Schedule.Day}"><Setter Property="Background" Value="{DynamicResource B.Cal.DayOff}"/></Style>
   <Style x:Key="Schedule.Today" TargetType="Button" BasedOn="{StaticResource Schedule.Day}"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/></Style>
-  <Style x:Key="Schedule.DayHead" TargetType="Grid"><Setter Property="Height" Value="28"/></Style>
-  <Style x:Key="Schedule.DateCircle" TargetType="Border"><Setter Property="Width" Value="24"/><Setter Property="Height" Value="24"/><Setter Property="CornerRadius" Value="12"/><Setter Property="Margin" Value="6,2,0,2"/><Setter Property="HorizontalAlignment" Value="Left"/></Style>
+  <Style x:Key="Schedule.DayHead" TargetType="Grid"><Setter Property="Height" Value="30"/></Style>
+  <Style x:Key="Schedule.DateCircle" TargetType="Border"><Setter Property="Width" Value="24"/><Setter Property="Height" Value="24"/><Setter Property="CornerRadius" Value="12"/><Setter Property="Margin" Value="4,6,0,0"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="VerticalAlignment" Value="Top"/></Style>
   <Style x:Key="Schedule.Date" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
-  <Style x:Key="Schedule.Mark" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="12"/><Setter Property="HorizontalAlignment" Value="Right"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Margin" Value="0,6,6,0"/></Style>
-  <Style x:Key="Schedule.Holiday" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="4,0,8,0"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
-  <Style x:Key="Schedule.Chip" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="2"/><Setter Property="Margin" Value="4,0,8,2"/><Setter Property="Padding" Value="4,0"/><Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/></Style>
+
+  <Style x:Key="Schedule.Holiday" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="8,0,4,0"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Schedule.Chip" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="2"/><Setter Property="Margin" Value="4,0,4,2"/><Setter Property="Padding" Value="4,0"/><Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/></Style>
   <Style x:Key="Schedule.ChipText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
-  <Style x:Key="Schedule.More" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Margin" Value="4,0,8,0"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
-  <Style x:Key="Schedule.Side" TargetType="Grid"><Setter Property="Margin" Value="12,0,0,0"/></Style>
-  <Style x:Key="Schedule.SideBorder" TargetType="Border"><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="4"/><Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/></Style>
+  <Style x:Key="Schedule.More" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Margin" Value="8,0,4,0"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
+  <Style x:Key="Schedule.Side" TargetType="Grid"/>
+
   <Style x:Key="Schedule.SideTitle" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="FontSize" Value="{DynamicResource F.Subtitle}"/><Setter Property="FontWeight" Value="{DynamicResource F.Subtitle.Weight}"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
-  <Style x:Key="Schedule.Add" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="8,0,12,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
-  <Style x:Key="Schedule.SideBody" TargetType="DockPanel"><Setter Property="Margin" Value="12"/></Style>
+  <Style x:Key="Schedule.Add" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.SideBody" TargetType="DockPanel"><Setter Property="Margin" Value="16,0,16,16"/></Style>
   <Style x:Key="Schedule.Form" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
   <Style x:Key="Schedule.Field" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
   <Style x:Key="Schedule.FieldLabel" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,0,8"/></Style>
   <Style x:Key="Schedule.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="0,4,0,0"/></Style>
-  <Style x:Key="Schedule.Separator" TargetType="Border"><Setter Property="Height" Value="1"/><Setter Property="Margin" Value="0,12,0,12"/><Setter Property="Background" Value="{DynamicResource B.Border.Default}"/></Style>
+  <Style x:Key="Schedule.Separator" TargetType="Border"><Setter Property="Height" Value="16"/></Style>
   <Style x:Key="Schedule.EventRow" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="Height" Value="32"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
-      <Border Background="{TemplateBinding Background}" BorderBrush="{DynamicResource B.Border.Muted}" BorderThickness="0,0,0,1"><ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/></Border>
+      <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}"><ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/></Border>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <Style x:Key="Schedule.EventTime" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Width" Value="72"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.EventTime" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Width" Value="64"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.EventTitle" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.RoutineCount" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <PopupAnimation x:Key="{x:Static SystemParameters.MenuPopupAnimationKey}">None</PopupAnimation>
@@ -1776,7 +1795,7 @@ function Get-WtShellXaml {
   </WindowChrome.WindowChrome>
   <Border Background="{DynamicResource B.Bg.Canvas}">
     <Grid>
-      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
       <DockPanel x:Name="TitleBar" Height="{DynamicResource F.Chrome.Height}" Background="{DynamicResource B.Bg.Canvas}">
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
           <Button x:Name="MinButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최소화" AutomationProperties.Name="최소화">
@@ -1796,7 +1815,7 @@ function Get-WtShellXaml {
       </DockPanel>
       <Grid Grid.Row="1">
         <Grid.ColumnDefinitions><ColumnDefinition x:Name="NavColumn" Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-        <Border x:Name="NavBorder" Width="{DynamicResource F.Nav.Width}" Background="{DynamicResource B.Bg.Canvas}" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="0,0,1,0">
+        <Border x:Name="NavBorder" Width="{DynamicResource F.Nav.Width}" Background="{DynamicResource B.Bg.Canvas}">
           <DockPanel>
             <Grid DockPanel.Dock="Top" Height="40">
               <Button x:Name="CollapseButton" Style="{DynamicResource Btn.Canvas}" HorizontalAlignment="Left" Margin="12,0,0,0" ToolTip="메뉴 접기/펼치기 (Ctrl+B)" AutomationProperties.Name="메뉴 접기/펼치기">
@@ -1812,17 +1831,16 @@ function Get-WtShellXaml {
               </Button>
             </StackPanel>
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
-              <StackPanel x:Name="NavPanel" Margin="8,0,7,0"/>
+              <StackPanel x:Name="NavPanel" Margin="8,0,8,0"/>
             </ScrollViewer>
           </DockPanel>
         </Border>
-        <Grid Grid.Column="1">
+        <Grid Grid.Column="1" Margin="0,0,8,8">
           <ContentControl x:Name="WarmHost" Focusable="False" Visibility="Hidden" IsHitTestVisible="False"/>
           <ContentControl x:Name="PageHost" Focusable="False"/>
         </Grid>
       </Grid>
-      <Border Grid.Row="2" Height="{DynamicResource F.Height.StatusBar}" Background="{DynamicResource B.Bg.Canvas}" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="0,1,0,0"/>
-      <Border x:Name="Frame" Grid.RowSpan="3" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
+      <Border x:Name="Frame" Grid.RowSpan="2" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
     </Grid>
   </Border>
 </Window>
@@ -2096,7 +2114,7 @@ function New-WtStatTile([string]$Label, [string]$Value, [string]$Unit, [string]$
 # 화면 맨 위: 작은 설명(선택) + 큰 제목 + 오른쪽 요소(선택)
 function New-WtPageHeader([string]$Title, [string]$Sub, $Right) {
     $d = [System.Windows.Controls.DockPanel]::new()
-    $d.Margin = [System.Windows.Thickness]::new(0, 0, 0, 20)
+    $d.Margin = [System.Windows.Thickness]::new(8, 12, 8, 12)
     if ($Right) {
         [System.Windows.Controls.DockPanel]::SetDock($Right, 'Right')
         $Right.VerticalAlignment = 'Bottom'
@@ -2116,15 +2134,13 @@ function New-WtPage([switch]$Fill) {
     if ($Fill) {
         $dock = [System.Windows.Controls.DockPanel]::new()
         $dock.LastChildFill = $true
-        $dock.Margin = [System.Windows.Thickness]::new(36, 8, 36, 32)
         return @{ Root = $dock; Panel = $dock }
     }
     $sv = [System.Windows.Controls.ScrollViewer]::new()
     $sv.VerticalScrollBarVisibility = 'Auto'
     $sv.HorizontalScrollBarVisibility = 'Disabled'
     $sv.Focusable = $false
-    $panel = New-WtStack Vertical 16
-    $panel.Margin = [System.Windows.Thickness]::new(36, 8, 36, 32)
+    $panel = New-WtStack Vertical 8
     $sv.Content = $panel
     @{ Root = $sv; Panel = $panel }
 }
@@ -2221,8 +2237,11 @@ function New-WtTaskGrid {
 
 function New-WtTaskPage {
     $page = New-WtPage -Fill
-    $page.Root.Margin = [System.Windows.Thickness]::new(24, 8, 24, 24)
-    $page
+    $card = New-WtCard
+    $inner = [System.Windows.Controls.DockPanel]::new()
+    $card.Child = $inner
+    [void]$page.Panel.Children.Add($card)
+    @{ Root = $page.Root; Panel = $inner }
 }
 
 # 대화상자 모양은 여기에서만 정한다. 호출자는 본문/버튼과 처리기만 붙인다.
@@ -2314,9 +2333,10 @@ function Set-WtSidePanelLayout($Panel, [bool]$Collapsed, [bool]$Narrow) {
     $Panel.Rail.HorizontalAlignment = $Panel.Side
     $Panel.Expanded.Visibility = if ($Collapsed) { 'Collapsed' } else { 'Visible' }
     $Panel.Rail.Visibility = if ($Collapsed) { 'Visible' } else { 'Collapsed' }
-    $edge = if ($Panel.Side -eq 'Right') { [System.Windows.Thickness]::new(1,0,0,0) } else { [System.Windows.Thickness]::new(0,0,1,0) }
-    $Panel.Expanded.BorderThickness = $edge
-    $Panel.Rail.BorderThickness = $edge
+    # 카드 사이는 간격으로 나눈다. 내용 위에 겹칠 때만 선으로 경계를 보인다.
+    $gap = (Get-WtStyleDictionary)['F.SidePanel.Gap']
+    $Panel.Root.Margin = if ($Panel.Side -eq 'Right') { [System.Windows.Thickness]::new($gap, 0, 0, 0) } else { [System.Windows.Thickness]::new(0, 0, $gap, 0) }
+    $Panel.Expanded.BorderThickness = [System.Windows.Thickness]::new($(if ($Narrow -and -not $Collapsed) { 1 } else { 0 }))
     [System.Windows.Controls.DockPanel]::SetDock($Panel.Collapse, $(if ($Panel.Side -eq 'Right') { 'Left' } else { 'Right' }))
     $Panel.CollapseGlyph.Text = [string][char]$(if ($Panel.Side -eq 'Right') { 0xE76C } else { 0xE76B })
     $Panel.OpenGlyph.Text = [string][char]$(if ($Panel.Side -eq 'Right') { 0xE76B } else { 0xE76C })
@@ -2324,22 +2344,28 @@ function Set-WtSidePanelLayout($Panel, [bool]$Collapsed, [bool]$Narrow) {
 
 Export-ModuleMember -Function Get-WtShellXaml, Set-WtNavLayout, Set-WtSidePanelLayout
 
-# 홈 전용 배치 · 공통 부품. 치수는 디자인 2판 7·8절에만 맞춘다.
+# 홈 전용 배치 · 공통 부품. 값은 디자인 3판 7·8절.
+# 내용이 창보다 작으면 마지막 카드가 남은 높이를 채우고, 크면 화면 전체가 스크롤된다.
 function New-WtHomeLayout {
-    $page = New-WtPage
-    $page.Panel.ClearValue([System.Windows.FrameworkElement]::MarginProperty)
-    Set-WtStyle $page.Panel 'Home.Page'
-    $page.Panel.Tag = [double]12
-    [void](Add-WtChild $page.Panel (New-WtPageHeader '오늘'))
+    $scroll = [System.Windows.Controls.ScrollViewer]::new()
+    $scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'; $scroll.Focusable = $false
+    $root = [System.Windows.Controls.DockPanel]::new()
+    $viewport = [System.Windows.Data.Binding]::new('ViewportHeight'); $viewport.Source = $scroll
+    [void]$root.SetBinding([System.Windows.FrameworkElement]::MinHeightProperty, $viewport)
+    $headArea = New-WtStack Vertical; Set-WtStyle $headArea 'Home.Head'
+    $title = New-WtText '' 'T.Display'; [void]$headArea.Children.Add($title)
+    $head = New-WtStack Vertical; [void]$headArea.Children.Add($head)
+    [System.Windows.Controls.DockPanel]::SetDock($headArea, 'Top'); [void]$root.Children.Add($headArea)
     $grid = [System.Windows.Controls.Grid]::new()
-    foreach ($width in @([System.Windows.GridLength]::new(1, 'Star'), [System.Windows.GridLength]::new(12), [System.Windows.GridLength]::new(300))) {
+    foreach ($width in @([System.Windows.GridLength]::new(1, 'Star'), [System.Windows.GridLength]::new(8), [System.Windows.GridLength]::new(320))) {
         $column = [System.Windows.Controls.ColumnDefinition]::new(); $column.Width = $width; $grid.ColumnDefinitions.Add($column)
     }
-    $main = New-WtStack Vertical 12; $side = New-WtStack Vertical 12
+    $main = [System.Windows.Controls.DockPanel]::new(); $main.Tag = [double]8
+    $side = [System.Windows.Controls.DockPanel]::new(); $side.Tag = [double]8
     [System.Windows.Controls.Grid]::SetColumn($side, 2)
-    [void]$grid.Children.Add($main); [void]$grid.Children.Add($side)
-    [void](Add-WtChild $page.Panel $grid)
-    @{ Root = $page.Root; Main = $main; Side = $side }
+    [void]$grid.Children.Add($main); [void]$grid.Children.Add($side); [void]$root.Children.Add($grid)
+    $scroll.Content = $root
+    @{ Root = $scroll; Title = $title; Head = $head; Main = $main; Side = $side }
 }
 
 function New-WtHomePinMenuItem($Shortcut, [scriptblock]$OnChange) {
@@ -2359,17 +2385,15 @@ function New-WtShortcutTile($Shortcut, [scriptblock]$OnChange) {
     $button = [System.Windows.Controls.Button]::new(); Set-WtStyle $button 'Home.Tile'
     $button.Tag = $Shortcut; $button.ToolTip = $Shortcut.Title
     [System.Windows.Automation.AutomationProperties]::SetName($button, $Shortcut.Title)
-    $canvas = [System.Windows.Controls.Canvas]::new()
-    $icon = New-WtIcon ([int]$Shortcut.Icon); $icon.Width = 16; $icon.Height = 16
-    [System.Windows.Controls.Canvas]::SetLeft($icon, 20); [System.Windows.Controls.Canvas]::SetTop($icon, 22)
-    $titleText = New-WtText $Shortcut.Title; $titleText.Width = 224; $titleText.TextWrapping = 'NoWrap'; $titleText.TextTrimming = 'CharacterEllipsis'
-    [System.Windows.Controls.Canvas]::SetLeft($titleText, 56); [System.Windows.Controls.Canvas]::SetTop($titleText, 11)
-    $subText = New-WtText $Shortcut.Sub 'T.Sub'; $subText.Width = 224; $subText.TextWrapping = 'NoWrap'; $subText.TextTrimming = 'CharacterEllipsis'
-    [System.Windows.Controls.Canvas]::SetLeft($subText, 56); [System.Windows.Controls.Canvas]::SetTop($subText, 32)
-    $arrow = New-WtIcon 0xE76C; $arrow.FontSize = 12
-    [System.Windows.Controls.Canvas]::SetLeft($arrow, 290); [System.Windows.Controls.Canvas]::SetTop($arrow, 24)
-    foreach ($part in $icon, $titleText, $subText, $arrow) { [void]$canvas.Children.Add($part) }
-    $button.Content = $canvas
+    $row = [System.Windows.Controls.DockPanel]::new()
+    $icon = New-WtIcon ([int]$Shortcut.Icon); $icon.Width = 16; $icon.Height = 16; $icon.Margin = [System.Windows.Thickness]::new(0, 0, 12, 0)
+    Set-WtResource $icon Foreground 'B.Text.Secondary'
+    [System.Windows.Controls.DockPanel]::SetDock($icon, 'Left'); [void]$row.Children.Add($icon)
+    $texts = New-WtStack Vertical; $texts.VerticalAlignment = 'Center'
+    $titleText = New-WtText $Shortcut.Title; $titleText.TextWrapping = 'NoWrap'; $titleText.TextTrimming = 'CharacterEllipsis'
+    $subText = New-WtText $Shortcut.Sub 'T.CaptionMuted'; $subText.TextWrapping = 'NoWrap'; $subText.TextTrimming = 'CharacterEllipsis'
+    [void]$texts.Children.Add($titleText); [void]$texts.Children.Add($subText); [void]$row.Children.Add($texts)
+    $button.Content = $row
     $button.Add_Click({ param($s, $e) Open-WtPage -Id $s.Tag.Page -Args @{ Key = $s.Tag.Key } })
     $button.ContextMenu = New-WtHomePinContextMenu
     $button.ContextMenu.Tag = $OnChange
@@ -2383,34 +2407,35 @@ function New-WtShortcutTile($Shortcut, [scriptblock]$OnChange) {
 }
 
 function New-WtShortcutCard([object[]]$Items, [scriptblock]$OnChange) {
-    $panel = New-WtStack Vertical 8
+    $card = New-WtCard; Set-WtStyle $card 'Home.Card'
+    $panel = New-WtStack Vertical 4
     [void](Add-WtChild $panel (New-WtText '바로 가기' 'T.H2'))
-    if (-not $Items.Count) { [void](Add-WtChild $panel (New-WtText '자주 연 항목이 여기에 표시됩니다' 'T.Sub')); return $panel }
-    $grid = [System.Windows.Controls.Grid]::new(); $grid.HorizontalAlignment = 'Left'
-    foreach ($width in 320, 4, 320) { $cd = [System.Windows.Controls.ColumnDefinition]::new(); $cd.Width = [System.Windows.GridLength]::new($width); $grid.ColumnDefinitions.Add($cd) }
+    $card.Child = $panel
+    if (-not $Items.Count) { [void](Add-WtChild $panel (New-WtText '자주 연 항목이 여기에 표시됩니다' 'T.Sub')); return $card }
+    $grid = [System.Windows.Controls.Grid]::new()
+    foreach ($width in @([System.Windows.GridLength]::new(1, 'Star'), [System.Windows.GridLength]::new(32), [System.Windows.GridLength]::new(1, 'Star'))) {
+        $cd = [System.Windows.Controls.ColumnDefinition]::new(); $cd.Width = $width; $grid.ColumnDefinitions.Add($cd)
+    }
     for ($i = 0; $i -lt [Math]::Min(8, $Items.Count); $i++) {
         $rowIndex = [int][Math]::Floor($i / 2)
         if ($i % 2 -eq 0) { $rd = [System.Windows.Controls.RowDefinition]::new(); $rd.Height = [System.Windows.GridLength]::Auto; $grid.RowDefinitions.Add($rd) }
         $tile = New-WtShortcutTile $Items[$i] -OnChange $OnChange
-        if ($rowIndex -gt 0) { $tile.Margin = [System.Windows.Thickness]::new(0, 4, 0, 0) }
         [System.Windows.Controls.Grid]::SetColumn($tile, ($i % 2) * 2); [System.Windows.Controls.Grid]::SetRow($tile, $rowIndex)
         [void]$grid.Children.Add($tile)
     }
     [void](Add-WtChild $panel $grid)
-    $panel
+    $card
 }
 
 # 콜백은 달 이동만 맡는다. 날짜 이동은 코어의 CalendarHost 등록을 거친다.
 function New-WtMiniCalendar([datetime]$Month, $Calendar, [scriptblock]$OnMonth) {
-    $card = New-WtCard; Set-WtStyle $card 'Home.Card'; $card.Width = 276; $card.Height = 268
-    # 안쪽 252×244 + 가장자리 12(선 1 포함)씩 = 바깥 276×268.
-    $card.Padding = [System.Windows.Thickness]::new(12 - 1)
-    $card.HorizontalAlignment = 'Left'; $card.Tag = @{ Month = $Month; OnMonth = $OnMonth }
+    $card = New-WtCard; Set-WtStyle $card 'Home.Card'
+    $card.Tag = @{ Month = $Month; OnMonth = $OnMonth }
     $col = New-WtStack Vertical
-    $header = [System.Windows.Controls.Grid]::new(); $header.Height = 32
-    $monthText = New-WtText (Format-WtDate $Month 'yyyy년 M월') 'T.Dialog'; $monthText.VerticalAlignment = 'Center'
+    $header = [System.Windows.Controls.Grid]::new(); $header.Height = 28; $header.Margin = [System.Windows.Thickness]::new(0, 0, 0, 4)
+    $monthText = New-WtText (Format-WtDate $Month 'yyyy년 M월') 'T.H2'; $monthText.VerticalAlignment = 'Center'
     [void]$header.Children.Add($monthText)
-    $nav = New-WtStack Horizontal; $nav.HorizontalAlignment = 'Right'
+    $nav = New-WtStack Horizontal 4; $nav.HorizontalAlignment = 'Right'
     foreach ($step in -1, 1) {
         $button = New-WtButton '' -Kind Icon -Icon $(if ($step -lt 0) { 0xE76B } else { 0xE76C }) -ToolTip $(if ($step -lt 0) { '이전 달' } else { '다음 달' })
         [System.Windows.Automation.AutomationProperties]::SetName($button, [string]$button.ToolTip)
@@ -2429,40 +2454,47 @@ function New-WtMiniCalendar([datetime]$Month, $Calendar, [scriptblock]$OnMonth) 
     $hostAddon = Get-WtCalendarHost
     for ($i = 0; $i -lt 42; $i++) {
         $date = $start.AddDays($i); $mark = Get-WtCalendarMark $date $Calendar.Items
+        $isToday = $date -eq [datetime]::Today; $inMonth = $date.Month -eq $Month.Month
+        $weekend = $date.DayOfWeek -in [DayOfWeek]::Sunday, [DayOfWeek]::Saturday
         $button = [System.Windows.Controls.Button]::new(); Set-WtStyle $button 'Home.CalendarDay'
         $button.Tag = @{ Page = $(if ($hostAddon) { $hostAddon.Id } else { '' }); Date = $date }
         [System.Windows.Automation.AutomationProperties]::SetName($button, (ConvertTo-WtDateText $date))
         $button.IsEnabled = $null -ne $hostAddon
         $button.ToolTip = if ($Calendar.Errors.Count) { @($Calendar.Errors.Reason) -join "`n" } elseif ($mark.ToolTip) { $mark.ToolTip } else { Format-WtDate $date 'M월 d일 dddd' }
-        if ($mark.DayOff) { Set-WtStyle $button 'Home.CalendarDayOff' }
-        $cell = [System.Windows.Controls.Grid]::new(); $cell.Width = 36; $cell.Height = 32
-        $dateCircle = [System.Windows.Controls.Border]::new(); $dateCircle.Width = 22; $dateCircle.Height = 22; $dateCircle.CornerRadius = 11; $dateCircle.VerticalAlignment = 'Top'
+        $dateCircle = [System.Windows.Controls.Border]::new(); $dateCircle.Width = 22; $dateCircle.Height = 22; $dateCircle.CornerRadius = 11
         $number = New-WtText ([string]$date.Day) 'T.Sub'; $number.TextAlignment = 'Center'; $number.VerticalAlignment = 'Center'
-        Set-WtResource $number Foreground $(if ($date.Month -ne $Month.Month) { 'B.Text.Tertiary' } else { 'B.Text.Primary' })
-        if ($date -eq [datetime]::Today) { Set-WtResource $dateCircle Background 'B.Accent'; Set-WtResource $number Foreground 'B.OnAccent'; $number.FontWeight = 'SemiBold' }
-        $dateCircle.Child = $number; [void]$cell.Children.Add($dateCircle)
-        if ($mark.Glyph) {
-            $symbol = New-WtIcon $mark.Glyph; $symbol.FontSize = 10; $symbol.HorizontalAlignment = 'Center'; $symbol.VerticalAlignment = 'Bottom'
-            Set-WtResource $symbol Foreground $mark.Brush; [void]$cell.Children.Add($symbol)
-        }
-        $button.Content = $cell
+        $painted = $inMonth -and $mark.Kind
+        Set-WtResource $number Foreground $(if ($isToday) { 'B.OnAccent' } elseif (-not $inMonth) { 'B.Text.Disabled' } elseif ($painted) { $mark.Fore } elseif ($weekend) { 'B.Text.Tertiary' } else { 'B.Text.Primary' })
+        if ($isToday) { Set-WtResource $dateCircle Background 'B.Accent'; $number.FontWeight = 'SemiBold' }
+        elseif ($painted) { Set-WtResource $dateCircle Background $mark.Back }
+        $dateCircle.Child = $number
+        $button.Content = $dateCircle
         $button.Add_Click({ param($s, $e) if ($s.Tag.Page) { Open-WtPage -Id $s.Tag.Page -Args @{ Date = $s.Tag.Date } } })
         [void]$days.Children.Add($button)
     }
-    [void](Add-WtChild $col $days); $card.Child = $col; $card
+    [void](Add-WtChild $col $days)
+    $legend = New-WtStack Horizontal 16; $legend.Margin = [System.Windows.Thickness]::new(0, 8, 0, 0)
+    foreach ($entry in @(@('업무외', 'B.Cal.Overtime.Bg'), @('휴가', 'B.Cal.Leave.Bg'), @('휴무일', 'B.Status.Error.Bg'))) {
+        $item = New-WtStack Horizontal 6
+        $swatch = [System.Windows.Controls.Border]::new(); $swatch.Width = 12; $swatch.Height = 12; $swatch.CornerRadius = 6
+        Set-WtResource $swatch Background $entry[1]
+        [void](Add-WtChild $item $swatch); [void](Add-WtChild $item (New-WtText $entry[0] 'T.Sub'))
+        [void](Add-WtChild $legend $item)
+    }
+    [void](Add-WtChild $col $legend); $card.Child = $col; $card
 }
 
+# 시간 막대. 폭은 카드에 맞추므로 일정은 분으로 들고, 자리는 Set-WtTimelineLayout이 계산한다.
 function New-WtTimeline([object[]]$Items, [datetime]$Date, [string]$Page, [string]$ErrorText = '') {
     $card = New-WtCard; Set-WtStyle $card 'Home.Card'
-    # 바깥 선 1을 빼서 제목 x=12, 전체 40+56+12=108을 맞춘다. 하루 종일 줄은 위에 더해진다.
-    $card.Padding = [System.Windows.Thickness]::new((12 - 1), 0, (12 - 1), (12 - 2))
     $col = New-WtStack Vertical
     $header = New-WtCardHeader '오늘 일정' ([string]$Items.Count) '일정 열기' $Page
-    $header.Height = 40; $header.Margin = [System.Windows.Thickness]::new(0)
+    $header.Margin = [System.Windows.Thickness]::new(0)
     [void](Add-WtChild $col $header)
     $allDay = @($Items | Where-Object AllDay)
     if ($allDay.Count) {
-        $row = New-WtStack Horizontal 4
+        $row = New-WtStack Horizontal 8
+        $label = New-WtText '하루 종일' 'T.Sub'; $label.VerticalAlignment = 'Center'; [void](Add-WtChild $row $label)
         foreach ($entry in $allDay) {
             $button = New-WtButton $entry.Title -Kind Link
             $button.MinHeight = 20; $button.Tag = @{ Page = $Page; Date = $Date; Id = $entry.Id }; $button.ToolTip = $entry.ToolTip
@@ -2471,43 +2503,33 @@ function New-WtTimeline([object[]]$Items, [datetime]$Date, [string]$Page, [strin
         }
         [void](Add-WtChild $col $row)
     }
-    $canvas = [System.Windows.Controls.Canvas]::new(); $canvas.Width = 584; $canvas.Height = 56; $canvas.HorizontalAlignment = 'Left'
+    $canvas = [System.Windows.Controls.Canvas]::new(); $canvas.Height = 116; $canvas.Margin = [System.Windows.Thickness]::new(0, 8, 0, 0)
     $workStart = (ConvertFrom-WtTimeText (Get-WtSetting 'work.start')).TotalMinutes
     $workEnd = (ConvertFrom-WtTimeText (Get-WtSetting 'work.end')).TotalMinutes
-    $rangeStart = $workStart - 60; $rangeEnd = $workEnd + 120; $span = $rangeEnd - $rangeStart
-    $track = [System.Windows.Controls.Border]::new(); $track.Width = 584; $track.Height = 16; $track.CornerRadius = 2; $track.BorderThickness = 1
-    Set-WtResource $track Background 'B.Bg.Subtle'; Set-WtResource $track BorderBrush 'B.Border.Muted'
-    [System.Windows.Controls.Canvas]::SetTop($track, 28); [void]$canvas.Children.Add($track)
-    $work = [System.Windows.Controls.Border]::new(); $work.Width = 584 * ($workEnd - $workStart) / $span; $work.Height = 14
+    $rangeStart = $workStart - 60; $rangeEnd = $workEnd + 120
+    $rail = [System.Windows.Controls.Border]::new(); $rail.Height = 20; $rail.CornerRadius = 2
+    Set-WtResource $rail Background 'B.Bg.Subtle'
+    [System.Windows.Controls.Canvas]::SetTop($rail, 44); [void]$canvas.Children.Add($rail)
+    $work = [System.Windows.Controls.Border]::new(); $work.Height = 20
     Set-WtResource $work Background 'B.Cal.Work'
-    [System.Windows.Controls.Canvas]::SetLeft($work, 584 * ($workStart - $rangeStart) / $span); [System.Windows.Controls.Canvas]::SetTop($work, 29)
-    [void]$canvas.Children.Add($work)
-    # 시작/끝과 두 시간 간격. 10시는 C 원본처럼 생략하여 지금 시각 라벨 자리를 남긴다.
-    $ticks = @($rangeStart) + @(for ($minute = [Math]::Ceiling(($rangeStart + 180) / 120) * 120; $minute -lt $rangeEnd; $minute += 120) { $minute }) + @($rangeEnd)
-    foreach ($minute in $ticks) {
-        $x = 584 * ($minute - $rangeStart) / $span
-        $tick = [System.Windows.Controls.Border]::new(); $tick.Width = 1; $tick.Height = 4; Set-WtResource $tick Background 'B.Border.Default'
-        [System.Windows.Controls.Canvas]::SetLeft($tick, $x); [System.Windows.Controls.Canvas]::SetTop($tick, 24); [void]$canvas.Children.Add($tick)
+    [System.Windows.Controls.Canvas]::SetTop($work, 44); [void]$canvas.Children.Add($work)
+    $ticks = [System.Collections.Generic.List[object]]::new()
+    $minutes = @($rangeStart) + @(for ($minute = [Math]::Ceiling(($rangeStart + 1) / 120) * 120; $minute -lt $rangeEnd; $minute += 120) { $minute }) + @($rangeEnd)
+    foreach ($minute in $minutes) {
         $text = New-WtText ($Date.AddMinutes($minute).ToString('HH', [Globalization.CultureInfo]::InvariantCulture)) 'T.CaptionMuted'
-        $text.Width = 24; $text.TextAlignment = 'Center'
-        [System.Windows.Controls.Canvas]::SetLeft($text, $x - 12); [System.Windows.Controls.Canvas]::SetTop($text, 4); [void]$canvas.Children.Add($text)
+        $text.Width = 24; $text.TextAlignment = if ($minute -eq $rangeStart) { 'Left' } elseif ($minute -eq $rangeEnd) { 'Right' } else { 'Center' }
+        [System.Windows.Controls.Canvas]::SetTop($text, 24); [void]$canvas.Children.Add($text)
+        $ticks.Add(@{ Text = $text; Minute = $minute })
     }
-    $ends = @([double]::NegativeInfinity, [double]::NegativeInfinity); $hidden = [System.Collections.Generic.List[string]]::new()
+    $events = [System.Collections.Generic.List[object]]::new()
     foreach ($entry in @($Items | Where-Object { -not $_.AllDay } | Sort-Object Start, End, Title)) {
         $a = ($entry.Start - $Date.Date).TotalMinutes; $b = if ($entry.End -gt $entry.Start) { ($entry.End - $Date.Date).TotalMinutes } else { $a }
-        $left = [Math]::Clamp($a, $rangeStart, $rangeEnd); $right = [Math]::Clamp($b, $rangeStart, $rangeEnd)
-        $barWidth = [Math]::Max(10, 584 * ($right - $left) / $span)
-        $x = [Math]::Min(584 - $barWidth, 584 * ($left - $rangeStart) / $span)
-        $lane = if ($x -ge $ends[0]) { 0 } elseif ($x -ge $ends[1]) { 1 } else { -1 }
-        if ($lane -lt 0) { $hidden.Add($entry.ToolTip); continue }
-        $ends[$lane] = $x + $barWidth
         $button = [System.Windows.Controls.Button]::new(); Set-WtStyle $button 'Home.TimelineEvent'
-        $button.Width = $barWidth
         $button.Tag = @{ Page = $Page; Date = $Date; Id = $entry.Id }; $button.ToolTip = $entry.ToolTip
         [System.Windows.Automation.AutomationProperties]::SetName($button, $entry.Title)
         $button.Add_Click({ param($s, $e) Open-WtPage -Id $s.Tag.Page -Args @{ Date = $s.Tag.Date; Id = $s.Tag.Id } })
         if ($a -lt $rangeStart -or $b -gt $rangeEnd) {
-            $markers = [System.Windows.Controls.Grid]::new(); $markers.Width = $barWidth
+            $markers = [System.Windows.Controls.Grid]::new(); $markers.Width = 10
             foreach ($side in 'Left', 'Right') {
                 if (($side -eq 'Left' -and $a -ge $rangeStart) -or ($side -eq 'Right' -and $b -le $rangeEnd)) { continue }
                 $marker = New-WtIcon $(if ($side -eq 'Left') { 0xE76B } else { 0xE76C }); $marker.FontSize = 12
@@ -2516,22 +2538,25 @@ function New-WtTimeline([object[]]$Items, [datetime]$Date, [string]$Page, [strin
             }
             $button.Content = $markers
         }
-        [System.Windows.Controls.Canvas]::SetLeft($button, $x); [System.Windows.Controls.Canvas]::SetTop($button, 31 + $lane * 12)
         [void]$canvas.Children.Add($button)
+        $caption = New-WtText ($entry.Start.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) + ' ' + $entry.Title) 'T.Sub'
+        $caption.TextWrapping = 'NoWrap'; $caption.IsHitTestVisible = $false; [void]$canvas.Children.Add($caption)
+        $alarm = $null
         if ($entry.Alarm) {
             $alarm = New-WtIcon 0xEA8F; $alarm.FontSize = 12; Set-WtResource $alarm Foreground 'B.Accent'; $alarm.ToolTip = $entry.ToolTip
-            [System.Windows.Controls.Canvas]::SetLeft($alarm, $x + $button.Width); [System.Windows.Controls.Canvas]::SetTop($alarm, 29 + $lane * 12); [void]$canvas.Children.Add($alarm)
+            [void]$canvas.Children.Add($alarm)
         }
+        $events.Add(@{ Entry = $entry; Start = $a; End = $b; Button = $button; Caption = $caption; Alarm = $alarm })
     }
-    if ($hidden.Count) {
-        $more = New-WtText "+$($hidden.Count)" 'T.Sub'; $more.ToolTip = $hidden -join "`n`n"
-        [System.Windows.Controls.Canvas]::SetRight($more, 0); [System.Windows.Controls.Canvas]::SetTop($more, 44); [void]$canvas.Children.Add($more)
-    }
-    $nowLine = [System.Windows.Controls.Border]::new(); $nowLine.Width = 2; $nowLine.Height = 26; $nowLine.IsHitTestVisible = $false
-    Set-WtResource $nowLine Background 'B.Text.Primary'; [System.Windows.Controls.Canvas]::SetTop($nowLine, 22); [void]$canvas.Children.Add($nowLine)
-    $nowLabel = New-WtText '' 'T.Sub'; Set-WtResource $nowLabel Foreground 'B.Text.Primary'; Set-WtResource $nowLabel Background 'B.Bg.Surface'; $nowLabel.Width = 96; $nowLabel.TextAlignment = 'Center'; $nowLabel.IsHitTestVisible = $false
-    [System.Windows.Controls.Canvas]::SetTop($nowLabel, 4); [void]$canvas.Children.Add($nowLabel)
-    $canvas.Tag = @{ Date = $Date; Start = $rangeStart; End = $rangeEnd; Line = $nowLine; Label = $nowLabel }
+    $more = New-WtText '' 'T.Sub'; $more.Visibility = 'Collapsed'
+    [System.Windows.Controls.Canvas]::SetRight($more, 0); [System.Windows.Controls.Canvas]::SetTop($more, 70); [void]$canvas.Children.Add($more)
+    $nowLine = [System.Windows.Controls.Border]::new(); $nowLine.Width = 2; $nowLine.Height = 28; $nowLine.IsHitTestVisible = $false
+    Set-WtResource $nowLine Background 'B.Text.Primary'; [System.Windows.Controls.Canvas]::SetTop($nowLine, 40); [void]$canvas.Children.Add($nowLine)
+    $nowLabel = New-WtText '' 'T.Sub'; Set-WtResource $nowLabel Foreground 'B.Text.Primary'; $nowLabel.Width = 96; $nowLabel.TextAlignment = 'Center'; $nowLabel.IsHitTestVisible = $false
+    [System.Windows.Controls.Canvas]::SetTop($nowLabel, 0); [void]$canvas.Children.Add($nowLabel)
+    $canvas.Tag = @{ Date = $Date; Start = $rangeStart; End = $rangeEnd; WorkStart = $workStart; WorkEnd = $workEnd; Now = (Get-Date)
+        Rail = $rail; Work = $work; Ticks = $ticks; Events = $events; More = $more; Line = $nowLine; Label = $nowLabel }
+    $canvas.Add_SizeChanged({ param($s, $e) Set-WtTimelineLayout $s })
     Update-WtTimelineNow $canvas
     [void](Add-WtChild $col $canvas)
     if ($ErrorText) { $message = New-WtText '일정 파일을 읽지 못했습니다' 'T.Sub'; $message.ToolTip = $ErrorText; [void](Add-WtChild $col $message) }
@@ -2540,15 +2565,100 @@ function New-WtTimeline([object[]]$Items, [datetime]$Date, [string]$Page, [strin
     @{ Card = $card; Timeline = $canvas }
 }
 
-function Update-WtTimelineNow($Timeline, [datetime]$Now = (Get-Date)) {
-    $state = $Timeline.Tag; $minute = ($Now - $state.Date.Date).TotalMinutes
+function Set-WtTimelineLayout($Timeline) {
+    $state = $Timeline.Tag
+    $width = if ($Timeline.ActualWidth -gt 0) { $Timeline.ActualWidth } else { 584 }
+    $span = $state.End - $state.Start
+    $state.Rail.Width = $width
+    $state.Work.Width = $width * ($state.WorkEnd - $state.WorkStart) / $span
+    [System.Windows.Controls.Canvas]::SetLeft($state.Work, $width * ($state.WorkStart - $state.Start) / $span)
+    foreach ($tick in $state.Ticks) {
+        $x = $width * ($tick.Minute - $state.Start) / $span
+        [System.Windows.Controls.Canvas]::SetLeft($tick.Text, [Math]::Clamp($x - 12, 0, $width - 24))
+    }
+    # 막대는 두 줄까지 쌓고, 넘치면 숨긴 뒤 오른쪽에 +n으로 묶는다.
+    $ends = @([double]::NegativeInfinity, [double]::NegativeInfinity); $hidden = [System.Collections.Generic.List[string]]::new(); $placed = [System.Collections.Generic.List[object]]::new()
+    foreach ($event in $state.Events) {
+        $left = [Math]::Clamp($event.Start, $state.Start, $state.End); $right = [Math]::Clamp($event.End, $state.Start, $state.End)
+        $barWidth = [Math]::Max(10, $width * ($right - $left) / $span)
+        $x = [Math]::Min($width - $barWidth, $width * ($left - $state.Start) / $span)
+        $lane = if ($x -ge $ends[0]) { 0 } elseif ($x -ge $ends[1]) { 1 } else { -1 }
+        if ($lane -lt 0) {
+            $event.Button.Visibility = 'Collapsed'; $event.Caption.Visibility = 'Collapsed'
+            if ($event.Alarm) { $event.Alarm.Visibility = 'Collapsed' }
+            $hidden.Add($event.Entry.ToolTip); continue
+        }
+        $ends[$lane] = $x + $barWidth
+        $event.Button.Visibility = 'Visible'; if ($event.Alarm) { $event.Alarm.Visibility = 'Visible' }
+        $placed.Add(@{ Event = $event; X = $x; Width = $barWidth; Lane = $lane })
+    }
+    $stacked = @($placed | Where-Object { $_.Lane -eq 1 }).Count -gt 0
+    $captionEnds = @([double]::NegativeInfinity, [double]::NegativeInfinity)
+    $infinite = [System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)
+    foreach ($item in $placed) {
+        $event = $item.Event; $button = $event.Button
+        $button.Width = $item.Width; $button.Height = if ($stacked) { 8 } else { 14 }
+        if ($button.Content) { $button.Content.Width = $item.Width }  # 범위 밖 표시를 양 끝에 맞춘다.
+        $top = if ($stacked) { 46 + $item.Lane * 8 } else { 47 }
+        [System.Windows.Controls.Canvas]::SetLeft($button, $item.X); [System.Windows.Controls.Canvas]::SetTop($button, $top)
+        if ($event.Alarm) { [System.Windows.Controls.Canvas]::SetLeft($event.Alarm, $item.X + $item.Width); [System.Windows.Controls.Canvas]::SetTop($event.Alarm, $top - 2) }
+        $event.Caption.Measure($infinite); $captionWidth = $event.Caption.DesiredSize.Width
+        $captionX = [Math]::Max(0, [Math]::Min($item.X, $width - $captionWidth))
+        $line = if ($captionX -ge $captionEnds[0]) { 0 } elseif ($captionX -ge $captionEnds[1]) { 1 } else { -1 }
+        $event.Caption.Visibility = if ($line -lt 0) { 'Collapsed' } else { 'Visible' }
+        if ($line -ge 0) {
+            $captionEnds[$line] = $captionX + $captionWidth + 8
+            [System.Windows.Controls.Canvas]::SetLeft($event.Caption, $captionX); [System.Windows.Controls.Canvas]::SetTop($event.Caption, 70 + $line * 18)
+        }
+    }
+    $state.More.Visibility = if ($hidden.Count) { 'Visible' } else { 'Collapsed' }
+    $state.More.Text = "+$($hidden.Count)"; $state.More.ToolTip = $hidden -join "`n`n"
+    $minute = ($state.Now - $state.Date.Date).TotalMinutes
     $visible = $minute -ge $state.Start -and $minute -le $state.End
     $state.Line.Visibility = $state.Label.Visibility = if ($visible) { 'Visible' } else { 'Collapsed' }
-    if (-not $visible) { return }
-    $x = 584 * ($minute - $state.Start) / ($state.End - $state.Start)
-    [System.Windows.Controls.Canvas]::SetLeft($state.Line, $x - 1)
-    [System.Windows.Controls.Canvas]::SetLeft($state.Label, [Math]::Clamp($x - 48, 0, 488))
-    $state.Label.Text = '지금 ' + $Now.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+    if ($visible) {
+        $x = $width * ($minute - $state.Start) / $span
+        [System.Windows.Controls.Canvas]::SetLeft($state.Line, $x - 1)
+        [System.Windows.Controls.Canvas]::SetLeft($state.Label, [Math]::Clamp($x - 48, 0, $width - 96))
+        $state.Label.Text = '지금 ' + $state.Now.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+    }
+}
+
+# 지난 일정은 흐리게, 다음 일정은 진하게, 그 뒤는 옅게 칠한다.
+function Update-WtTimelineNow($Timeline, [datetime]$Now = (Get-Date)) {
+    $state = $Timeline.Tag; $state.Now = $Now; $nextFound = $false
+    foreach ($event in $state.Events) {
+        $entry = $event.Entry
+        $past = $(if ($entry.End -gt $entry.Start) { $entry.End } else { $entry.Start }) -le $Now
+        $look = if ($past) { 'past' } elseif (-not $nextFound) { 'next' } else { 'later' }
+        if ($look -eq 'next') { $nextFound = $true }
+        Set-WtResource $event.Button Background $(switch ($look) { 'past' { 'B.Border.Strong' } 'next' { 'B.Accent' } default { 'B.Accent.Later' } })
+        Set-WtResource $event.Caption Foreground $(switch ($look) { 'past' { 'B.Text.Tertiary' } 'next' { 'B.Text.Primary' } default { 'B.Text.Secondary' } })
+        $event.Caption.FontWeight = if ($look -eq 'next') { 'SemiBold' } else { 'Normal' }
+    }
+    Set-WtTimelineLayout $Timeline
+}
+
+# 홈 제목 아래 다음 일정 줄. 남은 일정이 없으면 숨긴다.
+function New-WtNextEventLine([object[]]$Items) {
+    $line = New-WtStack Horizontal 8; $line.Margin = [System.Windows.Thickness]::new(0, 6, 0, 0)
+    $pill = [System.Windows.Controls.Border]::new(); Set-WtStyle $pill 'Home.NextPill'
+    $pill.Child = New-WtText '' 'Home.NextPillText'
+    $title = New-WtText '' 'T.Strong'; $title.VerticalAlignment = 'Center'; $title.TextWrapping = 'NoWrap'; $title.TextTrimming = 'CharacterEllipsis'
+    [void](Add-WtChild $line $pill); [void](Add-WtChild $line $title)
+    $line.Tag = @{ Items = @($Items | Where-Object { -not $_.AllDay } | Sort-Object Start, End, Title); Pill = $pill; Title = $title }
+    Update-WtNextEventLine $line
+    $line
+}
+
+function Update-WtNextEventLine($Line, [datetime]$Now = (Get-Date)) {
+    $state = $Line.Tag
+    $next = @($state.Items | Where-Object { $(if ($_.End -gt $_.Start) { $_.End } else { $_.Start }) -gt $Now } | Select-Object -First 1)
+    $Line.Visibility = if ($next.Count) { 'Visible' } else { 'Collapsed' }
+    if (-not $next.Count) { return }
+    $left = [int][Math]::Ceiling(($next[0].Start - $Now).TotalMinutes)
+    $state.Pill.Child.Text = if ($left -le 0) { '진행 중' } elseif ($left -lt 60) { "${left}분 후" } elseif ($left % 60) { "$([Math]::Floor($left / 60))시간 $($left % 60)분 후" } else { "$($left / 60)시간 후" }
+    $state.Title.Text = $next[0].Start.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) + ' ' + $next[0].Title
 }
 
 function Set-WtTargetRowSelected($Row, [bool]$Selected) {
@@ -2579,4 +2689,4 @@ function New-WtHomePinContextMenu {
     $menu
 }
 
-Export-ModuleMember -Function New-WtHomeLayout, New-WtHomePinContextMenu, New-WtHomePinMenuItem, New-WtShortcutCard, New-WtMiniCalendar, New-WtTimeline, Update-WtTimelineNow, Set-WtTargetRowSelected
+Export-ModuleMember -Function New-WtHomeLayout, New-WtHomePinContextMenu, New-WtHomePinMenuItem, New-WtShortcutCard, New-WtMiniCalendar, New-WtTimeline, Set-WtTimelineLayout, New-WtNextEventLine, Update-WtNextEventLine, Update-WtTimelineNow, Set-WtTargetRowSelected

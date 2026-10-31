@@ -509,7 +509,7 @@ try {
     $layout = & $mod {
         param($v)
         $size = { param($w) $v.Measure([System.Windows.Size]::new($w, 700)); $v.Arrange([System.Windows.Rect]::new(0, 0, $w, 700)); $v.UpdateLayout() }
-        & $size 966
+        & $size 880
         $r = @{ Narrow = $script:helpNarrow; Closed = "$($script:ui.HelpHost.Visibility)"; Open = "$($script:ui.HelpOpen.Visibility)" }
         Open-WtFlowHelp
         $r.Over = "$($script:ui.HelpHost.Visibility)"; $r.OverCol = [System.Windows.Controls.Grid]::GetColumn($script:ui.HelpHost); $r.Shadow = "$($script:ui.HelpShadow.Visibility)"

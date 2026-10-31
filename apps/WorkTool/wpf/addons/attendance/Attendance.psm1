@@ -33,13 +33,16 @@ function New-WtAttendanceView {
     $xaml = @"
 <Grid {NS} Style="{DynamicResource Attendance.Page}">
   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-  <DockPanel x:Name="Header" Grid.ColumnSpan="2" Style="{DynamicResource Attendance.Header}">
-    <StackPanel x:Name="Actions" Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right"/>
-    <StackPanel x:Name="Nav" Orientation="Horizontal" HorizontalAlignment="Left"/>
-  </DockPanel>
-  <Grid Grid.Row="1"><ContentControl x:Name="TableHost"/><TextBlock x:Name="Empty" Text="기록이 없습니다." Style="{DynamicResource T.Sub}" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid>
-  <Grid x:Name="SideHost" Grid.Row="1" Grid.Column="1"/>
+  <Border Style="{DynamicResource Panel.Surface}">
+    <DockPanel>
+      <DockPanel x:Name="Header" DockPanel.Dock="Top" Style="{DynamicResource Attendance.Header}">
+        <StackPanel x:Name="Actions" Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right"/>
+        <StackPanel x:Name="Nav" Orientation="Horizontal" HorizontalAlignment="Left"/>
+      </DockPanel>
+      <Grid Style="{DynamicResource Attendance.TableHost}"><ContentControl x:Name="TableHost"/><TextBlock x:Name="Empty" Text="기록이 없습니다." Style="{DynamicResource T.Sub}" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid>
+    </DockPanel>
+  </Border>
+  <Grid x:Name="SideHost" Grid.Column="1"/>
 </Grid>
 "@
     $root = ConvertFrom-WtXaml $xaml
@@ -70,7 +73,7 @@ function New-WtAttendanceView {
         if ($row -is [Windows.Controls.DataGridRow] -and $row.Item -and (-not $script:form -or -not $script:form.Entry -or $script:form.Entry.Id -cne $row.Item.Entry.Id)) { Show-WtAttForm $row.Item.Entry }
     })
     $script:detail = [Windows.Controls.ContentControl]::new()
-    $sideRoot = New-WtSidePanel -Content $script:detail -Side Right -Key 'attendance.sidebar.collapsed' -Title '이번 달' -Width 308
+    $sideRoot = New-WtSidePanel -Content $script:detail -Side Right -Key 'attendance.sidebar.collapsed' -Title '이번 달' -Width 288
     $script:side = @{ Root = $sideRoot }; foreach ($name in 'Title','Open','Rail') { $script:side[$name] = $sideRoot.FindName($name) }; [void]$script:view.SideHost.Children.Add($sideRoot)
     $root
 }
@@ -99,7 +102,7 @@ function Update-WtAttendanceView {
     if (-not $script:view) { return }
     $script:data = Get-WtAttendanceData; $holidays = Get-WtHolidayData
     $key = @($script:data.Stamp, $holidays.Stamp, $script:month.Ticks, [datetime]::Today.Ticks, (Get-WtSetting 'attendance.tripDays'),
-        (Get-WtSetting 'theme.accent'), (Get-WtSetting 'ui.fontScale'), ((Get-WtWorkHours | ConvertTo-Json -Compress))) -join '|'
+        (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'), ((Get-WtWorkHours | ConvertTo-Json -Compress))) -join '|'
     if ($script:viewKey -ceq $key) { return }
     $script:refreshing = $true
     try {
@@ -113,6 +116,9 @@ function Update-WtAttendanceView {
         $script:view['work-start'].ToolTip = if ($script:data.Error) { $script:data.Error } elseif ($today.Count) { '출근' } else { $null }
         $script:view['work-end'].IsEnabled = -not $script:data.Error -and ($today.Count -eq 1 -or @($today | Where-Object { -not $_.HasEnd }).Count -eq 1)
         $script:view['work-end'].ToolTip = '퇴근'
+        # 강조 버튼은 화면당 하나다. 지금 누를 수 있는 쪽에만 준다.
+        $clock = if ($script:view['work-start'].IsEnabled) { 'work-start' } elseif ($script:view['work-end'].IsEnabled) { 'work-end' } else { '' }
+        foreach ($id in 'work-start', 'work-end') { Set-WtStyle $script:view[$id] $(if ($id -ceq $clock) { 'Attendance.Action.Primary' } else { 'Attendance.Action' }) }
         $script:view.over.IsEnabled = -not $script:data.Error; $script:view.new.IsEnabled = -not $script:data.Error
         $open = @($script:data.Entries | Where-Object { $_.State -ceq 'ok' -and $_.Kind -ceq 'overtime' -and -not $_.HasEnd })
         $overLabel = if ($open.Count) { '업무외 끝' } else { '업무외 시작' }; $script:view.over.Content = $overLabel

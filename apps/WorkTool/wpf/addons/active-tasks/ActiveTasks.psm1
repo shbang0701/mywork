@@ -505,6 +505,7 @@ function New-WtActiveTasksView {
     $script:ui = @{}
     $page = New-WtTaskPage
     $header = New-WtPageHeader '활성 작업' '' $null
+    $header.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
     [System.Windows.Controls.DockPanel]::SetDock($header, 'Top'); [void]$page.Panel.Children.Add($header)
     $tools = [System.Windows.Controls.WrapPanel]::new(); $tools.Margin = [System.Windows.Thickness]::new(0, 0, 0, 12)
     $search = New-WtSearchBox '이름으로 찾기'; $search.Root.Width = 280; $search.Root.Margin = [System.Windows.Thickness]::new(0, 0, 12, 8)

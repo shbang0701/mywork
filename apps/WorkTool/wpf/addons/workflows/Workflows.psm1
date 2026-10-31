@@ -28,7 +28,7 @@ $script:filling = $false     # 코드로 트리를 고르는 중
 $script:outputKey = $null    # 출력 칸에 보이는 것이 어느 스크립트 · 업무의 것인지 ('script:경로' | 'flow:id')
 $script:shown = 0            # 출력 칸에 붙인 줄 수 (화면에 안 보여도 직접 센다)
 $script:encoding = $null     # 출력 문자 코드 (Get-WtFlowEncoding)
-$script:threeColumns = 912   # 세 칸이 다 들어가는 폭: 목록 240 + 가운데 최소 360 + 설명 280 + 사이 16 × 2
+$script:threeColumns = 896   # 세 칸이 다 들어가는 폭: 목록 240 + 가운데 최소 360 + 설명 280 + 사이 8 × 2
 $script:helpNarrow = $false  # 창이 좁아 설명을 가운데 위에 겹쳐 여는 중인지 (Update-WtFlowHelp)
 $script:helpOverlay = $false # 좁을 때 겹쳐 연 설명이 열려 있는지
 
@@ -1754,7 +1754,7 @@ function New-WtFlowsView {
     # 왼쪽: 저장한 업무 + 스크립트 폴더
     $left = New-WtCard
     $left.Padding = [System.Windows.Thickness]::new(12)
-    $left.Margin = [System.Windows.Thickness]::new(0, 0, 16, 0)
+    $left.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
     $ldock = [System.Windows.Controls.DockPanel]::new()
     $remove = New-WtButton '목록에서 빼기' -Kind Link -Icon 0xE738
     $remove.ToolTip = '고른 스크립트 폴더를 목록에서 뺍니다 (폴더와 파일은 그대로)'
@@ -1964,7 +1964,7 @@ function New-WtFlowsView {
     Set-WtStyle $helpShadow 'Overlay.Shadow'
     $helpShadow.Visibility = 'Collapsed'
     $helpHost = [System.Windows.Controls.Grid]::new()
-    $helpHost.Margin = [System.Windows.Thickness]::new(16, 0, 0, 0)
+    $helpHost.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
     [void]$helpHost.Children.Add($helpShadow)
     [void]$helpHost.Children.Add($right)
     [System.Windows.Controls.Grid]::SetColumn($helpHost, 2)

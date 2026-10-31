@@ -572,7 +572,7 @@ function New-WtDocsView {
     # 왼쪽: 즐겨찾기 + 폴더 트리
     $left = New-WtCard
     $left.Padding = [System.Windows.Thickness]::new(12)
-    $left.Margin = [System.Windows.Thickness]::new(0, 0, 16, 0)
+    $left.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
     $ldock = [System.Windows.Controls.DockPanel]::new()
     $remove = New-WtButton '목록에서 빼기' -Kind Link -Icon 0xE738
     $remove.ToolTip = '고른 맨 위 폴더를 목록에서 뺍니다 (폴더는 그대로)'
@@ -623,7 +623,7 @@ function New-WtDocsView {
     $sb.Root.Margin = [System.Windows.Thickness]::new(0, 8, 0, 8)
     $cols = [System.Windows.Controls.DockPanel]::new()
     $cols.Margin = [System.Windows.Thickness]::new(12, 0, 12, 4)
-    foreach ($h in @(@('크기', 80, 'Right'), @('고친 날짜', 130, 'Left'), @('종류', 90, 'Left'))) {
+    foreach ($h in @(@('크기', 80, 'Right'), @('수정일', 130, 'Left'), @('종류', 90, 'Left'))) {
         $t = New-WtText $h[0] 'T.Sub'
         $t.FontWeight = 'SemiBold'
         $t.Width = $h[1]; $t.TextAlignment = $h[2]

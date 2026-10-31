@@ -46,11 +46,11 @@ function New-WtThemeCard {
     [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
     [void](Add-WtChild $col (New-WtCardHeader '화면'))
 
-    # 강조색: 이름과 견본. 색·모양은 공통 자원만 참조한다.
+    # 파스텔: 이름과 견본. 색·모양은 공통 자원만 참조한다.
     $swatches = New-WtStack Horizontal
-    $current = [string](Get-WtSetting 'theme.accent')
+    $current = [string](Get-WtSetting 'theme.color')
     $palettes = Get-WtPalette
-    if (-not $palettes.Contains($current)) { $current = 'blue' }
+    if (-not $palettes.Contains($current)) { $current = @($palettes.Keys)[0] }
     foreach ($key in $palettes.Keys) {
         $p = $palettes[$key]
         $rb = [System.Windows.Controls.RadioButton]::new()
@@ -63,13 +63,11 @@ function New-WtThemeCard {
         $rb.IsChecked = ($key -eq $current)
         $rb.Add_Checked({
             param($s, $e)
-            Set-WtSetting 'theme.accent' ([string]$s.Tag)
-            # 셸 파일은 건드리지 않고 기존 아이콘 그리기만 같은 선택색으로 다시 부른다.
-            if (Get-WtWindow) { & (Get-Module Shell) { Update-WtAppIcon } }
+            Set-WtSetting 'theme.color' ([string]$s.Tag)
         })
         [void]$swatches.Children.Add($rb)
     }
-    [void](Add-WtChild $col (New-WtSettingRow '강조색' $swatches))
+    [void](Add-WtChild $col (New-WtSettingRow '색' $swatches))
 
     # 창 투명도: 끌면 바로 보이고, 손을 떼고 잠시 뒤 저장한다
     $op = New-WtStack Horizontal 12
@@ -206,15 +204,11 @@ function New-WtDataCard {
 
 function New-WtTabbedPage([string]$Title, [object[]]$Sections) {
     $page = New-WtPage -Fill
-    $page.Panel.Margin = [System.Windows.Thickness]::new(16)
     $heading = New-WtPageHeader $Title
-    $heading.Margin = [System.Windows.Thickness]::new(0, 0, 0, 16)
     [System.Windows.Controls.DockPanel]::SetDock($heading, 'Top')
     [void](Add-WtChild $page.Panel $heading)
     $tabs = [System.Windows.Controls.TabControl]::new()
-    $tabs.BorderThickness = [System.Windows.Thickness]::new(0)
-    $tabs.Padding = [System.Windows.Thickness]::new(0)
-    Set-WtResource $tabs Background 'B.Bg.Surface'
+    Set-WtStyle $tabs 'Tabs'
     [System.Windows.Automation.AutomationProperties]::SetName($tabs, "$Title 하위 탭")
     foreach ($section in $Sections) {
         $item = [System.Windows.Controls.TabItem]::new()

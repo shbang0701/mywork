@@ -57,7 +57,7 @@ function Get-WtPageView([string]$Id) {
             [ordered]@{ Identity = [Runtime.CompilerServices.RuntimeHelpers]::GetHashCode($a); Id = $a.Id; Title = $a.Title
                 Description = $a.Description; Required = $a.Required; Order = $a.Order; Help = $a.Help; Shortcuts = $a.Shortcuts }
         })
-        $settings = @(foreach ($name in 'theme.color','theme.accent','ui.opacity','ui.fontScale','window.closeToTray','addons.disabled','legacy.path') {
+        $settings = @(foreach ($name in 'theme.color','ui.opacity','ui.fontScale','window.closeToTray','addons.disabled','legacy.path') {
             [ordered]@{ Key = $name; Value = (Get-WtSetting $name) }
         })
         $key = ConvertTo-Json -Compress -Depth 8 -InputObject @(
@@ -281,7 +281,7 @@ function New-WtSidePanel {
         [ValidateSet('Right','Left')][string]$Side = 'Right',
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Key,
         [Parameter(Mandatory)][string]$Title,
-        [ValidateSet(220,280,308)][int]$Width = 308,
+        [ValidateSet(220,280,288)][int]$Width = 288,
         [switch]$Independent
     )
     Register-WtSettingDefault $Key $false
@@ -481,7 +481,7 @@ function New-WtAppIconPng([int]$Size, [string]$Hex) {
 # 앱 아이콘(.ico 내용): 크기별 그림을 하나로 묶는다. 트레이(16~24) · 제목 줄 · 작업 표시줄(24~48) · 큰 아이콘(256)에서
 # Windows가 화면 배율에 맞는 크기를 고르므로 늘리거나 줄여서 흐려지지 않는다.
 function New-WtAppIconBytes {
-    $hex = (Get-WtThemeColors ([string](Get-WtSetting 'theme.color'))).Accent
+    $hex = (Get-WtThemeColors).Accent
     $sizes = @(16, 20, 24, 32, 40, 48, 64, 256)
     $pngs = @(foreach ($s in $sizes) { , (New-WtAppIconPng $s $hex) })
     $ms = [System.IO.MemoryStream]::new()
@@ -722,7 +722,7 @@ function Initialize-WtShellSettings {
         param($key, $value)
         if (-not $script:ui -or $script:exiting) { return }
         switch -Wildcard ($key) {
-            'theme.color' { Update-WtThemeDictionary $script:themeDict; Update-WtAppIcon }
+            'theme.color' { Update-WtAppIcon }
             'ui.opacity' { Set-WtOpacity }
             'nav.collapsed' { Update-WtCollapsed }
             'window.closeToTray' { Update-WtCloseTip }
