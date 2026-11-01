@@ -20,16 +20,20 @@ function New-WtHomeCalendar {
 }
 
 function Update-WtHomeView {
-    $script:layout.Main.Children.Clear(); $script:layout.Side.Children.Clear()
+    $script:layout.Title.Text = Format-WtDate ([datetime]::Today) 'M월 d일 dddd'
+    $script:layout.Head.Children.Clear(); $script:layout.Main.Children.Clear(); $script:layout.Side.Children.Clear()
     $cards = @(
         [pscustomobject]@{ Id = 'home-shortcuts'; HomeSlot = 'main'; HomeOrder = 20; HomeCard = { New-WtShortcutCard @(Get-WtShortcuts) -OnChange { Update-WtHomeView } } }
         [pscustomobject]@{ Id = 'home-calendar'; HomeSlot = 'side'; HomeOrder = 10; HomeCard = { New-WtHomeCalendar } }
     ) + @(Get-WtHomeCards)
     foreach ($card in @($cards | Sort-Object HomeSlot, HomeOrder, Id)) {
-        $column = if ($card.HomeSlot -eq 'side') { $script:layout.Side } else { $script:layout.Main }
+        $column = switch ($card.HomeSlot) { 'head' { $script:layout.Head } 'side' { $script:layout.Side } default { $script:layout.Main } }
         try {
             foreach ($element in @(& $card.HomeCard)) {
-                if ($element -is [System.Windows.UIElement]) { [void](Add-WtChild $column $element) }
+                if ($element -is [System.Windows.UIElement]) {
+                    [System.Windows.Controls.DockPanel]::SetDock($element, 'Top')
+                    [void](Add-WtChild $column $element)
+                }
             }
         } catch { Write-Warning "홈 카드: $($_.Exception.Message)" }
     }

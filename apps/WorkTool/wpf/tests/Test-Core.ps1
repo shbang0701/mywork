@@ -136,6 +136,42 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     try { $locked1 = Get-WtStoreStamp 'cache-sample'; $locked2 = Get-WtStoreStamp 'cache-sample' } finally { $cacheLock.Dispose() }
     Assert-Wt '저장 표식: 다른 프로그램이 파일을 잡고 있어도 멈추지 않고, 매번 다시 읽게 한다' ($locked1 -cne $locked2)
 
+    # 선택적 비동기 직렬화/대기 생략도 기존 저장 통로의 보유·버전·bak 규칙을 따른다.
+    $queueStorage = Get-Module Storage
+    $queueWriter = & $queueStorage { , $script:writeJob }
+    $queueWait = & $queueStorage { $script:writeWaitMs }
+    $queueGate = New-WtTestGate
+    $queuePath = Get-WtStorePath 'queue-sample'
+    try {
+        Write-WtStore queue-sample -Items @([pscustomobject]@{ id = 'q1'; title = '처음'; future = @{ keep = @(1, 2) } })
+        $queueStore = Open-WtStore queue-sample
+        & $queueStorage { $script:writeJob = { param($p, $json) $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne(); Write-WtDataFile $p $json } }
+        $queueItems = @(Copy-WtItem $queueStore.Items); $queueItems[0].title = '직렬화 밖'
+        $queuedStore = Save-WtStore $queueStore $queueItems -Background -Extra @{ unknown = @('a', 'b') }
+        $enteredQueue = $queueGate.Entered.WaitOne(10000)
+        Assert-Wt '저장 통로: 화면 밖 직렬화는 쓰기 전부터 보유하며 아직 저장됨이 아니다' (
+            $enteredQueue -and (Get-WtDataWriteStatus $queuePath).State -eq 'writing' -and (Read-WtStore queue-sample).items[0].title -eq '직렬화 밖' -and
+            [IO.File]::ReadAllText($queuePath) -notmatch '직렬화 밖')
+        $scopeError = $null
+        try { Invoke-WtQueuedStoreWrite -Action { Write-WtJsonFile (Get-WtStorePath 'queue-config') @{ schema = 1; values = @{ choice = 'x' } }; throw '대기 범위 검사' } } catch { $scopeError = $_.Exception.Message }
+        Assert-Wt '저장 통로: 대기 생략 범위가 실패해도 기본 대기는 복구하고 완성된 JSON은 보유한다' (
+            $scopeError -like '*대기 범위 검사*' -and (& $queueStorage { $script:writeWaitMs }) -eq $queueWait -and (Read-WtJsonFile (Get-WtStorePath 'queue-config')).values.choice -eq 'x')
+        [void]$queueGate.Gate.Set(); Wait-WtTestWrites 30000
+        $queueDoc = [IO.File]::ReadAllText($queuePath) | ConvertFrom-Json -DateKind String
+        $queueBak = [IO.File]::ReadAllText("$queuePath.bak") | ConvertFrom-Json -DateKind String
+        Assert-Wt '저장 통로: 파일 확인 뒤 저장됨 · 모르는 키/칸 유지 · 직전 bak 유지' (
+            (Get-WtDataWriteStatus $queuePath).State -eq 'saved' -and $queueDoc.items[0].title -eq '직렬화 밖' -and $queueBak.items[0].title -eq '처음' -and
+            ($queueDoc.items[0].future.keep -join ',') -eq '1,2' -and ($queueDoc.unknown -join ',') -eq 'a,b')
+        Write-WtJsonFile (Get-WtStorePath 'queue-plain') @{ schema = 1; values = @{ choice = '그대로' } } -Background
+        Wait-WtTestWrites 30000
+        $plainDoc = [IO.File]::ReadAllText((Get-WtStorePath 'queue-plain')) | ConvertFrom-Json
+        Assert-Wt '저장 통로: 일반 JSON의 화면 밖 직렬화도 items 키를 더하지 않고 원래 형식을 유지한다' (
+            $plainDoc.values.choice -ceq '그대로' -and -not $plainDoc.PSObject.Properties['items'])
+    } finally {
+        Remove-WtTestGate $queueGate
+        & $queueStorage { param($writer) $script:writeJob = $writer } $queueWriter
+    }
+
     Write-WtStore -Name 'mig' -Schema 1 -Items @([ordered]@{ id = 'm1' })
     $doc = Read-WtStore -Name 'mig' -Schema 2 -Migrate {
         param($d, $from)
@@ -466,16 +502,16 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
 
     # ---- 설정 ----
     Initialize-WtSettings
-    Assert-Wt '설정 기본값' ((Get-WtSetting 'theme.accent') -eq 'blue' -and (Get-WtSetting 'ui.opacity') -eq 100)
+    Assert-Wt '설정 기본값' ((Get-WtSetting 'theme.color') -eq 'sky' -and (Get-WtSetting 'ui.opacity') -eq 100)
     Register-WtSettingHandler { param($k, $v) $script:seenKey = $k }
-    Set-WtSetting 'theme.accent' 'pink'
+    Set-WtSetting 'theme.color' 'pink'
     Set-WtSetting 'addons.disabled' @('test-b')
     Assert-Wt '설정이 바뀌면 처리기를 부른다' ($script:seenKey -eq 'addons.disabled')
     $saved = Get-Content (Get-WtSettingsPath) -Raw | ConvertFrom-Json
-    Assert-Wt '바꾼 값만 저장한다' (@($saved.values.PSObject.Properties.Name).Count -eq 2 -and $saved.values.'theme.accent' -eq 'pink')
-    Set-WtSetting 'theme.accent' 'blue'
+    Assert-Wt '바꾼 값만 저장한다' (@($saved.values.PSObject.Properties.Name).Count -eq 2 -and $saved.values.'theme.color' -eq 'pink')
+    Set-WtSetting 'theme.color' 'sky'
     $saved = Get-Content (Get-WtSettingsPath) -Raw | ConvertFrom-Json
-    Assert-Wt '기본값으로 돌리면 파일에서 빠진다' (-not ($saved.values.PSObject.Properties.Name -contains 'theme.accent'))
+    Assert-Wt '기본값으로 돌리면 파일에서 빠진다' (-not ($saved.values.PSObject.Properties.Name -contains 'theme.color'))
     Initialize-WtSettings
     Assert-Wt '배열 설정을 다시 읽는다' (@(Get-WtSetting 'addons.disabled') -contains 'test-b')
 
@@ -644,14 +680,17 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     $scHours = Get-WtWorkHours
     Set-WtWorkHours @{ 'work.days' = @(1, 2, 3, 4, 5); 'work.start' = '10:00'; 'work.end' = '19:00'; 'work.lunchStart' = '12:00'; 'work.lunchEnd' = '13:00' }
     Register-WtCalendarSource -Id 'test-marks' -CalendarItems {
-        foreach ($spec in @(@('2026-11-02', 'work', '10:00'), @('2026-11-03', 'work', '09:30'), @('2026-11-04', 'leave', ''), @('2026-11-07', 'work', '11:00'))) {
+        foreach ($spec in @(@('2026-11-02', 'work', '10:00'), @('2026-11-03', 'overtime', '19:30'), @('2026-11-04', 'leave', ''), @('2026-11-05', 'public', ''), @('2026-11-07', 'work', '11:00'))) {
             [pscustomobject]@{ Date = ConvertFrom-WtDateText $spec[0]; Kind = $spec[1]; Text = $spec[1]; Style = 'Sub'; AllDay = -not [bool]$spec[2]; Time = $spec[2]; Id = $spec[0] }
         }
     }
     $marksData = Get-WtCalendarItems ([datetime]'2026-11-02') ([datetime]'2026-11-08')
-    $marks = @(2, 3, 4, 7, 8 | ForEach-Object { Get-WtCalendarMark ([datetime]::new(2026, 11, $_)) $marksData.Items })
-    Assert-Wt '작은 달력: 업무시간 설정 · 안/밖 ✔ 색 · 휴가 X · 쉬는 날 출근 ✔ 우선' ($marks[0].Glyph -eq 0xE73E -and $marks[0].Brush -ceq 'B.Status.Success.Icon' -and
-        $marks[1].Glyph -eq 0xE73E -and $marks[1].Brush -ceq 'B.Text.Tertiary' -and $marks[2].Glyph -eq 0xE711 -and $marks[2].DayOff -and $marks[3].Glyph -eq 0xE73E -and $marks[3].DayOff -and $marks[4].Glyph -eq 0xE711)
+    $marks = @(2, 3, 4, 5, 7, 8 | ForEach-Object { Get-WtCalendarMark ([datetime]::new(2026, 11, $_)) $marksData.Items })
+    Assert-Wt '작은 달력: 평소 근무일은 표시 없음 · 휴가 · 공휴일 · 쉬는 날 출근과 업무외는 같은 색' ($marks[0].Kind -ceq '' -and -not $marks[0].DayOff -and
+        $marks[1].Kind -ceq 'over' -and $marks[1].Back -ceq 'B.Cal.Overtime.Bg' -and $marks[1].Fore -ceq 'B.Cal.Overtime.Text' -and
+        $marks[2].Kind -ceq 'leave' -and $marks[2].Back -ceq 'B.Cal.Leave.Bg' -and $marks[2].DayOff -and
+        $marks[3].Kind -ceq 'off' -and $marks[3].Back -ceq 'B.Status.Error.Bg' -and $marks[3].DayOff -and
+        $marks[4].Kind -ceq 'over' -and $marks[4].DayOff -and $marks[5].Kind -ceq '' -and $marks[5].DayOff -and $marks[5].Back -ceq '')
     Register-WtCalendarSource -Id 'test-marks' -CalendarItems $null
     Set-WtWorkHours $scHours
 
@@ -695,20 +734,23 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
         @('SubText', 'WindowBg', 4.5), @('SubText', 'Sidebar', 4.5), @('SubText', 'Card', 4.5),
         @('NavText', 'Sidebar', 4.5), @('NavText', 'Hover', 4.5),
         @('InputBorder', 'Card', 3.0), @('Accent', 'Card', 3.0))
-    Assert-Wt '테마 2판: 강조색은 파랑 기본 · 분홍 · 청록 · 보라 · 회색만' (((Get-WtPalette).Keys -join ',') -ceq 'blue,pink,teal,purple,gray')
-    $expectedAccents = @{
-        blue = @('#1A5BBE', '#174FA6', '#144690'); pink = @('#B83D69', '#A1355C', '#8C2E50')
-        teal = @('#0B6B69', '#0A5D5C', '#085150'); purple = @('#7048B8', '#623FA1', '#55378C'); gray = @('#56606D', '#4B545F', '#414953')
+    Assert-Wt '테마 3판: 파스텔 일곱 색, 첫째가 기본' (((Get-WtPalette).Keys -join ',') -ceq 'sky,pink,green,yellow,purple,gray,black')
+    $expectedPastels = @{
+        sky = @('#DCEBFA', '#226EBE'); pink = @('#FADDE8', '#B83D69'); green = @('#E1F1CF', '#3F7D20'); yellow = @('#FBEDBF', '#856000')
+        purple = @('#E9E0F8', '#7048B8'); gray = @('#E3E7EC', '#56606D'); black = @('#DEDFE2', '#2B2F36')
     }
     foreach ($name in (Get-WtPalette).Keys) {
-        $c = Get-WtThemeColors -Accent $name
+        $c = Get-WtThemeColors -Name $name
         $bad = foreach ($p in $pairs) {
             $ratio = Get-WtContrast $c[$p[0]] $c[$p[1]]
             if ($ratio -lt $p[2]) { '{0}/{1} {2:N2}' -f $p[0], $p[1], $ratio }
         }
         Assert-Wt "테마 '$name' 색 대비" (-not $bad) ($bad -join ', ')
-        Assert-Wt "테마 '$name' 2판 강조 상태와 중성 면" (($c.Accent, $c['Accent.Hover'], $c['Accent.Pressed'] -join ',') -ceq ($expectedAccents[$name] -join ',') -and
-            $c.WindowBg -ceq '#F3F4F6' -and $c.Sidebar -ceq '#F3F4F6' -and $c.Card -ceq '#FFFFFF' -and $c['Bg.Subtle'] -ceq '#F7F8FA' -and $c.AccentSoft -ceq '#E8F0FC')
+        $tint, $accent = $expectedPastels[$name]
+        Assert-Wt "테마 '$name' 3판 강조 상태와 파스텔 면" ($c.Accent -ceq $accent -and $c['Accent.Hover'] -ceq (Get-WtMixedColor $accent '#000000' 0.1272) -and
+            $c['Accent.Pressed'] -ceq (Get-WtMixedColor $accent '#000000' 0.2399) -and $c['Accent.Later'] -ceq (Get-WtMixedColor $accent '#FFFFFF' 0.6) -and
+            $c.WindowBg -ceq (Get-WtMixedColor $tint '#FFFFFF' 0.55) -and $c.Sidebar -ceq $c.WindowBg -and $c.Card -ceq '#FFFFFF' -and
+            $c['Bg.Subtle'] -ceq (Get-WtMixedColor $tint '#FFFFFF' 0.72) -and $c.AccentSoft -ceq (Get-WtMixedColor $tint '#FFFFFF' 0.35))
         $bad = foreach ($fg in 'Text.Primary', 'Text.Secondary', 'Text.Tertiary') {
             foreach ($bg in 'Bg.Canvas', 'Bg.Surface', 'Bg.Subtle', 'Bg.Raised', 'Bg.Selected', 'Fill.Hover.Surface', 'Fill.Pressed.Surface', 'Fill.Hover.Canvas', 'Fill.Pressed.Canvas', 'Fill.Selected.Nav', 'Fill.Hover.Subtle', 'Fill.Pressed.Subtle') {
                 $ratio = Get-WtContrast $c[$fg] $c[$bg]
@@ -728,10 +770,10 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
         Assert-Wt "테마 '$name' 2판 상태 글자 AA·아이콘 대비" (-not $bad) ($bad -join ', ')
     }
     foreach ($k in 'Work', 'Over', 'Trip', 'Leave') {
-        $c = Get-WtThemeColors -Accent 'blue'
+        $c = Get-WtThemeColors -Name 'sky'
         Assert-Wt "근태 표시 '$k' 색 대비" ((Get-WtContrast $c["Att.$k"] $c["Att.${k}Bg"]) -ge 4.5)
     }
-    $c = Get-WtThemeColors -Accent 'blue'
+    $c = Get-WtThemeColors -Name 'sky'
     $bad = foreach ($k in 'Blue', 'Teal', 'Green', 'Orange', 'Red', 'Purple', 'Gray') {
         foreach ($fg in "Callout.$k", 'Text') {
             $ratio = Get-WtContrast $c[$fg] $c["Callout.${k}Bg"]
@@ -749,17 +791,13 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
         (Get-WtContrast $c.Text $c['Dia.NoteBg']) -ge 4.5 -and (Get-WtContrast $c.SubText $c['Dia.GroupBg']) -ge 4.5 -and
         (Get-WtContrast $c['Dia.Line'] $c.Card) -ge 3 -and (Get-WtContrast $c['Dia.NodeLine'] $c.Card) -ge 3)
 
-    # 옛 값은 보존하되 강조색 결정에는 쓰지 않는다. 새 값이 없거나 모르는 값이면 파랑.
-    foreach ($legacyName in 'sky', 'pink', 'green', 'yellow', 'purple', 'gray', 'black', 'unknown') {
-        Set-WtSetting 'theme.color' $legacyName
-        Assert-Wt "테마: 옛 theme.color '$legacyName'은 무시" ((Get-WtThemeColors $legacyName).Accent -ceq '#1A5BBE' -and (Get-WtSetting 'theme.accent') -ceq 'blue')
-    }
-    Set-WtSetting 'theme.accent' 'pink'
+    # 저장한 색을 따르고, 모르는 값은 저장 값을 그대로 둔 채 기본 파스텔로 표시한다.
+    Set-WtSetting 'theme.color' 'pink'
+    Assert-Wt '테마: 설정한 파스텔을 따른다' ((Get-WtThemeColors).Accent -ceq '#B83D69')
+    Set-WtSetting 'theme.color' 'unknown'
     $savedTheme = Get-Content (Get-WtSettingsPath) -Raw | ConvertFrom-Json
-    Assert-Wt '테마: 강조색을 바꿔도 파일의 옛 키는 남는다' ($savedTheme.values.'theme.color' -ceq 'unknown' -and $savedTheme.values.'theme.accent' -ceq 'pink' -and (Get-WtThemeColors 'gray').Accent -ceq '#B83D69')
-    Set-WtSetting 'theme.accent' 'unknown'
-    Assert-Wt '테마: 모르는 새 강조색도 파랑으로 안전하게 표시' ((Get-WtThemeColors).Accent -ceq '#1A5BBE')
-    Set-WtSetting 'theme.accent' 'blue'
+    Assert-Wt '테마: 모르는 색은 하늘로 표시하고 파일의 값은 그대로 둔다' ((Get-WtThemeColors).Accent -ceq '#226EBE' -and $savedTheme.values.'theme.color' -ceq 'unknown')
+    Set-WtSetting 'theme.color' 'sky'
     Assert-Wt '테마: 글자 2판 단계와 옛 크기 별칭' ((Get-WtFontSize 'Body') -eq 14 -and (Get-WtFontSize 'Small') -eq 12 -and
         (Get-WtFontSize 'Title') -eq 20 -and (Get-WtFontSize 'Memo.Body') -eq 15 -and (Get-WtFontSize 'BodyLine') -eq 24 -and
         (Get-WtFontSize 'MdH2') -eq 18 -and (Get-WtFontSize 'MdH3') -eq 16 -and (Get-WtFontSize 'Code') -eq 14)
@@ -894,7 +932,7 @@ flowchart LR
         Set-WtResource $resourceText Foreground B.Accent
         Set-WtResource $resourceText FontSize F.Body
         Assert-Wt '공통 자원: 같은 속성 이름도 컨트롤 형식·자원 키별 연결을 유지한다' (
-            $resourceText.Background.Color.ToString() -ceq '#FFF3F4F6' -and $resourceBorder.Background.Color.ToString() -ceq '#FFFFFFFF')
+            $resourceText.Background.Color.ToString() -ceq '#FFEFF6FD' -and $resourceBorder.Background.Color.ToString() -ceq '#FFFFFFFF')
         Set-WtResource $resourceText Background B.Bg.Surface
         Assert-Wt '공통 자원: 같은 컨트롤의 자원 키를 바꿀 수 있다' ([object]::ReferenceEquals($resourceText.Background, $resourceBorder.Background))
         $resourceCaseRejected = $false
@@ -917,22 +955,22 @@ flowchart LR
         Assert-Wt '테마 재사용: 사전은 독립이고 변경 불가 브러시만 공유한다' (
             -not [object]::ReferenceEquals($v2Theme, $secondTheme) -and $v2Theme['B.Accent'].IsFrozen -and
             [object]::ReferenceEquals($v2Theme['B.Accent'], $secondTheme['B.Accent']))
-        Set-WtSetting 'theme.accent' 'teal'
+        Set-WtSetting 'theme.color' 'green'
         Assert-Wt '테마 재사용: 여러 사전과 이미 연결한 컨트롤의 강조색을 함께 바꾼다' (
-            $resourceText.Foreground.Color.ToString() -ceq '#FF0B6B69' -and $secondTheme['B.Accent'].Color.ToString() -ceq '#FF0B6B69' -and
-            [object]::ReferenceEquals($themeRefs['B.Bg.Canvas'], $v2Theme['B.Bg.Canvas']) -and
+            $resourceText.Foreground.Color.ToString() -ceq '#FF3F7D20' -and $secondTheme['B.Accent'].Color.ToString() -ceq '#FF3F7D20' -and
+            [object]::ReferenceEquals($themeRefs['B.Bg.Surface'], $v2Theme['B.Bg.Surface']) -and
             [object]::ReferenceEquals($themeRefs['Font.UI'], $v2Theme['Font.UI']))
         Set-WtSetting 'ui.fontScale' 'l'
         Assert-Wt '테마 재사용: 글자 확대는 연결된 글자·별칭·줄 높이·컨트롤 높이에 반영한다' (
             $resourceText.FontSize -eq 15.7 -and $secondTheme['F.Small'] -eq 13.4 -and $v2Theme['F.Body.LineHeight'] -eq 22.4 -and
-            $v2Theme['F.Height.Control'] -eq 35.8 -and [object]::ReferenceEquals($themeRefs['B.Bg.Canvas'], $v2Theme['B.Bg.Canvas']))
+            $v2Theme['F.Height.Control'] -eq 35.8 -and [object]::ReferenceEquals($themeRefs['B.Bg.Surface'], $v2Theme['B.Bg.Surface']))
         $v2Theme['B.Accent'] = [System.Windows.Media.Brushes]::Black
         $v2Theme.Remove('F.Body')
         Update-WtThemeDictionary $v2Theme
         Assert-Wt '테마 재사용: 바뀌거나 빠진 자원도 현재 설정대로 복구한다' (
-            $resourceText.Foreground.Color.ToString() -ceq '#FF0B6B69' -and $resourceText.FontSize -eq 15.7)
+            $resourceText.Foreground.Color.ToString() -ceq '#FF3F7D20' -and $resourceText.FontSize -eq 15.7)
         Set-WtSetting 'ui.fontScale' 'm'
-        Set-WtSetting 'theme.accent' 'blue'
+        Set-WtSetting 'theme.color' 'sky'
         $mergedTheme = [System.Windows.ResourceDictionary]::new()
         $mergedTheme.MergedDictionaries.Add($secondTheme)
         Update-WtThemeDictionary $mergedTheme
@@ -940,7 +978,7 @@ flowchart LR
         $mergedTheme.MergedDictionaries.Clear()
         Assert-Wt '테마 재사용: 병합 원본을 바꾸거나 빼도 갱신한 사전의 로컬 자원을 유지한다' (
             $mergedTheme.Keys.Count -eq $secondTheme.Keys.Count -and $mergedTheme['F.Body'] -eq 14 -and
-            $mergedTheme['B.Accent'].Color.ToString() -ceq '#FF1A5BBE')
+            $mergedTheme['B.Accent'].Color.ToString() -ceq '#FF226EBE')
         Update-WtThemeDictionary $secondTheme
         $v2Styles = Get-WtStyleDictionary
         $styleErrors = foreach ($styleKey in @($v2Styles.Keys)) {
@@ -981,12 +1019,12 @@ flowchart LR
         Assert-Wt 'WPF 2판: 입력 오류는 오류색 선·아이콘과 이유 툴팁' ($v2Input.BorderBrush.Color.ToString() -ceq '#FFC42F29' -and $errorIcon.Visibility -eq 'Visible' -and $v2Input.ToolTip -ceq '검사 오류')
         [System.Windows.Controls.Validation]::ClearInvalid($v2Expression)
         $selectedBar = $v2Row.Template.FindName('SelectedBar', $v2Row)
-        Assert-Wt 'WPF 2판: 선택 행은 선택 면 + 3×16 강조 막대' ($v2Row.Background.Color.ToString() -ceq '#FFE8F0FC' -and $selectedBar.Visibility -eq 'Visible' -and $selectedBar.Width -eq 3 -and $selectedBar.Height -eq 16)
+        Assert-Wt 'WPF 2판: 선택 행은 선택 면 + 3×16 강조 막대' ($v2Row.Background.Color.ToString() -ceq '#FFE8F2FC' -and $selectedBar.Visibility -eq 'Visible' -and $selectedBar.Width -eq 3 -and $selectedBar.Height -eq 16)
         $checkLabel = Get-WtVisualChild $v2Check ([System.Windows.Controls.ContentPresenter])
         $checkText = Get-WtVisualChild $checkLabel ([System.Windows.Controls.TextBlock])
-        Assert-Wt 'WPF 2판: 완료 체크리스트는 3차 글자색만, 취소선·추가 투명도 없음' ($v2Check.Foreground.Color.ToString() -ceq '#FF5C6470' -and $v2Check.Opacity -eq 1 -and $checkText.TextDecorations.Count -eq 0)
+        Assert-Wt 'WPF 2판: 완료 체크리스트는 3차 글자색만, 취소선·추가 투명도 없음' ($v2Check.Foreground.Color.ToString() -ceq '#FF526172' -and $v2Check.Opacity -eq 1 -and $checkText.TextDecorations.Count -eq 0)
         $v2Button.IsEnabled = $false
-        Assert-Wt 'WPF 2판: 비활성은 정해진 면·선·글자, 불투명도 1' ($v2Button.Background.Color.ToString() -ceq '#FFF3F4F6' -and $v2Button.Foreground.Color.ToString() -ceq '#FFA3AAB4' -and $v2Button.Opacity -eq 1)
+        Assert-Wt 'WPF 2판: 비활성은 정해진 면·선·글자, 불투명도 1' ($v2Button.Background.Color.ToString() -ceq '#FFEFF6FD' -and $v2Button.Foreground.Color.ToString() -ceq '#FFA3AAB4' -and $v2Button.Opacity -eq 1)
         $v2Tip = [System.Windows.Controls.ToolTip]::new()
         $v2Tip.Resources.MergedDictionaries.Add($v2Theme); $v2Tip.Resources.MergedDictionaries.Add($v2Styles)
         $v2Tip.Content = '긴 안내 글 ' * 80
@@ -997,9 +1035,10 @@ flowchart LR
             [System.Windows.Controls.ToolTipService]::GetInitialShowDelay([System.Windows.Documents.Hyperlink]::new()) -eq 400)
         Assert-Wt 'WPF 2판: 메모 본문·제목 줄 높이와 치수 자원' ($v2Theme['F.Memo.Body'] -eq 15 -and $v2Theme['F.Memo.Body.LineHeight'] -eq 24 -and $v2Theme['F.Memo.H2.LineHeight'] -eq 26 -and $v2Theme['F.Memo.H6.LineHeight'] -eq 22 -and
             $v2Theme['F.Radius.Control'].TopLeft -eq 4 -and $v2Theme['F.Radius.Overlay'].TopLeft -eq 8 -and $v2Theme['F.Line.Focus'] -eq 2)
-        Set-WtSetting 'theme.accent' 'teal'
-        Assert-Wt 'WPF 2판: 강조색 변경을 기존 사전에 즉시 반영하고 면은 유지' ($v2Theme['B.Accent'].Color.ToString() -ceq '#FF0B6B69' -and $v2Theme['B.Bg.Canvas'].Color.ToString() -ceq '#FFF3F4F6')
-        Set-WtSetting 'theme.accent' 'blue'
+        Set-WtSetting 'theme.color' 'green'
+        Assert-Wt 'WPF 3판: 파스텔 변경을 기존 사전에 즉시 반영하고 흰 면은 유지' ($v2Theme['B.Accent'].Color.ToString() -ceq '#FF3F7D20' -and
+            $v2Theme['B.Bg.Canvas'].Color.ToString() -ceq ('#FF' + (Get-WtThemeColors 'green')['Bg.Canvas'].TrimStart('#')) -and $v2Theme['B.Bg.Surface'].Color.ToString() -ceq '#FFFFFFFF')
+        Set-WtSetting 'theme.color' 'sky'
         $v2ThemeCard = & (Get-Module Pages) { New-WtThemeCard }
         function Get-WtTestThemeChoices($Element) {
             if ($Element -is [System.Windows.Controls.RadioButton] -and $Element.GroupName -ceq 'WtTheme') { $Element }
@@ -1008,11 +1047,13 @@ flowchart LR
             }
         }
         $themeChoices = @(Get-WtTestThemeChoices $v2ThemeCard)
-        Assert-Wt 'WPF 2판: 설정은 강조색 제목·이름과 견본 5개, 설명 줄 없음' ($themeChoices.Count -eq 5 -and ($themeChoices.Content -join ',') -ceq '파랑,분홍,청록,보라,회색' -and
-            @(Get-WtTestTexts $v2ThemeCard) -contains '강조색' -and $v2ThemeCard.Child.Children[1].Children[0].Children.Count -eq 1)
+        # 설정 행은 라벨 글자 하나 + 값이다. 라벨 칸이 글자 하나면 그 밑에 설명 줄이 있을 수 없다
+        $colorRow = $v2ThemeCard.Child.Children[0]
+        Assert-Wt 'WPF 3판: 설정은 색 제목·이름과 견본 7개, 설명 줄 없음' ($themeChoices.Count -eq 7 -and ($themeChoices.Content -join ',') -ceq '하늘,분홍,연두,노랑,보라,회색,검정' -and
+            $colorRow.Children.Count -eq 2 -and $colorRow.Children[0] -is [System.Windows.Controls.TextBlock] -and $colorRow.Children[0].Text -ceq '색')
         foreach ($choice in $themeChoices) { $choice.IsChecked = $true }
-        Assert-Wt 'WPF 2판: 설정의 강조색 선택이 새 키·현재 사전에 반영' ((Get-WtSetting 'theme.accent') -ceq 'gray' -and $v2Theme['B.Accent'].Color.ToString() -ceq '#FF56606D')
-        Set-WtSetting 'theme.accent' 'blue'
+        Assert-Wt 'WPF 3판: 설정의 색 선택이 키·현재 사전에 반영' ((Get-WtSetting 'theme.color') -ceq 'black' -and $v2Theme['B.Accent'].Color.ToString() -ceq '#FF2B2F36')
+        Set-WtSetting 'theme.color' 'sky'
         $settingsView = New-WtSettingsPage
         $helpView = New-WtHelpPage
         $settingsTabs = $settingsView.Children[1]
@@ -1028,9 +1069,9 @@ flowchart LR
         Assert-Wt '설정 하위 탭: 공통 Tab 스타일 · 높이 36 · 선택 위 선 2' (
             $settingsTabs.Items[0].MinHeight -eq 36 -and $settingsTabs.Items[0].Template -eq (Get-WtStyleDictionary)['Tab'].Setters.Where({ $_.Property.Name -eq 'Template' })[0].Value)
         $helpTexts = @(Get-WtTestTexts $helpView)
-        Assert-Wt '도움말: 키 · 하는 일 두 열 · Ctrl+Shift+B · 앱 이름과 데이터 폴더' (
+        Assert-Wt '도움말: 키 · 하는 일 두 열 · Ctrl+Shift+B · 데이터 폴더' (
             $helpTexts -contains '키' -and $helpTexts -contains '하는 일' -and $helpTexts -contains 'Ctrl + Shift + B' -and
-            $helpTexts -contains 'WorkTool' -and $helpTexts -contains (Get-WtDataRoot))
+            $helpTexts -contains '데이터 폴더' -and $helpTexts -contains (Get-WtDataRoot))
         $v2Source = [System.IO.File]::ReadAllText((Join-Path $root 'core/Ui.psm1')) + [System.IO.File]::ReadAllText((Join-Path $root 'core/Theme.psm1'))
         Assert-Wt 'WPF 2판: 효과·그라데이션·애니메이션·둥근 안쪽 Clip 없음' ($v2Source -notmatch 'DropShadowEffect|BlurEffect|(?:Linear|Radial)GradientBrush|<Storyboard|<(?:Double|Color|Thickness|Object)Animation[ >]|ClipToBounds="True"|<[^>]*\.Clip>')
 
@@ -1307,7 +1348,7 @@ pie
                 Register-WtAddon -Id 'shell-late' -Title '뒤' -Group '첫 묶음' -Order 30 -Badge { $null } -NewView { New-WtText '빈 화면' } -OnOpen { param($OpenArgs) $script:testOpenArgs = $OpenArgs }
                 Register-WtAddon -Id 'shell-dot' -Title '점' -Group '다음 묶음' -Order 20 -Badge { 'dot' } -BadgeToolTip '가짜 점' -NewView { New-WtText '점 화면' }
                 Register-WtAddon -Id 'shell-count' -Title '수' -Group '첫 묶음' -Order 10 -Badge { 7 } -NewView {
-                    New-WtSidePanel -Content (New-WtText '보조 내용') -Key 'test.shell.side' -Title '보조' -Width 308
+                    New-WtSidePanel -Content (New-WtText '보조 내용') -Key 'test.shell.side' -Title '보조' -Width 288
                 }
                 Register-WtAddon -Id 'shell-error' -Title '실패' -Group '다음 묶음' -Order 40 -Badge { throw '배지 실패' } -NewView { New-WtText '계속 열림' }
                 $script:window = ConvertFrom-WtXaml $script:shellXaml
@@ -1352,7 +1393,7 @@ pie
                 $copy = New-WtSidePanel -Content (New-WtText '다시 만듦') -Key 'test.shell.side' -Title '복원'
                 $restored = $copy.Width -eq 28
                 $panel.Open.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
-                $opened = -not [bool](Get-WtSetting 'test.shell.side') -and $panel.Root.Width -eq 308
+                $opened = -not [bool](Get-WtSetting 'test.shell.side') -and $panel.Root.Width -eq 288
                 Select-WtPage 'shell-late'
                 $onlyNav = @(foreach ($n in 1..2) { Switch-WtPanelCycle; [bool](Get-WtSetting 'nav.collapsed') }) -join ','
                 $script:window.Width = 1100
@@ -1368,7 +1409,7 @@ pie
                 [void]$hostGrid.Children.Add($main)
                 [System.Windows.Controls.Grid]::SetColumn($small, 1); [void]$hostGrid.Children.Add($small)
                 $hostGrid.Measure([System.Windows.Size]::new(600,300)); $hostGrid.Arrange([System.Windows.Rect]::new(0,0,600,300))
-                $overlay = $small.Width -eq 28 -and $smallPanel.Expanded.ActualWidth -eq 280 -and $main.ActualWidth -eq 572 -and
+                $overlay = $small.Width -eq 28 -and $smallPanel.Expanded.ActualWidth -eq 280 -and $main.ActualWidth -eq 564 -and
                     $smallPanel.Expanded.TranslatePoint([System.Windows.Point]::new(0,0), $small).X -eq -252 -and $null -eq $smallPanel.Expanded.Effect
                 Set-WtSidePanelCollapsed $smallPanel $true
                 $script:window.Width = 1280; Update-WtSidePanel $smallPanel
@@ -1381,6 +1422,9 @@ pie
                 $leftPanel = @(Get-WtSidePanels $left)[0]
                 $leftOk = $left.Width -eq 220 -and $leftPanel.CollapseGlyph.Text -eq [string][char]0xE76B -and
                     [System.Windows.Controls.DockPanel]::GetDock($leftPanel.Collapse) -eq 'Right' -and $leftPanel.Independent
+                $script:window.Width = 1100; Update-WtSidePanel $leftPanel
+                $leftOk = $leftOk -and -not $leftPanel.Collapsed -and $left.Width -eq 220
+                $script:window.Width = 1280; Update-WtSidePanel $leftPanel
                 # 화면을 바꾼 직후에도 배지를 다시 평가한다.
                 $badge['shell-count'].Addon.Badge = { 0 }
                 Select-WtPage 'shell-dot'
@@ -1451,7 +1495,7 @@ pie
         Assert-Wt '창 짜임: 보조 칸 접기·설정 저장·다시 만들기' $shellChecks.Saved
         Assert-Wt '창 짜임: Ctrl+Shift+B 네 단계·없는 칸 건너뛰기' ($shellChecks.Cycle -eq 'False/True,True/True,False/True,False/False' -and $shellChecks.OnlyNav -eq 'True,False') "$($shellChecks.Cycle) / $($shellChecks.OnlyNav)"
         Assert-Wt '창 짜임: 1200 미만 레일 시작·겹쳐 열기·늘리면 저장 상태' ($shellChecks.Narrow -and $shellChecks.Overlay -and $shellChecks.Restore) "$($shellChecks.Narrow)/$($shellChecks.Overlay)/$($shellChecks.Restore)"
-        Assert-Wt '창 짜임: 왼쪽 보조 칸·독립 접기' $shellChecks.Left
+        Assert-Wt '창 짜임: 왼쪽 보조 칸·독립 접기·좁아도 접지 않음' $shellChecks.Left
         Assert-Wt '창 짜임: 최소 크기·타이틀바·예약 단축키' ($shellChecks.Chrome -and $shellChecks.Reserved)
         Assert-Wt '첫 설정: work.start가 없을 때만 창 안에 기본값 입력을 연다' ($shellChecks.FirstShown -and $shellChecks.FirstOnlyMissing)
         Assert-Wt '첫 설정: 잘못된 시각은 칸 아래 오류 · 저장 거부' $shellChecks.FirstInvalid
@@ -1484,11 +1528,11 @@ pie
         $settings1 = & $shell { Get-WtPageView '_settings' }
         $settings2 = & $shell { Get-WtPageView '_settings' }
         Assert-Wt 'WPF 설정: 같은 조건이면 화면 재사용' ([object]::ReferenceEquals($settings1.View, $settings2.View))
-        $accentBefore = Get-WtSetting 'theme.accent'
-        Set-WtSetting 'theme.accent' $(if ($accentBefore -eq 'teal') { 'blue' } else { 'teal' })
+        $accentBefore = Get-WtSetting 'theme.color'
+        Set-WtSetting 'theme.color' $(if ($accentBefore -eq 'green') { 'sky' } else { 'green' })
         $settingsAccent = & $shell { Get-WtPageView '_settings' }
-        Assert-Wt 'WPF 설정: 외부에서 바꾼 강조색도 재진입 때 선택 상태에 반영한다' (-not [object]::ReferenceEquals($settings2.View,$settingsAccent.View))
-        Set-WtSetting 'theme.accent' $accentBefore
+        Assert-Wt 'WPF 설정: 외부에서 바꾼 색도 재진입 때 선택 상태에 반영한다' (-not [object]::ReferenceEquals($settings2.View,$settingsAccent.View))
+        Set-WtSetting 'theme.color' $accentBefore
         $close = Get-WtSetting 'window.closeToTray'; Set-WtSetting 'window.closeToTray' (-not $close)
         $settings3 = & $shell { Get-WtPageView '_settings' }
         Assert-Wt 'WPF 설정: 바뀐 설정은 재진입 때 다시 읽는다' (-not [object]::ReferenceEquals($settings2.View, $settings3.View))

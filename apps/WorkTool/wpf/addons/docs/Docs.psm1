@@ -2,7 +2,7 @@
 # 보안 문서 · 계정 엑셀처럼 툴에 옮기면 안 되는 파일도 여기서 원본을 바로 연다. 파일 내용은 읽거나 저장하지 않는다.
 # 설정(데이터 폴더의 settings.json, 저장소에 올라가지 않음):
 #   docs.roots  트리 맨 위 폴더들 · docs.pins  즐겨찾기(파일 · 폴더 경로) · docs.last  마지막으로 본 폴더
-# 단축키(문서 화면 안): Enter 열기 · Alt+↑ 위 폴더 · F5 새로 고침 · Ctrl+F 이름으로 거르기
+# 단축키(문서 화면 안): Enter 열기 · Alt+↑ 위 폴더 · F5 새로 고침 · Ctrl+F 이름으로 필터링
 
 $ErrorActionPreference = 'Stop'
 
@@ -392,7 +392,10 @@ function Cancel-WtDocFolder {
 
 function Get-WtDocSelected { $script:ui.List.SelectedItem }
 
-function Set-WtDocStatus([string]$Text) { $script:ui.Status.Text = $Text }
+function Set-WtDocStatus([string]$Text) {
+    $script:ui.Status.Text = $Text
+    $script:ui.Status.ToolTip = if ($Text) { $Text } else { $null }   # 좁은 창에서 말줄임되면 전체를 본다
+}
 
 function New-WtDocTreeItem([string]$Label, [string]$Path, [int]$Icon, [switch]$Leaf) {
     $ti = [System.Windows.Controls.TreeViewItem]::new()
@@ -529,7 +532,7 @@ function Update-WtDocCommands {
         $b.ToolTip = if ($has) { $b.Tag } else { '파일이나 폴더를 먼저 고르세요' }
     }
     $pinned = $has -and (Test-WtDocPinned $e.Path)
-    $script:ui.Pin.Content = New-WtButtonContent $(if ($pinned) { '즐겨찾기에서 빼기' } else { '즐겨찾기' }) $(if ($pinned) { 0xE735 } else { 0xE734 })
+    $script:ui.Pin.Content = New-WtButtonContent $(if ($pinned) { '즐겨찾기 해제' } else { '즐겨찾기' }) $(if ($pinned) { 0xE735 } else { 0xE734 })
     $script:ui.Open.Content = New-WtButtonContent $(if ($has -and $e.IsDir) { '들어가기' } else { '열기' }) 0xE8E5
 }
 
@@ -558,30 +561,37 @@ function New-WtDocsView {
     if ($script:filterTimer) { $script:filterTimer.Stop() }
     $script:ui = @{}
     $page = New-WtPage -Fill
-    $add = New-WtButton '폴더 추가' -Icon 0xE710 -ToolTip '볼 폴더 추가'
-    $add.Add_Click({ Add-WtDocRoot })
-    $header = New-WtPageHeader '문서' '' $add
-    [System.Windows.Controls.DockPanel]::SetDock($header, 'Top')
-    [void]$page.Panel.Children.Add($header)
 
     $grid = [System.Windows.Controls.Grid]::new()
     $c1 = [System.Windows.Controls.ColumnDefinition]::new(); $c1.Width = [System.Windows.GridLength]::new(280)
     $c2 = [System.Windows.Controls.ColumnDefinition]::new(); $c2.Width = [System.Windows.GridLength]::new(1, 'Star')
     $grid.ColumnDefinitions.Add($c1); $grid.ColumnDefinitions.Add($c2)
 
-    # 왼쪽: 즐겨찾기 + 폴더 트리
+    # 왼쪽: 제목 + 폴더 추가 · 즐겨찾기 + 폴더 트리 · 목록에서 빼기
     $left = New-WtCard
-    $left.Padding = [System.Windows.Thickness]::new(12)
-    $left.Margin = [System.Windows.Thickness]::new(0, 0, 16, 0)
+    Set-WtStyle $left 'Panel.Surface'
+    $left.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
     $ldock = [System.Windows.Controls.DockPanel]::new()
+    $leftHead = [System.Windows.Controls.DockPanel]::new()
+    Set-WtStyle $leftHead 'Doc.TreeHead'
+    $add = New-WtButton '' -Kind Icon -Icon 0xE710 -ToolTip '폴더 추가'
+    $add.VerticalAlignment = 'Center'
+    $add.Add_Click({ Add-WtDocRoot })
+    [System.Windows.Controls.DockPanel]::SetDock($add, 'Right')
+    [void]$leftHead.Children.Add($add)
+    $leftTitle = New-WtText '문서' 'T.Dialog'
+    $leftTitle.VerticalAlignment = 'Center'
+    [void]$leftHead.Children.Add($leftTitle)
+    [System.Windows.Controls.DockPanel]::SetDock($leftHead, 'Top')
+    [void]$ldock.Children.Add($leftHead)
     $remove = New-WtButton '목록에서 빼기' -Kind Link -Icon 0xE738
+    Set-WtStyle $remove 'Doc.TreeFoot'
     $remove.ToolTip = '고른 맨 위 폴더를 목록에서 뺍니다 (폴더는 그대로)'
-    $remove.HorizontalAlignment = 'Left'
     $remove.Add_Click({ Remove-WtDocRoot })
     [System.Windows.Controls.DockPanel]::SetDock($remove, 'Bottom')
     [void]$ldock.Children.Add($remove)
     $tree = [System.Windows.Controls.TreeView]::new()
-    Set-WtStyle $tree 'Tree'
+    Set-WtStyle $tree 'Doc.Tree'
     $tree.Add_SelectedItemChanged({
             param($s, $e)
             $node = $s.SelectedItem
@@ -594,58 +604,68 @@ function New-WtDocsView {
     [System.Windows.Controls.Grid]::SetColumn($left, 0)
     [void]$grid.Children.Add($left)
 
-    # 오른쪽: 경로 · 거르기 · 목록 · 명령
+    # 오른쪽: 머리줄(위 폴더 · 경로 · 찾기 · 새로 고침 · 탐색기) · 표 머리 · 목록 · 아래 명령
     $right = New-WtCard
-    $right.Padding = [System.Windows.Thickness]::new(16, 12, 16, 12)
+    Set-WtStyle $right 'Panel.Surface'
     $rdock = [System.Windows.Controls.DockPanel]::new()
 
     $top = [System.Windows.Controls.DockPanel]::new()
+    Set-WtStyle $top 'Card.Head'
     $up = New-WtButton '' -Kind Icon -Icon 0xE74A -ToolTip '위 폴더 (Alt+↑)'
+    $up.VerticalAlignment = 'Center'
     $up.Add_Click({ Show-WtDocFolder (Split-Path $script:current -Parent) -SelectTree })
     [System.Windows.Controls.DockPanel]::SetDock($up, 'Left')
     [void]$top.Children.Add($up)
-    $refresh = New-WtButton '' -Kind Icon -Icon 0xE72C -ToolTip '새로 고침 (F5)'
-    $refresh.Add_Click({ Show-WtDocFolder $script:current })
     $openFolder = New-WtButton '탐색기에서 열기' -Kind Link -Icon 0xE838
+    $openFolder.VerticalAlignment = 'Center'
     $openFolder.Add_Click({ if ($script:current -and $script:current -ne '*') { Open-WtPath $script:current } })
+    $refresh = New-WtButton '' -Kind Icon -Icon 0xE72C -ToolTip '새로 고침 (F5)'
+    $refresh.VerticalAlignment = 'Center'
+    $refresh.Add_Click({ Show-WtDocFolder $script:current })
+    $sb = New-WtSearchBox '찾기' -Compact
+    $sb.Root.VerticalAlignment = 'Center'
+    $sb.Root.Margin = [System.Windows.Thickness]::new(8, 0, 8, 0)
+    $filter = $sb.Box
+    $filter.ToolTip = '이 폴더에서 이름으로 찾습니다. 띄어 쓰면 낱말이 모두 들어간 이름만 (Ctrl+F)'
+    $script:filterTimer = New-WtPollTimer { $script:filterTimer.Stop(); Update-WtDocList }
+    $filter.Add_TextChanged({ $script:filterTimer.Stop(); $script:filterTimer.Start() })
     foreach ($b in @($openFolder, $refresh)) { [System.Windows.Controls.DockPanel]::SetDock($b, 'Right'); [void]$top.Children.Add($b) }
     $pathText = New-WtText '' 'T.Strong'
     $pathText.TextWrapping = 'NoWrap'
     $pathText.TextTrimming = 'CharacterEllipsis'
     $pathText.VerticalAlignment = 'Center'
-    $pathText.Margin = [System.Windows.Thickness]::new(8, 0, 8, 0)
-    [void]$top.Children.Add($pathText)
-    $sb = New-WtSearchBox '이 폴더에서 이름으로 찾기'
-    $filter = $sb.Box
-    $filter.ToolTip = '띄어 쓰면 낱말이 모두 들어간 이름만 (Ctrl+F)'
-    $script:filterTimer = New-WtPollTimer { $script:filterTimer.Stop(); Update-WtDocList }
-    $filter.Add_TextChanged({ $script:filterTimer.Stop(); $script:filterTimer.Start() })
-    $sb.Root.Margin = [System.Windows.Thickness]::new(0, 8, 0, 8)
+    $pathText.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
+    # 경로와 찾기 칸이 남는 폭을 나눠 갖는다. 찾기 칸은 240까지만 늘어나므로 넓으면 경로가 나머지를 쓴다
+    $pathRow = [System.Windows.Controls.Grid]::new()
+    $pathColumn = [System.Windows.Controls.ColumnDefinition]::new(); $pathColumn.Width = [System.Windows.GridLength]::new(1, 'Star')
+    $findColumn = [System.Windows.Controls.ColumnDefinition]::new(); $findColumn.Width = [System.Windows.GridLength]::new(1, 'Star'); $findColumn.MaxWidth = 256
+    $pathRow.ColumnDefinitions.Add($pathColumn); $pathRow.ColumnDefinitions.Add($findColumn)
+    [System.Windows.Controls.Grid]::SetColumn($sb.Root, 1)
+    [void]$pathRow.Children.Add($pathText)
+    [void]$pathRow.Children.Add($sb.Root)
+    [void]$top.Children.Add($pathRow)
+    $colsBorder = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $colsBorder 'Doc.Columns'
+    $colsBorder.Margin = [System.Windows.Thickness]::new(16, 0, 16, 0)
     $cols = [System.Windows.Controls.DockPanel]::new()
-    $cols.Margin = [System.Windows.Thickness]::new(12, 0, 12, 4)
-    foreach ($h in @(@('크기', 80, 'Right'), @('고친 날짜', 130, 'Left'), @('종류', 90, 'Left'))) {
-        $t = New-WtText $h[0] 'T.Sub'
-        $t.FontWeight = 'SemiBold'
+    foreach ($h in @(@('크기', 80, 'Right'), @('수정일', 130, 'Left'), @('종류', 90, 'Left'))) {
+        $t = New-WtText $h[0] 'Doc.Column'
         $t.Width = $h[1]; $t.TextAlignment = $h[2]
-        $t.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
         [System.Windows.Controls.DockPanel]::SetDock($t, 'Right')
         [void]$cols.Children.Add($t)
     }
-    $nameHead = New-WtText '이름' 'T.Sub'
-    $nameHead.FontWeight = 'SemiBold'
+    $nameHead = New-WtText '이름' 'Doc.Column'
     $nameHead.Margin = [System.Windows.Thickness]::new(28, 0, 0, 0)
     [void]$cols.Children.Add($nameHead)
+    $colsBorder.Child = $cols
     $headStack = New-WtStack Vertical
-    foreach ($x in @($top, $sb.Root, $cols)) { [void]$headStack.Children.Add($x) }
-    $line = [System.Windows.Controls.Border]::new()
-    Set-WtStyle $line 'Divider'
-    [void]$headStack.Children.Add($line)
+    foreach ($x in @($top, $colsBorder)) { [void]$headStack.Children.Add($x) }
     [System.Windows.Controls.DockPanel]::SetDock($headStack, 'Top')
     [void]$rdock.Children.Add($headStack)
 
     # 아래 명령
     $cmd = [System.Windows.Controls.DockPanel]::new()
-    $cmd.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)
+    Set-WtStyle $cmd 'Card.Foot'
     $status = New-WtText '' 'T.Sub'
     $status.VerticalAlignment = 'Center'
     $status.TextTrimming = 'CharacterEllipsis'
@@ -667,7 +687,7 @@ function New-WtDocsView {
             if (-not $x) { return }
             $on = Switch-WtDocPin $x.Path
             if ($script:current -eq '*') { Show-WtDocFolder '*' } else { Update-WtDocCommands }
-            Set-WtDocStatus $(if ($on) { "즐겨찾기에 넣었습니다: $($x.Name)" } else { "즐겨찾기에서 뺐습니다: $($x.Name)" })
+            Set-WtDocStatus $(if ($on) { "즐겨찾기에 넣었습니다: $($x.Name)" } else { "즐겨찾기를 해제했습니다: $($x.Name)" })
         })
     foreach ($b in @($open, $reveal, $copy, $pin)) {
         [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($b, $true)   # 못 쓸 때 이유를 보여 준다
@@ -678,20 +698,22 @@ function New-WtDocsView {
     $status.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
     $status.TextAlignment = 'Right'
     [void]$cmd.Children.Add($status)
-    $cwrap = New-WtStack Vertical
-    $line2 = [System.Windows.Controls.Border]::new()
-    Set-WtStyle $line2 'Divider'
-    [void]$cwrap.Children.Add($line2)
-    [void]$cwrap.Children.Add($cmd)
-    [System.Windows.Controls.DockPanel]::SetDock($cwrap, 'Bottom')
-    [void]$rdock.Children.Add($cwrap)
+    [System.Windows.Controls.DockPanel]::SetDock($cmd, 'Bottom')
+    [void]$rdock.Children.Add($cmd)
 
     # 목록 + 비었을 때 안내
     $area = [System.Windows.Controls.Grid]::new()
+    Set-WtStyle $area 'Card.Body'
     $list = [System.Windows.Controls.ListBox]::new()
     Set-WtStyle $list 'Doc.List'
-    $list.Margin = [System.Windows.Thickness]::new(0, 4, 0, 0)
     $list.Add_SelectionChanged({ Update-WtDocCommands })
+    # 스크롤 막대가 나타나면 표 머리도 그만큼 비워 열을 맞춘다
+    $list.AddHandler([System.Windows.Controls.ScrollViewer]::ScrollChangedEvent, [System.Windows.Controls.ScrollChangedEventHandler] {
+            param($s, $e)
+            if ($e.ViewportWidthChange -eq 0) { return }
+            $base = $script:ui.Columns.Padding
+            $script:ui.Columns.Padding = [System.Windows.Thickness]::new($base.Left, $base.Top, $base.Left + [Math]::Max(0, $s.ActualWidth - $e.ViewportWidth), $base.Bottom)
+        })
     $list.Add_MouseDoubleClick({
             param($s, $e)
             # 행 위에서 두 번 눌렀을 때만 (빈 곳 · 스크롤 막대는 무시)
@@ -750,7 +772,7 @@ function New-WtDocsView {
         })
 
     $script:ui = @{
-        Tree = $tree; RemoveRoot = $remove; List = $list; Filter = $filter; PathText = $pathText; Status = $status
+        Tree = $tree; RemoveRoot = $remove; List = $list; Filter = $filter; PathText = $pathText; Status = $status; Columns = $colsBorder
         Up = $up; OpenFolder = $openFolder; Open = $open; Pin = $pin; ItemButtons = @($open, $reveal, $copy, $pin)
         Empty = $empty; EmptyText = $emptyText; EmptyAdd = $emptyAdd; Cancel = $cancel; Error = $null; Loading = $false
     }

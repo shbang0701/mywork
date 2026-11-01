@@ -38,7 +38,7 @@ $d = { param($t) [datetime]::ParseExact($t, 'yyyy-MM-dd', [System.Globalization.
 $tests = [System.Collections.Generic.List[object]]::new()
 
 function Copy-WtTestFixture([string]$Name) { [System.IO.File]::Copy((Join-Path $fixtures $Name), (Get-WtStorePath 'schedule'), $true) }
-function Read-WtTestDoc { [System.IO.File]::ReadAllText((Get-WtStorePath 'schedule')) | ConvertFrom-Json -Depth 20 -DateKind String }
+function Read-WtTestDoc { Wait-WtTestWrites; [System.IO.File]::ReadAllText((Get-WtStorePath 'schedule')) | ConvertFrom-Json -Depth 20 -DateKind String }
 function Get-WtTestKeys($Occurrences) { (@($Occurrences) | ForEach-Object { $_.Key }) -join ',' }
 function Get-WtTestJson($Value) { ConvertTo-Json -InputObject $Value -Depth 20 -Compress }
 function Get-WtTestById($Entries) { $m = @{}; foreach ($e in @($Entries)) { if ($e.Id -and -not $m.ContainsKey($e.Id)) { $m[$e.Id] = $e } }; $m }
@@ -716,14 +716,13 @@ try {
         try {
             & $module { Set-WtScheduleDate ([datetime]::new(2026,10,26)) }
             $marks = & $module { ,$script:cells }
-            Assert-WtTest '일정 근태: 업무시간 안/밖 ✔ · 쉬는 날 X · 토요일 근무 ✔ 우선/시각 툴팁' (
-                $marks[29].Mark.Text -ceq [string][char]0xE73E -and $marks[30].Mark.Text -ceq [string][char]0xE73E -and
-                $marks[28].Mark.Text -ceq [string][char]0xE711 -and $marks[34].Mark.Text -ceq [string][char]0xE73E -and
-                $marks[29].Mark.ToolTip -ceq '근무 09:02–18:10' -and $marks[31].Mark.ToolTip -ceq '휴가')
-            $markColors = & $module { @($script:cells[29].Mark.Foreground.ToString(), $script:cells[30].Mark.Foreground.ToString(), $script:cells[28].Mark.Foreground.ToString()) }
             $view.UpdateLayout()
-            Assert-WtTest '일정 근태 색: 성공 · 3단 글자 · 오류 토큰' ($marks[29].Mark.Foreground -eq $view.FindResource('B.Status.Success.Icon') -and
-                $marks[30].Mark.Foreground -eq $view.FindResource('B.Text.Tertiary') -and $marks[28].Mark.Foreground -eq $view.FindResource('B.Status.Error.Icon'))
+            Assert-WtTest '일정 근태: 평소 근무일 · 쉬는 날은 칠하지 않고 업무외 · 휴가만 숫자 바탕, 시각 툴팁' (
+                $null -eq $marks[29].Circle.Background -and $null -eq $marks[28].Circle.Background -and
+                $marks[30].Circle.Background -eq $view.FindResource('B.Cal.Overtime.Bg') -and $marks[31].Circle.Background -eq $view.FindResource('B.Cal.Leave.Bg') -and
+                $marks[29].Circle.ToolTip -ceq '근무 09:02–18:10' -and $marks[31].Circle.ToolTip -ceq '휴가')
+            Assert-WtTest '일정 근태 칩: 휴가 · 업무외는 칸의 일정보다 앞, 평소 근무는 칩 없음' ($marks[31].Chips[0].Visibility -eq 'Visible' -and $marks[31].Chips[0].Child.Text -ceq '휴가' -and
+                $marks[30].Chips[0].Child.Text -ceq '근무 20:00–18:10' -and $marks[30].Chips[1].Child.Text -ceq '14:00 반복 시험' -and $marks[29].Chips[0].Child.Text -ceq '09:00 한날 하나')
         } finally { Register-WtCalendarSource 'schedule-view-marks' $null }
         & $module { Show-WtScheduleForm -Kind event; $script:form.Fields.title.Text = '취소할 일정'; Show-WtScheduleDay }
         Assert-WtTest '일정 폼 취소: 저장소에 추가 안 함' (@((Get-WtScheduleData).Items | Where-Object title -ceq '취소할 일정').Count -eq 0)
@@ -775,10 +774,17 @@ try {
         Assert-WtTest '루틴 화면: 지난 날 체크 증적 저장' (@(Get-WtRoutineSlots '2026-10-26' | Where-Object { $_.Routine.Id -ceq $routine.Id -and $_.Done }).Count -eq 1)
         & $module { $script:check = $script:checkList.Children[0].Children[0]; $peer = [Windows.Automation.Peers.CheckBoxAutomationPeer]::new($script:check); $toggle = $peer.GetPattern([Windows.Automation.Peers.PatternInterface]::Toggle); ([Windows.Automation.Provider.IToggleProvider]$toggle).Toggle() }
         Assert-WtTest '루틴 화면: 체크 풀기 · 지운 증적 남김' (@(Get-WtRoutineSlots '2026-10-26' | Where-Object Done).Count -eq 0 -and @(Get-WtRoutineHistory '2026-10-26' '2026-10-26' | Where-Object { Test-WtDeleted $_ }).Count -eq 1)
+        $section = & $module { New-WtRoutineSection '루틴' ([datetime]::Today) }
+        $headLine = { $line = @($section.Root.Children[0].Content.Children)[-1]; [Windows.Documents.TextRange]::new($line.ContentStart, $line.ContentEnd).Text }
+        $before = & $headLine
+        & $module { param($List) $List.Children[0].Children[0].IsChecked = $true } $section.List
+        $after = & $headLine
+        Assert-WtTest '루틴 제목: 완료 수를 체크할 때 바로 바꾼다' ($before -ceq '루틴  0/1' -and $after -ceq '루틴  1/1') "$before / $after"
+        & $module { param($List) $List.Children[0].Children[0].IsChecked = $false } $section.List
         $cards = @(Get-WtHomeCards | Where-Object Id -ceq schedule)
         $routineCard = & $module { New-WtRoutineHomeCard }
-        Assert-WtTest '일정 홈 등록: 오늘 일정 main10/오늘 루틴 side20 · 공용 체크리스트 카드' ($cards.Count -eq 2 -and
-            $cards[0].HomeSlot -ceq 'main' -and $cards[0].HomeOrder -eq 10 -and $cards[1].HomeSlot -ceq 'side' -and $cards[1].HomeOrder -eq 20 -and (Get-WtTestTexts $routineCard) -contains '오늘 루틴')
+        Assert-WtTest '일정 홈 등록: 다음 일정 head10/오늘 일정 main10/오늘 루틴 side20 · 공용 체크리스트 카드' ($cards.Count -eq 3 -and $cards[0].HomeSlot -ceq 'head' -and $cards[0].HomeOrder -eq 10 -and
+            $cards[1].HomeSlot -ceq 'main' -and $cards[1].HomeOrder -eq 10 -and $cards[2].HomeSlot -ceq 'side' -and $cards[2].HomeOrder -eq 20 -and (Get-WtTestTexts $routineCard) -contains '오늘 루틴')
         [void](Set-WtRoutineDeleted -Id $routine.Id)
         Assert-WtTest '오늘 루틴: 해당 루틴 없으면 카드 없음' ($null -eq (& $module { New-WtRoutineHomeCard }))
         [IO.File]::WriteAllText((Get-WtStorePath 'schedule'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))

@@ -21,8 +21,8 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   OnOpen       { param($OpenArgs) } → Open-WtPage로 옮긴 뒤 인자를 받는다 (선택)
   ShortcutExists { param($Key) } → 바로 가기 대상이 남아 있으면 $true (선택)
   HomeCard     { } → 홈에 놓을 카드 요소(여러 개 가능)를 돌려준다 (선택)
-  HomeSlot     main(기본) · side. HomeOrder가 작을수록 먼저 놓는다
-  HomeCards    @(@{ Slot = 'main'|'side'; Order = 숫자; Card = { } }, ...). 한 탭의 여러 자리 카드 (선택)
+  HomeSlot     main(기본) · side · head(제목 아래 줄). HomeOrder가 작을수록 먼저 놓는다
+  HomeCards    @(@{ Slot = 'head'|'main'|'side'; Order = 숫자; Card = { } }, ...). 한 탭의 여러 자리 카드 (선택)
   CalendarHost 작은 달력 날짜를 열 탭 표시 (선택)
   ImportLegacy { param($folder) } → 예전 WorkTool data 폴더에서 이 탭 데이터를 가져와 저장한다. 가져온 개수를 돌려준다 (선택)
   OnExit       { } → 끝내기 직전(SavePending 확인 뒤) 타이머·조회 등 실행 자원을 정리한다 (선택)
@@ -51,7 +51,7 @@ function Register-WtAddon {
         [scriptblock]$OnOpen,
         [scriptblock]$ShortcutExists,
         [scriptblock]$HomeCard,
-        [ValidateSet('main', 'side')][string]$HomeSlot = 'main',
+        [ValidateSet('head', 'main', 'side')][string]$HomeSlot = 'main',
         [int]$HomeOrder = 100,
         [switch]$CalendarHost,
         [scriptblock]$CalendarItems,
@@ -75,8 +75,8 @@ function Register-WtAddon {
         $cards = @(@{ Slot = $HomeSlot; Order = $HomeOrder; Card = $HomeCard })
     }
     foreach ($card in $cards) {
-        if ($card.Slot -cnotin @('main', 'side') -or $card.Card -isnot [scriptblock] -or $card.Order -isnot [int]) {
-            throw "애드온 '$Id'의 홈 카드는 Slot(main/side) · Order(정수) · Card(함수)가 필요합니다."
+        if ($card.Slot -cnotin @('head', 'main', 'side') -or $card.Card -isnot [scriptblock] -or $card.Order -isnot [int]) {
+            throw "애드온 '$Id'의 홈 카드는 Slot(head/main/side) · Order(정수) · Card(함수)가 필요합니다."
         }
     }
     for ($i = $script:addons.Count - 1; $i -ge 0; $i--) {
@@ -111,14 +111,22 @@ function Get-WtCalendarHost {
 }
 
 # 달력 출처의 의미(탭 이름 아님)와 업무시간으로 표시만 계산한다. 근무 기록은 쉬는 날보다 우선한다.
+# 달력 표시. 평소 근무일 · 주말은 Kind가 비고, 업무외 → 휴가 → 휴무일 순서로 하나만 고른다.
 function Get-WtCalendarMark([datetime]$Date, [object[]]$Items) {
     $dayItems = @($Items | Where-Object { $_.Date.Date -eq $Date.Date })
-    $off = [int]$Date.DayOfWeek -notin @(Get-WtSetting 'work.days') -or
-        @($dayItems | Where-Object { $_.Kind -cin @('public', 'company', 'personal', 'leave') }).Count -gt 0
-    $work = @($dayItems | Where-Object { $_.Kind -cin @('work', 'overtime', 'trip') })
-    $inside = @($work | Where-Object { -not $_.AllDay -and $_.Time -ge (Get-WtSetting 'work.start') -and $_.Time -lt (Get-WtSetting 'work.end') }).Count -gt 0
-    [pscustomobject]@{ DayOff = $off; Glyph = $(if ($work.Count) { 0xE73E } elseif ($off) { 0xE711 } else { 0 })
-        Brush = $(if ($work.Count) { if ($inside) { 'B.Status.Success.Icon' } else { 'B.Text.Tertiary' } } else { 'B.Status.Error.Icon' })
+    $holiday = @($dayItems | Where-Object { $_.Kind -cin @('public', 'company', 'personal') }).Count -gt 0
+    $leave = @($dayItems | Where-Object { $_.Kind -ceq 'leave' }).Count -gt 0
+    $off = [int]$Date.DayOfWeek -notin @(Get-WtSetting 'work.days') -or $holiday -or $leave
+    $work = @($dayItems | Where-Object { $_.Kind -cin @('work', 'trip') }).Count -gt 0
+    $over = @($dayItems | Where-Object { $_.Kind -ceq 'overtime' }).Count -gt 0
+    $kind = if ($over -or ($work -and $off)) { 'over' } elseif ($leave) { 'leave' } elseif ($holiday) { 'off' } else { '' }
+    $look = switch ($kind) {
+        'over' { @('B.Cal.Overtime.Bg', 'B.Cal.Overtime.Text') }
+        'leave' { @('B.Cal.Leave.Bg', 'B.Cal.Leave.Text') }
+        'off' { @('B.Status.Error.Bg', 'B.Status.Error.Text') }
+        default { @('', '') }
+    }
+    [pscustomobject]@{ DayOff = $off; Kind = $kind; Back = $look[0]; Fore = $look[1]
         ToolTip = (@($dayItems | ForEach-Object Text | Where-Object { $_ }) -join "`n") }
 }
 

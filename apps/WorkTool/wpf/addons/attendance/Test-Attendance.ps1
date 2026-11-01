@@ -372,10 +372,13 @@ try {
         $view = New-WtTestView 'attendance'
         $view.Measure([Windows.Size]::new(1080,616)); $view.Arrange([Windows.Rect]::new(0,0,1080,616)); $view.UpdateLayout()
         & $module { Update-WtAttendanceView; $script:testFirst = $script:table.ItemsSource; Update-WtAttendanceView }
+        # 열은 시각 트리 밖이라 DynamicResource로 준 스타일이 조용히 안 먹는다
+        $columns = & $module { $c = $script:table.Columns; @{ Text = $null -ne $c[0].ElementStyle; Right = [string](@($c[6].ElementStyle.Setters; $c[6].ElementStyle.BasedOn.Setters) | Where-Object { $_.Property.Name -eq 'TextAlignment' } | Select-Object -First 1).Value; Head = [string](@($c[6].HeaderStyle.Setters) | Where-Object { $_.Property.Name -eq 'HorizontalContentAlignment' } | Select-Object -First 1).Value } }
+        Assert-WtTest '근태 표: 열 스타일이 들어가고 이동 · 시간은 머리까지 오른쪽 맞춤' ($columns.Text -and $columns.Right -ceq 'Right' -and $columns.Head -ceq 'Right') "$($columns.Text)/$($columns.Right)/$($columns.Head)"
         Assert-WtTest '근태 화면: 같은 월과 데이터는 표 재사용' (& $module { [object]::ReferenceEquals($script:testFirst, $script:table.ItemsSource) })
         Assert-WtTest '근태 표: 날짜순 8열·U14 폭·행 32·— 장소' (& $module {
             ($script:table.Columns | ForEach-Object Header) -join ',' -ceq '날짜,종류,시작,끝,장소,이동,시간,메모' -and
-            ($script:table.Columns | Select-Object -First 7 | ForEach-Object { $_.Width.Value }) -join ',' -ceq '90,80,64,64,72,56,64' -and
+            ($script:table.Columns | Select-Object -First 7 | ForEach-Object { $_.Width.Value }) -join ',' -ceq '100,72,64,64,72,56,64' -and
             $script:table.RowHeight -eq 32 -and @($script:table.ItemsSource | Where-Object { $_.Entry.Id -ceq 'weekend-unknown' -and $_.Place -ceq '—' }).Count -eq 1
         })
         Assert-WtTest '근태 요약: 장소 없음·퇴근 기록 없음 표시, 기존 홈 카드 등록 없음' ((Get-WtTestTexts $view) -contains '장소 없음' -and (Get-WtTestTexts $view) -contains '퇴근 기록 없음' -and -not (Get-WtAddon -Id attendance).HomeCard)
@@ -397,7 +400,10 @@ try {
         })
         Assert-WtTest '직접 입력: 선택 달의 1일과 빈 시작·끝·이동·메모로 연다' (& $module {
             Show-WtAttForm
-            $script:form.Fields.date.Text -ceq '2026-11-01' -and $script:form.Fields.start.Text -ceq '' -and $script:form.Fields.end.Text -ceq '' -and
+            # 이번 달을 보고 있으면 오늘, 다른 달이면 그 달 1일이다. 검사를 돌리는 날짜와 상관없게 앱 규칙대로 기대값을 계산한다
+            $today = [datetime]::Today
+            $expected = if ($script:month.Year -eq $today.Year -and $script:month.Month -eq $today.Month) { $today } else { $script:month }
+            $script:form.Fields.date.Text -ceq $expected.ToString('yyyy-MM-dd') -and $script:form.Fields.start.Text -ceq '' -and $script:form.Fields.end.Text -ceq '' -and
                 $script:form.Fields.out.Text -ceq '' -and $script:form.Fields.back.Text -ceq '' -and $script:form.Fields.note.Text -ceq ''
         })
         $beforeBad = [IO.File]::ReadAllText((Get-WtStorePath 'attendance'))

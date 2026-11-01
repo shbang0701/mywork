@@ -19,38 +19,36 @@ function Update-WtOpacityNote([double]$Percent) {
     $script:opacityNote.Visibility = if ($note) { 'Visible' } else { 'Collapsed' }
 }
 
+# 설정 행: 왼쪽 라벨 + 오른쪽 값. 부모에 SetIsSharedSizeScope를 켜면 라벨 칸 폭이 맞는다. 행 사이는 12다.
 function New-WtSettingRow([string]$Label, $Control, [string]$Note) {
     $row = [System.Windows.Controls.Grid]::new()
-    $row.Margin = [System.Windows.Thickness]::new(0, 8, 0, 8)
+    Set-WtStyle $row 'Setting.Row'
     $labelColumn = [System.Windows.Controls.ColumnDefinition]::new()
     $labelColumn.Width = [System.Windows.GridLength]::Auto
     $labelColumn.SharedSizeGroup = 'WtSettingLabels'
     $row.ColumnDefinitions.Add($labelColumn)
     $row.ColumnDefinitions.Add([System.Windows.Controls.ColumnDefinition]::new())
-    $left = New-WtStack Vertical 4
-    $left.Margin = [System.Windows.Thickness]::new(0, 0, 12, 0)
-    $left.VerticalAlignment = 'Center'
-    [void](Add-WtChild $left (New-WtText $Label 'T.Strong'))
+    $text = New-WtText $Label 'Setting.Label'
     if ($Note) { $Control.ToolTip = $Note }
-    [void]$row.Children.Add($left)
+    [void]$row.Children.Add($text)
     $Control.VerticalAlignment = 'Center'
     $Control.HorizontalAlignment = 'Left'
     [System.Windows.Controls.Grid]::SetColumn($Control, 1)
     [void]$row.Children.Add($Control)
+    $row.Tag = $text
     $row
 }
 
 function New-WtThemeCard {
     $card = New-WtCard
-    $col = New-WtStack Vertical 4
+    $col = New-WtStack Vertical
     [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
-    [void](Add-WtChild $col (New-WtCardHeader '화면'))
 
-    # 강조색: 이름과 견본. 색·모양은 공통 자원만 참조한다.
+    # 파스텔: 이름과 견본. 색·모양은 공통 자원만 참조한다.
     $swatches = New-WtStack Horizontal
-    $current = [string](Get-WtSetting 'theme.accent')
+    $current = [string](Get-WtSetting 'theme.color')
     $palettes = Get-WtPalette
-    if (-not $palettes.Contains($current)) { $current = 'blue' }
+    if (-not $palettes.Contains($current)) { $current = @($palettes.Keys)[0] }
     foreach ($key in $palettes.Keys) {
         $p = $palettes[$key]
         $rb = [System.Windows.Controls.RadioButton]::new()
@@ -63,13 +61,11 @@ function New-WtThemeCard {
         $rb.IsChecked = ($key -eq $current)
         $rb.Add_Checked({
             param($s, $e)
-            Set-WtSetting 'theme.accent' ([string]$s.Tag)
-            # 셸 파일은 건드리지 않고 기존 아이콘 그리기만 같은 선택색으로 다시 부른다.
-            if (Get-WtWindow) { & (Get-Module Shell) { Update-WtAppIcon } }
+            Set-WtSetting 'theme.color' ([string]$s.Tag)
         })
         [void]$swatches.Children.Add($rb)
     }
-    [void](Add-WtChild $col (New-WtSettingRow '강조색' $swatches))
+    [void](Add-WtChild $col (New-WtSettingRow '색' $swatches))
 
     # 창 투명도: 끌면 바로 보이고, 손을 떼고 잠시 뒤 저장한다
     $op = New-WtStack Horizontal 12
@@ -131,12 +127,12 @@ function New-WtThemeCard {
 function New-WtMenuCard {
     $card = New-WtCard
     $col = New-WtStack Vertical 4
-    [void](Add-WtChild $col (New-WtCardHeader '탭'))
     $disabled = @(Get-WtSetting 'addons.disabled')
     $script:addonChecks = @()
     foreach ($a in @(Get-WtAddon -All)) {
         $cb = [System.Windows.Controls.CheckBox]::new()
         Set-WtStyle $cb 'Check'
+        $cb.HorizontalAlignment = 'Left'
         $cb.Content = if ($a.Description) { "$($a.Title) — $($a.Description)" } else { $a.Title }
         $cb.Tag = $a.Id
         $cb.IsChecked = $a.Required -or ($disabled -notcontains $a.Id)
@@ -154,14 +150,14 @@ function New-WtMenuCard {
 
 function New-WtDataCard {
     $card = New-WtCard
-    $col = New-WtStack Vertical 8
+    $col = New-WtStack Vertical
     [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
-    [void](Add-WtChild $col (New-WtCardHeader '데이터'))
 
     $root = Get-WtDataRoot
     $path = New-WtText $root 'T.Body'
     Set-WtResource $path 'FontFamily' 'Font.Mono'
     $open = New-WtButton '폴더 열기' -Icon 0xE8B7
+    $open.HorizontalAlignment = 'Left'
     $open.Tag = $root
     $open.Add_Click({ param($s, $e) Open-WtPath ([string]$s.Tag) })
     $box = New-WtStack Vertical 8
@@ -206,15 +202,11 @@ function New-WtDataCard {
 
 function New-WtTabbedPage([string]$Title, [object[]]$Sections) {
     $page = New-WtPage -Fill
-    $page.Panel.Margin = [System.Windows.Thickness]::new(16)
     $heading = New-WtPageHeader $Title
-    $heading.Margin = [System.Windows.Thickness]::new(0, 0, 0, 16)
     [System.Windows.Controls.DockPanel]::SetDock($heading, 'Top')
     [void](Add-WtChild $page.Panel $heading)
     $tabs = [System.Windows.Controls.TabControl]::new()
-    $tabs.BorderThickness = [System.Windows.Thickness]::new(0)
-    $tabs.Padding = [System.Windows.Thickness]::new(0)
-    Set-WtResource $tabs Background 'B.Bg.Surface'
+    Set-WtStyle $tabs 'Tabs'
     [System.Windows.Automation.AutomationProperties]::SetName($tabs, "$Title 하위 탭")
     foreach ($section in $Sections) {
         $item = [System.Windows.Controls.TabItem]::new()
@@ -235,8 +227,10 @@ function New-WtTabbedPage([string]$Title, [object[]]$Sections) {
 
 function New-WtSettingsPage {
     $work = New-WtWorkHoursForm
+    $workCard = New-WtCard
+    $workCard.Child = $work.Root
     New-WtTabbedPage '설정' @(
-        @('일반', (New-WtThemeCard)), @('업무시간', $work.Root),
+        @('일반', (New-WtThemeCard)), @('업무시간', $workCard),
         @('탭', (New-WtMenuCard)), @('데이터', (New-WtDataCard)))
 }
 
@@ -281,18 +275,17 @@ function Reset-WtWorkForm($Form) {
 }
 
 function New-WtWorkHoursForm([switch]$FirstSetup) {
-    $col = New-WtStack Vertical 12
-    $col.Margin = [System.Windows.Thickness]::new(12)
+    $col = New-WtStack Vertical
+    [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
     $form = @{ Root = $col; Boxes = @{}; Errors = @{}; Days = @(); FirstSetup = [bool]$FirstSetup; Loading = $true; Start = $null }
-    $daysCol = New-WtStack Vertical 8
-    [void](Add-WtChild $daysCol (New-WtText '일하는 요일' 'T.Strong'))
+    $daysCol = New-WtStack Vertical 4
     $daysRow = [System.Windows.Controls.WrapPanel]::new()
     $dayNames = @('월', '화', '수', '목', '금', '토', '일')
     for ($n = 1; $n -le 7; $n++) {
         $cb = [System.Windows.Controls.CheckBox]::new()
         Set-WtStyle $cb 'Check'
         $cb.Content = $dayNames[$n - 1]
-        $cb.Margin = [System.Windows.Thickness]::new(0, 0, 8, 0)
+        $cb.Margin = [System.Windows.Thickness]::new(0, 0, 16, 0)
         $cb.Tag = @{ Form = $form; Day = $n }
         $cb.Add_Click({ param($s, $e) [void](Update-WtWorkForm $s.Tag.Form -Save:(-not $s.Tag.Form.FirstSetup)) })
         $form.Days += $cb
@@ -303,16 +296,12 @@ function New-WtWorkHoursForm([switch]$FirstSetup) {
     Set-WtResource $dayError Foreground 'B.Status.Error.Text'
     $form.Errors['work.days'] = $dayError
     [void](Add-WtChild $daysCol $dayError)
-    [void](Add-WtChild $col $daysCol)
+    [void](Add-WtChild $col (New-WtSettingRow '일하는 요일' $daysCol))
     foreach ($field in @(@('work.start', '시작 시각'), @('work.end', '끝 시각'), @('work.lunchStart', '점심 시작 시각'), @('work.lunchEnd', '점심 끝 시각'))) {
-        $group = New-WtStack Vertical 8
-        $label = New-WtText $field[1] 'T.Strong'
-        [void](Add-WtChild $group $label)
+        $group = New-WtStack Vertical 4
         $box = [System.Windows.Controls.TextBox]::new()
-        Set-WtStyle $box 'Input'
-        Set-WtResource $box FontFamily 'Font.Mono'
+        Set-WtStyle $box 'Setting.Time'
         [System.Windows.Automation.AutomationProperties]::SetName($box, $field[1])
-        [System.Windows.Automation.AutomationProperties]::SetLabeledBy($box, $label)
         $box.Tag = $form
         # 별도 바인딩에 오류를 연결한다. Text를 직접 바꾸는 UIA 입력도 바인딩을 끊지 않는다.
         $binding = [System.Windows.Data.Binding]::new()
@@ -331,11 +320,14 @@ function New-WtWorkHoursForm([switch]$FirstSetup) {
         [System.Windows.Automation.AutomationProperties]::SetLiveSetting($errorText, 'Polite')
         $form.Errors[$field[0]] = $errorText
         [void](Add-WtChild $group $errorText)
-        [void](Add-WtChild $col $group)
+        $row = New-WtSettingRow $field[1] $group
+        [System.Windows.Automation.AutomationProperties]::SetLabeledBy($box, $row.Tag)
+        [void](Add-WtChild $col $row)
     }
     if ($FirstSetup) {
         $start = New-WtButton '시작' -Kind Primary
         $start.HorizontalAlignment = 'Left'
+        $start.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)
         $start.Tag = $form
         $start.Add_Click({ param($s, $e) if (Update-WtWorkForm $s.Tag -Save) { [void](Close-WtFirstWorkSetup) } })
         $form.Start = $start
@@ -452,8 +444,7 @@ function New-WtHelpPage {
     foreach ($r in @(Get-WtShortcutRows)) { [void](Add-WtChild $col (New-WtKeyRow $r.Key $r.Text)) }
     $keys.Child = $col
 
-    $tabs = New-WtStack Vertical 12
-    $tabs.Margin = [System.Windows.Thickness]::new(12)
+    $tabs = New-WtStack Vertical 16
     foreach ($a in @(Get-WtAddon)) {
         $section = New-WtStack Vertical 8
         [void](Add-WtChild $section (New-WtCardHeader $a.Title))
@@ -468,14 +459,17 @@ function New-WtHelpPage {
         [void](Add-WtChild $tabs $section)
     }
 
+    $tabsCard = New-WtCard
+    $tabsCard.Child = $tabs
+
     $win = New-WtCard
-    $col = New-WtStack Vertical 8
-    [void](Add-WtChild $col (New-WtCardHeader 'WorkTool'))
-    [void](Add-WtChild $col (New-WtText '1단계 미리보기' 'T.Body'))
-    [void](Add-WtChild $col (New-WtText '데이터 폴더' 'T.Strong'))
-    [void](Add-WtChild $col (New-WtText (Get-WtDataRoot) 'T.Body'))
+    $col = New-WtStack Vertical
+    [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
+    $rootText = New-WtText (Get-WtDataRoot) 'T.Body'
+    Set-WtResource $rootText 'FontFamily' 'Font.Mono'
+    [void](Add-WtChild $col (New-WtSettingRow '데이터 폴더' $rootText))
     $win.Child = $col
-    New-WtTabbedPage '도움말' @(@('단축키', $keys), @('탭', $tabs), @('정보', $win))
+    New-WtTabbedPage '도움말' @(@('단축키', $keys), @('탭', $tabsCard), @('정보', $win))
 }
 
 Export-ModuleMember -Function New-WtSettingsPage, New-WtHelpPage, Show-WtFirstWorkSetup, Close-WtFirstWorkSetup, Invoke-WtWorkSetupKey

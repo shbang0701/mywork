@@ -14,6 +14,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'fixtures/new-memo-perf-fixture.ps1')
 . (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'tests/TestKit.ps1')
 Import-WtTestCore
 Import-Module (Join-Path $PSScriptRoot 'MemoEditor.psm1') -Force -DisableNameChecking
@@ -39,7 +40,6 @@ try {
     $a1 = $memos | Where-Object id -eq 'a1'
     Assert-WtTest '메모: 여러 줄 본문 유지' ($a1.body -eq "첫 줄`n둘째 줄" -or $a1.body -eq "첫 줄`r`n둘째 줄")
     Assert-WtTest '메모: 최근 고친 순서' ((@(Get-WtMemoSorted $memos)[0]).id -eq 'a2')
-    Assert-WtTest '메모 검색: 기존 화면 내부 검색 유지' (& $memoModule { param($all) @(Find-WtMemo $all '장비 정리').Count -eq 1 -and @(Find-WtMemo $all '').Count -eq 2 } $memos)
 
     # ---- 쓰기 ----
     $when = [datetime]'2026-10-22 11:20:05'
@@ -155,6 +155,10 @@ try {
         $state.Items[0].opened -ceq '2026-10-26T09:01:00+09:00' -and $state.Items[0].future -ceq '남김' -and $state.Items[2].id -ceq 'missing' -and
         $memoBefore -ceq (Read-MemoTestText (Get-WtStorePath memo)) -and $memoVersion -eq (& (Get-Module Storage) { (Get-WtDataFileRecord (Get-WtStorePath memo)).Version }))
     Assert-WtTest '5a 최근: 맨 위 모르는 키 보존' ((Read-WtJsonFile (Get-WtStorePath memo-state)).futureState -ceq '남김')
+    # 메모를 열 때마다 화면 스레드에서 돈다. 메모 전체를 JSON으로 복사하면 메모 3,000개에서 몇 초씩 멈춘다
+    $refuseOpen = { param($items, $id) try { [void](Set-WtMemoOpened -Store $state -MemoStore ([pscustomobject]@{ Name = 'memo'; State = 'ok'; Items = $items }) -Id $id -At '2026-10-26T09:02:00+09:00'); '' } catch { $_.Exception.Message } }
+    $openChecks = @((& $refuseOpen @() 'x'), (& $refuseOpen @([pscustomobject]@{ id = 'x'; deleted = '2026-10-26T09:00:00+09:00' }) 'x'), (& $refuseOpen @([pscustomobject]@{ id = 'x' }, [pscustomobject]@{ id = 'x' }) 'x'))
+    Assert-WtTest '5a 최근: 메모를 복사하지 않고 확인만 한다 · 없는 · 지운 · 겹친 메모는 거절' ((Get-Command Set-WtMemoOpened).ScriptBlock.ToString() -notmatch 'Get-WtMemoEditable' -and $openChecks[0] -ceq '항목을 찾지 못했습니다' -and $openChecks[1] -like '지운 메모*' -and $openChecks[2] -like 'id가 겹쳐*') ($openChecks -join ' / ')
     $recent = Find-WtMemo -Index $index -View recent -OpenedMap $state
     Assert-WtTest '5a 최근: 없는 메모 무시, 열람 시각 내림차순' (($recent.Items.Id -join ',') -ceq 'm1,m2')
     $openedMap = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
@@ -269,13 +273,23 @@ try {
         Write-Host ('PERF {0} 10회 중앙값 {1:F1}{4} 최댓값 {2:F1}{4} 첫 회 {3:F1}{4}' -f $Label, $medianSample, $orderedSamples[-1], $firstSample, $Unit)
     }
     $perfSeed = 5061581; $perfRandom = [Random]::new($perfSeed)
-    $perfBodies = [string[]]::new(32)
+    $realFixture = New-WtMemoPerfFixture -Count 3000 -Seed $perfSeed
+    $uniqueBodies = [Collections.Generic.HashSet[string]]::new([Collections.Generic.IEnumerable[string]][string[]]$realFixture.Document.items.body, [StringComparer]::Ordinal)
+    Assert-WtTest '성능 자료: 서로 다른 본문 3000개 · 2048 낱말 · 평균 1.2KB · 20KB 1%' (
+        $uniqueBodies.Count -eq 3000 -and $realFixture.Vocabulary -ge 2000 -and $realFixture.AverageBodyBytes -ge 1150 -and $realFixture.AverageBodyBytes -le 1300 -and
+        @($realFixture.Document.items | Where-Object { [Text.Encoding]::UTF8.GetByteCount($_.body) -ge 20KB }).Count -eq 30)
+    Assert-WtTest '성능 자료: 연결 절반 · 같은 제목 20쌍 · 고정20 · 보관5% · 삭제1% · 폴더4 · 열람1000' (
+        @($realFixture.Document.items | Where-Object { $_.body.Contains('[[') }).Count -eq 1500 -and
+        @($realFixture.Document.items | Group-Object title | Where-Object Count -eq 2).Count -eq 20 -and
+        @($realFixture.Document.items | Where-Object pinned -eq $true).Count -eq 20 -and @($realFixture.Document.items | Where-Object archived -eq $true).Count -eq 150 -and
+        @($realFixture.Document.items | Where-Object deleted).Count -eq 30 -and $realFixture.Document.folders.Count -eq 4 -and $realFixture.State.items.Count -eq 1000)
+    # 아래 기존 검색 기대값(3000건/고정 제외2970건)은 유지하고, 본문만 모두 다른 실제 크기로 만든다.
+    $perfBodies = [string[]]::new(3000)
     for ($variant = 0; $variant -lt $perfBodies.Length; $variant++) {
-        $perfBody = "자료 $variant " + ('운영 메모 본문 확인 ' * 65) + '권한 오류 복구 절차 #백업 [[대상]]'
-        $perfBodies[$variant] = $perfBody + (' ' * (2048 - [Text.Encoding]::UTF8.GetByteCount($perfBody)))
+        $perfBodies[$variant] = '권한 오류 복구 절차 #백업 [[대상]] ' + $realFixture.Document.items[$variant].body
     }
     $perfMemos = @(for ($i = 0; $i -lt 3000; $i++) { [pscustomobject]@{
-        id = "perf$i"; title = "메모 $i"; body = $perfBodies[$perfRandom.Next($perfBodies.Length)]; tags = @('백업'); folder = 'work'; pinned = ($i % 100 -eq 0)
+        id = "perf$i"; title = "메모 $i"; body = $perfBodies[$i]; tags = @('백업'); folder = 'work'; pinned = ($i % 100 -eq 0)
         created = '2026-10-01T09:00:00+09:00'; updated = '2026-10-26T09:00:00+09:00'
     } })
     $watch = [Diagnostics.Stopwatch]::new()
@@ -291,7 +305,7 @@ try {
         $perfResult = $null; $indexMemory[$repeat] = ([GC]::GetTotalMemory($true) - $memoryBefore) / 1MB
     }
     Assert-WtTest '5a 속도 자료: 새 색인 10개 첫 검색 결과 개수' $validFirst
-    Write-Host "PERF 씨앗 $perfSeed 메모 3000개 본문 UTF-8 각각 2048B (메모리는 입력 자료를 제외한 GC 후 색인 보유량)"
+    Write-Host "PERF 씨앗 $perfSeed 메모 3000개 본문 모두 다름 · 평균 약1.2KB + 검색 검사용 접두어 · 1%는20KB (메모리는 입력 자료를 제외한 GC 후 색인 보유량)"
     Write-MemoPerf '색인 (연결은 첫 검색에 포함)' $indexTimes
     Write-MemoPerf '새 색인의 첫 검색 [권한 오류]' $firstTimes
     Write-MemoPerf '색인 관리 힙' $indexMemory 'MiB'
@@ -325,6 +339,50 @@ try {
         $times[$repeat] = $watch.Elapsed.TotalMilliseconds
     }
     Write-MemoPerf '메모 하나 본문/연결 갱신' $times
+
+    # 연결 해석은 메모 하나에 약 12ms다. 한꺼번에 하면 메모 3,000개의 첫 찾기가 36초 걸렸다
+    $linkMemos = @(foreach ($i in 1..6) { [pscustomobject]@{ id = "l$i"; title = "연결 $i"; body = $(if ($i % 2) { "[[연결 $($i + 1)]]" } else { '연결 없음' }); tags = @() } })
+    $stepped = New-WtMemoIndex $linkMemos
+    $skipped = (Find-WtMemo -Index $stepped -Query '연결' -SkipBacklinks).Count -eq 6 -and -not $stepped.LinksReady
+    $steps = 0; while (-not (Step-WtMemoLinks $stepped 0)) { $steps++ }
+    $whole = New-WtMemoIndex $linkMemos
+    Assert-WtTest '메모 연결: 목록 찾기는 해석을 기다리지 않고, 나눠 해석해도 한꺼번에 한 결과와 같다' ($skipped -and $steps -ge 5 -and $stepped.LinksReady -and -not $stepped.LinkCache.Count -and
+        (Get-MemoResultIds (Find-WtMemo -Index $stepped -Query 'has:backlink')) -ceq (Get-MemoResultIds (Find-WtMemo -Index $whole -Query 'has:backlink'))) "$skipped/$steps"
+    $editing = New-WtMemoIndex $linkMemos
+    [void](Step-WtMemoLinks $editing 0)
+    Update-WtMemoIndex -Index $editing -Memo ([pscustomobject]@{ id = 'l1'; title = '연결 1'; body = '[[연결 3]]'; tags = @() })
+    while (-not (Step-WtMemoLinks $editing 0)) { }
+    Assert-WtTest '메모 연결: 해석하는 사이 고친 본문이 결과에 들어간다' ((Get-MemoResultIds (Find-WtMemo -Index $editing -Query 'linksto:"연결 3"')) -ceq 'l1' -and -not (Get-MemoResultIds (Find-WtMemo -Index $editing -Query 'linksto:"연결 2"')))
+    $hints = & (Get-Module MemoData) {
+        $samples = '그냥 글 #태그', '[[메모]]', '[글](x)', '![그림](a.png)', 'https://a.example', 'HTTP://A.EXAMPLE', 'ftp://a.example', 'www.a.example', 'WWW.A.EXAMPLE', '<mailto:a@a.example>', 'mailto:a@a.example', 'MAILTO:a@a.example', 'tel:010', '<a href="x">y</a>', 'a@a.example', '[^1]', '`[[코드]]`'
+        $fast = foreach ($b in $samples) { (Get-WtMemoLinkInfo $b).HasLink }
+        $keep = $script:memoLinkHint; $script:memoLinkHint = [regex]::new('')   # 모든 본문을 해석기로 보낸다
+        $full = foreach ($b in $samples) { (Get-WtMemoLinkInfo $b).HasLink }
+        $script:memoLinkHint = $keep
+        @{ Fast = $fast -join ','; Full = $full -join ','; Some = ($full -contains $true) -and ($full -contains $false) }
+    }
+    Assert-WtTest '메모 연결: 연결이 될 글자가 없으면 해석을 건너뛰어도 해석기 결과와 같다' ($hints.Some -and $hints.Fast -ceq $hints.Full) "$($hints.Fast) / $($hints.Full)"
+    $linkQuery = { param($q) Test-WtMemoQueryLinks (ConvertFrom-WtMemoQuery $q).Root }
+    Assert-WtTest '메모 연결: 연결을 쓰는 검색식을 빼는 조건까지 알아본다' ((& $linkQuery 'has:link') -and (& $linkQuery '-has:backlink') -and (& $linkQuery 'title:가 linksto:나') -and -not (& $linkQuery 'title:가') -and -not (& $linkQuery '오류 #태그'))
+
+    # 저장: 안 고친 메모는 복사하지 않는다. 메모마다 복사 · 병합하면 메모 3,000개에서 저장 한 번에 화면이 20초 멈췄다
+    $keepItems = @([pscustomobject]@{ id = 'k1'; title = '하나'; body = '가'; rev = 1; updated = '2026-10-01T09:00:00+09:00'; future = '남김' }
+        [pscustomobject]@{ id = 'k2'; title = '둘'; body = '나'; rev = 1; updated = '2026-10-01T09:00:00+09:00' }
+        [pscustomobject]@{ id = 'k3'; title = '셋'; body = '다'; rev = 1; updated = '2026-10-01T09:00:00+09:00' })
+    $null = Get-WtMemoItems
+    $null = Save-WtMemoDataItems -Store (Open-WtMemoStore) -Items $keepItems
+    $keepStore = Open-WtMemoStore
+    $keepOf = { param($items, $id) @($items | Where-Object { [string]$_.id -ceq $id })[0] }   # 앞 검사의 메모가 지운 표시로 앞자리에 남아 있어 id로 찾는다
+    $reread = @(Copy-WtItem @($keepStore.Items))   # 다시 읽은 것처럼 객체만 다르고 내용이 같다
+    $sameSecond = Copy-WtItem (& $keepOf $reread 'k2'); $sameSecond.body = '나나'   # 같은 초 · 같은 rev로 본문만 다르다
+    $saved = Save-WtMemoDataItems -Store $keepStore -Items @((& $keepOf $keepStore.Items 'k1'), $sameSecond, (& $keepOf $reread 'k3'))
+    Wait-WtTestWrites
+    $savedBack = @((Read-WtJsonFile (Get-WtStorePath memo)).items)
+    $keptSame = @([object]::ReferenceEquals((& $keepOf $saved.Items 'k1'), (& $keepOf $keepStore.Items 'k1')), [object]::ReferenceEquals((& $keepOf $saved.Items 'k3'), (& $keepOf $keepStore.Items 'k3')),
+        -not [object]::ReferenceEquals((& $keepOf $saved.Items 'k2'), (& $keepOf $keepStore.Items 'k2')), ((& $keepOf $saved.Items 'k2').body -ceq '나나'),
+        ((& $keepOf $savedBack 'k1').future -ceq '남김'), ((& $keepOf $savedBack 'k2').body -ceq '나나'))
+    Assert-WtTest '메모 저장: 안 고친 메모는 원자료 그대로, 고친 메모만 새 객체, 같은 초에 고쳐도 반영, 모르는 칸 유지' ($keptSame -notcontains $false) ($keptSame -join ',')
+
     # 아래 기존 화면 검사는 새 목록을 저장하며 시작한다. 데이터 검사에서 직접 연 핸들 대신 지금 원자료를 읽어 준비한다.
     $null = Get-WtMemoItems
 
@@ -396,7 +454,7 @@ try {
     Set-WtSetting 'memo.tabs' $null
     Set-WtSetting 'memo.mode' 'edit'
     Show-TestView
-    Assert-WtTest 'WPF 메모: 예전 memo.mode=edit는 편집(live)으로 연다' (& $memoModule { $script:mode -eq 'live' -and @($script:ui.ModeButtons | Where-Object IsChecked)[0].Tag.Value -eq 'live' })
+    Assert-WtTest 'WPF 메모: 예전 memo.mode=edit는 편집(live)으로 연다' (& $memoModule { $script:mode -eq 'live' -and $script:panes[0].ViewButton.ToolTip -ceq '편집 보기 (Ctrl+E)' })
     $s = Get-TestTabs
     Assert-WtTest 'WPF 메모 탭: 처음에는 최근 메모 하나를 탭으로 연다' ($s.Panes -eq 1 -and $s.Tabs[0] -eq 'ma' -and $s.Current[0] -eq 'ma')
 
@@ -467,7 +525,7 @@ try {
     $s = Get-TestTabs
     Assert-WtTest 'WPF 메모 칸: 첫 칸이 비고 둘째 칸에 탭이 있으면 하나로 합친다' ($s.Panes -eq 1 -and $s.Tabs[0] -eq 'mc' -and $s.Current[0] -eq 'mc')
     & $memoModule { $p = $script:panes[0]; [void](Close-WtMemoTab $p $p.Current) }
-    $empty = & $memoModule { $p = $script:panes[0]; $p.Empty.Visibility -eq 'Visible' -and $p.Head.Visibility -eq 'Collapsed' -and -not $p.Delete.IsEnabled }
+    $empty = & $memoModule { $p = $script:panes[0]; $p.Empty.Visibility -eq 'Visible' -and $p.Head.Visibility -eq 'Collapsed' -and -not $p.More.IsEnabled }
     Assert-WtTest 'WPF 메모 칸: 탭이 없으면 빈 상태 안내 + 행동 버튼' $empty
 
     # ---- 지운 메모의 탭은 모든 칸에서 닫힌다 ----
@@ -476,21 +534,34 @@ try {
     & (Get-WtAddon -Id memo).OnOpen @{ Key = 'ma' }
     Assert-WtTest '메모: 바로 가기 인자로 열기 · 연 횟수 한 번 · 옛 홈 카드 제거' ((& $memoModule { Get-WtMemoCurrentId }) -ceq 'ma' -and
         (@(Get-WtShortcuts -Max 200) | Where-Object { $_.Page -ceq 'memo' -and $_.Key -ceq 'ma' }).Count -eq $beforeUse + 1 -and -not (Get-WtAddon -Id memo).HomeCard)
+    # 홈은 바로 가기 줄마다 부른다. memo.json이 그대로면 다시 읽지 않고, 다시 읽어도 저장 핸들이 낡지 않는다
+    $shortcutCheck = & $memoModule {
+        $a = @{ Have = Test-WtMemoShortcut 'ma'; None = Test-WtMemoShortcut '없는 메모' }
+        $ids = $script:shortcutIds; [void](Test-WtMemoShortcut 'mb'); $a.Reused = [object]::ReferenceEquals($ids, $script:shortcutIds)
+        $script:shortcutStamp = ''; [void](Test-WtMemoShortcut 'ma'); $a.Fresh = -not [object]::ReferenceEquals($ids, $script:shortcutIds)
+        try { Save-WtMemoItems @($script:items); $a.Saved = $true } catch { $a.Saved = $false }
+        $a
+    }
+    Assert-WtTest '메모 바로 가기: memo.json이 그대로면 다시 읽지 않고, 다시 읽어도 저장은 된다' ($shortcutCheck.Have -and -not $shortcutCheck.None -and $shortcutCheck.Reused -and $shortcutCheck.Fresh -and $shortcutCheck.Saved) "$($shortcutCheck.Have)/$($shortcutCheck.None)/$($shortcutCheck.Reused)/$($shortcutCheck.Fresh)/$($shortcutCheck.Saved)"
     & $memoModule {
-        $m = $script:ui.List.ContextMenu; $m.Tag = 'ma'
-        $m.Items[$m.Items.Count - 1].RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.MenuItem]::ClickEvent))
+        $m = $script:ui.List.ContextMenu; Set-WtMemoListMenu $m 'ma'
+        @($m.Items | Where-Object { $_.Header -ceq '홈에 고정' })[0].RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.MenuItem]::ClickEvent))
         [void](Open-WtMemo 'mb')
     }
     Assert-WtTest '메모: 목록 홈 고정 메뉴' (Test-WtHomePin -Page memo -Key ma)
     Send-TestListClick 'mc' Right
     $menuState = & $memoModule { [pscustomobject]@{ MenuId = $script:listMenuId; Current = $script:panes[0].Current.Id } }
-    & $memoModule { $script:listMenuId = ''; $m = $script:ui.List.ContextMenu; $m.Tag = 'mb'; $m.Items[1].RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.MenuItem]::ClickEvent)) }
+    & $memoModule { $script:listMenuId = ''; $m = $script:ui.List.ContextMenu; Set-WtMemoListMenu $m 'mb'; $m.Items[1].RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.MenuItem]::ClickEvent)) }
     $s = Get-TestTabs
     Assert-WtTest 'WPF 메모 칸: 목록 우클릭은 선택을 바꾸지 않고, 메뉴 [오른쪽에 열기]는 오른쪽 칸에 연다' ($menuState.MenuId -eq 'mc' -and $menuState.Current -eq 'mb' -and $s.Panes -eq 2 -and $s.Tabs[1] -eq 'mb' -and $s.Tabs[0] -eq 'ma,mb') "$($menuState.MenuId) $($s.Tabs -join ' | ')"
     & $memoModule { Remove-WtMemoCurrent }
     $s = Get-TestTabs
     Assert-WtTest 'WPF 메모 칸: 메모를 지우면 그 탭을 모든 칸에서 닫는다' ($s.Panes -eq 1 -and $s.Tabs[0] -eq 'ma' -and -not ((Get-WtMemoItems) | Where-Object id -eq 'mb') -and (& $memoModule { $script:ui.UndoBar.Visibility }) -eq 'Visible')
+    Wait-WtTestWrites
+    Assert-WtTest '메모 바로 가기: 지운 메모는 곧바로 없는 것으로 본다' (-not (& $memoModule { Test-WtMemoShortcut 'mb' }))
     & $memoModule { Restore-WtMemoDeleted }
+    Wait-WtTestWrites
+    Assert-WtTest '메모 바로 가기: 되살린 메모는 다시 있는 것으로 본다' (& $memoModule { Test-WtMemoShortcut 'mb' })
     $s = Get-TestTabs
     Assert-WtTest 'WPF 메모: 삭제 실행 취소는 메모를 되살려 새 탭으로 연다' ($s.Tabs[0] -eq 'ma,mb' -and $s.Current[0] -eq 'mb' -and ((Get-WtMemoItems) | Where-Object id -eq 'mb'))
 
@@ -544,11 +615,13 @@ try {
 
     # ---- 모드 ----
     [void](Send-TestKey E Control)
-    $readOk = & $memoModule { $script:mode -eq 'read' -and $script:panes[0].TitleText.Visibility -eq 'Visible' -and $script:panes[0].TitleBox.Visibility -eq 'Collapsed' }
+    $srcOk = & $memoModule { $script:mode -eq 'source' -and (Get-WtMemoActivePane).ViewButton.ToolTip -ceq '원문 보기 (Ctrl+E)' }
+    [void](Send-TestKey E Control)
+    $readOk = & $memoModule { $p = Get-WtMemoActivePane; $script:mode -eq 'read' -and $p.TitleText.Visibility -eq 'Visible' -and $p.TitleBox.Visibility -eq 'Collapsed' -and $p.ViewButton.ToolTip -ceq '읽기 보기 (Ctrl+E)' }
+    [void](Send-TestKey E Control)
+    $srcOk = $srcOk -and (& $memoModule { $script:mode -eq 'live' })
     [void](Send-TestKey Oem2 Control)
-    $srcOk = & $memoModule { $script:mode -eq 'source' }
-    [void](Send-TestKey E Control); [void](Send-TestKey E Control)
-    Assert-WtTest 'WPF 메모 모드: Ctrl+E 읽기 ↔ 편집(돌아갈 모드 기억), Ctrl+/ 원문, 설정에 live · source · read로 남긴다' ($readOk -and $srcOk -and (& $memoModule { $script:mode }) -eq 'source' -and (Get-WtSetting 'memo.mode') -eq 'source')
+    Assert-WtTest 'WPF 메모 보기: Ctrl+E 편집 → 원문 → 읽기 → 편집, Ctrl+/ 원문, 설정에 live · source · read로 남긴다' ($readOk -and $srcOk -and (& $memoModule { $script:mode }) -eq 'source' -and (Get-WtSetting 'memo.mode') -eq 'source')
     [void](Send-TestKey Oem2 Control)
 
     # ---- 새 메모 → 입력 → 저장 → 삭제 → 실행 취소 · 끝낼 때 저장 ----
@@ -557,12 +630,14 @@ try {
     [void](Send-TestKey N Control)
     & $memoModule { $script:panes[0].TitleBox.Text = '새 제목' }
     Set-TestBody 0 '본문 #새태그'
+    Start-Sleep -Milliseconds 1100   # 수정일은 초 단위다. 앞 메모와 같은 초면 제목 순서가 된다
     [void](& $memoModule { Save-WtMemoNow })
     $saved = Get-WtMemoItems
     $new = $saved | Where-Object title -eq '새 제목'
     Assert-WtTest 'WPF 메모: Ctrl+N 새 메모(새 탭)를 쓰고 저장' ($saved.Count -eq $before + 1 -and $new.body -eq '본문 #새태그' -and @($new.tags)[0] -eq '새태그' -and (Get-TestTabs).Current[0] -eq $new.id)
+    Wait-WtTestWrites
     $st0 = & $memoModule { $script:panes[0].Status }
-    Assert-WtTest 'WPF 메모: 저장 상태 표시 · 탭 제목 · 목록 맨 위' (@(Get-WtTestTexts $st0 | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1 -and (& $memoModule { $script:panes[0].Current.Text.Text }) -eq '새 제목' -and (& $memoModule { [string]$script:ui.List.Items[0].Id }) -eq $new.id)
+    Assert-WtTest 'WPF 메모: 저장 상태 표시 · 탭 제목 · 목록 맨 위' (@(Get-WtTestTexts $st0 | Where-Object { $_ -like '저장됨*' }).Count -eq 1 -and (& $memoModule { $script:panes[0].Current.Text.Text }) -eq '새 제목' -and (& $memoModule { [string]$script:ui.List.Items[0].Id }) -eq $new.id)
     Set-TestBody 0 '고치는 중'
     & $memoModule { $script:testStatus = $script:panes[0].Status.Content }
     Set-TestBody 0 '고치는 중 2'
@@ -622,7 +697,7 @@ try {
     [void](Send-TestKey S Control)
     & $settle 600
     Assert-WtTest '메모 안정성: 잠금이 풀린 뒤 Ctrl+S가 가지고 있던 내용을 다시 써서 저장한다' (
-        ([System.IO.File]::ReadAllText($memoPath) -match 'unsaved draft 2') -and @(Get-WtTestTexts $st0 | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1 -and -not @(Get-WtDataUnsaved).Count)
+        ([System.IO.File]::ReadAllText($memoPath) -match 'unsaved draft 2') -and @(Get-WtTestTexts $st0 | Where-Object { $_ -like '저장됨*' }).Count -eq 1 -and -not @(Get-WtDataUnsaved).Count)
     Assert-WtTest '메모 안정성: 재시도한 본문을 다시 읽을 수 있다' (((Get-WtMemoItems) | Where-Object id -eq $one.id).body -eq 'unsaved draft 2')
     & $memoModule { $script:ui.Search.Text = '' }
     Set-TestBody 0 'next draft'
@@ -631,7 +706,7 @@ try {
     & $memoModule { param($id) Select-WtMemoItem $id } $one.id
 
     # 데이터 폴더가 늦게 답하는 저장. 실제 쓰기(Write-WtDataFile) 앞에 기다림만 끼운다. 저장 통로 · 버전 · 칸 표시는 그대로 돈다
-    # 저장 표시는 시간이 아니라 「받아들인 내용이 파일에 쓰였는지」로 정한다: 쓰는 중이면 「저장하는 중」, 쓰이면 「자동 저장됨」
+    # 저장 표시는 시간이 아니라 「받아들인 내용이 파일에 쓰였는지」로 정한다: 쓰는 중이면 「저장하는 중」, 쓰이면 「저장됨」
     $storage = Get-Module Storage
     $pump = { [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{ }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle) }
     $settle = { param($ms) $w = [System.Diagnostics.Stopwatch]::StartNew(); while ($w.ElapsedMilliseconds -lt $ms) { Update-WtWork; & $pump; Start-Sleep -Milliseconds 20 } }
@@ -641,20 +716,22 @@ try {
         & $storage { $script:writeJob = { param($p, $json) [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.WaitOne(); Write-WtDataFile $p $json } }
         Set-TestBody 0 'slow draft'
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        $saveProcess = [Diagnostics.Process]::GetCurrentProcess(); $saveCpu = $saveProcess.TotalProcessorTime
         $savedNow = & $memoModule { Save-WtMemoNow }
-        $saveMs = $watch.ElapsedMilliseconds
+        $saveWallMs = $watch.ElapsedMilliseconds
+        $saveProcess.Refresh(); $saveMs = ($saveProcess.TotalProcessorTime - $saveCpu).TotalMilliseconds
         $writingTexts = @(Get-WtTestTexts $st0)
         $dirtyAfter = & $memoModule { $script:panes[0].Dirty }
         [void]$gate.Gate.Set()
         & $settle 1000
-        Assert-WtTest "메모 안정성: 저장이 늦으면 잠깐만 기다리고(${saveMs}ms) 「저장하는 중」, 파일에 쓰이면 「자동 저장됨」 (다시 저장하지 않는다)" (
+        Assert-WtTest "메모 안정성: 저장이 늦으면 잠깐만 기다리고(벽 ${saveWallMs}ms / CPU ${saveMs}ms) 「저장하는 중」, 파일에 쓰이면 「저장됨」 (다시 저장하지 않는다)" (
             $savedNow -and $saveMs -lt 1500 -and -not $dirtyAfter -and @($writingTexts | Where-Object { $_ -like '저장하는 중*' }).Count -eq 1 -and
-            @(Get-WtTestTexts $st0 | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1 -and ([System.IO.File]::ReadAllText($memoPath) -match 'slow draft')) ($writingTexts -join ' / ')
+            @(Get-WtTestTexts $st0 | Where-Object { $_ -like '저장됨*' }).Count -eq 1 -and ([System.IO.File]::ReadAllText($memoPath) -match 'slow draft')) ($writingTexts -join ' / ')
     } finally {
         & $storage { $script:writeJob = $script:testJob }
         Remove-WtTestGate $gate
     }
-    # 모든 쓰기가 0.6초씩 걸리고 성공하는 폴더: 화면이 기다리는 시간(0.4초)보다 길어도 한 번 쓰면 「자동 저장됨」이고, 같은 내용을 되풀이해 쓰지 않는다
+    # 모든 쓰기가 0.6초씩 걸리고 성공하는 폴더: 화면이 기다리는 시간(0.4초)보다 길어도 한 번 쓰면 「저장됨」이고, 같은 내용을 되풀이해 쓰지 않는다
     $slowWrites = [System.Collections.ArrayList]::Synchronized([System.Collections.ArrayList]::new())
     [AppDomain]::CurrentDomain.SetData('WtTestWrites', $slowWrites)
     try {
@@ -663,8 +740,8 @@ try {
         [void](& $memoModule { Save-WtMemoNow })
         & $settle 2500
         $memoWrites = @($slowWrites | Where-Object { $_ -ieq $memoPath }).Count
-        Assert-WtTest '메모 안정성: 모든 쓰기가 0.6초씩 걸려도 한 번 쓰면 「자동 저장됨」이고 되풀이해 쓰지 않는다' (
-            $memoWrites -eq 1 -and -not (& $memoModule { $script:panes[0].Dirty }) -and @(Get-WtTestTexts $st0 | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1 -and
+        Assert-WtTest '메모 안정성: 모든 쓰기가 0.6초씩 걸려도 한 번 쓰면 「저장됨」이고 되풀이해 쓰지 않는다' (
+            $memoWrites -eq 1 -and -not (& $memoModule { $script:panes[0].Dirty }) -and @(Get-WtTestTexts $st0 | Where-Object { $_ -like '저장됨*' }).Count -eq 1 -and
             ([System.IO.File]::ReadAllText($memoPath) -match 'slow draft 2')) "(memo 쓰기 ${memoWrites}번 · $(@(Get-WtTestTexts $st0) -join ' '))"
     } finally {
         & $storage { $script:writeJob = $script:testJob }
@@ -690,8 +767,8 @@ try {
         Assert-WtTest '메모 안정성: 그 내용이 있으면 끝내기 전에 묻는다 ([취소]면 머문다)' $stay
         [void](Send-TestKey S Control)
         & $settle 800
-        Assert-WtTest '메모 안정성: Ctrl+S가 가지고 있던 내용을 다시 써서 파일에 남기고 「자동 저장됨」이 된다' (
-            ([System.IO.File]::ReadAllText($memoPath) -match '늦게 실패할 메모') -and @(& $memoModule { Get-WtTestTexts $script:panes[0].Status } | Where-Object { $_ -like '자동 저장됨*' }).Count -eq 1)
+        Assert-WtTest '메모 안정성: Ctrl+S가 가지고 있던 내용을 다시 써서 파일에 남기고 「저장됨」이 된다' (
+            ([System.IO.File]::ReadAllText($memoPath) -match '늦게 실패할 메모') -and @(& $memoModule { Get-WtTestTexts $script:panes[0].Status } | Where-Object { $_ -like '저장됨*' }).Count -eq 1)
         & $memoModule { Remove-WtMemoCurrent }   # 아래 검사가 메모 두 개로 시작하게
     } finally {
         & $storage { $script:writeJob = $script:testJob }
@@ -708,10 +785,250 @@ try {
     $held.Dispose(); $held = $null
     [void](Send-TestKey S Control)
     & $settle 600
-    Assert-WtTest '메모 안정성: 다시 쓴 뒤 파일도 같고 ID가 모두 고유하다' ((Get-WtMemoItems).Count -eq $before -and @((Get-WtMemoItems).id | Sort-Object -Unique).Count -eq $before -and -not @(Get-WtDataUnsaved).Count)
+    Assert-WtTest '메모 안정성: 다시 쓴 뒤 파일도 같고 ID가 모두 고유하다' ((Get-WtMemoItems).Count -eq $before -and @((Get-WtMemoItems).id | Sort-Object -Unique).Count -eq $before -and -not @(Get-WtDataUnsaved).Count) "($((Get-WtMemoItems).Count)/$before · 못 쓴 내용 $(@(Get-WtDataUnsaved).Count) $(@(Get-WtDataUnsaved) | ConvertTo-Json -Compress -Depth 2))"
+
+    # ---- 목록 · 조건 · 보기 · 목차 ----
+    Assert-WtTest '메모 화면: 목록 카드 280 · 목차 카드 220 · 보기 단추 하나' (& $memoModule { $script:ui.ListPanel.Width -eq 280 -and $script:ui.TocPanel.Width -eq 220 -and $script:panes[0].ViewButton -and -not $script:ui.ContainsKey('ModeButtons') })
+    $side = & $memoModule { $p = $script:panes[0]; foreach ($w in 1000, 500, 300) { Update-WtMemoPaneSide $p $w; $p.Head.Margin.Left } }
+    Assert-WtTest '메모 화면: 글 폭 680 가운데 · 좁으면 여백 44 · 아주 좁으면 20' (($side -join ',') -ceq '160,44,20') ($side -join ',')
+    $listMemos = @(foreach ($i in 1..95) { $m = New-WtMemo; [void](Set-WtMemoContent $m "목록 $i" "본문 $i" ([datetime]'2026-10-01').AddMinutes($i)); $m.id = "list$i"; $m })
+    $tocMemo = New-WtMemo; [void](Set-WtMemoContent $tocMemo '복구 절차' "# 복구 절차`n`n## 준비`n`n내용`n`n### 세부`n`n## 실행`n`n내용 #장애" ([datetime]'2026-10-20')); $tocMemo.id = 'toc'
+    Save-WtMemoItems (@($tocMemo) + $listMemos)
+    & $memoModule { $script:viewStamp = $null; $script:listRows = $null; Update-WtMemoView }
+    $paged = & $memoModule { Clear-WtMemoFilter; $a = @{ Count = $script:listResult.Count; Rows = $script:listRows.Count }; Add-WtMemoListPage; $a.More = $script:listRows.Count; Select-WtMemoItem 'list1'; $a.Until = @($script:listRows | Where-Object Id -ceq 'list1').Count; $a }
+    Assert-WtTest '메모 목록: 40줄씩 만들고 스크롤 · 고르기로 이어 만든다' ($paged.Count -eq 96 -and $paged.Rows -eq 40 -and $paged.More -eq 80 -and $paged.Until -eq 1) "$($paged.Count)/$($paged.Rows)/$($paged.More)/$($paged.Until)"
+    $first = & $memoModule { $i = Get-WtMemoIndex; $all = @((Find-WtMemo -Index $i).Items.Id); $part = Find-WtMemo -Index $i -First 3; $next = @(Get-WtMemoResultRows -Result $part -Skip 3 -First 3); @{ Same = ((@($part.Items.Id) + @($next.Id)) -join ',') -ceq (@($all[0..5]) -join ','); Count = $part.Count; Snippet = [bool]$next[0].Snippet } }
+    Assert-WtTest '메모 검색: 앞줄만 만들어도 뒤를 같은 순서 · 미리보기로 이어 받는다' ($first.Same -and $first.Count -eq 96 -and $first.Snippet)
+    $fresh = & $memoModule { $script:memoIndex = $null; Start-WtMemoIndexBuild; $script:indexTimer.Stop(); Update-WtMemoList; $a = @{ NoIndex = $null -eq $script:memoIndex -and $null -eq $script:listResult.Find; Rows = $script:listRows.Count }; Set-WtMemoSearch '복구'; $a.Built = $null -ne $script:memoIndex -and $null -eq $script:indexBuild; $a.Found = @($script:listRows.Id) -join ','; $a }
+    Assert-WtTest '메모 색인: 첫 목록은 색인을 기다리지 않고, 찾으면 남은 색인을 끝낸다' ($fresh.NoIndex -and $fresh.Rows -gt 0 -and $fresh.Built -and $fresh.Found -ceq 'toc') "$($fresh.Found)"
+    # 연결 조건은 해석이 끝나야 답한다. 끝나지 않았으면 화면을 세우지 않고 앞 결과를 둔 뒤, 끝나면 다시 그린다
+    $wait = & $memoModule {
+        $script:memoIndex = $null; Start-WtMemoIndexBuild; $script:indexTimer.Stop(); [void](Get-WtMemoIndex); $script:linkTimer.Stop()
+        $keep = $script:linkWaitMs; $script:linkWaitMs = 0
+        Set-WtMemoSearch '복구'
+        $before = @($script:listRows.Id) -join ','
+        Set-WtMemoSearch 'has:backlink'
+        $a = @{ Waiting = $script:listWaitLinks; Note = [string]$script:ui.ListNote.Text; Tip = [string]$script:ui.ListNote.ToolTip; Same = (@($script:listRows.Id) -join ',') -ceq $before; Ready = $script:memoIndex.LinksReady }
+        $script:linkWaitMs = $keep
+        $script:linkTimer.Start()
+        $timer = $script:linkTimer
+        $guard = [Diagnostics.Stopwatch]::StartNew()
+        # 타이머가 가장 낮은 우선순위라 같은 우선순위로 기다려야 돌 틈이 생긴다
+        while ($timer.IsEnabled -and $guard.Elapsed.TotalSeconds -lt 20) { [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([action] { }, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle); Start-Sleep -Milliseconds 5 }
+        $a.After = $script:memoIndex.LinksReady -and -not $script:listWaitLinks -and $script:ui.ListNote.Visibility -eq 'Collapsed'
+        Clear-WtMemoFilter
+        $a
+    }
+    Assert-WtTest '메모 연결: 연결 조건은 화면을 세우지 않고 기다렸다가, 해석이 끝나면 결과를 그린다' ($wait.Waiting -and $wait.Same -and -not $wait.Ready -and $wait.Note -ceq '이전 조건 결과' -and $wait.Tip -like '연결을 정리하는 중*' -and $wait.After) "$($wait.Waiting)/$($wait.Same)/$($wait.Ready)/$($wait.Note)/$($wait.After)"
+    $kept = & $memoModule { Set-WtMemoSearch '목록'; $a = @{ Find = $null -ne $script:listResult.Find }; Add-WtMemoListPage; $a.Before = $script:listRows.Count; $rows = $script:listRows; Update-WtMemoList; $a.After = $script:listRows.Count; $a.Same = [object]::ReferenceEquals($rows, $script:listRows); Clear-WtMemoFilter; $a }
+    Assert-WtTest '메모 목록: 스크롤로 만든 줄은 저장 뒤 다시 그려도 그대로다 (찾기 결과)' ($kept.Find -and $kept.Before -eq 80 -and $kept.After -eq 80 -and $kept.Same) "$($kept.Before)/$($kept.After)/$($kept.Same)"
+    $chips = & $memoModule { Set-WtMemoSearch '#장애 복구'; Move-WtMemoQueryToChips; $a = @{ Labels = @($script:listChips.Label) -join ','; Box = [string]$script:ui.Search.Text; Count = $script:listResult.Count; Shown = $script:ui.Chips.Children.Count }; $script:listChips.RemoveAt(0); Update-WtMemoList; $a.After = $script:ui.Chips.Visibility; Clear-WtMemoFilter; $a }
+    Assert-WtTest '메모 조건: Enter는 조건을 칩으로 옮기고 낱말은 검색창에 남긴다 · 칩을 지우면 빠진다' ($chips.Labels -ceq '#장애' -and $chips.Box -ceq '복구' -and $chips.Count -eq 1 -and $chips.Shown -eq 1 -and $chips.After -eq 'Collapsed') "$($chips.Labels) / $($chips.Box)"
+    $labels = & $memoModule {
+        foreach ($q in '-tag:"초안"', 'folder:"절차"', 'updated:7d', 'is:pinned', 'no:tag', 'has:backlink') { Add-WtMemoChip $q '' }
+        @($script:listChips.Label) -join ','; $script:listChips.Clear()
+    }
+    Assert-WtTest '메모 조건: 칩은 읽기 쉬운 이름으로 보인다' ($labels -ceq '제외: #초안,폴더: 절차,수정일: 최근 7일,고정,태그 없음,받은 연결 있음') $labels
+    $broken = & $memoModule { Set-WtMemoSearch '복구'; $before = @($script:listRows.Id) -join ','; Set-WtMemoSearch 'title:'; $a = @{ Note = $script:ui.ListNote.Text; Shown = $script:ui.ListNote.Visibility; Same = (@($script:listRows.Id) -join ',') -ceq $before; Tip = [string]$script:ui.ListNote.ToolTip }; Set-WtMemoSearch '없는낱말'; $a.Empty = $script:ui.ListEmpty.Visibility; Clear-WtMemoFilter; $a.Back = $script:ui.ListEmpty.Visibility; $a.Count = $script:listResult.Count; $a }
+    Assert-WtTest '메모 조건: 쓰는 중인 틀린 식은 앞 결과를 두고 알린다 · 0건은 조건 지우기' ($broken.Note -ceq '이전 조건 결과' -and $broken.Shown -eq 'Visible' -and $broken.Same -and $broken.Tip -and $broken.Empty -eq 'Visible' -and $broken.Back -eq 'Collapsed' -and $broken.Count -eq 96)
+    $actions = & $memoModule {
+        Invoke-WtMemoAction archive 'toc' $true
+        $a = @{ Normal = $script:listResult.Count }
+        $script:listView = 'archived'; Update-WtMemoList
+        $a.Archived = @($script:listRows.Id) -join ','
+        Clear-WtMemoFilter; Invoke-WtMemoAction archive 'toc' $false
+        Invoke-WtMemoAction pin 'list1' $true
+        $a.Pinned = $script:listRows[0].Id; $a.Pin = $script:listRows[0].PinShown
+        Invoke-WtMemoAction pin 'list1' $false
+        Invoke-WtMemoAction folder 'list2' 'work'
+        Set-WtMemoSearch 'folder:업무'
+        $a.Folder = @($script:listRows.Id) -join ','
+        Clear-WtMemoFilter; $script:listSort = 'title'; $script:listDir = 'desc'; Update-WtMemoList
+        $a.Sorted = $script:listRows[0].Title
+        Clear-WtMemoFilter; $a
+    }
+    Assert-WtTest '메모 정리: 보관 · 고정 · 폴더 · 정렬이 목록에 바로 보인다' ($actions.Normal -eq 95 -and $actions.Archived -ceq 'toc' -and $actions.Pinned -ceq 'list1' -and $actions.Pin -eq 'Visible' -and $actions.Folder -ceq 'list2' -and $actions.Sorted -ceq '복구 절차') ($actions | ConvertTo-Json -Compress)
+    $saved = & $memoModule {
+        Set-WtMemoSearch '#장애'; Move-WtMemoQueryToChips; Save-WtMemoCurrentView '장애 보기'
+        $a = @{ Label = $script:ui.ViewLabel.Text }
+        Set-WtMemoSearch '복구'
+        $a.Changed = $script:ui.ViewLabel.Text
+        Clear-WtMemoFilter; $a.Plain = $script:ui.ViewLabel.Text
+        Use-WtMemoSavedView @(Get-WtMemoViews | Where-Object name -ceq '장애 보기')[0]
+        $a.Chips = @($script:listChips.Label) -join ','; $a.Count = $script:listResult.Count; $a.Back = $script:ui.ViewLabel.Text
+        Set-WtMemoViewMenu $script:ui.ViewPick.ContextMenu
+        $a.Menu = @($script:ui.ViewPick.ContextMenu.Items | ForEach-Object Header) -join '|'
+        Clear-WtMemoFilter; $a
+    }
+    Assert-WtTest '메모 보기: 저장한 보기 · 변경됨 표시 · 다시 불러오기 · 메뉴' ($saved.Label -ceq '장애 보기' -and $saved.Changed -ceq '장애 보기 · 변경됨' -and $saved.Plain -ceq '일반' -and $saved.Chips -ceq '#장애' -and $saved.Count -eq 1 -and $saved.Back -ceq '장애 보기' -and
+        $saved.Menu -like '*✓ 장애 보기*보기 업데이트*이 보기 삭제*새 보기로 저장...') ($saved | ConvertTo-Json -Compress)
+    $menus = & $memoModule {
+        Set-WtMemoFilterMenu $script:ui.FilterButton.ContextMenu; Set-WtMemoSortMenu $script:ui.SortButton.ContextMenu
+        Set-WtMemoListMenu $script:ui.List.ContextMenu 'toc'
+        @{ Filter = @($script:ui.FilterButton.ContextMenu.Items | ForEach-Object Header) -join '|'; Sort = @($script:ui.SortButton.ContextMenu.Items | ForEach-Object Header) -join '|'; List = @($script:ui.List.ContextMenu.Items | ForEach-Object Header) -join '|' }
+    }
+    Assert-WtTest '메모 메뉴: 조건 · 정렬 · 목록 우클릭 항목' ($menus.Filter -like '수정일|오늘|최근 7일|최근 30일|상태|고정|*#장애*' -and $menus.Sort -ceq '✓ 기본|수정일|생성일|제목|최근 열기|받은 연결 수' -and
+        $menus.List -like '새 탭에서 열기|오른쪽에 열기|홈에 고정|고정|보관|폴더로 옮기기|*삭제') ($menus | ConvertTo-Json -Compress)
+    $toc = & $memoModule {
+        [void](Open-WtMemo 'toc' 'tab')
+        $p = Get-WtMemoActivePane
+        Set-WtMemoMode 'live'
+        $a = @{ Rows = @($script:ui.Toc.Items | ForEach-Object Text) -join ','; Lines = @($script:ui.Toc.Items | ForEach-Object Line) -join ',' }
+        $null = Show-WtMemoEditorLine $p.Editor 8
+        $a.Live = $p.Editor.Caret.Line
+        Set-WtMemoMode 'read'; $null = Show-WtMemoEditorLine $p.Editor 8; $a.Read = $p.Editor.Caret.Line; $a.Block = $null -ne $p.Editor.View.Tag.HeadingBlocks[9]
+        Set-WtMemoMode 'source'; $null = Show-WtMemoEditorLine $p.Editor 8
+        $a.Source = $p.Editor.Source.CaretIndex -gt 0
+        Set-WtMemoMode 'live'; $a
+    }
+    Assert-WtTest '메모 목차: 제목 + 소제목(같은 제목 H1은 뺀다) · 세 보기 모두 그 줄로 간다' ($toc.Rows -ceq '복구 절차,준비,세부,실행' -and $toc.Lines -ceq '-1,2,6,8' -and $toc.Live -eq 8 -and $toc.Read -eq 8 -and $toc.Source -and $toc.Block) "$($toc.Rows) / $($toc.Lines)"
+    $modes = & $memoModule {
+        $p = Get-WtMemoActivePane
+        Set-WtMemoMode 'read'
+        $reading = $p.Current
+        [void](Open-WtMemo 'list3' 'tab')
+        Set-WtMemoMode 'source'
+        [void](Select-WtMemoTab $p $reading)
+        $a = @{ Back = $script:mode; Tip = $p.ViewButton.ToolTip }
+        Save-WtMemoTabs
+        $a.Saved = @((Get-WtSetting 'memo.tabs').panes[0].modes) -join ','
+        Set-WtMemoMode 'live'; $a
+    }
+    Assert-WtTest '메모 보기: 탭마다 기억하고 설정에 남긴다' ($modes.Back -ceq 'read' -and $modes.Tip -ceq '읽기 보기 (Ctrl+E)' -and $modes.Saved -like '*read,source*') ($modes | ConvertTo-Json -Compress)
+
+    $caseUpper = New-WtMemo; $caseUpper.id = 'CaseA'; [void](Set-WtMemoContent $caseUpper '대문자 항목' '위 본문')
+    $caseLower = New-WtMemo; $caseLower.id = 'casea'; [void](Set-WtMemoContent $caseLower '소문자 항목' '아래 본문')
+    Save-WtMemoItems @($caseUpper, $caseLower)
+    $caseAction = & $memoModule {
+        $script:viewStamp = $null; Update-WtMemoView
+        Invoke-WtMemoAction 'pin' 'casea' $true
+        @{ Ids = @($script:items.id); Upper = @($script:items | Where-Object id -CEQ 'CaseA')[0]; Lower = @($script:items | Where-Object id -CEQ 'casea')[0] }
+    }
+    Assert-WtTest '메모 정리: 대소문자만 다른 id를 구분하고 다른 행을 덮지 않는다' (
+        $caseAction.Ids.Count -eq 2 -and $caseAction.Upper.title -ceq '대문자 항목' -and -not $caseAction.Upper.pinned -and $caseAction.Lower.pinned -and $caseAction.Lower.body -ceq '아래 본문')
+
+    # ---- 큰 저장소: 직렬화 전부터 보유 · 연속 저장 · 실패 · 종료 확인 · 캐시 ----
+    Wait-WtTestWrites 30000
+    & $memoModule { foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } }; $script:ui = @{}; $script:panes.Clear() }
+    if ($win) { $win.Close(); $win = $null }
+    Stop-WtAllWork
+    $backgroundTest = New-WtTestData 'memo-background'
+    $backgroundFixture = New-WtMemoPerfFixture -Count 320
+    $originalWriter = & $storage { , $script:writeJob }
+    $originalWritingChoice = & $shellModule { , ${function:Show-WtWritingChoice} }
+    $originalWindow = & $shellModule { $script:window }
+    $backgroundGate = $null
+    try {
+        Write-WtJsonFile (Get-WtStorePath memo) $backgroundFixture.Document
+        Wait-WtTestWrites 30000
+        Set-WtAppRoot $backgroundTest.App
+        [void](Wait-WtWork -All -Milliseconds 30000)
+        $backgroundStore = Open-WtMemoStore
+        $backgroundPath = Get-WtStorePath memo
+        $backgroundGate = New-WtTestGate
+        & $storage {
+            $script:writeJob = { param($p, $json) $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne(); Write-WtDataFile $p $json }
+        }
+        & $shellModule {
+            $script:window = $null; $script:testWritingAsked = 0
+            function script:Show-WtWritingChoice { param($Purpose, [switch]$NoCancel) $script:testWritingAsked++; 'cancel' }
+        }
+        $nextItems = Get-WtMemoLiveItems $backgroundStore.Items
+        $firstCopy = Copy-WtItem $nextItems[0]; $firstCopy.title = '화면 밖 첫 저장'; Set-WtItemEdited $firstCopy; $nextItems[0] = $firstCopy
+        $firstSave = Save-WtMemoDataItems $backgroundStore $nextItems
+        $entered = $backgroundGate.Entered.WaitOne(10000)
+        $writingLook = & $memoModule { Get-WtMemoSaveLook }
+        $closeCancelled = & $shellModule { $script:writingDropped = $false; -not (Confirm-WtDataWrites) -and $script:testWritingAsked -eq 1 }
+        Assert-WtTest '화면 밖 저장: 쓰기 전부터 보유 · 저장하는 중 · 종료 취소 때 내용 유지' (
+            $entered -and (Get-WtDataWriteStatus $backgroundPath).State -eq 'writing' -and $writingLook[0] -eq 'writing' -and $closeCancelled -and
+            (Read-WtStore memo).items[0].title -ceq '화면 밖 첫 저장' -and [IO.File]::ReadAllText($backgroundPath) -notmatch '화면 밖 첫 저장')
+        # 다시 읽은 핸들로 저장해 낡은 핸들 거부 규칙도 그대로 지킨다.
+        $secondBase = Open-WtMemoStore
+        $nextItems = Get-WtMemoLiveItems $secondBase.Items
+        $secondCopy = Copy-WtItem $nextItems[0]; $secondCopy.title = '화면 밖 두 번째 저장'; Set-WtItemEdited $secondCopy; $nextItems[0] = $secondCopy
+        $secondSave = Save-WtMemoDataItems $secondBase $nextItems
+        Assert-WtTest '화면 밖 저장: 쓰는 중 다시 저장해도 앞 스냅샷은 불변이고 최신 내용을 보유한다' (
+            $firstSave.Items[0].title -ceq '화면 밖 첫 저장' -and (Read-WtStore memo).items[0].title -ceq '화면 밖 두 번째 저장')
+        [void]$backgroundGate.Gate.Set(); Wait-WtTestWrites 30000
+        $disk = [IO.File]::ReadAllText($backgroundPath) | ConvertFrom-Json -DateKind String
+        $backup = [IO.File]::ReadAllText("$backgroundPath.bak") | ConvertFrom-Json -DateKind String
+        Assert-WtTest '화면 밖 저장: 저장됨은 파일에 쓴 최신 버전 · bak은 직전 버전' (
+            (Get-WtDataWriteStatus $backgroundPath).State -eq 'saved' -and $disk.items[0].title -ceq '화면 밖 두 번째 저장' -and $backup.items[0].title -ceq '화면 밖 첫 저장')
+        Remove-WtTestGate $backgroundGate; $backgroundGate = $null
+        & $storage { $script:writeJob = { param($p, $json) throw [IO.IOException]::new('큰 저장소 검사 실패') } }
+        $failedBase = Open-WtMemoStore
+        $failedSave = Set-WtMemoArchived -Store $failedBase -Id memo-0 -Archived $true
+        Wait-WtTestWrites 30000
+        $failedLook = & $memoModule { Get-WtMemoSaveLook }
+        $failureAsked = & $shellModule { $script:testAsked = @(); $script:testChoices.Clear(); $script:writingDropped = $false; -not (Confirm-WtDataWrites) -and ($script:testAsked -join ',') -eq 'exit' }
+        Assert-WtTest '화면 밖 저장: 실패 내용 보유 · 실패 표시 · 종료 전에 묻기 · 원본 유지' (
+            (Get-WtDataWriteStatus $backgroundPath).State -eq 'failed' -and $failedLook[0] -eq 'error' -and $failureAsked -and
+            (Read-WtStore memo).items[0].archived -eq $true -and ([IO.File]::ReadAllText($backgroundPath) | ConvertFrom-Json).items[0].archived -eq $false)
+        & $storage { param($writer) $script:writeJob = $writer } $originalWriter
+        [void](& $memoModule { Save-WtMemoNow -Retry }); Wait-WtTestWrites 30000
+        Assert-WtTest '화면 밖 저장: Ctrl+S 재시도로 보유 내용을 파일에 쓰고 실패를 해제한다' (
+            (Get-WtDataWriteStatus $backgroundPath).State -eq 'saved' -and ([IO.File]::ReadAllText($backgroundPath) | ConvertFrom-Json).items[0].archived -eq $true)
+
+        $backgroundGate = New-WtTestGate
+        & $storage { $script:writeJob = { param($p, $json) $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne(); Write-WtDataFile $p $json } }
+        Invoke-WtQueuedStoreWrite -Action { Write-WtJsonFile (Get-WtStorePath 'edit-gate') @{ items = @() } }
+        [void]$backgroundGate.Entered.WaitOne(10000)
+        $editable = @(Get-WtMemoItems)
+        [void](Set-WtMemoContent $editable[0] '편집용 항목' '받아들인 본문 #태그')
+        Save-WtMemoItems $editable
+        $editable[0].body = '아직 저장하지 않은 다음 본문'
+        $acceptedBody = (Read-WtStore memo).items[0].body
+        [void]$backgroundGate.Gate.Set(); Wait-WtTestWrites 30000
+        Assert-WtTest '화면 밖 저장: 편집용 항목을 직접 고쳐도 JSON 캐시가 낡지 않고 받아들인 스냅샷은 이후 편집과 분리된다' (
+            $acceptedBody -ceq '받아들인 본문 #태그' -and ([IO.File]::ReadAllText($backgroundPath) | ConvertFrom-Json).items[0].body -ceq '받아들인 본문 #태그')
+        Remove-WtTestGate $backgroundGate; $backgroundGate = $null
+        & $storage { param($writer) $script:writeJob = $writer } $originalWriter
+
+        $cacheItems = @($backgroundFixture.Document.items[0..63]) + @($backgroundFixture.Document.items[100])
+        $cachePath = Get-WtStorePath memo-index-cache
+        $cacheReference = New-WtMemoIndex $cacheItems -Folders $backgroundFixture.Document.folders
+        $expectedLinks = (Find-WtMemo -Index $cacheReference -Query 'has:link').Items.Id -join ','
+        foreach ($cacheCase in 'missing', 'valid', 'stale', 'broken') {
+            switch ($cacheCase) {
+                'missing' { & $storage { param($p) [IO.File]::Delete($p) } $cachePath }
+                'stale' { $staleCache = Read-WtCacheFile $cachePath; $staleCache.Version = 99; Write-WtCacheFile $cachePath $staleCache }
+                'broken' { & $storage { param($p) [IO.File]::WriteAllText($p, '{broken') } $cachePath }
+            }
+            $cacheWork = Start-WtMemoBackgroundIndex -Items $cacheItems -Folders $backgroundFixture.Document.folders
+            $cacheFinished = Wait-WtWork $cacheWork -Milliseconds 30000
+            if ($cacheFinished -and $cacheWork.State -eq 'done') { Set-WtMemoIndexProperties $cacheWork.Result }
+            Assert-WtTest "연결 캐시: $cacheCase 상태에서도 같은 연결 결과를 다시 만든다" (
+                $cacheFinished -and $cacheWork.State -eq 'done' -and $cacheWork.Result.LinksReady -and
+                ((Find-WtMemo -Index $cacheWork.Result -Query 'has:link').Items.Id -join ',') -ceq $expectedLinks -and (Read-WtCacheFile $cachePath).Version -eq 1) $cacheWork.Error
+        }
+        Write-WtJsonFile $backgroundPath ([pscustomobject]@{ schema = 1; saved = '2026-11-01T09:30:00+09:00'; items = $cacheItems; folders = $backgroundFixture.Document.folders })
+        Wait-WtTestWrites 30000
+        Set-WtAppRoot $backgroundTest.App; [void](Wait-WtWork -All -Milliseconds 30000)
+        $loadedBefore = @(Get-WtMemoItems); $stampBefore = Get-WtStoreStamp memo
+        & $storage {
+            param($p)
+            $at = [IO.File]::GetLastWriteTimeUtc($p)
+            $text = [IO.File]::ReadAllText($p).Replace('[[시험 메모 0100]]', '[[시험 메모 0101]]')
+            [IO.File]::WriteAllText($p, $text, [Text.UTF8Encoding]::new($false)); [IO.File]::SetLastWriteTimeUtc($p, $at)
+        } $backgroundPath
+        $loadedAfter = @(Get-WtMemoItems); $stampAfter = Get-WtStoreStamp memo
+        $externalWork = Start-WtMemoBackgroundIndex -Items $loadedAfter -Folders $backgroundFixture.Document.folders
+        $externalFinished = Wait-WtWork $externalWork -Milliseconds 30000
+        if ($externalFinished -and $externalWork.State -eq 'done') { Set-WtMemoIndexProperties $externalWork.Result }
+        Assert-WtTest '연결 캐시: 같은 크기·시각의 외부 memo.json 변경도 다시 읽고 낡은 연결을 버린다' (
+            $stampBefore -cne $stampAfter -and $loadedBefore[0].body.Contains('[[시험 메모 0100]]') -and $loadedAfter[0].body.Contains('[[시험 메모 0101]]') -and
+            $externalFinished -and $externalWork.State -eq 'done' -and (Find-WtMemo -Index $externalWork.Result -Query 'linksto:memo-100').Count -eq 0)
+    } finally {
+        if ($backgroundGate) { Remove-WtTestGate $backgroundGate }
+        & $storage { param($writer) $script:writeJob = $writer } $originalWriter
+        & $shellModule { param($choice, $window) Set-Item Function:script:Show-WtWritingChoice $choice; $script:window = $window } $originalWritingChoice $originalWindow
+        Wait-WtTestWrites 30000; Stop-WtAllWork
+        Set-WtAppRoot $test.App
+        Remove-WtTestData $backgroundTest
+    }
 } finally {
     if ($held) { $held.Dispose() }
     if ($win) { try { $win.Close() } catch { } }
-    & $memoModule { if ($script:saveTimer) { $script:saveTimer.Stop() }; if ($script:undoTimer) { $script:undoTimer.Stop() } }
+    & $memoModule { foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } }
     Remove-WtTestData $test
 }

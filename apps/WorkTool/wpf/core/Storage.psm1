@@ -28,6 +28,9 @@ $script:writeSlowMs = 5000       # 이보다 오래 걸리는 저장은 「응�
 $script:writeQueue = [System.Collections.Generic.List[object]]::new()   # 차례를 기다리는 쓰기 (파일마다 마지막 내용 하나)
 $script:writeCurrent = $null     # 지금 쓰는 것
 $script:writeHandlers = [System.Collections.Generic.List[scriptblock]]::new()
+$script:storePreparers = @{}
+$script:storePreparations = @{}
+$script:storeSerializers = @{}
 
 # 여러 단계인 디스크 작업 (화면 밖 실행 공간에서 돈다. 명령 없이 .NET만 쓴다. 예전 CSV만 Import-Csv). 검사가 응답 없는 폴더를 흉내 내려고 바꿔 끼운다.
 # 메서드 하나로 끝나는 읽기 · 있는지 보기 · 폴더 만들기는 Invoke-WtDataCall로 스레드 풀에서 바로 부른다 (가장 빠르다)
@@ -104,11 +107,138 @@ function Invoke-WtDataCall {
 
 # 진입 스크립트가 자기 위치를 알려 준다. 묶음 파일이든 원본 폴더든 같은 방식으로 쓴다.
 function Set-WtAppRoot([string]$Path) {
+    foreach ($preparation in $script:storePreparations.Values) { if ($preparation.Work) { Stop-WtWork $preparation.Work } }
     $script:appRoot = $Path
     $script:dataRoot = $null
     $script:storeTops = @{}
     $script:storeRead = @{}
     $script:storeSession++
+    $script:storePreparations = @{}
+    $script:storeSerializers = @{}
+    foreach ($name in $script:storePreparers.Keys) { Start-WtStorePreparation $name }
+}
+
+# 큰 저장소를 쓰는 탭이 선택적으로 등록한다. 앱 경로가 정해진 뒤에만 시험/사용자 데이터 경로를 연다.
+# 준비 결과는 읽기 검증을 통과한 첫 Read-WtStore에서만 사용하며 외부 변경이면 버린다.
+function Register-WtStorePreparation {
+    param([string]$Name, [Management.Automation.CommandInfo]$Prepare, [Management.Automation.CommandInfo[]]$Functions, $Context, [string]$CacheName)
+    $script:storePreparers[$Name] = @{ Prepare = $Prepare; Functions = $Functions; Context = $Context; CacheName = $CacheName }
+}
+
+function Read-WtCacheFile([string]$Path) {
+    try {
+        $envelope = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json -Depth 30 -DateKind String -AsHashtable
+        if ($envelope.Format -ne 1 -or $envelope.Json -isnot [string]) { return $null }
+        $bytes = [Text.Encoding]::UTF8.GetBytes($envelope.Json)
+        $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes))
+        if ($hash -cne $envelope.Hash) { return $null }
+        $envelope.Json | ConvertFrom-Json -Depth 30 -DateKind String -AsHashtable
+    }
+    catch { $null }   # 다시 만들 수 있는 캐시는 저장 실패/종료 확인의 대상이 아니다.
+}
+
+function Write-WtCacheFile([string]$Path, $Value) {
+    try {
+        $payload = ConvertTo-Json -InputObject $Value -Depth 30 -Compress
+        $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($payload)))
+        $json = ConvertTo-Json -InputObject @{ Format = 1; Json = $payload; Hash = $hash } -Depth 4 -Compress
+        $tmp = "$Path.tmp"
+        [System.IO.File]::WriteAllText($tmp, $json, [Text.UTF8Encoding]::new($false))
+        [System.IO.File]::Move($tmp, $Path, $true)
+    } catch { }   # 원본 저장소에는 닿지 않는다.
+}
+
+function Read-WtPreparedDocument([string]$Path) {
+    try { $bytes = [System.IO.File]::ReadAllBytes($Path) }
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return @{ Document = $null; Stamp = 'missing' } }
+    $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes).TrimStart([char]0xFEFF)
+    $doc = $text | ConvertFrom-Json -Depth 20 -DateKind String
+    $cache = [Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
+    if ($doc -is [pscustomobject] -and $doc.items -is [array]) {
+        $parsed = [Text.Json.JsonDocument]::Parse($text)
+        try {
+            $i = 0
+            foreach ($item in $parsed.RootElement.GetProperty('items').EnumerateArray()) {
+                if ($null -ne $doc.items[$i]) { [void]$cache.TryAdd($doc.items[$i], $item.GetRawText()) }
+                $i++
+            }
+        } finally { $parsed.Dispose() }
+    }
+    @{ Document = $doc; Serialization = $cache; Stamp = "$($bytes.Length)|$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)))" }
+}
+
+# 받아들인 문서의 항목은 불변이다. 바뀌지 않은 항목의 JSON 조각을 재사용하며, 약한 키로 옛 항목을 붙잡지 않는다.
+function ConvertTo-WtStoreDocumentJson($Document, $Cache, $Factory) {
+    # 일반 JSON 호출에도 같은 내용을 쓴다. 항목 목록을 가진 저장소 문서에만 조각 재사용을 적용한다.
+    if ($Document -isnot [Collections.IDictionary] -or -not (@($Document.Keys) -ccontains 'items') -or $Document['items'] -isnot [array]) {
+        return ConvertTo-Json -InputObject $Document -Depth 20
+    }
+    $top = [ordered]@{}
+    foreach ($name in $Document.Keys) { if ($name -cne 'items') { $top[$name] = $Document[$name] } }
+    $head = ConvertTo-Json -InputObject $top -Depth 20 -Compress
+    $items = $Document['items']
+    $plan = $Factory.Invoke($items, $Cache)
+    $parts = $plan[0]
+    foreach ($i in $plan[1]) {
+        $item = $items[$i]
+        # 문서의 items 안 항목은 깊이 2에서 시작한다. 전체 문서 Depth 20과 같은 한도다.
+        $part = ConvertTo-Json -InputObject $item -Depth 18 -Compress
+        [void]$Cache.TryAdd($item, $part)
+        $parts[$i] = $part
+    }
+    $head.Substring(0, $head.Length - 1) + ',"items":[' + [string]::Join(',', $parts) + ']}'
+}
+
+function Initialize-WtStoreJsonParts {
+    $e = [Linq.Expressions.Expression]
+    $newExpression = $e.GetMethod('New', [type[]]@([Reflection.ConstructorInfo], [Collections.Generic.IEnumerable[Linq.Expressions.Expression]])).CreateDelegate(
+        [Func[Reflection.ConstructorInfo, Collections.Generic.IEnumerable[Linq.Expressions.Expression], Linq.Expressions.NewExpression]])
+    $items = $e::Parameter([object[]], 'items'); $cache = $e::Parameter([Runtime.CompilerServices.ConditionalWeakTable[object, object]], 'cache')
+    $i = $e::Variable([int], 'i'); $part = $e::Variable([object], 'part'); $parts = $e::Variable([string[]], 'parts')
+    $missing = $e::Variable([Collections.Generic.List[int]], 'missing'); $item = $e::ArrayIndex($items, $i)
+    $target = $e::ArrayAccess($parts, [Linq.Expressions.Expression[]]@($i)); $done = $e::Label()
+    $step = $e::IfThenElse($e::Equal($item, $e::Constant($null, [object])),
+        $e::Block([Linq.Expressions.Expression[]]@($e::Assign($target, $e::Constant('null')), $e::Empty())),
+        $e::IfThenElse($e::Call($cache, [Runtime.CompilerServices.ConditionalWeakTable[object, object]].GetMethod('TryGetValue'), [Linq.Expressions.Expression[]]@($item, $part)),
+            $e::Block([Linq.Expressions.Expression[]]@($e::Assign($target, $e::Convert($part, [string])), $e::Empty())),
+            $e::Call($missing, [Collections.Generic.List[int]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($i))))
+    $loop = $e::Loop($e::IfThenElse($e::LessThan($i, $e::ArrayLength($items)),
+        $e::Block([Linq.Expressions.Expression[]]@($step, $e::PostIncrementAssign($i), $e::Empty())), $e::Break($done)), $done)
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $part, $parts, $missing), [Linq.Expressions.Expression[]]@(
+        $e::Assign($parts, $e::NewArrayBounds([string], [Linq.Expressions.Expression[]]@($e::ArrayLength($items)))),
+        $e::Assign($missing, $newExpression.Invoke([Collections.Generic.List[int]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())), $loop,
+        $e::NewArrayInit([object], [Linq.Expressions.Expression[]]@($parts, $e::Call($missing, [Collections.Generic.List[int]].GetMethod('ToArray'))))))
+    $script:jsonPartsFactory = $e::Lambda([Func[object[], Runtime.CompilerServices.ConditionalWeakTable[object, object], object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($items, $cache)).Compile()
+}
+Initialize-WtStoreJsonParts
+
+function Start-WtStorePreparation([string]$Name) {
+    $spec = $script:storePreparers[$Name]
+    $path = Get-WtStorePath $Name
+    $cachePath = if ($spec.CacheName) { Get-WtStorePath $spec.CacheName } else { '' }
+    try {
+        $functions = @($spec.Functions) + @($spec.Prepare) + @(Get-Command Read-WtPreparedDocument, Read-WtCacheFile)
+        $work = Start-WtWork -Script {
+            param($path, $prepare, $context, $cachePath)
+            $read = Read-WtPreparedDocument $path
+            $cache = if ($cachePath) { Read-WtCacheFile $cachePath } else { $null }
+            $read.Value = & $prepare $read.Document $cache $context
+            $read
+        } -ArgumentList $path, $spec.Prepare.Name, $spec.Context, $cachePath -Functions $functions -Session Default
+        $script:storePreparations[$Name] = @{ Work = $work; Used = $false; Value = $null; Stamp = $null }
+    } catch { }   # 준비가 실패하면 보통 읽기가 기존 오류 표시 경로로 알린다.
+}
+
+function Get-WtStorePreparation([string]$Name) {
+    $p = $script:storePreparations[$Name]
+    if (-not $p) { return $null }
+    if ($p.Work) {
+        [void](Wait-WtWork $p.Work -Milliseconds 0)
+        if (-not $p.Work.Finished -or $p.Work.State -ne 'done') { return $null }
+        $p.Value = $p.Work.Result.Value
+        $p.Stamp = $p.Work.Result.Stamp
+    }
+    $p
 }
 
 function Get-WtAppRoot { $script:appRoot }
@@ -163,7 +293,10 @@ function Read-WtJsonFile([string]$Path) {
 # JSON 파일의 글. 파일이 없으면 $null (빈 파일이면 ''). 아직 파일에 쓰이지 않은 내용이 있으면 그 글
 function Read-WtJsonText([string]$Path) {
     $pending = Get-WtDataWritePending $Path
-    if ($pending) { return [string]$pending.Json }
+    if ($pending) {
+        if ($null -ne $pending.Document) { return ConvertTo-Json -InputObject $pending.Document -Depth 20 }
+        return [string]$pending.Json
+    }
     try { Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllText $Path) }
     catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { $null }
 }
@@ -175,10 +308,24 @@ JSON 파일 하나를 바꿔치기로 쓴다. 직전 파일은 <파일>.bak. 저
   바로 실패 · 쓰기 시작 실패 · 늦은 실패 모두 같은 길(Set-WtDataWriteFailed)로 남는다. 실패는 한 번 알리고, 셸이 끝내기 전에 묻는다.
   기다리는 시간은 화면이 얼마나 기다릴지만 정한다. 저장 상태(저장됨 · 쓰는 중 · 실패)는 Get-WtDataWriteStatus가 버전으로 정한다
 #>
-function Write-WtJsonFile([string]$Path, $Data) {
+function Write-WtJsonFile([string]$Path, $Data, [switch]$Background) {
+    if ($Background) {
+        # 호출자가 소유권을 넘기는 불변 문서. 직렬화 전부터 통로의 받아들인 버전에 포함한다.
+        [void](Submit-WtDataWrite $Path -Document $Data)
+        return
+    }
     $json = ConvertTo-Json -InputObject $Data -Depth 20
     $entry = Submit-WtDataWrite $Path $json
     Wait-WtDataWrite $entry $script:writeWaitMs
+}
+
+# 호출 하나의 이미 직렬화된 쓰기만 기다리지 않는다. 설정처럼 작은 문서를 함께 저장하는 화면용이다.
+# 기본 대기 시간과 다른 호출의 동작은 finally에서 즉시 복구한다. 받아들인 내용/실패/종료 확인은 같은 통로다.
+function Invoke-WtQueuedStoreWrite {
+    param([Parameter(Mandatory)][scriptblock]$Action, [object[]]$ArgumentList = @())
+    $previousWait = $script:writeWaitMs
+    try { $script:writeWaitMs = 0; & $Action @ArgumentList }
+    finally { $script:writeWaitMs = $previousWait }
 }
 
 # ---- 저장 통로 --------------------------------------------------------------------------------
@@ -208,13 +355,13 @@ function Get-WtDataFileRecord([string]$Path) {
 
 # 쓰기 하나를 통로에 넣는다. 넣는 순간 받아들인 버전이 된다.
 # 같은 파일의 아직 시작하지 않은 쓰기는 새 내용으로 바꾼다 (새 내용이 앞 내용을 담고 있다)
-function Submit-WtDataWrite([string]$Path, [string]$Json) {
+function Submit-WtDataWrite([string]$Path, [string]$Json, $Document = $null) {
     $rec = Get-WtDataFileRecord $Path
     for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) {
         if ($script:writeQueue[$i].Path -ieq $Path) { $script:writeQueue[$i].State = 'superseded'; $script:writeQueue.RemoveAt($i) }
     }
     $rec.Version++
-    $entry = @{ Path = $Path; Json = $Json; ContentStamp = $null; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
+    $entry = @{ Path = $Path; Json = $Json; Document = $Document; ContentStamp = $null; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
     $rec.Accepted = $entry
     $rec.Failed = $null   # 실패로 남아 있던 앞 내용은 이 내용이 담고 있다. 이 쓰기도 실패하면 이 내용이 남는다
     $script:writeQueue.Add($entry)
@@ -231,9 +378,18 @@ function Start-WtDataWriteNext {
         $entry.State = 'writing'
         try {
             $script:writeCurrent = $entry
-            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile) }
-            $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Reserved `
-                -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
+            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile, ConvertTo-WtStoreDocumentJson) }
+            if ($null -ne $entry.Document) {
+                $key = $entry.Path.ToLowerInvariant()
+                if (-not $script:storeSerializers.ContainsKey($key)) { $script:storeSerializers[$key] = [Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new() }
+                # 이 작업이 화면 일과 겹치면 화면 스레드가 약 300ms 멈춘다(메모 3,000개 실측, 원인은 못 찾음). 저장 뒤 화면 일이 먼저 끝나게 잠깐 쉬고 시작한다
+                $text = "param(`$p, `$doc, `$cache, `$factory)`n[System.Threading.Thread]::Sleep($script:writeStartDelayMs)`n`$json = ConvertTo-WtStoreDocumentJson `$doc `$cache `$factory`n& {`n$($script:writeJob.ToString())`n} `$p `$json`n`$bytes = [Text.UTF8Encoding]::new(`$false).GetBytes(`$json)`n`"`$(`$bytes.Length)|`$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(`$bytes)))`""
+                $entry.Work = Start-WtWork -Script $text -ArgumentList $entry.Path, $entry.Document, $script:storeSerializers[$key], $script:jsonPartsFactory -Functions $script:writeFunctions -Session Default -Reserved `
+                    -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
+            } else {
+                $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Reserved `
+                    -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
+            }
         } catch {
             $script:writeCurrent = $null
             Set-WtDataWriteFailed $entry $_.Exception
@@ -241,6 +397,7 @@ function Start-WtDataWriteNext {
     }
 }
 $script:writeFunctions = $null
+$script:writeStartDelayMs = 200   # 큰 저장소의 화면 밖 저장을 시작하기 전에 쉬는 시간
 
 # 쓰기 하나가 끝났을 때 (화면 스레드): 성공이면 확인된 버전을 올리고, 실패면 실패로 남긴다. 그 뒤 다음 차례를 시작한다
 function Complete-WtDataWrite($Work) {
@@ -248,6 +405,7 @@ function Complete-WtDataWrite($Work) {
     if ([object]::ReferenceEquals($script:writeCurrent, $entry)) { $script:writeCurrent = $null }
     if ($Work.State -eq 'done') {
         $entry.State = 'done'
+        if ($null -ne $entry.Document) { $entry.ContentStamp = [string]$Work.Result }
         $rec = Get-WtDataFileRecord $entry.Path
         if ($entry.Version -gt $rec.Confirmed) { $rec.Confirmed = $entry.Version }
         Update-WtDataFileState $rec
@@ -273,7 +431,7 @@ function Update-WtDataFileState($Rec) {
     if (-not $acc -or $acc.Version -le $Rec.Confirmed) { $Rec.Failed = $null }
     elseif ($flying -and $flying.Version -ge $acc.Version) { $Rec.Failed = $null }   # 그 내용(이나 더 새 내용)을 쓰는 중이다
     elseif (-not $Rec.Failed -or $Rec.Failed.Version -lt $acc.Version) {
-        $Rec.Failed = @{ Path = $acc.Path; Json = $acc.Json; Version = $acc.Version
+        $Rec.Failed = @{ Path = $acc.Path; Json = $acc.Json; Document = $acc.Document; Version = $acc.Version
             Exception = if ($acc.Exception) { $acc.Exception } elseif ($Rec.LastError) { $Rec.LastError } else { [System.IO.IOException]::new('저장하지 못했습니다.') } }
     }
     $tell = $false
@@ -337,7 +495,7 @@ function Get-WtDataUnsaved {
 function Resume-WtDataWrites([string]$Path = '') {
     $entries = foreach ($rec in @($script:writeFiles.Values)) {
         if (-not $rec.Failed -or ($Path -and $rec.Path -ine $Path) -or (Get-WtDataWriteFlying $rec.Path)) { continue }
-        Submit-WtDataWrite $rec.Path $rec.Failed.Json
+        Submit-WtDataWrite $rec.Path $rec.Failed.Json -Document $rec.Failed.Document
     }
     foreach ($e in @($entries)) { Wait-WtDataWrite $e $script:writeWaitMs }
 }
@@ -428,6 +586,7 @@ function Get-WtStoreStamp([string]$Name) {
     # 저장 중인 내용은 다 쓴 뒤의 파일과 같은 표식이 되게 같은 바이트(UTF-8, BOM 없음)로 잰다
     $pending = Get-WtDataWritePending $path
     if ($pending) {
+        if ($null -ne $pending.Document) { return "$scope|accepted:$($pending.Version)" }
         # 받아들인 버전의 Json은 변하지 않는다. 새 쓰기는 새 항목이므로 이전 표식을 재사용하지 않는다.
         # 바이트 배열은 보관하지 않고, 경로는 호출 때 붙여 기존 대소문자 동작을 유지한다.
         if (-not $pending.ContentStamp) {
@@ -436,10 +595,17 @@ function Get-WtStoreStamp([string]$Name) {
         }
         return "$scope|$($pending.ContentStamp)"
     }
-    try { $bytes = Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllBytes $path) }
+    # Invoke-WtWork는 byte[]를 하나의 결과로 반환한다. 중간 함수의 파이프라인에서
+    # 바이트마다 풀지 않고 직접 받아, 실행 공간을 만들지 않는 파일 읽기 통로를 쓴다.
+    try { $bytes = Invoke-WtWork -Call (New-WtCall ([IO.File]) ReadAllBytes $path) -Key 'data' -TimeoutMs $script:ioTimeoutMs }
     catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return "$scope|missing" }
     catch { return "$scope|unread-$([guid]::NewGuid().ToString('N'))" }
-    "$scope|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
+    $stamp = "$($bytes.Length)|$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
+    $rec = $script:writeFiles[$path.ToLowerInvariant()]
+    if ($rec -and $rec.Accepted -and $null -ne $rec.Accepted.Document -and $rec.Accepted.ContentStamp -ceq $stamp) {
+        return "$scope|accepted:$($rec.Accepted.Version)"
+    }
+    "$scope|$stamp"
 }
 
 # 문서 맨 위의 키 중 schema · saved · items가 아닌 것 (importedFrom · 더 새 앱이 더한 키 등)
@@ -491,7 +657,20 @@ function Read-WtStore {
     )
     $path = Get-WtStorePath $Name
     $key = $path.ToLowerInvariant()
-    try { $text = Read-WtJsonText $path }
+    $prepared = Get-WtStorePreparation $Name
+    $doc = $null; $hasPrepared = $false
+    $pending = Get-WtDataWritePending $path
+    if ($pending -and $null -ne $pending.Document) {
+        $doc = [pscustomobject]$pending.Document
+        $hasPrepared = $true
+    } elseif ($prepared -and -not $prepared.Used -and -not $pending) {
+        $stamp = Get-WtStoreStamp $Name
+        if ($stamp -ceq "$path|session:$script:storeSession|$($prepared.Stamp)") {
+            $doc = $prepared.Work.Result.Document; $hasPrepared = $true; $prepared.Used = $true
+            if ($prepared.Work.Result.Serialization) { $script:storeSerializers[$key] = $prepared.Work.Result.Serialization }
+        }
+    }
+    try { $text = if ($hasPrepared) { if ($null -eq $doc) { $null } else { 'prepared' } } else { Read-WtJsonText $path } }
     catch { Set-WtStoreRead $path 'unread' -Reason $_.Exception.Message; throw }
     if ($null -eq $text) {
         Set-WtStoreRead $path 'missing' $Schema
@@ -500,7 +679,7 @@ function Read-WtStore {
         return $null
     }
     if (-not $text.Trim()) { Stop-WtStoreRead $path "$Name.json이 비어 있습니다. 파일은 바꾸지 않았습니다." }
-    try { $doc = $text | ConvertFrom-Json -Depth 20 -DateKind String }
+    try { if (-not $hasPrepared) { $doc = $text | ConvertFrom-Json -Depth 20 -DateKind String } }
     catch { Stop-WtStoreRead $path "$Name.json을 JSON으로 읽지 못했습니다. 파일은 바꾸지 않았습니다. ($($_.Exception.Message))" }
     if ($doc -isnot [System.Management.Automation.PSCustomObject]) { Stop-WtStoreRead $path "$Name.json의 맨 위가 객체가 아닙니다. 파일은 바꾸지 않았습니다." }
     $num = ConvertFrom-WtWhole (Get-WtField $doc 'schema') 1 999
@@ -561,7 +740,8 @@ function Write-WtStore {
         [int]$Schema = 1,
         [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()][object[]]$Items,
         [hashtable]$Extra,
-        [switch]$KeepNull
+        [switch]$KeepNull,
+        [switch]$Background
     )
     $path = Get-WtStorePath $Name
     $key = $path.ToLowerInvariant()
@@ -576,7 +756,7 @@ function Write-WtStore {
     $script:storeTops[$key] = $tops
     # if 식으로 받으면 항목 하나짜리 목록이 펴져서 목록이 아니게 되므로 나눠서 넣는다
     if ($KeepNull) { $doc['items'] = @($Items) } else { $doc['items'] = @($Items | Where-Object { $null -ne $_ }) }
-    Write-WtJsonFile $path $doc
+    Write-WtJsonFile $path $doc -Background:$Background
     Set-WtStoreRead $path 'ok' $Schema
 }
 
@@ -613,12 +793,12 @@ function New-WtStoreHandle([string]$Name, [string]$Path, [int]$Schema, [string]$
 $Items의 null · 깨진 항목은 그대로 쓴다. 저장하면 새 버전의 핸들을 돌려준다(이어서 저장하려면 그것을 쓴다). 넘긴 핸들은 더 쓸 수 없다
 #>
 function Save-WtStore {
-    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()][object[]]$Items, [hashtable]$Extra)
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()][object[]]$Items, [hashtable]$Extra, [switch]$Background)
     if ($Store.State -notin 'ok', 'missing') { throw "$($Store.Name).json은 읽지 못해서 저장하지 않습니다. ($($Store.Error))" }
     $key = ([string]$Store.Path).ToLowerInvariant()
     $read = $script:storeRead[$key]
     if (-not $read -or $read.Generation -ne $Store.Version) { throw "$($Store.Name).json이 이 핸들로 읽은 뒤에 바뀌었습니다(다시 읽음 · 다른 저장). 다시 읽은 뒤 저장하세요." }
-    Write-WtStore -Name $Store.Name -Schema $Store.Schema -Items @($Items) -Extra $Extra -KeepNull
+    Write-WtStore -Name $Store.Name -Schema $Store.Schema -Items @($Items) -Extra $Extra -KeepNull -Background:$Background
     New-WtStoreHandle $Store.Name $Store.Path $Store.Schema 'ok' $null $Store.Doc @($Items) $script:storeRead[$key].Generation
 }
 # 새 항목 ID
@@ -658,6 +838,7 @@ function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
 }
 
 Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
+    Register-WtStorePreparation, Get-WtStorePreparation, Read-WtCacheFile, Write-WtCacheFile, Invoke-WtQueuedStoreWrite,
     Test-WtDataWriting, Get-WtDataWriteState, Get-WtDataWriteStatus, Get-WtDataUnsaved, Resume-WtDataWrites, Register-WtDataWriteHandler, Stop-WtDataWrites,
     Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, Open-WtStore, Save-WtStore, New-WtId,
     Find-WtLegacyFolder, Read-WtLegacyCsv, Import-WtLegacyCsv

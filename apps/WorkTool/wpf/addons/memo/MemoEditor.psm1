@@ -15,6 +15,8 @@
 #   Set-WtMemoEditorEnabled $ed $false  메모가 없을 때
 #   Set-WtMemoEditorFocus $ed [-End]    포커스 (커서는 마지막 자리, -End면 글 끝)
 #   Get-WtMemoEditorState $ed / Set-WtMemoEditorState $ed $state   탭을 오갈 때 커서 · 스크롤 기억
+#   Set-WtMemoEditorSide $ed $side      글 좌우 여백 (스크롤 막대는 칸 끝에 남는다)
+#   Show-WtMemoEditorLine $ed $line     그 줄을 보기 맨 위로 (목차)
 #
 # 알림
 #   OnChanged  사용자가 글을 고쳤을 때
@@ -416,6 +418,51 @@ function Set-WtMemoEditorState($Ed, $State) {
     }
     $sv = Get-WtMemoScroller $target
     if ($sv) { $sv.ScrollToVerticalOffset($scroll) }
+}
+
+# 글 좌우 여백. 보기는 Md.View의 -5를 더해 원문과 글 시작을 맞춘다.
+function Set-WtMemoEditorSide($Ed, [double]$Side) {
+    $Ed.Source.Padding = [System.Windows.Thickness]::new($Side, 0, $Side, 0)
+    foreach ($view in $Ed.Live, $Ed.View) { $view.Padding = [System.Windows.Thickness]::new($Side - 5, 0, $Side - 5, 0) }
+}
+
+# 줄($Line, 0부터)을 보기 맨 위로 옮긴다. 음수면 맨 위로. 커서도 그 줄 처음으로 옮긴다.
+function Show-WtMemoEditorLine($Ed, [int]$Line) {
+    $target = if ($Ed.Mode -eq 'live') { $Ed.Live } elseif ($Ed.Mode -eq 'read') { $Ed.View } else { $Ed.Source }
+    $sv = Get-WtMemoScroller $target
+    if (-not $sv) { return }
+    if ($Line -lt 0) { $Ed.Caret = @{ Line = 0; Col = 0 }; $sv.ScrollToHome(); return }
+    if ($Ed.Mode -eq 'source') {
+        $lines = @($Ed.Source.Text -split "\r?\n")
+        $Line = [Math]::Min($Line, $lines.Count - 1)
+        $nl = if ($Ed.Source.Text.Contains("`r`n")) { 2 } else { 1 }
+        $index = 0
+        for ($i = 0; $i -lt $Line; $i++) { $index += $lines[$i].Length + $nl }
+        $Ed.Source.CaretIndex = $index
+        $Ed.Source.UpdateLayout()
+        $rect = $Ed.Source.GetRectFromCharacterIndex($index)
+        if (-not $rect.IsEmpty) { $sv.ScrollToVerticalOffset($sv.VerticalOffset + $rect.Top) }
+        return
+    }
+    $Line = [Math]::Max(0, [Math]::Min($Line, $Ed.Lines.Count - 1))
+    $Ed.Caret = @{ Line = $Line; Col = 0 }
+    $block = $null
+    if ($Ed.Mode -eq 'read') { $block = $Ed.View.Tag.HeadingBlocks[$Line + 1] }
+    else {
+        $Ed.Busy++
+        try {
+            if ($Ed.Island) { Close-WtMemoIsland $Ed }
+            $unit = Find-WtMemoUnitIndex $Ed $Line
+            if ($unit -lt 0) { return }
+            # 맨 위로 올릴 만큼 아래 글도 그려 둔다.
+            Complete-WtMemoRender $Ed ($unit + 20)
+            $block = $Ed.Sections[$unit]
+        } finally { $Ed.Busy-- }
+    }
+    if (-not $block) { return }
+    $target.UpdateLayout()
+    $rect = $block.ContentStart.GetCharacterRect([System.Windows.Documents.LogicalDirection]::Forward)
+    if (-not $rect.IsEmpty) { $sv.ScrollToVerticalOffset($sv.VerticalOffset + $rect.Top) }
 }
 
 # 텍스트 상자 · 보기 안쪽의 ScrollViewer
@@ -2135,4 +2182,4 @@ Register-WtSettingHandler {
 }
 
 Export-ModuleMember -Function New-WtMemoEditor, Set-WtMemoEditorText, Get-WtMemoEditorText, Set-WtMemoEditorMode,
-    Set-WtMemoEditorEnabled, Set-WtMemoEditorFocus, Get-WtMemoEditorState, Set-WtMemoEditorState
+    Set-WtMemoEditorEnabled, Set-WtMemoEditorFocus, Get-WtMemoEditorState, Set-WtMemoEditorState, Set-WtMemoEditorSide, Show-WtMemoEditorLine
