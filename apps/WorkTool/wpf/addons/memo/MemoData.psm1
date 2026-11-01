@@ -1558,8 +1558,7 @@ Initialize-WtMemoSaveFactory
 Initialize-WtMemoQuickFactory
 Initialize-WtMemoIndexOrderFactory
 Register-WtMemoPreparation
-Initialize-WtMemoQueryRuntime
 
-Export-ModuleMember -Function ConvertFrom-WtMemoQuery, ConvertTo-WtMemoQuery, New-WtMemoIndex, Update-WtMemoIndex, Add-WtMemoIndexEntries, Find-WtMemo, Get-WtMemoResultRows, Step-WtMemoLinks, Test-WtMemoQueryLinks,
+Export-ModuleMember -Function Initialize-WtMemoQueryRuntime, ConvertFrom-WtMemoQuery, ConvertTo-WtMemoQuery, New-WtMemoIndex, Update-WtMemoIndex, Add-WtMemoIndexEntries, Find-WtMemo, Get-WtMemoResultRows, Step-WtMemoLinks, Test-WtMemoQueryLinks,
     Set-WtMemoFolder, Set-WtMemoPinned, Set-WtMemoArchived, Get-WtMemoFolders, Save-WtMemoFolders, Set-WtMemoOpened,
     Get-WtMemoViews, Save-WtMemoView, Set-WtMemoViewDeleted, Open-WtMemoStore, Save-WtMemoDataItems, Start-WtMemoBackgroundIndex, Get-WtMemoLookupData, New-WtMemoViewRows, Get-WtMemoUpdatedOrder, Get-WtMemoLiveItems, Get-WtMemoInitialOrder, Set-WtMemoIndexProperties, Find-WtMemoQuickData, Get-WtMemoIdArray, Get-WtMemoDetachedItems

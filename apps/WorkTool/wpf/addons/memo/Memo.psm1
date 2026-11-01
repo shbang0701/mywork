@@ -2065,6 +2065,14 @@ function Update-WtMemoView {
     }
     if (-not $script:restored) { Restore-WtMemoTabs }
     Update-WtMemoList
+    Start-WtMemoQueryWarmUp
+}
+
+# 첫 찾기가 느리지 않게 메모 화면이 뜬 뒤 쉬는 틈에 한 번 돌려 둔다. 앱을 켤 때 돌리면 창이 약 0.9초 늦게 뜬다
+function Start-WtMemoQueryWarmUp {
+    if ($script:queryWarmAsked -or -not $script:ui.List) { return }
+    $script:queryWarmAsked = $true
+    [void]$script:ui.List.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::ApplicationIdle, [Action] { try { Initialize-WtMemoQueryRuntime } catch { } })
 }
 
 # 바로 가기의 메모가 남아 있는지. 홈을 그릴 때 줄마다 불리므로 memo.json이 바뀌었을 때만 다시 읽고,
