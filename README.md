@@ -8,6 +8,7 @@
 - **[scripts/](scripts/)** — 복사 한 번으로 끝나는 단독 PowerShell 스크립트. 새로 만들 때는 [scripts/README.md](scripts/README.md)
   - [office/New-OfficeTestFile.ps1](scripts/office/New-OfficeTestFile.ps1) — Office를 띄우지 않고 .NET만으로 xlsx · docx · pptx 시험 파일 생성 (Office 2016 열기 · DRM 적용 확인용)
   - [network/Watch-MultiPing.ps1](scripts/network/Watch-MultiPing.ps1) — 여러 서버에 ping(또는 TCP 포트)을 계속 보내 응답 · 끊김을 한 화면에 보고, 바뀐 시각을 CSV로 남김 (점검 · 재부팅 확인용)
+  - [files/Test-MemoFileAccess.ps1](scripts/files/Test-MemoFileAccess.ps1) — 메모용 .md 파일 쓰기 · 읽기 · 바꿔치기 · 이름 바꾸기 · 지우기가 이 PC에서 되는지와 걸린 시간을 확인 (보안 프로그램 · DRM 영향 확인용)
   - 바로 쓰는 예제 (WorkTool 업무 탭에서 폼으로 실행, zip에도 들어 있음)
     - 사무: [files/Rename-FileBatch.ps1](scripts/files/Rename-FileBatch.ps1) 이름 한꺼번에 바꾸기 · [files/Find-OldLargeFile.ps1](scripts/files/Find-OldLargeFile.ps1) 큰 · 오래된 파일 · [files/Find-DuplicateFile.ps1](scripts/files/Find-DuplicateFile.ps1) 중복 파일 · [files/Compare-Folder.ps1](scripts/files/Compare-Folder.ps1) 두 폴더 비교
     - IT 운영: [network/Test-TcpPort.ps1](scripts/network/Test-TcpPort.ps1) TCP 포트 확인 · [network/Get-CertificateExpiry.ps1](scripts/network/Get-CertificateExpiry.ps1) 인증서 만료일 · [system/Get-DiskSpace.ps1](scripts/system/Get-DiskSpace.ps1) 디스크 · 공유 폴더 용량 · [system/Get-EventLogError.ps1](scripts/system/Get-EventLogError.ps1) 이벤트 로그 오류 · 경고
