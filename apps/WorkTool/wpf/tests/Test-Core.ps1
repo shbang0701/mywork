@@ -1011,8 +1011,10 @@ flowchart LR
             }
         }
         $themeChoices = @(Get-WtTestThemeChoices $v2ThemeCard)
+        # 설정 행은 라벨 글자 하나 + 값이다. 라벨 칸이 글자 하나면 그 밑에 설명 줄이 있을 수 없다
+        $colorRow = $v2ThemeCard.Child.Children[0]
         Assert-Wt 'WPF 3판: 설정은 색 제목·이름과 견본 7개, 설명 줄 없음' ($themeChoices.Count -eq 7 -and ($themeChoices.Content -join ',') -ceq '하늘,분홍,연두,노랑,보라,회색,검정' -and
-            @(Get-WtTestTexts $v2ThemeCard) -contains '색' -and $v2ThemeCard.Child.Children[1].Children[0].Children.Count -eq 1)
+            $colorRow.Children.Count -eq 2 -and $colorRow.Children[0] -is [System.Windows.Controls.TextBlock] -and $colorRow.Children[0].Text -ceq '색')
         foreach ($choice in $themeChoices) { $choice.IsChecked = $true }
         Assert-Wt 'WPF 3판: 설정의 색 선택이 키·현재 사전에 반영' ((Get-WtSetting 'theme.color') -ceq 'black' -and $v2Theme['B.Accent'].Color.ToString() -ceq '#FF2B2F36')
         Set-WtSetting 'theme.color' 'sky'
@@ -1031,9 +1033,9 @@ flowchart LR
         Assert-Wt '설정 하위 탭: 공통 Tab 스타일 · 높이 36 · 선택 위 선 2' (
             $settingsTabs.Items[0].MinHeight -eq 36 -and $settingsTabs.Items[0].Template -eq (Get-WtStyleDictionary)['Tab'].Setters.Where({ $_.Property.Name -eq 'Template' })[0].Value)
         $helpTexts = @(Get-WtTestTexts $helpView)
-        Assert-Wt '도움말: 키 · 하는 일 두 열 · Ctrl+Shift+B · 앱 이름과 데이터 폴더' (
+        Assert-Wt '도움말: 키 · 하는 일 두 열 · Ctrl+Shift+B · 데이터 폴더' (
             $helpTexts -contains '키' -and $helpTexts -contains '하는 일' -and $helpTexts -contains 'Ctrl + Shift + B' -and
-            $helpTexts -contains 'WorkTool' -and $helpTexts -contains (Get-WtDataRoot))
+            $helpTexts -contains '데이터 폴더' -and $helpTexts -contains (Get-WtDataRoot))
         $v2Source = [System.IO.File]::ReadAllText((Join-Path $root 'core/Ui.psm1')) + [System.IO.File]::ReadAllText((Join-Path $root 'core/Theme.psm1'))
         Assert-Wt 'WPF 2판: 효과·그라데이션·애니메이션·둥근 안쪽 Clip 없음' ($v2Source -notmatch 'DropShadowEffect|BlurEffect|(?:Linear|Radial)GradientBrush|<Storyboard|<(?:Double|Color|Thickness|Object)Animation[ >]|ClipToBounds="True"|<[^>]*\.Clip>')
 
