@@ -1065,6 +1065,9 @@ $script:writeSlowMs = 5000       # 이보다 오래 걸리는 저장은 「응�
 $script:writeQueue = [System.Collections.Generic.List[object]]::new()   # 차례를 기다리는 쓰기 (파일마다 마지막 내용 하나)
 $script:writeCurrent = $null     # 지금 쓰는 것
 $script:writeHandlers = [System.Collections.Generic.List[scriptblock]]::new()
+$script:storePreparers = @{}
+$script:storePreparations = @{}
+$script:storeSerializers = @{}
 
 # 여러 단계인 디스크 작업 (화면 밖 실행 공간에서 돈다. 명령 없이 .NET만 쓴다. 예전 CSV만 Import-Csv). 검사가 응답 없는 폴더를 흉내 내려고 바꿔 끼운다.
 # 메서드 하나로 끝나는 읽기 · 있는지 보기 · 폴더 만들기는 Invoke-WtDataCall로 스레드 풀에서 바로 부른다 (가장 빠르다)
@@ -1141,11 +1144,138 @@ function Invoke-WtDataCall {
 
 # 진입 스크립트가 자기 위치를 알려 준다. 묶음 파일이든 원본 폴더든 같은 방식으로 쓴다.
 function Set-WtAppRoot([string]$Path) {
+    foreach ($preparation in $script:storePreparations.Values) { if ($preparation.Work) { Stop-WtWork $preparation.Work } }
     $script:appRoot = $Path
     $script:dataRoot = $null
     $script:storeTops = @{}
     $script:storeRead = @{}
     $script:storeSession++
+    $script:storePreparations = @{}
+    $script:storeSerializers = @{}
+    foreach ($name in $script:storePreparers.Keys) { Start-WtStorePreparation $name }
+}
+
+# 큰 저장소를 쓰는 탭이 선택적으로 등록한다. 앱 경로가 정해진 뒤에만 시험/사용자 데이터 경로를 연다.
+# 준비 결과는 읽기 검증을 통과한 첫 Read-WtStore에서만 사용하며 외부 변경이면 버린다.
+function Register-WtStorePreparation {
+    param([string]$Name, [Management.Automation.CommandInfo]$Prepare, [Management.Automation.CommandInfo[]]$Functions, $Context, [string]$CacheName)
+    $script:storePreparers[$Name] = @{ Prepare = $Prepare; Functions = $Functions; Context = $Context; CacheName = $CacheName }
+}
+
+function Read-WtCacheFile([string]$Path) {
+    try {
+        $envelope = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json -Depth 30 -DateKind String -AsHashtable
+        if ($envelope.Format -ne 1 -or $envelope.Json -isnot [string]) { return $null }
+        $bytes = [Text.Encoding]::UTF8.GetBytes($envelope.Json)
+        $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes))
+        if ($hash -cne $envelope.Hash) { return $null }
+        $envelope.Json | ConvertFrom-Json -Depth 30 -DateKind String -AsHashtable
+    }
+    catch { $null }   # 다시 만들 수 있는 캐시는 저장 실패/종료 확인의 대상이 아니다.
+}
+
+function Write-WtCacheFile([string]$Path, $Value) {
+    try {
+        $payload = ConvertTo-Json -InputObject $Value -Depth 30 -Compress
+        $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($payload)))
+        $json = ConvertTo-Json -InputObject @{ Format = 1; Json = $payload; Hash = $hash } -Depth 4 -Compress
+        $tmp = "$Path.tmp"
+        [System.IO.File]::WriteAllText($tmp, $json, [Text.UTF8Encoding]::new($false))
+        [System.IO.File]::Move($tmp, $Path, $true)
+    } catch { }   # 원본 저장소에는 닿지 않는다.
+}
+
+function Read-WtPreparedDocument([string]$Path) {
+    try { $bytes = [System.IO.File]::ReadAllBytes($Path) }
+    catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return @{ Document = $null; Stamp = 'missing' } }
+    $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes).TrimStart([char]0xFEFF)
+    $doc = $text | ConvertFrom-Json -Depth 20 -DateKind String
+    $cache = [Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
+    if ($doc -is [pscustomobject] -and $doc.items -is [array]) {
+        $parsed = [Text.Json.JsonDocument]::Parse($text)
+        try {
+            $i = 0
+            foreach ($item in $parsed.RootElement.GetProperty('items').EnumerateArray()) {
+                if ($null -ne $doc.items[$i]) { [void]$cache.TryAdd($doc.items[$i], $item.GetRawText()) }
+                $i++
+            }
+        } finally { $parsed.Dispose() }
+    }
+    @{ Document = $doc; Serialization = $cache; Stamp = "$($bytes.Length)|$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)))" }
+}
+
+# 받아들인 문서의 항목은 불변이다. 바뀌지 않은 항목의 JSON 조각을 재사용하며, 약한 키로 옛 항목을 붙잡지 않는다.
+function ConvertTo-WtStoreDocumentJson($Document, $Cache, $Factory) {
+    # 일반 JSON 호출에도 같은 내용을 쓴다. 항목 목록을 가진 저장소 문서에만 조각 재사용을 적용한다.
+    if ($Document -isnot [Collections.IDictionary] -or -not (@($Document.Keys) -ccontains 'items') -or $Document['items'] -isnot [array]) {
+        return ConvertTo-Json -InputObject $Document -Depth 20
+    }
+    $top = [ordered]@{}
+    foreach ($name in $Document.Keys) { if ($name -cne 'items') { $top[$name] = $Document[$name] } }
+    $head = ConvertTo-Json -InputObject $top -Depth 20 -Compress
+    $items = $Document['items']
+    $plan = $Factory.Invoke($items, $Cache)
+    $parts = $plan[0]
+    foreach ($i in $plan[1]) {
+        $item = $items[$i]
+        # 문서의 items 안 항목은 깊이 2에서 시작한다. 전체 문서 Depth 20과 같은 한도다.
+        $part = ConvertTo-Json -InputObject $item -Depth 18 -Compress
+        [void]$Cache.TryAdd($item, $part)
+        $parts[$i] = $part
+    }
+    $head.Substring(0, $head.Length - 1) + ',"items":[' + [string]::Join(',', $parts) + ']}'
+}
+
+function Initialize-WtStoreJsonParts {
+    $e = [Linq.Expressions.Expression]
+    $newExpression = $e.GetMethod('New', [type[]]@([Reflection.ConstructorInfo], [Collections.Generic.IEnumerable[Linq.Expressions.Expression]])).CreateDelegate(
+        [Func[Reflection.ConstructorInfo, Collections.Generic.IEnumerable[Linq.Expressions.Expression], Linq.Expressions.NewExpression]])
+    $items = $e::Parameter([object[]], 'items'); $cache = $e::Parameter([Runtime.CompilerServices.ConditionalWeakTable[object, object]], 'cache')
+    $i = $e::Variable([int], 'i'); $part = $e::Variable([object], 'part'); $parts = $e::Variable([string[]], 'parts')
+    $missing = $e::Variable([Collections.Generic.List[int]], 'missing'); $item = $e::ArrayIndex($items, $i)
+    $target = $e::ArrayAccess($parts, [Linq.Expressions.Expression[]]@($i)); $done = $e::Label()
+    $step = $e::IfThenElse($e::Equal($item, $e::Constant($null, [object])),
+        $e::Block([Linq.Expressions.Expression[]]@($e::Assign($target, $e::Constant('null')), $e::Empty())),
+        $e::IfThenElse($e::Call($cache, [Runtime.CompilerServices.ConditionalWeakTable[object, object]].GetMethod('TryGetValue'), [Linq.Expressions.Expression[]]@($item, $part)),
+            $e::Block([Linq.Expressions.Expression[]]@($e::Assign($target, $e::Convert($part, [string])), $e::Empty())),
+            $e::Call($missing, [Collections.Generic.List[int]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($i))))
+    $loop = $e::Loop($e::IfThenElse($e::LessThan($i, $e::ArrayLength($items)),
+        $e::Block([Linq.Expressions.Expression[]]@($step, $e::PostIncrementAssign($i), $e::Empty())), $e::Break($done)), $done)
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $part, $parts, $missing), [Linq.Expressions.Expression[]]@(
+        $e::Assign($parts, $e::NewArrayBounds([string], [Linq.Expressions.Expression[]]@($e::ArrayLength($items)))),
+        $e::Assign($missing, $newExpression.Invoke([Collections.Generic.List[int]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())), $loop,
+        $e::NewArrayInit([object], [Linq.Expressions.Expression[]]@($parts, $e::Call($missing, [Collections.Generic.List[int]].GetMethod('ToArray'))))))
+    $script:jsonPartsFactory = $e::Lambda([Func[object[], Runtime.CompilerServices.ConditionalWeakTable[object, object], object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($items, $cache)).Compile()
+}
+Initialize-WtStoreJsonParts
+
+function Start-WtStorePreparation([string]$Name) {
+    $spec = $script:storePreparers[$Name]
+    $path = Get-WtStorePath $Name
+    $cachePath = if ($spec.CacheName) { Get-WtStorePath $spec.CacheName } else { '' }
+    try {
+        $functions = @($spec.Functions) + @($spec.Prepare) + @(Get-Command Read-WtPreparedDocument, Read-WtCacheFile)
+        $work = Start-WtWork -Script {
+            param($path, $prepare, $context, $cachePath)
+            $read = Read-WtPreparedDocument $path
+            $cache = if ($cachePath) { Read-WtCacheFile $cachePath } else { $null }
+            $read.Value = & $prepare $read.Document $cache $context
+            $read
+        } -ArgumentList $path, $spec.Prepare.Name, $spec.Context, $cachePath -Functions $functions -Session Default
+        $script:storePreparations[$Name] = @{ Work = $work; Used = $false; Value = $null; Stamp = $null }
+    } catch { }   # 준비가 실패하면 보통 읽기가 기존 오류 표시 경로로 알린다.
+}
+
+function Get-WtStorePreparation([string]$Name) {
+    $p = $script:storePreparations[$Name]
+    if (-not $p) { return $null }
+    if ($p.Work) {
+        [void](Wait-WtWork $p.Work -Milliseconds 0)
+        if (-not $p.Work.Finished -or $p.Work.State -ne 'done') { return $null }
+        $p.Value = $p.Work.Result.Value
+        $p.Stamp = $p.Work.Result.Stamp
+    }
+    $p
 }
 
 function Get-WtAppRoot { $script:appRoot }
@@ -1200,7 +1330,10 @@ function Read-WtJsonFile([string]$Path) {
 # JSON 파일의 글. 파일이 없으면 $null (빈 파일이면 ''). 아직 파일에 쓰이지 않은 내용이 있으면 그 글
 function Read-WtJsonText([string]$Path) {
     $pending = Get-WtDataWritePending $Path
-    if ($pending) { return [string]$pending.Json }
+    if ($pending) {
+        if ($null -ne $pending.Document) { return ConvertTo-Json -InputObject $pending.Document -Depth 20 }
+        return [string]$pending.Json
+    }
     try { Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllText $Path) }
     catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { $null }
 }
@@ -1212,10 +1345,24 @@ JSON 파일 하나를 바꿔치기로 쓴다. 직전 파일은 <파일>.bak. 저
   바로 실패 · 쓰기 시작 실패 · 늦은 실패 모두 같은 길(Set-WtDataWriteFailed)로 남는다. 실패는 한 번 알리고, 셸이 끝내기 전에 묻는다.
   기다리는 시간은 화면이 얼마나 기다릴지만 정한다. 저장 상태(저장됨 · 쓰는 중 · 실패)는 Get-WtDataWriteStatus가 버전으로 정한다
 #>
-function Write-WtJsonFile([string]$Path, $Data) {
+function Write-WtJsonFile([string]$Path, $Data, [switch]$Background) {
+    if ($Background) {
+        # 호출자가 소유권을 넘기는 불변 문서. 직렬화 전부터 통로의 받아들인 버전에 포함한다.
+        [void](Submit-WtDataWrite $Path -Document $Data)
+        return
+    }
     $json = ConvertTo-Json -InputObject $Data -Depth 20
     $entry = Submit-WtDataWrite $Path $json
     Wait-WtDataWrite $entry $script:writeWaitMs
+}
+
+# 호출 하나의 이미 직렬화된 쓰기만 기다리지 않는다. 설정처럼 작은 문서를 함께 저장하는 화면용이다.
+# 기본 대기 시간과 다른 호출의 동작은 finally에서 즉시 복구한다. 받아들인 내용/실패/종료 확인은 같은 통로다.
+function Invoke-WtQueuedStoreWrite {
+    param([Parameter(Mandatory)][scriptblock]$Action, [object[]]$ArgumentList = @())
+    $previousWait = $script:writeWaitMs
+    try { $script:writeWaitMs = 0; & $Action @ArgumentList }
+    finally { $script:writeWaitMs = $previousWait }
 }
 
 # ---- 저장 통로 --------------------------------------------------------------------------------
@@ -1245,13 +1392,13 @@ function Get-WtDataFileRecord([string]$Path) {
 
 # 쓰기 하나를 통로에 넣는다. 넣는 순간 받아들인 버전이 된다.
 # 같은 파일의 아직 시작하지 않은 쓰기는 새 내용으로 바꾼다 (새 내용이 앞 내용을 담고 있다)
-function Submit-WtDataWrite([string]$Path, [string]$Json) {
+function Submit-WtDataWrite([string]$Path, [string]$Json, $Document = $null) {
     $rec = Get-WtDataFileRecord $Path
     for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) {
         if ($script:writeQueue[$i].Path -ieq $Path) { $script:writeQueue[$i].State = 'superseded'; $script:writeQueue.RemoveAt($i) }
     }
     $rec.Version++
-    $entry = @{ Path = $Path; Json = $Json; ContentStamp = $null; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
+    $entry = @{ Path = $Path; Json = $Json; Document = $Document; ContentStamp = $null; Version = $rec.Version; State = 'queued'; Work = $null; Exception = $null; Watch = [System.Diagnostics.Stopwatch]::StartNew() }
     $rec.Accepted = $entry
     $rec.Failed = $null   # 실패로 남아 있던 앞 내용은 이 내용이 담고 있다. 이 쓰기도 실패하면 이 내용이 남는다
     $script:writeQueue.Add($entry)
@@ -1268,9 +1415,18 @@ function Start-WtDataWriteNext {
         $entry.State = 'writing'
         try {
             $script:writeCurrent = $entry
-            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile) }
-            $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Reserved `
-                -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
+            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile, ConvertTo-WtStoreDocumentJson) }
+            if ($null -ne $entry.Document) {
+                $key = $entry.Path.ToLowerInvariant()
+                if (-not $script:storeSerializers.ContainsKey($key)) { $script:storeSerializers[$key] = [Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new() }
+                # 이 작업이 화면 일과 겹치면 화면 스레드가 약 300ms 멈춘다(메모 3,000개 실측, 원인은 못 찾음). 저장 뒤 화면 일이 먼저 끝나게 잠깐 쉬고 시작한다
+                $text = "param(`$p, `$doc, `$cache, `$factory)`n[System.Threading.Thread]::Sleep($script:writeStartDelayMs)`n`$json = ConvertTo-WtStoreDocumentJson `$doc `$cache `$factory`n& {`n$($script:writeJob.ToString())`n} `$p `$json`n`$bytes = [Text.UTF8Encoding]::new(`$false).GetBytes(`$json)`n`"`$(`$bytes.Length)|`$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(`$bytes)))`""
+                $entry.Work = Start-WtWork -Script $text -ArgumentList $entry.Path, $entry.Document, $script:storeSerializers[$key], $script:jsonPartsFactory -Functions $script:writeFunctions -Session Default -Reserved `
+                    -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
+            } else {
+                $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Reserved `
+                    -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
+            }
         } catch {
             $script:writeCurrent = $null
             Set-WtDataWriteFailed $entry $_.Exception
@@ -1278,6 +1434,7 @@ function Start-WtDataWriteNext {
     }
 }
 $script:writeFunctions = $null
+$script:writeStartDelayMs = 200   # 큰 저장소의 화면 밖 저장을 시작하기 전에 쉬는 시간
 
 # 쓰기 하나가 끝났을 때 (화면 스레드): 성공이면 확인된 버전을 올리고, 실패면 실패로 남긴다. 그 뒤 다음 차례를 시작한다
 function Complete-WtDataWrite($Work) {
@@ -1285,6 +1442,7 @@ function Complete-WtDataWrite($Work) {
     if ([object]::ReferenceEquals($script:writeCurrent, $entry)) { $script:writeCurrent = $null }
     if ($Work.State -eq 'done') {
         $entry.State = 'done'
+        if ($null -ne $entry.Document) { $entry.ContentStamp = [string]$Work.Result }
         $rec = Get-WtDataFileRecord $entry.Path
         if ($entry.Version -gt $rec.Confirmed) { $rec.Confirmed = $entry.Version }
         Update-WtDataFileState $rec
@@ -1310,7 +1468,7 @@ function Update-WtDataFileState($Rec) {
     if (-not $acc -or $acc.Version -le $Rec.Confirmed) { $Rec.Failed = $null }
     elseif ($flying -and $flying.Version -ge $acc.Version) { $Rec.Failed = $null }   # 그 내용(이나 더 새 내용)을 쓰는 중이다
     elseif (-not $Rec.Failed -or $Rec.Failed.Version -lt $acc.Version) {
-        $Rec.Failed = @{ Path = $acc.Path; Json = $acc.Json; Version = $acc.Version
+        $Rec.Failed = @{ Path = $acc.Path; Json = $acc.Json; Document = $acc.Document; Version = $acc.Version
             Exception = if ($acc.Exception) { $acc.Exception } elseif ($Rec.LastError) { $Rec.LastError } else { [System.IO.IOException]::new('저장하지 못했습니다.') } }
     }
     $tell = $false
@@ -1374,7 +1532,7 @@ function Get-WtDataUnsaved {
 function Resume-WtDataWrites([string]$Path = '') {
     $entries = foreach ($rec in @($script:writeFiles.Values)) {
         if (-not $rec.Failed -or ($Path -and $rec.Path -ine $Path) -or (Get-WtDataWriteFlying $rec.Path)) { continue }
-        Submit-WtDataWrite $rec.Path $rec.Failed.Json
+        Submit-WtDataWrite $rec.Path $rec.Failed.Json -Document $rec.Failed.Document
     }
     foreach ($e in @($entries)) { Wait-WtDataWrite $e $script:writeWaitMs }
 }
@@ -1465,6 +1623,7 @@ function Get-WtStoreStamp([string]$Name) {
     # 저장 중인 내용은 다 쓴 뒤의 파일과 같은 표식이 되게 같은 바이트(UTF-8, BOM 없음)로 잰다
     $pending = Get-WtDataWritePending $path
     if ($pending) {
+        if ($null -ne $pending.Document) { return "$scope|accepted:$($pending.Version)" }
         # 받아들인 버전의 Json은 변하지 않는다. 새 쓰기는 새 항목이므로 이전 표식을 재사용하지 않는다.
         # 바이트 배열은 보관하지 않고, 경로는 호출 때 붙여 기존 대소문자 동작을 유지한다.
         if (-not $pending.ContentStamp) {
@@ -1473,10 +1632,17 @@ function Get-WtStoreStamp([string]$Name) {
         }
         return "$scope|$($pending.ContentStamp)"
     }
-    try { $bytes = Invoke-WtDataCall (New-WtCall ([System.IO.File]) ReadAllBytes $path) }
+    # Invoke-WtWork는 byte[]를 하나의 결과로 반환한다. 중간 함수의 파이프라인에서
+    # 바이트마다 풀지 않고 직접 받아, 실행 공간을 만들지 않는 파일 읽기 통로를 쓴다.
+    try { $bytes = Invoke-WtWork -Call (New-WtCall ([IO.File]) ReadAllBytes $path) -Key 'data' -TimeoutMs $script:ioTimeoutMs }
     catch [System.IO.FileNotFoundException], [System.IO.DirectoryNotFoundException] { return "$scope|missing" }
     catch { return "$scope|unread-$([guid]::NewGuid().ToString('N'))" }
-    "$scope|$($bytes.Length)|$([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
+    $stamp = "$($bytes.Length)|$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([byte[]]$bytes)))"
+    $rec = $script:writeFiles[$path.ToLowerInvariant()]
+    if ($rec -and $rec.Accepted -and $null -ne $rec.Accepted.Document -and $rec.Accepted.ContentStamp -ceq $stamp) {
+        return "$scope|accepted:$($rec.Accepted.Version)"
+    }
+    "$scope|$stamp"
 }
 
 # 문서 맨 위의 키 중 schema · saved · items가 아닌 것 (importedFrom · 더 새 앱이 더한 키 등)
@@ -1528,7 +1694,20 @@ function Read-WtStore {
     )
     $path = Get-WtStorePath $Name
     $key = $path.ToLowerInvariant()
-    try { $text = Read-WtJsonText $path }
+    $prepared = Get-WtStorePreparation $Name
+    $doc = $null; $hasPrepared = $false
+    $pending = Get-WtDataWritePending $path
+    if ($pending -and $null -ne $pending.Document) {
+        $doc = [pscustomobject]$pending.Document
+        $hasPrepared = $true
+    } elseif ($prepared -and -not $prepared.Used -and -not $pending) {
+        $stamp = Get-WtStoreStamp $Name
+        if ($stamp -ceq "$path|session:$script:storeSession|$($prepared.Stamp)") {
+            $doc = $prepared.Work.Result.Document; $hasPrepared = $true; $prepared.Used = $true
+            if ($prepared.Work.Result.Serialization) { $script:storeSerializers[$key] = $prepared.Work.Result.Serialization }
+        }
+    }
+    try { $text = if ($hasPrepared) { if ($null -eq $doc) { $null } else { 'prepared' } } else { Read-WtJsonText $path } }
     catch { Set-WtStoreRead $path 'unread' -Reason $_.Exception.Message; throw }
     if ($null -eq $text) {
         Set-WtStoreRead $path 'missing' $Schema
@@ -1537,7 +1716,7 @@ function Read-WtStore {
         return $null
     }
     if (-not $text.Trim()) { Stop-WtStoreRead $path "$Name.json이 비어 있습니다. 파일은 바꾸지 않았습니다." }
-    try { $doc = $text | ConvertFrom-Json -Depth 20 -DateKind String }
+    try { if (-not $hasPrepared) { $doc = $text | ConvertFrom-Json -Depth 20 -DateKind String } }
     catch { Stop-WtStoreRead $path "$Name.json을 JSON으로 읽지 못했습니다. 파일은 바꾸지 않았습니다. ($($_.Exception.Message))" }
     if ($doc -isnot [System.Management.Automation.PSCustomObject]) { Stop-WtStoreRead $path "$Name.json의 맨 위가 객체가 아닙니다. 파일은 바꾸지 않았습니다." }
     $num = ConvertFrom-WtWhole (Get-WtField $doc 'schema') 1 999
@@ -1598,7 +1777,8 @@ function Write-WtStore {
         [int]$Schema = 1,
         [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()][object[]]$Items,
         [hashtable]$Extra,
-        [switch]$KeepNull
+        [switch]$KeepNull,
+        [switch]$Background
     )
     $path = Get-WtStorePath $Name
     $key = $path.ToLowerInvariant()
@@ -1613,7 +1793,7 @@ function Write-WtStore {
     $script:storeTops[$key] = $tops
     # if 식으로 받으면 항목 하나짜리 목록이 펴져서 목록이 아니게 되므로 나눠서 넣는다
     if ($KeepNull) { $doc['items'] = @($Items) } else { $doc['items'] = @($Items | Where-Object { $null -ne $_ }) }
-    Write-WtJsonFile $path $doc
+    Write-WtJsonFile $path $doc -Background:$Background
     Set-WtStoreRead $path 'ok' $Schema
 }
 
@@ -1650,12 +1830,12 @@ function New-WtStoreHandle([string]$Name, [string]$Path, [int]$Schema, [string]$
 $Items의 null · 깨진 항목은 그대로 쓴다. 저장하면 새 버전의 핸들을 돌려준다(이어서 저장하려면 그것을 쓴다). 넘긴 핸들은 더 쓸 수 없다
 #>
 function Save-WtStore {
-    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()][object[]]$Items, [hashtable]$Extra)
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][AllowEmptyCollection()][AllowNull()][object[]]$Items, [hashtable]$Extra, [switch]$Background)
     if ($Store.State -notin 'ok', 'missing') { throw "$($Store.Name).json은 읽지 못해서 저장하지 않습니다. ($($Store.Error))" }
     $key = ([string]$Store.Path).ToLowerInvariant()
     $read = $script:storeRead[$key]
     if (-not $read -or $read.Generation -ne $Store.Version) { throw "$($Store.Name).json이 이 핸들로 읽은 뒤에 바뀌었습니다(다시 읽음 · 다른 저장). 다시 읽은 뒤 저장하세요." }
-    Write-WtStore -Name $Store.Name -Schema $Store.Schema -Items @($Items) -Extra $Extra -KeepNull
+    Write-WtStore -Name $Store.Name -Schema $Store.Schema -Items @($Items) -Extra $Extra -KeepNull -Background:$Background
     New-WtStoreHandle $Store.Name $Store.Path $Store.Schema 'ok' $null $Store.Doc @($Items) $script:storeRead[$key].Generation
 }
 # 새 항목 ID
@@ -1695,6 +1875,7 @@ function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
 }
 
 Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
+    Register-WtStorePreparation, Get-WtStorePreparation, Read-WtCacheFile, Write-WtCacheFile, Invoke-WtQueuedStoreWrite,
     Test-WtDataWriting, Get-WtDataWriteState, Get-WtDataWriteStatus, Get-WtDataUnsaved, Resume-WtDataWrites, Register-WtDataWriteHandler, Stop-WtDataWrites,
     Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, Open-WtStore, Save-WtStore, New-WtId,
     Find-WtLegacyFolder, Read-WtLegacyCsv, Import-WtLegacyCsv
@@ -12085,6 +12266,11 @@ $script:undoTimer = $null
 $script:listUpdating = $false
 $script:listMenuId = ''
 $script:rowCache = @{}
+$script:rowGetters = [scriptblock[]]@(
+    { if ($null -eq $this.StampValue) { $this.StampValue = Format-WtMemoTime $this.Updated }; $this.StampValue },
+    { if ($null -eq $this.SnippetValue) { $this.SnippetValue = Get-WtMarkdownSnippet $this.SnippetSource }; $this.SnippetValue },
+    { if ($this.Snippet) { "$($this.Stamp) · $($this.Snippet)" } else { $this.Stamp } }
+)
 $script:quickOpen = $false
 $script:memoIndex = $null    # 검색 색인. 다 만들어지기 전에는 $script:indexBuild가 들고 있다
 $script:indexBuild = $null
@@ -12118,11 +12304,11 @@ Register-WtSettingDefault 'memo.tabs' $null
 function Get-WtMemoItems {
     $script:memoStore = Open-WtMemoStore
     if ($script:memoStore.State -notin 'ok', 'missing') { throw $script:memoStore.Error }
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($item in $script:memoStore.Items) {
-        $id = Get-WtField $item 'id'
-        if ($id -is [string] -and $id -and $seen.Add($id) -and -not (Test-WtDeleted $item)) { $item }
-    }
+    $prepared = Get-WtStorePreparation 'memo'
+    $script:preparedMemo = if ($prepared -and $prepared.Value -and [object]::ReferenceEquals($script:memoStore.Doc, $prepared.Value.Document)) { $prepared.Value } else { $null }
+    if ($script:preparedMemo) { $script:preparedMemo.Live; return }
+    # 편집용 스칼라 칸을 저장 통로가 보유한 항목과 분리한다. 알려지지 않은 중첩 칸은 수정하지 않는다.
+    (Get-WtMemoDetachedItems (Get-WtMemoLiveItems $script:memoStore.Items))
 }
 
 function Save-WtMemoItems([object[]]$Items) {
@@ -12132,7 +12318,7 @@ function Save-WtMemoItems([object[]]$Items) {
 
 # 최근 고친 순서
 function Get-WtMemoSorted([object[]]$Items) {
-    @($Items | Sort-Object -Property @{ Expression = { [string]$_.updated }; Descending = $true })
+    (Get-WtMemoUpdatedOrder $Items)
 }
 
 function Format-WtMemoTime([string]$Stamp) {
@@ -12181,16 +12367,7 @@ function Set-WtMemoContent($Memo, [string]$Title, [string]$Body, [datetime]$When
 
 # 빠른 이동 결과. 띄어 쓴 낱말이 제목에 모두 들어 있으면 위에, 본문까지 합쳐야 들어 있으면 아래에 (각각 최근 고친 순)
 function Find-WtMemoQuick([object[]]$Items, [string]$Query, [int]$Limit = 50) {
-    $words = @($Query -split '\s+' | Where-Object { $_ })
-    $inTitle = [System.Collections.Generic.List[object]]::new()
-    $inBody = [System.Collections.Generic.List[object]]::new()
-    foreach ($m in $Items) {
-        $title = [string]$m.title
-        if (-not ($words | Where-Object { $title -notlike "*$_*" })) { $inTitle.Add($m); continue }
-        $text = "$title`n$($m.body)"
-        if (-not ($words | Where-Object { $text -notlike "*$_*" })) { $inBody.Add($m) }
-    }
-    @(@($inTitle) + @($inBody) | Select-Object -First $Limit)
+    (Find-WtMemoQuickData $Items $Query $Limit)
 }
 
 # 예전 memo.csv → memo.json. 가져온 개수를 돌려준다.
@@ -12224,7 +12401,16 @@ function Get-WtMemoModeSetting {
 
 # ---- 화면: 칸 · 탭 상태 ------------------------------------------------------------------------
 
-function Get-WtMemoById([string]$Id) { $script:items | Where-Object { $_.id -eq $Id } | Select-Object -First 1 }
+function Initialize-WtMemoLookup {
+    if ([object]::ReferenceEquals($script:lookupItems, $script:items)) { return }
+    $script:lookupItems = $script:items
+    $lookup = Get-WtMemoLookupData $script:items
+    $script:itemsById = $lookup[0]
+    $script:itemsByTitle = $lookup[1]
+    $script:memoTitles = $lookup[2]
+}
+
+function Get-WtMemoById([string]$Id) { Initialize-WtMemoLookup; $script:itemsById[$Id] }
 
 function Get-WtMemoModifiers { [System.Windows.Input.Keyboard]::Modifiers }
 
@@ -12268,7 +12454,17 @@ function Save-WtMemoTabs {
         active = [int]$script:active
         ratio  = [Math]::Round([double]$script:ratio, 3)
     }
-    try { $null = Set-WtSetting 'memo.tabs' $value } catch { }   # 설정을 못 남겨도 메모 쓰기는 막지 않는다
+    try {
+        if ($script:items.Count -ge 256) { $null = Invoke-WtQueuedStoreWrite -Action { param($v) Set-WtSetting 'memo.tabs' $v } -ArgumentList (, $value) }
+        else { $null = Set-WtSetting 'memo.tabs' $value }
+    } catch { }   # 설정을 못 남겨도 메모 쓰기는 막지 않는다
+}
+
+function Add-WtMemoUse([string]$Id) {
+    $title = Get-WtMemoTitle $Id
+    if ($script:items.Count -ge 256) {
+        Invoke-WtQueuedStoreWrite -Action { param($id, $name) Add-WtUse -Page 'memo' -Key $id -Title $name -Sub '메모' -Icon 0xE70B } -ArgumentList $Id, $title
+    } else { Add-WtUse -Page 'memo' -Key $Id -Title $title -Sub '메모' -Icon 0xE70B }
 }
 
 # 저장 상태 표시 (칸마다): saved · dirty · writing · error · ''(숨김)
@@ -12721,7 +12917,7 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
     Update-WtMemoTabStyles
     Sync-WtMemoListSelection
     Save-WtMemoTabs
-    Add-WtUse -Page 'memo' -Key $Id -Title (Get-WtMemoTitle $Id) -Sub '메모' -Icon 0xE70B
+    Add-WtMemoUse $Id
     Add-WtMemoOpened $Id
     $true
 }
@@ -12729,7 +12925,7 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
 function Select-WtMemoTab($Pane, $Tab) {
     if ([object]::ReferenceEquals($Pane.Current, $Tab)) {
         Set-WtMemoActivePane $Pane
-        Add-WtUse -Page 'memo' -Key $Tab.Id -Title (Get-WtMemoTitle $Tab.Id) -Sub '메모' -Icon 0xE70B
+        Add-WtMemoUse $Tab.Id
         return $true
     }
     if (-not (Save-WtMemoNow)) { return $false }
@@ -12740,7 +12936,7 @@ function Select-WtMemoTab($Pane, $Tab) {
     Update-WtMemoTabStyles
     Sync-WtMemoListSelection
     Save-WtMemoTabs
-    Add-WtUse -Page 'memo' -Key $Tab.Id -Title (Get-WtMemoTitle $Tab.Id) -Sub '메모' -Icon 0xE70B
+    Add-WtMemoUse $Tab.Id
     Add-WtMemoOpened $Tab.Id
     $true
 }
@@ -12956,7 +13152,12 @@ function Save-WtMemoNow([switch]$Retry) {
         [void](Set-WtMemoContent $candidate $p.TitleBox.Text (Get-WtMemoEditorText $p.Editor))
         $byId[[string]$m.id] = $candidate
     }
-    $next = @(foreach ($item in $script:items) { if ($byId.Contains([string]$item.id)) { $byId[[string]$item.id] } else { $item } })
+    if ($script:itemsById.Count -eq $script:items.Count) {
+        $next = $script:items.Clone()
+        foreach ($id in $byId.Keys) { $next[[array]::IndexOf($script:items, $script:itemsById[$id])] = $byId[$id] }
+    } else {
+        $next = @(foreach ($item in $script:items) { if ($byId.Contains([string]$item.id)) { $byId[[string]$item.id] } else { $item } })
+    }
     try { Save-WtMemoItems $next }
     catch {
         $msg = $_.Exception.Message
@@ -13087,7 +13288,7 @@ function Switch-WtMemoSource { Set-WtMemoMode $(if ($script:mode -eq 'source') {
 
 # ---- 링크 · 빠른 이동 --------------------------------------------------------------------------
 
-function Get-WtMemoTitles { @($script:items | ForEach-Object { [string]$_.title } | Where-Object { $_ }) }
+function Get-WtMemoTitles { Initialize-WtMemoLookup; $script:memoTitles }
 
 # 본문의 링크를 눌렀을 때. [[제목]]은 제목이 같은 메모를 열고(없으면 그 제목으로 만든다), #태그는 그 태그로 찾는다. 처리했으면 $true
 function Invoke-WtMemoLink($Ed, $Link, [string]$How = 'here') {
@@ -13098,7 +13299,8 @@ function Invoke-WtMemoLink($Ed, $Link, [string]$How = 'here') {
         'wiki' {
             $name = ([string]$Link.Target -split '#')[0].Trim()
             if (-not $name) { return $false }   # [[#제목]]: 같은 글 안 이동은 보기가 한다
-            $m = $script:items | Where-Object { ([string]$_.title).Trim() -eq $name } | Select-Object -First 1
+            Initialize-WtMemoLookup
+            $m = $script:itemsByTitle[$name]
             if ($m) { [void](Open-WtMemo $m.id $How $pane -History) }
             else { [void](Add-WtMemo -Title $name -How $How -Pane $pane -History) }
             return $true
@@ -13139,7 +13341,8 @@ function Update-WtMemoQuickResults {
         if ($snip) { $sub = "$sub · $snip" }
         $rows.Add([pscustomobject]@{ Id = [string]$m.id; Title = (Get-WtMemoTitle $m.id); Sub = $sub; Create = $false })
     }
-    $exact = $script:items | Where-Object { ([string]$_.title).Trim() -eq $query } | Select-Object -First 1
+    Initialize-WtMemoLookup
+    $exact = $script:itemsByTitle[$query]
     if ($query -and -not $exact) { $rows.Add([pscustomobject]@{ Id = ''; Title = "새 메모 만들기: $query"; Sub = ''; Create = $true; Query = $query }) }
     $q.List.ItemsSource = $rows.ToArray()
     if ($rows.Count) { $q.List.SelectedIndex = 0 }
@@ -13167,20 +13370,7 @@ function Invoke-WtMemoQuickPick([switch]$NewTab) {
 # ---- 목록 -------------------------------------------------------------------------------------
 
 function New-WtMemoListItem($Memo) {
-    $pinned = $Memo.pinned -eq $true
-    $cached = $script:rowCache[$Memo.id]
-    if ($cached -and $cached.Day -eq [datetime]::Today -and $cached.Body -ceq $Memo.body -and $cached.Title -ceq $Memo.title -and $cached.Updated -eq $Memo.updated -and $cached.Pinned -eq $pinned) { return $cached.Row }
-    $snippet = if ($cached -and $cached.Body -ceq $Memo.body) { $cached.Row.SnippetValue } else { $null }
-    $row = [pscustomobject]@{ Id = $Memo.id; Title = $Memo.title; Stamp = Format-WtMemoTime $Memo.updated; SnippetSource = [string]$Memo.body; SnippetValue = $snippet
-        PinShown = $(if ($pinned) { 'Visible' } else { 'Collapsed' }) }
-    # 가상 목록에서 보이는 행이 값을 읽을 때만 요약한다. 지역 변수는 캡처하지 않고 행 자체에 둔다.
-    $row | Add-Member -MemberType ScriptProperty -Name Snippet -Value {
-        if ($null -eq $this.SnippetValue) { $this.SnippetValue = Get-WtMarkdownSnippet $this.SnippetSource }
-        $this.SnippetValue
-    }
-    $row | Add-Member -MemberType ScriptProperty -Name Sub -Value { if ($this.Snippet) { "$($this.Stamp) · $($this.Snippet)" } else { $this.Stamp } }
-    $script:rowCache[$Memo.id] = @{ Body = $Memo.body; Title = $Memo.title; Updated = $Memo.updated; Pinned = $pinned; Day = [datetime]::Today; Row = $row }
-    $row
+    (New-WtMemoViewRows -Items @($Memo) -Getters $script:rowGetters -Cache $script:rowCache)[0]
 }
 
 # 목록 선택은 포커스가 있는 칸의 지금 탭 메모를 따라간다
@@ -13189,14 +13379,18 @@ function Sync-WtMemoListSelection {
     if (-not $list) { return }
     $keep = Get-WtMemoCurrentId
     $script:listUpdating = $true
-    try { $list.SelectedItem = $list.Items | Where-Object { [string]$_.Id -eq $keep } | Select-Object -First 1 }
+    try {
+        $selected = $null
+        foreach ($row in $script:listRows) { if ([string]$row.Id -eq $keep) { $selected = $row; break } }
+        $list.SelectedItem = $selected
+    }
     finally { $script:listUpdating = $false }
 }
 
 # 목록에서 메모 하나를 고른다(클릭과 같음: 지금 탭에서 연다). 조건에 걸러져 안 보이면 조건을 지운다
 function Select-WtMemoItem([string]$Id) {
     $list = $script:ui.List
-    $find = { $list.Items | Where-Object { [string]$_.Id -eq $Id } | Select-Object -First 1 }
+    $find = { foreach ($row in $script:listRows) { if ([string]$row.Id -eq $Id) { return $row } } }
     Add-WtMemoListPageUntil $Id
     $li = & $find
     if (-not $li) {
@@ -13214,6 +13408,14 @@ function Select-WtMemoItem([string]$Id) {
 
 # 처음 열 때 화면을 막지 않게 색인은 뒤에서 조금씩 만든다. 그동안 조건 없는 목록은 읽어 둔 메모로 보여 준다
 function Start-WtMemoIndexBuild {
+    if ($script:preparedMemo -and [object]::ReferenceEquals($script:preparedMemo.Document, $script:memoStore.Doc)) {
+        $script:memoIndex = $script:preparedMemo.Index
+        Set-WtMemoIndexProperties $script:memoIndex
+        $script:indexBuild = $null
+        $script:preparedMemo = $null
+        Start-WtMemoLinkBuild
+        return
+    }
     $script:memoIndex = $null
     $folders = try { @(Get-WtMemoFolders $script:memoStore) } catch { @() }
     $script:indexBuild = @{ Index = (New-WtMemoIndex @() -Folders $folders); Items = @($script:items); At = 0 }
@@ -13241,19 +13443,33 @@ function Step-WtMemoIndexBuild([int]$Count) {
 # 받는 연결 수와 연결 조건에 쓰는 해석. 메모마다 마크다운을 읽으므로 화면이 쉴 때만 조금씩 한다
 function Start-WtMemoLinkBuild {
     $script:linkFailed = $false
-    if (-not $script:linkTimer) {
-        $script:linkTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::ApplicationIdle)
-        $script:linkTimer.Interval = [TimeSpan]::FromMilliseconds(30)
-        $script:linkTimer.Add_Tick({
+    if ($script:items.Count -lt 256) {
+        if (-not $script:linkTimer) {
+            $script:linkTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::ApplicationIdle)
+            $script:linkTimer.Interval = [TimeSpan]::FromMilliseconds(30)
+            $script:linkTimer.Add_Tick({
                 param($s, $e)
                 try {
                     if ($script:memoIndex -and -not (Step-WtMemoLinks $script:memoIndex)) { return }
                     $s.Stop()
                     if ($script:listWaitLinks) { Update-WtMemoList }
-                } catch { $s.Stop(); $script:linkFailed = $true }   # 실패하면 연결 조건으로 찾을 때 이유를 보여 준다
+                } catch { $s.Stop(); $script:linkFailed = $true }
             })
+        }
+        $script:linkTimer.Start()
+        return
     }
-    $script:linkTimer.Start()
+    if ($script:memoIndex -and $script:memoIndex.LinksReady) { return }
+    if ($script:linkWork -and -not $script:linkWork.Finished) { return }
+    $script:linkWork = Start-WtMemoBackgroundIndex -Items $script:items -Folders @(Get-WtMemoFolders $script:memoStore) -Context $script:items -OnDone {
+        param($w)
+        $script:linkWork = $null
+        if ($w.State -ne 'done') { $script:linkFailed = $true; return }
+        if (-not [object]::ReferenceEquals($w.Context, $script:items)) { Start-WtMemoLinkBuild; return }
+        $script:memoIndex = $w.Result
+        Set-WtMemoIndexProperties $script:memoIndex
+        if ($script:listWaitLinks) { Update-WtMemoList }
+    }
 }
 
 # 찾을 때는 남은 색인을 바로 끝낸다
@@ -13264,6 +13480,7 @@ function Get-WtMemoIndex {
 }
 
 function Update-WtMemoIndexItem($Memo, [switch]$Removed) {
+    $script:rowCache.Remove([string]$Memo.id)
     if ($script:indexBuild) { Start-WtMemoIndexBuild; return }
     if (-not $script:memoIndex) { return }
     if ($Removed) { Update-WtMemoIndex -Index $script:memoIndex -Remove ([string]$Memo.id) }
@@ -13546,8 +13763,13 @@ function Invoke-WtMemoAction([string]$Action, [string]$Id, $Value) {
             'folder' { Set-WtMemoFolder -Id $Id -Folder ([string]$Value) -Store $script:memoStore }
         }
     } catch { Show-WtError $_ '메모 정리'; return }
-    $item = @($script:memoStore.Items | Where-Object { $_.id -ceq $Id })[0]
-    $script:items = @(foreach ($m in $script:items) { if ($m.id -ceq $Id) { $item } else { $m } })
+    $item = $null
+    foreach ($m in $script:memoStore.Items) { if ($m.id -ceq $Id) { $item = $m; break } }
+    $next = $script:items.Clone()
+    # 정리의 id는 ordinal이다. 화면 열기의 대소문자 무시 조회로 바꾸면 A/a 중 다른 행을 덮을 수 있다.
+    $position = [array]::IndexOf([string[]](Get-WtMemoIdArray $script:items), $Id)
+    if ($position -ge 0) { $next[$position] = $item }
+    $script:items = $next
     $script:viewStamp = Get-WtMemoViewStamp
     Update-WtMemoIndexItem $item
     Update-WtMemoList
@@ -13562,18 +13784,21 @@ function ConvertTo-WtMemoListItem($Row) {
 
 function Get-WtMemoListResult {
     $query = Get-WtMemoFilterText
+    $firstList = $script:firstMemoList
+    $script:firstMemoList = $false
     # 조건 없는 처음 목록은 색인을 기다리지 않는다
-    if (-not (Test-WtMemoFiltered) -and -not $script:memoIndex) {
-        $alive = @($script:items | Where-Object { $_.archived -ne $true })
-        $ordered = @($alive | Where-Object { $_.pinned -eq $true }) + @($alive | Where-Object { $_.pinned -ne $true })
-        return @{ Count = $ordered.Count; Items = $ordered; Find = $null }
+    if (-not (Test-WtMemoFiltered) -and ($firstList -or -not $script:memoIndex)) {
+        $ordered = Get-WtMemoInitialOrder $script:items
+        return @{ Count = $ordered.Count; Items = $ordered; Find = $null; Query = $query }
     }
     $index = Get-WtMemoIndex
     # 연결 조건은 해석이 끝나야 답할 수 있다. 화면을 세우지 않고 앞 결과를 둔 채 뒤에서 끝낸 다음 다시 그린다
     $script:listWaitLinks = $false
     if (-not $index.LinksReady -and -not $script:linkFailed) {
         $tree = ConvertFrom-WtMemoQuery $query
-        if (($script:listSort -ceq 'backlinks' -or ($tree.Success -and (Test-WtMemoQueryLinks $tree.Root))) -and -not (Step-WtMemoLinks $index $script:linkWaitMs)) {
+        if (($script:listSort -ceq 'backlinks' -or ($tree.Success -and (Test-WtMemoQueryLinks $tree.Root))) -and
+            ($script:items.Count -ge 256 -or -not (Step-WtMemoLinks $index $script:linkWaitMs))) {
+            Start-WtMemoLinkBuild
             $script:listWaitLinks = $true
             return @{ Error = [pscustomobject]@{ Reason = '연결을 정리하는 중입니다. 끝나면 결과를 보여 줍니다.' } }
         }
@@ -13585,19 +13810,45 @@ function Get-WtMemoListResult {
     }
     $found = Find-WtMemo @params
     if (-not $found.Success) { return @{ Error = $found.Error } }
-    @{ Count = $found.Count; Items = @($found.Items); Find = $found }
+    @{ Count = $found.Count; Items = @($found.Items); Find = $found; Query = $query }
 }
 
 function Get-WtMemoListPage($Result, [int]$Skip, [int]$Take) {
+    $context = "$([bool]$Result.Find)|$($Result.Query)|$([datetime]::Today.Ticks)"
+    if ($script:rowContext -cne $context) { $script:rowCache.Clear(); $script:rowContext = $context }
     if ($Result.Find) {
         # 찾기 결과는 앞 $script:listPage줄만 들고 있다. 스크롤로 더 만든 뒤 다시 그릴 때는 그만큼 새로 만든다
         $have = @($Result.Items)
         $rows = if ($Skip -eq 0 -and ($Take -le $have.Count -or $have.Count -ge $Result.Count)) { $have } else { @(Get-WtMemoResultRows -Result $Result.Find -Skip $Skip -First $Take) }
-        foreach ($row in $rows) { ConvertTo-WtMemoListItem $row }
+        $viewRows = New-WtMemoViewRows -Items $rows -Getters $script:rowGetters -Cache $script:rowCache -Search -Reuse
+        Complete-WtMemoRowText $viewRows
+        $viewRows
         return
     }
     $last = [Math]::Min($Skip + $Take, $Result.Count) - 1
-    if ($last -ge $Skip) { foreach ($m in @($Result.Items[$Skip..$last])) { New-WtMemoListItem $m } }
+    if ($last -ge $Skip) {
+        $viewRows = New-WtMemoViewRows -Items @($Result.Items[$Skip..$last]) -Getters $script:rowGetters -Cache $script:rowCache -Reuse
+        Complete-WtMemoRowText $viewRows
+        $viewRows
+    }
+}
+
+# 바인딩이 같은 ScriptProperty를 여러 번 평가하지 않게 앞/뒤 한 페이지의 표시 문자열을 한 번 완성한다.
+# 먼 위치 사이의 아직 표시되지 않은 행은 같은 getter를 남겨 처음 보일 때 원문으로 완성한다.
+function Complete-WtMemoRowText([object[]]$Rows) {
+    for ($i = 0; $i -lt $Rows.Count; $i++) {
+        if ($i -ge $script:listPage -and $i -lt $Rows.Count - $script:listPage) { $i = $Rows.Count - $script:listPage - 1; continue }
+        $row = $Rows[$i]
+        if ($row.PSObject.Properties['Sub'] -isnot [Management.Automation.PSScriptProperty]) { continue }
+        $stamp = Format-WtMemoTime $row.Updated
+        $snippet = Get-WtMarkdownSnippet $row.SnippetSource
+        $row.StampValue = $stamp; $row.SnippetValue = $snippet
+        $sub = if ($snippet) { "$stamp · $snippet" } else { $stamp }
+        foreach ($pair in @(@('Stamp', $stamp), @('Snippet', $snippet), @('Sub', $sub))) {
+            $row.PSObject.Properties.Remove($pair[0])
+            $row.PSObject.Properties.Add([Management.Automation.PSNoteProperty]::new($pair[0], $pair[1]))
+        }
+    }
 }
 
 # 목록을 다시 그린다. 열린 메모는 다시 채우지 않는다 (편집 중 글자 위치 유지). 편집 중인 메모가 조건에서 빠져도 편집기는 그대로 둔다
@@ -13618,15 +13869,15 @@ function Update-WtMemoList {
     $script:ui.ListNote.Visibility = 'Collapsed'
     $script:listResult = $result
     $script:ui.ListCount.Text = "  $($result.Count)"
-    $take = [Math]::Max($script:listPage, $(if ($script:listRows) { [Math]::Min($script:listRows.Count, $script:listPage * 5) } else { 0 }))
+    # 이미 보던 먼 위치를 유지한다. 앞 200줄로 줄이면 레이아웃 도중 ScrollChanged가 끝까지 다시 붙인다.
+    $take = [Math]::Max($script:listPage, $(if ($script:listRows) { $script:listRows.Count } else { 0 }))
     $rows = @(Get-WtMemoListPage $result 0 $take)
     $script:listUpdating = $true
     try {
         $same = $script:listRows -and $script:listRows.Count -eq $rows.Count
         for ($i = 0; $same -and $i -lt $rows.Count; $i++) { $same = [object]::ReferenceEquals($script:listRows[$i], $rows[$i]) }
         if (-not $same) {
-            $script:listRows = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-            foreach ($row in $rows) { $script:listRows.Add($row) }
+            $script:listRows = [System.Collections.ObjectModel.ObservableCollection[object]]::new([Collections.Generic.IEnumerable[object]]$rows)
             $list.ItemsSource = $script:listRows
         }
     } finally { $script:listUpdating = $false }
@@ -13643,7 +13894,26 @@ function Add-WtMemoListPage {
 
 function Add-WtMemoListPageUntil([string]$Id) {
     if (-not $script:listRows) { return }
-    while (-not @($script:listRows | Where-Object { [string]$_.Id -ceq $Id }).Count -and $script:listRows.Count -lt [int]$script:listResult.Count) { Add-WtMemoListPage }
+    foreach ($row in $script:listRows) { if ([string]$row.Id -ceq $Id) { return } }
+    $r = $script:listResult
+    $position = -1
+    if ($r.Find) {
+        $slot = [array]::IndexOf([string[]]$r.Find.Columns[0], $Id)
+        if ($slot -ge 0) { $position = [array]::IndexOf([int[]]$r.Find.Order, $slot) }
+    } else {
+        for ($i = 0; $i -lt $r.Items.Count; $i++) { if ([string]$r.Items[$i].id -ceq $Id) { $position = $i; break } }
+    }
+    if ($position -lt 0) { return }
+    $take = [Math]::Min($r.Count, [int]([Math]::Ceiling(($position + 1) / [double]$script:listPage) * $script:listPage))
+    $more = @(Get-WtMemoListPage $r $script:listRows.Count ($take - $script:listRows.Count))
+    $all = [object[]]::new($script:listRows.Count + $more.Count)
+    $script:listRows.CopyTo($all, 0)
+    [array]::Copy($more, 0, $all, $script:listRows.Count, $more.Count)
+    $script:listUpdating = $true
+    try {
+        $script:listRows = [Collections.ObjectModel.ObservableCollection[object]]::new([Collections.Generic.IEnumerable[object]]$all)
+        $script:ui.List.ItemsSource = $script:listRows
+    } finally { $script:listUpdating = $false }
 }
 
 # ---- 목차 ---------------------------------------------------------------------------------------
@@ -14010,7 +14280,12 @@ function Update-WtMemoView {
     if (-not (Save-WtMemoNow)) { return }
     $stamp = Get-WtMemoViewStamp
     if ($script:viewStamp -cne $stamp) {
-        $script:items = @(Get-WtMemoSorted (Get-WtMemoItems))
+        $script:rowCache.Clear()
+        $script:firstMemoList = $true
+        $reusePrepared = $script:preparedMemo -and [object]::ReferenceEquals($script:preparedMemo.Document, $script:memoStore.Doc) -and
+            $stamp -ceq "$($script:shortcutStamp)|$([datetime]::Today.Ticks)"
+        if (-not $reusePrepared) { $loaded = @(Get-WtMemoItems) }
+        $script:items = if ($script:preparedMemo) { $script:preparedMemo.Items } else { @(Get-WtMemoSorted $loaded) }
         Start-WtMemoIndexBuild
         $present = @{}
         foreach ($item in $script:items) { $present[$item.id] = $true }
@@ -14036,10 +14311,9 @@ function Update-WtMemoView {
 function Test-WtMemoShortcut([string]$Key) {
     $stamp = Get-WtStoreStamp 'memo'
     if (-not $script:shortcutIds -or $script:shortcutStamp -cne $stamp) {
-        $ids = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         $fresh = $script:viewStamp -ceq "$stamp|$([datetime]::Today.Ticks)"
-        foreach ($item in $(if ($fresh) { $script:items } else { Get-WtMemoItems })) { [void]$ids.Add([string]$item.id) }
-        $script:shortcutIds = $ids
+        $items = if ($fresh) { $script:items } else { @(Get-WtMemoItems) }
+        $script:shortcutIds = [Collections.Generic.HashSet[string]]::new([Collections.Generic.IEnumerable[string]](Get-WtMemoIdArray $items), [StringComparer]::Ordinal)
         $script:shortcutStamp = $stamp
     }
     $script:shortcutIds.Contains($Key)
@@ -14695,11 +14969,8 @@ function Test-WtMemoQueryLinks($Node) {
 function Update-WtMemoIndexOrder($Index) {
     $c = $Index.Columns
     $titles = [string[]]@($Index.Titles.Keys); [Array]::Sort($titles, [StringComparer]::Ordinal)
-    for ($n = 0; $n -lt $titles.Length; $n++) {
-        foreach ($id in $Index.Titles[$titles[$n]]) { $c.TitleOrdinal[$Index.Slots[$id]] = $n }
-    }
     $ids = [string[]]@($Index.Slots.Keys); [Array]::Sort($ids, [StringComparer]::Ordinal)
-    for ($n = 0; $n -lt $ids.Length; $n++) { $c.IdOrdinal[$Index.Slots[$ids[$n]]] = $n }
+    $script:memoIndexOrderFactory.Invoke($titles, $ids, $Index.Slots, $c.TitleLower, $c.TitleOrdinal, $c.IdOrdinal)
     $Index.OrderDirty = $false
 }
 
@@ -14804,8 +15075,7 @@ function New-WtMemoIndex {
         SortOrders = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
         TimeCache = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
     }
-    $index.PSObject.Properties.Add([Management.Automation.PSScriptProperty]::new('Entries', { Get-WtMemoIndexEntries $this }))
-    $index.PSObject.Properties.Add([Management.Automation.PSScriptProperty]::new('Sources', { Initialize-WtMemoLinks $this; , $this.LinkSources }))
+    Set-WtMemoIndexProperties $index
     # 처음 나온 id가 지운 줄/빈 id여도 뒤의 중복 줄을 채택하지 않는 옛 규칙을 유지한다.
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $unique = [Collections.Generic.List[object]]::new($Memos.Count)
@@ -14816,6 +15086,14 @@ function New-WtMemoIndex {
     Set-WtMemoIndexEntry $index $unique.ToArray()
     Update-WtMemoIndexOrder $index
     $index
+}
+
+# 화면 밖 결과의 속성은 받는 모듈에서 다시 묶는다. 끝난 작업의 실행 공간/지역 변수를 붙잡지 않는다.
+function Set-WtMemoIndexProperties($Index) {
+    $Index.PSObject.Properties.Remove('Entries')
+    $Index.PSObject.Properties.Remove('Sources')
+    $Index.PSObject.Properties.Add([Management.Automation.PSScriptProperty]::new('Entries', { Get-WtMemoIndexEntries $this }))
+    $Index.PSObject.Properties.Add([Management.Automation.PSScriptProperty]::new('Sources', { Initialize-WtMemoLinks $this; , $this.LinkSources }))
 }
 
 function Update-WtMemoIndex {
@@ -15064,7 +15342,11 @@ function Find-WtMemo {
         [Array]::Fill[long]($openedTicks, -1L)
         foreach ($id in $opened.Keys) {
             $text = [string]$opened[$id]
-            if (-not $Index.TimeCache.ContainsKey($text)) { $Index.TimeCache[$text] = Get-WtMemoIndexedTime $text }
+            if (-not $Index.TimeCache.ContainsKey($text)) {
+                $at = [DateTimeOffset]::MinValue
+                $valid = [DateTimeOffset]::TryParseExact($text, "yyyy-MM-dd'T'HH:mm:sszzz", $script:memoInv, [Globalization.DateTimeStyles]::None, [ref]$at)
+                $Index.TimeCache[$text] = if ($valid) { $at } else { Get-WtMemoIndexedTime $text }
+            }
             $stamp = $Index.TimeCache[$text]; $n = $Index.Slots[$id]; $openedTimes[$n] = $stamp
             if ($null -ne $stamp) { $openedTicks[$n] = $stamp.UtcTicks }
         }
@@ -15109,7 +15391,9 @@ function Open-WtMemoStore { Open-WtStore -Name 'memo' -Schema 1 }
 
 function Save-WtMemoStoreItems($Store, [object[]]$Items, [hashtable]$Extra) {
     if ($Store.Name -cne 'memo') { throw '메모 저장소 핸들이 아닙니다.' }
-    Save-WtStore $Store @(Compress-WtDeletedItems $Items) -Extra $Extra
+    $compact = $Items.Clone()
+    foreach ($i in $script:memoDeletedSlotsFactory.Invoke($Items)) { $compact[$i] = @(Compress-WtDeletedItems (, $Items[$i]))[0] }
+    Save-WtStore $Store $compact -Extra $Extra -Background:($compact.Count -ge 256)
 }
 
 function Get-WtMemoDataStamp($At) {
@@ -15132,10 +15416,39 @@ function Get-WtMemoFolders {
 }
 
 function Get-WtMemoEditable($Store, [string]$Id) {
-    $edit = Get-WtRecordEdit $Store $Id
+    $edit = Get-WtMemoRecordEdit $Store $Id
     if (-not $edit.Success) { throw $edit.Reason }
     if (Test-WtDeleted $edit.Item) { throw '지운 메모는 정리할 수 없습니다.' }
     $edit
+}
+
+# 정리 기능은 스칼라 칸만 바꾼다. 중첩된 모르는 칸은 공유하되 절대 고치지 않는다.
+function Copy-WtMemoFields($Item) {
+    if ($Item -is [Collections.IDictionary]) {
+        $copy = [ordered]@{}
+        foreach ($name in $Item.Keys) { $copy[$name] = $Item[$name] }
+        return [pscustomobject]$copy
+    }
+    $Item.PSObject.Copy()
+}
+
+# 목록의 참조와 실제로 고칠 한 항목의 속성만 복사한다.
+function Get-WtMemoRecordEdit($Store, [string]$Id) {
+    if ($Store.State -notin 'ok', 'missing') { throw "$($Store.Name).json은 읽지 못해서 저장하지 않습니다. ($($Store.Error))" }
+    $r = [pscustomobject]@{ Success = $false; Reason = ''; Items = $Store.Items.Clone(); Index = -1; Item = $null }
+    if (-not $Id) { $r.Success = $true; return $r }
+    for ($i = 0; $i -lt $r.Items.Count; $i++) {
+        $item = $r.Items[$i]
+        if ($null -ne $item -and $item -isnot [string] -and $item -isnot [ValueType] -and $item -isnot [array] -and [string]$item.id -ceq $Id) {
+            if ($r.Index -ge 0) { $r.Reason = 'id가 겹쳐 편집할 줄을 정할 수 없습니다'; return $r }
+            $r.Index = $i
+        }
+    }
+    if ($r.Index -lt 0) { $r.Reason = '항목을 찾지 못했습니다'; return $r }
+    $r.Item = Copy-WtMemoFields $r.Items[$r.Index]
+    $r.Items[$r.Index] = $r.Item
+    $r.Success = $true
+    $r
 }
 
 function Set-WtMemoFolder {
@@ -15185,15 +15498,17 @@ function Save-WtMemoFolders {
     }
     $removed = New-WtMemoStringSet
     foreach ($folder in $oldFolders) { if (-not $ids.Contains([string]$folder.id)) { [void]$removed.Add([string]$folder.id) } }
-    $items = @(Copy-WtItem @($Store.Items))
-    foreach ($item in $items) {
-        if ((Test-WtRecordObject $item) -and $removed.Contains([string](Get-WtField $item 'folder'))) {
+    $items = $Store.Items.Clone()
+    for ($i = 0; $i -lt $items.Count; $i++) {
+        $item = $items[$i]
+        if ($null -ne $item -and $item -isnot [array] -and $item -isnot [string] -and $item -isnot [ValueType] -and $removed.Contains([string]$item.folder)) {
+            $item = Copy-WtMemoFields $item; $items[$i] = $item
             Set-WtField $item 'folder' $null; Set-WtItemEdited $item (Get-WtMemoDataStamp)
         }
     }
     $saved = Save-WtMemoStoreItems $Store $items -Extra @{ folders = $list.ToArray() }
     # Save-WtStore의 Doc는 열 때의 문서다. 새 핸들에만 Extra를 반영한다(옛 핸들은 그대로).
-    $saved.Doc = if ($Store.Doc) { Copy-WtItem $Store.Doc } else { [pscustomobject]@{} }
+    $saved.Doc = if ($Store.Doc) { $Store.Doc.PSObject.Copy() } else { [pscustomobject]@{} }
     Set-WtField $saved.Doc 'folders' $list.ToArray()
     $saved
 }
@@ -15202,48 +15517,29 @@ function Save-WtMemoFolders {
 function Save-WtMemoDataItems {
     param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Items, [hashtable]$Extra)
     if ($Store.State -notin 'ok', 'missing') { throw $Store.Error }
-    $incoming = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-    foreach ($item in $Items) {
-        $id = Get-WtField $item 'id'
-        if ($id -isnot [string] -or -not $id -or $incoming.ContainsKey($id)) { throw '저장할 메모 id가 없거나 겹칩니다.' }
-        $incoming[$id] = $item
+    $plan = $script:memoSaveFactory.Invoke($Store.Items, $Items)
+    foreach ($i in $plan.Changed) {
+        $old = $plan.Olds[$i]
+        if ($null -ne $old) {
+            $item = $Items[$i]
+            # 형식이 깨진 rev도 기존 PowerShell 비교 규칙을 그대로 따른다.
+            $same = $old.rev -eq $item.rev -and [string]$old.updated -ceq [string]$item.updated -and
+                [string]$old.title -ceq [string]$item.title -and [string]$old.body -ceq [string]$item.body
+            if ($same -and -not (Test-WtDeleted $old)) { $copy = $old }
+            else {
+                $copy = Copy-WtItem $old
+                Merge-WtRecordPatch $copy $item
+                if (Test-WtDeleted $old) { Set-WtField $copy 'deleted' $null; Set-WtItemEdited $copy (Get-WtMemoDataStamp) }
+            }
+        } else { $copy = Copy-WtItem $Items[$i] }
+        $plan.Next[$plan.Targets[$i]] = $copy
     }
-    $original = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-    foreach ($old in $Store.Items) {
-        $id = Get-WtField $old 'id'
-        if ($id -is [string] -and $id -and -not $original.ContainsKey($id)) { $original[$id] = $old }
+    foreach ($i in $plan.Deleted) {
+        $copy = Copy-WtMemoFields $plan.Next[$i]; $now = Get-WtMemoDataStamp
+        Set-WtField $copy 'deleted' $now; Set-WtItemEdited $copy $now
+        $plan.Next[$i] = $copy
     }
-    $active = [Collections.Generic.List[object]]::new()
-    foreach ($item in $Items) {
-        $id = [string]$item.id
-        if ($original.ContainsKey($id)) {
-            $old = $original[$id]
-            # 안 고친 메모는 원자료 그대로 둔다. 메모마다 복사 · 병합하면 메모 3,000개에서 저장 한 번에 화면이 20초 멈춘다.
-            # 고칠 때마다 rev · updated가 바뀌고, 같은 초에 다시 저장하면 제목 · 본문이 다르다
-            $same = [object]::ReferenceEquals($old, $item) -or ($old.rev -eq $item.rev -and [string]$old.updated -ceq [string]$item.updated -and
-                [string]$old.title -ceq [string]$item.title -and [string]$old.body -ceq [string]$item.body)
-            if ($same -and ($null -eq $old.deleted -or -not (Test-WtDeleted $old))) { $active.Add($old); continue }
-            $copy = Copy-WtItem $old; Merge-WtRecordPatch $copy $item
-            if (Test-WtDeleted $old) { Set-WtField $copy 'deleted' $null; Set-WtItemEdited $copy (Get-WtMemoDataStamp) }
-            $active.Add($copy)
-        } else { $active.Add((Copy-WtItem $item)) }
-    }
-    # 활성 목록은 부르는 쪽 순서를 따른다(옛 화면의 같은 초 정렬도 유지).
-    # 숨긴 줄은 원래 자리에 두고 활성 자리만 채운다. 늘어난 분량은 뒤에 더한다.
-    $next = [Collections.Generic.List[object]]::new(); $seen = New-WtMemoStringSet; $at = 0
-    foreach ($old in $Store.Items) {
-        $id = Get-WtField $old 'id'
-        if ($id -isnot [string] -or -not $id -or -not $seen.Add($id)) { $next.Add($old); continue }
-        if ($incoming.ContainsKey($id)) {
-            $next.Add($active[$at]); $at++
-        } elseif (Test-WtDeleted $old) { $next.Add($old) }
-        else {
-            $copy = Copy-WtItem $old; $now = Get-WtMemoDataStamp
-            Set-WtField $copy 'deleted' $now; Set-WtItemEdited $copy $now; $next.Add($copy)
-        }
-    }
-    while ($at -lt $active.Count) { $next.Add($active[$at]); $at++ }
-    Save-WtMemoStoreItems $Store $next.ToArray() -Extra $Extra
+    Save-WtMemoStoreItems $Store $plan.Next -Extra $Extra
 }
 
 # 열람 기록은 메모를 고치지 않는다. Get-WtMemoEditable은 메모 전체를 JSON으로 복사하므로 여기서 쓰면 메모를 열 때마다 화면이 멈춘다
@@ -15266,14 +15562,14 @@ function Set-WtMemoOpened {
     $now = ConvertFrom-WtStamp $At
     if (-not $now) { throw '열람 시각이 앱 시각 모양이 아닙니다.' }
     if ($Store.State -notin 'ok', 'missing') { throw $Store.Error }
-    $edit = Get-WtRecordEdit $Store $Id
+    $edit = Get-WtMemoRecordEdit $Store $Id
     if (-not $edit.Success -and $edit.Reason -ne '항목을 찾지 못했습니다') { throw $edit.Reason }
     if ($edit.Success) {
         $before = ConvertFrom-WtStamp ([string](Get-WtField $edit.Item 'opened'))
         if ($before -and ($now - $before).TotalSeconds -ge 0 -and ($now - $before).TotalSeconds -lt 60) { return $Store }
         Set-WtField $edit.Item 'opened' ($now.ToOffset([timespan]::FromHours(9)).ToString("yyyy-MM-dd'T'HH:mm:sszzz", $script:memoInv))
     } else { $edit.Items += [pscustomobject]@{ id = $Id; opened = (Get-WtMemoDataStamp $now) } }
-    Save-WtStore $Store $edit.Items
+    Save-WtStore $Store $edit.Items -Background:($edit.Items.Count -ge 256)
 }
 
 function Get-WtMemoViews {
@@ -15319,12 +15615,412 @@ function Set-WtMemoViewDeleted {
     Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items)
 }
 
+function Initialize-WtMemoWorker($Context) {
+    foreach ($name in $Context.Keys) { $ExecutionContext.SessionState.PSVariable.Set("script:$name", $Context[$name]) }
+}
+
+# 화면에서 메모 수만큼 반복하는 속성 조회/행 생성은 기존 검색 엔진과 같은 기본 .NET 식 트리로 묶는다.
+function New-WtMemoFieldExpression($Object, [string]$Name, [switch]$String) {
+    $e = [Linq.Expressions.Expression]
+    $ps = $e::Call([Management.Automation.PSObject].GetMethod('AsPSObject', [type[]]@([object])), [Linq.Expressions.Expression[]]@($Object))
+    $base = $e::Property($ps, 'BaseObject')
+    $properties = $e::Property($ps, 'Properties')
+    $property = $e::Call($properties, [Management.Automation.PSMemberInfoCollection[Management.Automation.PSPropertyInfo]].GetMethod('get_Item', [type[]]@([string])), [Linq.Expressions.Expression[]]@($e::Constant($Name)))
+    $none = $e::Constant($null, [object])
+    $value = $e::Condition($e::Equal($property, $e::Constant($null, [Management.Automation.PSPropertyInfo])), $none, $e::Property($property, 'Value'))
+    $value = $e::Condition($e::TypeIs($base, [Collections.IDictionary]),
+        $e::Call($e::Convert($base, [Collections.IDictionary]), [Collections.IDictionary].GetMethod('get_Item'), [Linq.Expressions.Expression[]]@($e::Constant($Name, [object]))), $value)
+    $value = $e::Condition($e::Equal($Object, $none), $none, $value)
+    if ($String) {
+        return $e::Coalesce($e::Convert($e::Call([Management.Automation.LanguagePrimitives].GetMethod('ConvertTo', [type[]]@([object], [type])),
+            [Linq.Expressions.Expression[]]@($value, $e::Constant([string], [type]))), [string]), $e::Constant(''))
+    }
+    $value
+}
+
+function Initialize-WtMemoViewFactories {
+    $e = [Linq.Expressions.Expression]
+    $memoArg = $e::Parameter([object], 'memo')
+    $script:memoUpdatedKeyFactory = $e::Lambda([Func[object, string]], (New-WtMemoFieldExpression $memoArg 'updated' -String), [Linq.Expressions.ParameterExpression[]]@($memoArg)).Compile()
+    $flagEquals = [Management.Automation.LanguagePrimitives].GetMethod('Equals', [type[]]@([object], [object], [bool]))
+    $pinFlag = $e::Call($flagEquals, [Linq.Expressions.Expression[]]@((New-WtMemoFieldExpression $memoArg 'pinned'), $e::Constant($true, [object]), $e::Constant($true)))
+    $archiveFlag = $e::Call($flagEquals, [Linq.Expressions.Expression[]]@((New-WtMemoFieldExpression $memoArg 'archived'), $e::Constant($true, [object]), $e::Constant($true)))
+    $script:memoPinnedFactory = $e::Lambda([Func[object, bool]], $pinFlag, [Linq.Expressions.ParameterExpression[]]@($memoArg)).Compile()
+    $script:memoActiveFactory = $e::Lambda([Func[object, bool]], $e::Not($archiveFlag), [Linq.Expressions.ParameterExpression[]]@($memoArg)).Compile()
+    $inputArg = $e::Parameter([object[]], 'items'); $i = $e::Variable([int], 'i')
+    $item = $e::ArrayIndex($inputArg, $i)
+    $script:memoIdFactory = New-WtMemoArrayFactory ([string]) $inputArg $i ($e::ArrayLength($inputArg)) (New-WtMemoFieldExpression $item 'id' -String)
+    $asObject = $e::Call([Management.Automation.PSObject].GetMethod('AsPSObject', [type[]]@([object])), [Linq.Expressions.Expression[]]@($item))
+    $script:memoDetachedFactory = New-WtMemoArrayFactory ([object]) $inputArg $i ($e::ArrayLength($inputArg)) ($e::Convert($e::Call($asObject, [Management.Automation.PSObject].GetMethod('Copy', [type[]]@())), [object]))
+    $dictType = [Collections.Generic.Dictionary[string, object]]
+    $byId = $e::Variable($dictType, 'ids'); $byTitle = $e::Variable($dictType, 'titles')
+    $titleList = $e::Variable([Collections.Generic.List[string]], 'names')
+    $id = $e::Variable([string], 'id'); $title = $e::Variable([string], 'title'); $trimmed = $e::Variable([string], 'trimmed')
+    $dictNew = $script:memoNewExpression.Invoke($dictType.GetConstructor([type[]]@([Collections.Generic.IEqualityComparer[string]])),
+        [Linq.Expressions.Expression[]]@($e::Constant([StringComparer]::InvariantCultureIgnoreCase, [Collections.Generic.IEqualityComparer[string]])))
+    $step = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($id, (New-WtMemoFieldExpression $item 'id' -String)),
+        $e::Assign($title, (New-WtMemoFieldExpression $item 'title' -String)),
+        $e::Assign($trimmed, $e::Call($title, [string].GetMethod('Trim', [type[]]@()))),
+        $e::IfThen($e::Not($e::Call($byId, $dictType.GetMethod('ContainsKey'), [Linq.Expressions.Expression[]]@($id))),
+            $e::Call($byId, $dictType.GetMethod('Add'), [Linq.Expressions.Expression[]]@($id, $item))),
+        $e::IfThen($e::Not($e::Call($byTitle, $dictType.GetMethod('ContainsKey'), [Linq.Expressions.Expression[]]@($trimmed))),
+            $e::Call($byTitle, $dictType.GetMethod('Add'), [Linq.Expressions.Expression[]]@($trimmed, $item))),
+        $e::IfThen($e::GreaterThan($e::Property($title, 'Length'), $e::Constant(0)),
+            $e::Call($titleList, [Collections.Generic.List[string]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($title)))))
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $id, $title, $trimmed, $byId, $byTitle, $titleList), [Linq.Expressions.Expression[]]@(
+        $e::Assign($byId, $dictNew), $e::Assign($byTitle, $dictNew),
+        $e::Assign($titleList, $script:memoNewExpression.Invoke([Collections.Generic.List[string]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($inputArg)) $step),
+        $e::NewArrayInit([object], [Linq.Expressions.Expression[]]@($byId, $byTitle, $e::Call($titleList, [Collections.Generic.List[string]].GetMethod('ToArray'))))))
+    $script:memoLookupFactory = $e::Lambda([Func[object[], object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($inputArg)).Compile()
+
+    $seen = $e::Variable([Collections.Generic.HashSet[string]], 'seen'); $live = $e::Variable([Collections.Generic.List[object]], 'live')
+    $rawId = $e::Variable([object], 'rawId')
+    $validId = $e::AndAlso($e::TypeIs($rawId, [string]), $e::GreaterThan($e::Property($e::Convert($rawId, [string]), 'Length'), $e::Constant(0)))
+    $take = $e::AndAlso($validId, $e::AndAlso($e::Call($seen, [Collections.Generic.HashSet[string]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($e::Convert($rawId, [string]))), $e::Not((New-WtMemoDeletedExpression $item))))
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $seen, $live, $rawId), [Linq.Expressions.Expression[]]@(
+        $e::Assign($seen, $script:memoNewExpression.Invoke([Collections.Generic.HashSet[string]].GetConstructor([type[]]@([Collections.Generic.IEqualityComparer[string]])), [Linq.Expressions.Expression[]]@($e::Constant([StringComparer]::Ordinal, [Collections.Generic.IEqualityComparer[string]])))),
+        $e::Assign($live, $script:memoNewExpression.Invoke([Collections.Generic.List[object]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($inputArg)) ($e::Block([Linq.Expressions.Expression[]]@(
+            $e::Assign($rawId, (New-WtMemoFieldExpression $item 'id')),
+            $e::IfThen($take, $e::Call($live, [Collections.Generic.List[object]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($item))))))),
+        $e::Call($live, [Collections.Generic.List[object]].GetMethod('ToArray'))))
+    $script:memoLiveFactory = $e::Lambda([Func[object[], object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($inputArg)).Compile()
+    $slots = $e::Variable([Collections.Generic.List[int]], 'slots')
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $slots), [Linq.Expressions.Expression[]]@(
+        $e::Assign($slots, $script:memoNewExpression.Invoke([Collections.Generic.List[int]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($inputArg)) ($e::IfThen((New-WtMemoDeletedExpression $item), $e::Call($slots, [Collections.Generic.List[int]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($i))))),
+        $e::Call($slots, [Collections.Generic.List[int]].GetMethod('ToArray'))))
+    $script:memoDeletedSlotsFactory = $e::Lambda([Func[object[], int[]]], $body, [Linq.Expressions.ParameterExpression[]]@($inputArg)).Compile()
+
+    # 행의 날짜와 미리보기는 표시될 때 기존 함수를 그대로 부른다. 먼 메모까지의 행은 컨트롤 없이 한 번에 만든다.
+    $cache = $e::Parameter([Collections.IDictionary], 'cache'); $getters = $e::Parameter([Management.Automation.ScriptBlock[]], 'getters')
+    $reuse = $e::Parameter([bool], 'reuse')
+    $row = $e::Variable([Management.Automation.PSObject], 'row')
+    $rows = $e::Variable([object[]], 'rows')
+    $cached = $e::Variable([object], 'cached')
+    # 원자료와 검색 결과의 본문 칸 이름만 다르다. 두 대리자로 만들어 행 안에서는 분기하지 않는다.
+    $script:memoViewRowFactories = @{}
+    foreach ($bodyField in 'body', 'Snippet') {
+        $pin = New-WtMemoFieldExpression $item 'pinned'
+        $pinned = $e::Call([Management.Automation.LanguagePrimitives].GetMethod('Equals', [type[]]@([object], [object], [bool])),
+            [Linq.Expressions.Expression[]]@($pin, $e::Constant($true, [object]), $e::Constant($true)))
+        $values = @((New-WtMemoFieldExpression $item 'id' -String), (New-WtMemoFieldExpression $item 'title' -String),
+            (New-WtMemoFieldExpression $item 'updated' -String), $e::Constant($null, [object]),
+            (New-WtMemoFieldExpression $item $bodyField -String), $e::Constant($null, [object]),
+            $e::Condition($pinned, $e::Constant('Visible'), $e::Constant('Collapsed')), $e::Property($null, [datetime].GetProperty('Today')))
+        $newRow = New-WtMemoObjectExpression @('Id', 'Title', 'Updated', 'StampValue', 'SnippetSource', 'SnippetValue', 'PinShown', 'Day') $values
+        $steps = [Collections.Generic.List[Linq.Expressions.Expression]]::new()
+        $steps.Add($e::Assign($row, $e::Convert($newRow, [Management.Automation.PSObject])))
+        $propCtor = [Management.Automation.PSScriptProperty].GetConstructor([type[]]@([string], [Management.Automation.ScriptBlock]))
+        $add = [Management.Automation.PSMemberInfoCollection[Management.Automation.PSPropertyInfo]].GetMethod('Add', [type[]]@([Management.Automation.PSPropertyInfo], [bool]))
+        $j = 0
+        foreach ($name in 'Stamp', 'Snippet', 'Sub') {
+            $prop = $script:memoNewExpression.Invoke($propCtor, [Linq.Expressions.Expression[]]@($e::Constant($name), $e::ArrayIndex($getters, $e::Constant($j))))
+            $steps.Add($e::Call($e::Property($row, 'Properties'), $add, [Linq.Expressions.Expression[]]@($prop, $e::Constant($true))))
+            $j++
+        }
+        $rowObject = $e::Convert($row, [object])
+        $key = $e::Convert($values[0], [object])
+        $same = $e::NotEqual($cached, $e::Constant($null, [object]))
+        foreach ($pair in @(@('Title', 1), @('Updated', 2), @('SnippetSource', 4), @('PinShown', 6))) {
+            $same = $e::AndAlso($same, $e::Call([string].GetMethod('Equals', [type[]]@([string], [string], [StringComparison])),
+                [Linq.Expressions.Expression[]]@((New-WtMemoFieldExpression $cached $pair[0] -String), $values[$pair[1]], $e::Constant([StringComparison]::Ordinal))))
+        }
+        $same = $e::AndAlso($same, $e::Call([Management.Automation.LanguagePrimitives].GetMethod('Equals', [type[]]@([object], [object])),
+            [Linq.Expressions.Expression[]]@((New-WtMemoFieldExpression $cached 'Day'), $e::Convert($values[7], [object]))))
+        $same = $e::AndAlso($e::NotEqual($cached, $e::Constant($null, [object])), $e::OrElse($reuse, $same))
+        $steps.Add($e::Call($cache, [Collections.IDictionary].GetMethod('set_Item'), [Linq.Expressions.Expression[]]@($key, $rowObject)))
+        $steps.Add($e::Assign($e::ArrayAccess($rows, [Linq.Expressions.Expression[]]@($i)), $rowObject))
+        $rowStep = $e::Block([Linq.Expressions.Expression[]]@(
+            $e::Assign($cached, $e::Call($cache, [Collections.IDictionary].GetMethod('get_Item'), [Linq.Expressions.Expression[]]@($key))),
+            $e::IfThenElse($same, $e::Assign($e::ArrayAccess($rows, [Linq.Expressions.Expression[]]@($i)), $cached), $e::Block($steps))))
+        $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $row, $rows, $cached), [Linq.Expressions.Expression[]]@(
+            $e::Assign($rows, $e::NewArrayBounds([object], [Linq.Expressions.Expression[]]@($e::ArrayLength($inputArg)))),
+            (New-WtMemoLoopExpression $i ($e::ArrayLength($inputArg)) $rowStep), $rows))
+        $script:memoViewRowFactories[$bodyField] = $e::Lambda([Func[object[], Management.Automation.ScriptBlock[], Collections.IDictionary, bool, object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($inputArg, $getters, $cache, $reuse)).Compile()
+    }
+}
+
+function New-WtMemoDeletedExpression($Object) {
+    $e = [Linq.Expressions.Expression]
+    $value = New-WtMemoFieldExpression $Object 'deleted'
+    $falseBool = $e::AndAlso($e::TypeIs($value, [bool]), $e::Not($e::Convert($value, [bool])))
+    $text = New-WtMemoFieldExpression $Object 'deleted' -String
+    $e::AndAlso($e::NotEqual($value, $e::Constant($null, [object])), $e::AndAlso($e::Not($falseBool), $e::NotEqual($text, $e::Constant(''))))
+}
+
+# 전체 항목은 참조/위치만 .NET에서 맞춘다. 복사·병합·지운 표시는 바뀐 항목에만 기존 함수로 적용한다.
+function Initialize-WtMemoSaveFactory {
+    $e = [Linq.Expressions.Expression]
+    $source = $e::Parameter([object[]], 'source'); $inputArg = $e::Parameter([object[]], 'incomingItems')
+    $i = $e::Variable([int], 'i'); $at = $e::Variable([int], 'at')
+    $item = $e::Variable([object], 'item'); $old = $e::Variable([object], 'old'); $rawId = $e::Variable([object], 'rawId'); $id = $e::Variable([string], 'id')
+    $dictType = [Collections.Generic.Dictionary[string, object]]
+    $original = $e::Variable($dictType, 'original'); $incoming = $e::Variable([Collections.Generic.HashSet[string]], 'incoming'); $seen = $e::Variable([Collections.Generic.HashSet[string]], 'seen')
+    $active = $e::Variable([object[]], 'active'); $olds = $e::Variable([object[]], 'olds'); $targets = $e::Variable([int[]], 'targets')
+    $next = $e::Variable([Collections.Generic.List[object]], 'next'); $changed = $e::Variable([Collections.Generic.List[int]], 'changed'); $deleted = $e::Variable([Collections.Generic.List[int]], 'deleted')
+    $comparer = $e::Constant([StringComparer]::Ordinal, [Collections.Generic.IEqualityComparer[string]])
+    $newDict = $script:memoNewExpression.Invoke($dictType.GetConstructor([type[]]@([Collections.Generic.IEqualityComparer[string]])), [Linq.Expressions.Expression[]]@($comparer))
+    $newSet = $script:memoNewExpression.Invoke([Collections.Generic.HashSet[string]].GetConstructor([type[]]@([Collections.Generic.IEqualityComparer[string]])), [Linq.Expressions.Expression[]]@($comparer))
+    $newObjectList = $script:memoNewExpression.Invoke([Collections.Generic.List[object]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())
+    $newIntList = $script:memoNewExpression.Invoke([Collections.Generic.List[int]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())
+    $valid = $e::AndAlso($e::TypeIs($rawId, [string]), $e::GreaterThan($e::Property($e::Convert($rawId, [string]), 'Length'), $e::Constant(0)))
+    $readId = $e::Assign($rawId, (New-WtMemoFieldExpression $item 'id'))
+    $setId = $e::Assign($id, $e::Convert($rawId, [string]))
+    $sourceStep = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($item, $e::ArrayIndex($source, $i)), $readId,
+        $e::IfThen($valid, $e::Block([Linq.Expressions.Expression[]]@($setId,
+            $e::IfThen($e::Not($e::Call($original, $dictType.GetMethod('ContainsKey'), [Linq.Expressions.Expression[]]@($id))),
+                $e::Call($original, $dictType.GetMethod('Add'), [Linq.Expressions.Expression[]]@($id, $item))))))))
+    $oldRevision = New-WtMemoFieldExpression $old 'rev'; $newRevision = New-WtMemoFieldExpression $item 'rev'
+    $sameFields = $e::AndAlso($e::Not($e::OrElse($e::TypeIs($oldRevision, [array]), $e::TypeIs($newRevision, [array]))),
+        $e::Call([Management.Automation.LanguagePrimitives].GetMethod('Equals', [type[]]@([object], [object], [bool])), [Linq.Expressions.Expression[]]@($oldRevision, $newRevision, $e::Constant($true))))
+    foreach ($name in 'updated', 'title', 'body') {
+        $sameFields = $e::AndAlso($sameFields, $e::Call([string].GetMethod('Equals', [type[]]@([string], [string], [StringComparison])),
+            [Linq.Expressions.Expression[]]@((New-WtMemoFieldExpression $old $name -String), (New-WtMemoFieldExpression $item $name -String), $e::Constant([StringComparison]::Ordinal))))
+    }
+    $same = $e::AndAlso($e::NotEqual($old, $e::Constant($null, [object])), $e::AndAlso(
+        $e::OrElse($e::Call([object].GetMethod('ReferenceEquals'), [Linq.Expressions.Expression[]]@($old, $item)), $sameFields),
+        $e::Not((New-WtMemoDeletedExpression $old))))
+    $bad = $script:memoNewExpression.Invoke([ArgumentException].GetConstructor([type[]]@([string])), [Linq.Expressions.Expression[]]@($e::Constant('저장할 메모 id가 없거나 겹칩니다.')))
+    $incomingStep = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($item, $e::ArrayIndex($inputArg, $i)), $readId,
+        $e::IfThen($e::Not($valid), $e::Throw($bad)), $setId,
+        $e::IfThen($e::Not($e::Call($incoming, [Collections.Generic.HashSet[string]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($id))), $e::Throw($bad)),
+        $e::Assign($old, $e::Constant($null, [object])),
+        $e::Call($original, $dictType.GetMethod('TryGetValue'), [Linq.Expressions.Expression[]]@($id, $old)),
+        $e::Assign($e::ArrayAccess($olds, [Linq.Expressions.Expression[]]@($i)), $old),
+        $e::IfThenElse($same,
+            $e::Block([Linq.Expressions.Expression[]]@($e::Assign($e::ArrayAccess($active, [Linq.Expressions.Expression[]]@($i)), $old), $e::Empty())),
+            $e::Call($changed, [Collections.Generic.List[int]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($i)))))
+    $addOld = $e::Call($next, [Collections.Generic.List[object]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($item))
+    $addActive = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($e::ArrayAccess($targets, [Linq.Expressions.Expression[]]@($at)), $e::Property($next, 'Count')),
+        $e::Call($next, [Collections.Generic.List[object]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($e::ArrayIndex($active, $at))),
+        $e::PostIncrementAssign($at), $e::Empty()))
+    $nextStep = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($item, $e::ArrayIndex($source, $i)), $readId,
+        $e::IfThenElse($valid,
+            $e::Block([Linq.Expressions.Expression[]]@($setId,
+                $e::IfThenElse($e::Call($seen, [Collections.Generic.HashSet[string]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($id)),
+                    $e::IfThenElse($e::Call($incoming, [Collections.Generic.HashSet[string]].GetMethod('Contains'), [Linq.Expressions.Expression[]]@($id)), $addActive,
+                        $e::Block([Linq.Expressions.Expression[]]@(
+                            $e::IfThen($e::Not((New-WtMemoDeletedExpression $item)), $e::Call($deleted, [Collections.Generic.List[int]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($e::Property($next, 'Count')))), $addOld))), $addOld))), $addOld)))
+    $finish = $e::Label()
+    $tail = $e::Loop($e::IfThenElse($e::LessThan($at, $e::ArrayLength($inputArg)), $addActive, $e::Break($finish)), $finish)
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $at, $item, $old, $rawId, $id, $original, $incoming, $seen, $active, $olds, $targets, $next, $changed, $deleted), [Linq.Expressions.Expression[]]@(
+        $e::Assign($original, $newDict), $e::Assign($incoming, $newSet), $e::Assign($seen, $newSet),
+        $e::Assign($active, $e::Convert($e::Call($inputArg, [array].GetMethod('Clone')), [object[]])),
+        $e::Assign($olds, $e::NewArrayBounds([object], [Linq.Expressions.Expression[]]@($e::ArrayLength($inputArg)))),
+        $e::Assign($targets, $e::NewArrayBounds([int], [Linq.Expressions.Expression[]]@($e::ArrayLength($inputArg)))),
+        $e::Assign($next, $newObjectList), $e::Assign($changed, $newIntList), $e::Assign($deleted, $newIntList),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($source)) $sourceStep), $e::Assign($i, $e::Constant(0)),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($inputArg)) $incomingStep), $e::Assign($i, $e::Constant(0)),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($source)) $nextStep), $tail,
+        (New-WtMemoObjectExpression @('Olds', 'Targets', 'Next', 'Changed', 'Deleted') @($olds, $targets,
+            $e::Call($next, [Collections.Generic.List[object]].GetMethod('ToArray')), $e::Call($changed, [Collections.Generic.List[int]].GetMethod('ToArray')), $e::Call($deleted, [Collections.Generic.List[int]].GetMethod('ToArray'))))))
+    $script:memoSaveFactory = $e::Lambda([Func[object[], object[], object]], $body, [Linq.Expressions.ParameterExpression[]]@($source, $inputArg)).Compile()
+}
+
+function Get-WtMemoLookupData([object[]]$Items) { if ($null -eq $Items) { $Items = [object[]]::new(0) }; , $script:memoLookupFactory.Invoke($Items) }
+function Get-WtMemoIdArray([object[]]$Items) { if ($null -eq $Items) { $Items = [object[]]::new(0) }; , $script:memoIdFactory.Invoke($Items) }
+function Get-WtMemoDetachedItems([object[]]$Items) { if ($null -eq $Items) { $Items = [object[]]::new(0) }; , $script:memoDetachedFactory.Invoke($Items) }
+function Get-WtMemoLiveItems([object[]]$Items) { if ($null -eq $Items) { $Items = [object[]]::new(0) }; , $script:memoLiveFactory.Invoke($Items) }
+function Get-WtMemoUpdatedOrder([object[]]$Items) {
+    if ($null -eq $Items) { return , [object[]]::new(0) }
+    , [Linq.Enumerable]::ToArray[object]([Linq.Enumerable]::OrderByDescending[object, string]($Items, $script:memoUpdatedKeyFactory, [StringComparer]::CurrentCultureIgnoreCase))
+}
+function Get-WtMemoInitialOrder([object[]]$Items) {
+    if ($null -eq $Items) { return , [object[]]::new(0) }
+    , [Linq.Enumerable]::ToArray[object]([Linq.Enumerable]::OrderByDescending[object, bool]([Linq.Enumerable]::Where[object]($Items, $script:memoActiveFactory), $script:memoPinnedFactory))
+}
+
+function Initialize-WtMemoQuickFactory {
+    $e = [Linq.Expressions.Expression]
+    $items = $e::Parameter([object[]], 'items'); $patterns = $e::Parameter([Management.Automation.WildcardPattern[]], 'patterns'); $limit = $e::Parameter([int], 'limit')
+    $i = $e::Variable([int], 'i'); $j = $e::Variable([int], 'j'); $match = $e::Variable([bool], 'match'); $title = $e::Variable([string], 'title'); $text = $e::Variable([string], 'text')
+    $titles = $e::Variable([Collections.Generic.List[object]], 'titles'); $bodies = $e::Variable([Collections.Generic.List[object]], 'bodies')
+    $item = $e::ArrayIndex($items, $i)
+    $test = $e::Call($e::ArrayIndex($patterns, $j), [Management.Automation.WildcardPattern].GetMethod('IsMatch'), [Linq.Expressions.Expression[]]@($text))
+    $check = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($j, $e::Constant(0)), $e::Assign($match, $e::Constant($true)),
+        (New-WtMemoLoopExpression $j ($e::ArrayLength($patterns)) ($e::Assign($match, $e::AndAlso($match, $test))))))
+    $step = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($title, (New-WtMemoFieldExpression $item 'title' -String)), $e::Assign($text, $title), $check,
+        $e::IfThenElse($match,
+            $e::Call($titles, [Collections.Generic.List[object]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($item)),
+            $e::IfThen($e::LessThan($e::Property($bodies, 'Count'), $limit), $e::Block([Linq.Expressions.Expression[]]@(
+                $e::Assign($text, $e::Call([string].GetMethod('Concat', [type[]]@([string], [string], [string])), [Linq.Expressions.Expression[]]@($title, $e::Constant("`n"), (New-WtMemoFieldExpression $item 'body' -String)))),
+                $check, $e::IfThen($match, $e::Call($bodies, [Collections.Generic.List[object]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($item))))))),
+        $e::PostIncrementAssign($i), $e::Empty()))
+    $done = $e::Label()
+    $loop = $e::Loop($e::IfThenElse($e::AndAlso($e::LessThan($i, $e::ArrayLength($items)), $e::LessThan($e::Property($titles, 'Count'), $limit)), $step, $e::Break($done)), $done)
+    $newList = $script:memoNewExpression.Invoke([Collections.Generic.List[object]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $j, $match, $title, $text, $titles, $bodies), [Linq.Expressions.Expression[]]@(
+        $e::Assign($titles, $newList), $e::Assign($bodies, $newList), $loop,
+        $e::Call($titles, [Collections.Generic.List[object]].GetMethod('AddRange'), [Linq.Expressions.Expression[]]@($bodies)),
+        $e::IfThen($e::GreaterThan($e::Property($titles, 'Count'), $limit),
+            $e::Call($titles, [Collections.Generic.List[object]].GetMethod('RemoveRange'), [Linq.Expressions.Expression[]]@($limit, $e::Subtract($e::Property($titles, 'Count'), $limit)))),
+        $e::Call($titles, [Collections.Generic.List[object]].GetMethod('ToArray'))))
+    $script:memoQuickFactory = $e::Lambda([Func[object[], Management.Automation.WildcardPattern[], int, object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($items, $patterns, $limit)).Compile()
+}
+
+function Find-WtMemoQuickData([object[]]$Items, [string]$Query, [int]$Limit = 50) {
+    if ($null -eq $Items -or $Limit -eq 0) { return , [object[]]::new(0) }
+    $patterns = [Management.Automation.WildcardPattern[]]@(foreach ($word in ($Query -split '\s+')) {
+        if ($word) { [Management.Automation.WildcardPattern]::new("*$word*", [Management.Automation.WildcardOptions]::IgnoreCase) }
+    })
+    , $script:memoQuickFactory.Invoke($Items, $patterns, $Limit)
+}
+
+function Initialize-WtMemoIndexOrderFactory {
+    $e = [Linq.Expressions.Expression]
+    $titles = $e::Parameter([string[]], 'titles'); $ids = $e::Parameter([string[]], 'ids')
+    $slots = $e::Parameter([Collections.Generic.Dictionary[string, int]], 'slots'); $lower = $e::Parameter([Collections.Generic.List[string]], 'lower')
+    $titleRanks = $e::Parameter([Collections.Generic.List[int]], 'titleRanks'); $idRanks = $e::Parameter([Collections.Generic.List[int]], 'idRanks')
+    $map = $e::Variable([Collections.Generic.Dictionary[string, int]], 'ranks'); $i = $e::Variable([int], 'i'); $slot = $e::Variable([int], 'slot')
+    $dictType = [Collections.Generic.Dictionary[string, int]]
+    $newMap = $script:memoNewExpression.Invoke($dictType.GetConstructor([type[]]@([Collections.Generic.IEqualityComparer[string]])), [Linq.Expressions.Expression[]]@($e::Constant([StringComparer]::Ordinal, [Collections.Generic.IEqualityComparer[string]])))
+    $get = $dictType.GetMethod('get_Item'); $set = [Collections.Generic.List[int]].GetMethod('set_Item')
+    $rank = $e::Call($map, $get, [Linq.Expressions.Expression[]]@($e::Call($lower, [Collections.Generic.List[string]].GetMethod('get_Item'), [Linq.Expressions.Expression[]]@($slot))))
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($map, $i, $slot), [Linq.Expressions.Expression[]]@(
+        $e::Assign($map, $newMap),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($titles)) ($e::Call($map, $dictType.GetMethod('Add'), [Linq.Expressions.Expression[]]@($e::ArrayIndex($titles, $i), $i)))),
+        $e::Assign($i, $e::Constant(0)),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($ids)) ($e::Block([Linq.Expressions.Expression[]]@(
+            $e::Assign($slot, $e::Call($slots, $get, [Linq.Expressions.Expression[]]@($e::ArrayIndex($ids, $i)))),
+            $e::Call($titleRanks, $set, [Linq.Expressions.Expression[]]@($slot, $rank)),
+            $e::Call($idRanks, $set, [Linq.Expressions.Expression[]]@($slot, $i))))))))
+    $script:memoIndexOrderFactory = $e::Lambda([Action[string[], string[], Collections.Generic.Dictionary[string, int], Collections.Generic.List[string], Collections.Generic.List[int], Collections.Generic.List[int]]], $body,
+        [Linq.Expressions.ParameterExpression[]]@($titles, $ids, $slots, $lower, $titleRanks, $idRanks)).Compile()
+}
+function New-WtMemoViewRows([object[]]$Items, [Management.Automation.ScriptBlock[]]$Getters, [Collections.IDictionary]$Cache, [switch]$Search, [switch]$Reuse) {
+    if ($null -eq $Items) { return , [object[]]::new(0) }
+    , $script:memoViewRowFactories[$(if ($Search) { 'Snippet' } else { 'body' })].Invoke($Items, $Getters, $Cache, [bool]$Reuse)
+}
+
+function Get-WtMemoCachedLinks($Index, $Cache) {
+    if (-not $Cache -or $Cache.Version -ne 1 -or $Cache.Entries -isnot [Collections.IDictionary]) { return }
+    $c = $Index.Columns
+    for ($i = 0; $i -lt $c.Id.Count; $i++) {
+        if (-not $c.Alive[$i]) { continue }
+        $entry = $Cache.Entries[$c.Id[$i]]
+        if (-not $entry -or $entry.Body -isnot [string] -or $entry.Body -cne $c.Body[$i] -or $entry.Outgoing -isnot [array] -or $entry.HasLink -isnot [bool]) { continue }
+        $outgoing = New-WtMemoStringSet
+        $valid = $true
+        foreach ($target in $entry.Outgoing) { if ($target -isnot [string]) { $valid = $false; break }; [void]$outgoing.Add($target) }
+        if ($valid) { $Index.LinkCache[$c.Body[$i]] = @{ Outgoing = $outgoing; HasLink = $entry.HasLink } }
+    }
+}
+
+function New-WtMemoPreparedData($Doc, $Cache, $Context) {
+    Initialize-WtMemoWorker $Context
+    if ($null -ne $Doc -and ($Doc -isnot [pscustomobject] -or $Doc.schema -ne 1 -or $Doc.items -isnot [array])) { return $null }
+    $seen = New-WtMemoStringSet
+    $live = @(foreach ($item in $Doc.items) {
+        $id = Get-WtField $item 'id'
+        if ($id -is [string] -and $id -and $seen.Add($id) -and -not (Test-WtDeleted $item)) { $item }
+    })
+    $live = Get-WtMemoDetachedItems $live
+    $items = @($live | Sort-Object -Property @{ Expression = { [string]$_.updated }; Descending = $true })
+    $folders = if ($null -ne $Doc.folders -and $Doc.folders -is [array]) { $Doc.folders } else { @(Get-WtMemoDefaultFolders) }
+    $index = New-WtMemoIndex $items -Folders $folders
+    Get-WtMemoCachedLinks $index $Cache
+    $allCached = $true
+    for ($i = 0; $i -lt $index.Columns.Id.Count; $i++) { if ($index.Columns.Alive[$i] -and -not $index.LinkCache.ContainsKey($index.Columns.Body[$i])) { $allCached = $false; break } }
+    if ($allCached) { Initialize-WtMemoLinks $index }
+    @{ Items = $items; Live = $live; Index = $index; Document = $Doc }
+}
+
+function Complete-WtMemoBackgroundIndex($Items, $Folders, $CachePath, $Context) {
+    Initialize-WtMemoWorker $Context
+    $index = New-WtMemoIndex $Items -Folders $Folders
+    Get-WtMemoCachedLinks $index (Read-WtCacheFile $CachePath)
+    Initialize-WtMemoLinks $index
+    $entries = @{}
+    $c = $index.Columns
+    for ($i = 0; $i -lt $c.Id.Count; $i++) {
+        if ($c.Alive[$i]) { $entries[$c.Id[$i]] = @{ Body = $c.Body[$i]; HasLink = $c.HasLink[$i]; Outgoing = @($c.Outgoing[$i]) } }
+    }
+    Write-WtCacheFile $CachePath @{ Version = 1; Entries = $entries }
+    $index
+}
+
+function Start-WtMemoBackgroundIndex {
+    param([object[]]$Items, [object[]]$Folders, [scriptblock]$OnDone, $Context)
+    Start-WtWork -Script { param($items, $folders, $cachePath, $context) Complete-WtMemoBackgroundIndex $items $folders $cachePath $context } `
+        -ArgumentList $Items, $Folders, (Get-WtStorePath 'memo-index-cache'), $script:memoWorkerContext `
+        -Functions $script:memoWorkerFunctions -Session Default -OnDone $OnDone -Context $Context
+}
+
+# 같은 함수 정의를 Work에 넘긴다. 묶음(New-Module)에서도 파일 경로나 다시 Import-Module할 모듈이 필요 없다.
+function Register-WtMemoPreparation {
+    $recordModule = (Get-Command ConvertFrom-WtStamp).Module
+    $markdownModule = (Get-Command ConvertTo-WtMarkdownModel).Module
+    $recordFunctions = & $recordModule { Get-Command Get-WtField, Test-WtRecordObject, Test-WtDeleted, ConvertFrom-WtWhole, ConvertFrom-WtStamp, ConvertFrom-WtLegacyStamp, ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, Get-WtStamp }
+    $markdownFunctions = & $markdownModule { Get-Command ConvertTo-WtMarkdownModel, Get-WtMarkdownPipeline, ConvertFrom-WtMd*, Get-WtMdLines, Add-WtMdText, Add-WtMdPlain, Get-WtMdLinkKind, New-WtMdLinkModel, New-WtMdImageModel, Get-WtMdInlineText, Get-WtMdBlocksText, Get-WtMdAnchorKey }
+    $script:memoWorkerContext = & $recordModule {
+        $values = @{}
+        foreach ($name in 'inv', 'ko', 'stampFormat', 'minYear', 'maxYear', 'legacyDates', 'legacyTimes', 'legacyTimesKo', 'legacyStamps', 'legacyStampsKo') { $values[$name] = $ExecutionContext.SessionState.PSVariable.GetValue("script:$name") }
+        $values
+    }
+    $markdownContext = & $markdownModule { @{ callouts = $script:callouts; obsidianRe = $script:obsidianRe } }
+    foreach ($name in $markdownContext.Keys) { $script:memoWorkerContext[$name] = $markdownContext[$name] }
+    $script:memoWorkerContext.memoInv = $script:memoInv
+    $script:memoWorkerContext.memoLinkHint = $script:memoLinkHint
+    $script:memoWorkerContext.memoIndexOrderFactory = $script:memoIndexOrderFactory
+    $script:memoWorkerContext.memoDetachedFactory = $script:memoDetachedFactory
+    $script:memoWorkerFunctions = @(Get-Command New-WtMemoIndex, Set-WtMemoIndexEntry, Update-WtMemoIndexOrder, Get-WtMemoIndexedTime, Get-WtMemoDefaultFolders,
+        New-WtMemoStringSet, Get-WtMemoLinkInfo, Initialize-WtMemoLinks, Update-WtMemoBacklinks, Get-WtMemoIndexEntries, Set-WtMemoIndexProperties,
+        Initialize-WtMemoWorker, Get-WtMemoCachedLinks, Complete-WtMemoBackgroundIndex, Get-WtMemoDetachedItems, Read-WtCacheFile, Write-WtCacheFile) + @($recordFunctions) + @($markdownFunctions)
+    Register-WtStorePreparation -Name 'memo' -Prepare (Get-Command New-WtMemoPreparedData) -Functions $script:memoWorkerFunctions -Context $script:memoWorkerContext -CacheName 'memo-index-cache'
+    Register-WtStorePreparation -Name 'memo-state' -Prepare (Get-Command New-WtMemoStatePreparation) -Functions @() -Context $null
+}
+
+function New-WtMemoStatePreparation($Doc, $Cache, $Context) { $null }
+
+# 첫 입력 때 .NET 대리자/문자열 변환의 첫 실행 비용을 내지 않게 한다. 파일·사용자 자료에는 닿지 않는다.
+function Initialize-WtMemoQueryRuntime {
+    $stamp = [DateTimeOffset]::Now.ToString("yyyy-MM-dd'T'HH:mm:sszzz", $script:memoInv)
+    $sample = @(for ($i = 0; $i -lt 4; $i++) {
+        [pscustomobject]@{ id = "warm-$i"; title = "warm $i"; body = "word #tag [[warm 1]]`n`n- [ ] 항목"; tags = @('tag'); folder = 'work'; pinned = ($i -eq 0); created = $stamp; updated = $stamp }
+    })
+    $index = New-WtMemoIndex $sample
+    $opened = @{ 'warm-0' = $stamp }
+    foreach ($query in 'word', '#tag updated:30d', 'absent', 'has:link') {
+        foreach ($sort in '', 'updated', 'created', 'title', 'opened', 'backlinks') {
+            $parameters = @{ Index = $index; Query = $query; First = 4; OpenedMap = $opened; SkipBacklinks = $true }
+            if ($sort) { $parameters.Sort = $sort }
+            $result = Find-WtMemo @parameters
+            if (-not $result.Success) { throw $result.Error.Reason }
+        }
+    }
+    $getters = [scriptblock[]]@({ $this.Updated }, { $this.SnippetSource }, { $this.Title })
+    [void](New-WtMemoViewRows $sample $getters @{})
+    [void](New-WtMemoViewRows $result.Items $getters @{} -Search)
+    [void](Get-WtMemoLookupData $sample)
+    [void](Get-WtMemoUpdatedOrder $sample)
+    [void](Find-WtMemoQuickData $sample 'word')
+    [void](Find-WtMemoQuickData $sample 'absent')
+    [void]$script:memoSaveFactory.Invoke($sample, $sample)
+    [void](Get-WtMarkdownSnippet "# 제목`n`n[[warm 1]] #tag`n`n- [ ] 항목" 80)
+    if (Get-Command Format-WtMemoTime -ErrorAction SilentlyContinue) { [void](Format-WtMemoTime $stamp) }
+}
+
 # 입력 자료와 무관한 대리자는 모듈을 읽을 때 한 번 준비한다(검색 중 컴파일하지 않는다).
 Initialize-WtMemoSearchEngine
+Initialize-WtMemoViewFactories
+Initialize-WtMemoSaveFactory
+Initialize-WtMemoQuickFactory
+Initialize-WtMemoIndexOrderFactory
+Register-WtMemoPreparation
+Initialize-WtMemoQueryRuntime
 
 Export-ModuleMember -Function ConvertFrom-WtMemoQuery, ConvertTo-WtMemoQuery, New-WtMemoIndex, Update-WtMemoIndex, Add-WtMemoIndexEntries, Find-WtMemo, Get-WtMemoResultRows, Step-WtMemoLinks, Test-WtMemoQueryLinks,
     Set-WtMemoFolder, Set-WtMemoPinned, Set-WtMemoArchived, Get-WtMemoFolders, Save-WtMemoFolders, Set-WtMemoOpened,
-    Get-WtMemoViews, Save-WtMemoView, Set-WtMemoViewDeleted, Open-WtMemoStore, Save-WtMemoDataItems
+    Get-WtMemoViews, Save-WtMemoView, Set-WtMemoViewDeleted, Open-WtMemoStore, Save-WtMemoDataItems, Start-WtMemoBackgroundIndex, Get-WtMemoLookupData, New-WtMemoViewRows, Get-WtMemoUpdatedOrder, Get-WtMemoLiveItems, Get-WtMemoInitialOrder, Set-WtMemoIndexProperties, Find-WtMemoQuickData, Get-WtMemoIdArray, Get-WtMemoDetachedItems
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\memo\MemoData.psm1 끝 ----
 

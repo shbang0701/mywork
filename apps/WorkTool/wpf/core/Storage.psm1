@@ -382,7 +382,8 @@ function Start-WtDataWriteNext {
             if ($null -ne $entry.Document) {
                 $key = $entry.Path.ToLowerInvariant()
                 if (-not $script:storeSerializers.ContainsKey($key)) { $script:storeSerializers[$key] = [Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new() }
-                $text = "param(`$p, `$doc, `$cache, `$factory)`n`$json = ConvertTo-WtStoreDocumentJson `$doc `$cache `$factory`n& {`n$($script:writeJob.ToString())`n} `$p `$json`n`$bytes = [Text.UTF8Encoding]::new(`$false).GetBytes(`$json)`n`"`$(`$bytes.Length)|`$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(`$bytes)))`""
+                # 이 작업이 화면 일과 겹치면 화면 스레드가 약 300ms 멈춘다(메모 3,000개 실측, 원인은 못 찾음). 저장 뒤 화면 일이 먼저 끝나게 잠깐 쉬고 시작한다
+                $text = "param(`$p, `$doc, `$cache, `$factory)`n[System.Threading.Thread]::Sleep($script:writeStartDelayMs)`n`$json = ConvertTo-WtStoreDocumentJson `$doc `$cache `$factory`n& {`n$($script:writeJob.ToString())`n} `$p `$json`n`$bytes = [Text.UTF8Encoding]::new(`$false).GetBytes(`$json)`n`"`$(`$bytes.Length)|`$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(`$bytes)))`""
                 $entry.Work = Start-WtWork -Script $text -ArgumentList $entry.Path, $entry.Document, $script:storeSerializers[$key], $script:jsonPartsFactory -Functions $script:writeFunctions -Session Default -Reserved `
                     -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
             } else {
@@ -396,6 +397,7 @@ function Start-WtDataWriteNext {
     }
 }
 $script:writeFunctions = $null
+$script:writeStartDelayMs = 200   # 큰 저장소의 화면 밖 저장을 시작하기 전에 쉬는 시간
 
 # 쓰기 하나가 끝났을 때 (화면 스레드): 성공이면 확인된 버전을 올리고, 실패면 실패로 남긴다. 그 뒤 다음 차례를 시작한다
 function Complete-WtDataWrite($Work) {

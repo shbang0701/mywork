@@ -400,7 +400,10 @@ try {
         })
         Assert-WtTest '직접 입력: 선택 달의 1일과 빈 시작·끝·이동·메모로 연다' (& $module {
             Show-WtAttForm
-            $script:form.Fields.date.Text -ceq '2026-11-01' -and $script:form.Fields.start.Text -ceq '' -and $script:form.Fields.end.Text -ceq '' -and
+            # 이번 달을 보고 있으면 오늘, 다른 달이면 그 달 1일이다. 검사를 돌리는 날짜와 상관없게 앱 규칙대로 기대값을 계산한다
+            $today = [datetime]::Today
+            $expected = if ($script:month.Year -eq $today.Year -and $script:month.Month -eq $today.Month) { $today } else { $script:month }
+            $script:form.Fields.date.Text -ceq $expected.ToString('yyyy-MM-dd') -and $script:form.Fields.start.Text -ceq '' -and $script:form.Fields.end.Text -ceq '' -and
                 $script:form.Fields.out.Text -ceq '' -and $script:form.Fields.back.Text -ceq '' -and $script:form.Fields.note.Text -ceq ''
         })
         $beforeBad = [IO.File]::ReadAllText((Get-WtStorePath 'attendance'))
