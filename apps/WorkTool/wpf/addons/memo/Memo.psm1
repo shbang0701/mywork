@@ -28,6 +28,11 @@ $script:undoTimer = $null
 $script:listUpdating = $false
 $script:listMenuId = ''
 $script:rowCache = @{}
+$script:rowGetters = [scriptblock[]]@(
+    { if ($null -eq $this.StampValue) { $this.StampValue = Format-WtMemoTime $this.Updated }; $this.StampValue },
+    { if ($null -eq $this.SnippetValue) { $this.SnippetValue = Get-WtMarkdownSnippet $this.SnippetSource }; $this.SnippetValue },
+    { if ($this.Snippet) { "$($this.Stamp) · $($this.Snippet)" } else { $this.Stamp } }
+)
 $script:quickOpen = $false
 $script:memoIndex = $null    # 검색 색인. 다 만들어지기 전에는 $script:indexBuild가 들고 있다
 $script:indexBuild = $null
@@ -61,11 +66,11 @@ Register-WtSettingDefault 'memo.tabs' $null
 function Get-WtMemoItems {
     $script:memoStore = Open-WtMemoStore
     if ($script:memoStore.State -notin 'ok', 'missing') { throw $script:memoStore.Error }
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($item in $script:memoStore.Items) {
-        $id = Get-WtField $item 'id'
-        if ($id -is [string] -and $id -and $seen.Add($id) -and -not (Test-WtDeleted $item)) { $item }
-    }
+    $prepared = Get-WtStorePreparation 'memo'
+    $script:preparedMemo = if ($prepared -and $prepared.Value -and [object]::ReferenceEquals($script:memoStore.Doc, $prepared.Value.Document)) { $prepared.Value } else { $null }
+    if ($script:preparedMemo) { $script:preparedMemo.Live; return }
+    # 편집용 스칼라 칸을 저장 통로가 보유한 항목과 분리한다. 알려지지 않은 중첩 칸은 수정하지 않는다.
+    (Get-WtMemoDetachedItems (Get-WtMemoLiveItems $script:memoStore.Items))
 }
 
 function Save-WtMemoItems([object[]]$Items) {
@@ -75,7 +80,7 @@ function Save-WtMemoItems([object[]]$Items) {
 
 # 최근 고친 순서
 function Get-WtMemoSorted([object[]]$Items) {
-    @($Items | Sort-Object -Property @{ Expression = { [string]$_.updated }; Descending = $true })
+    (Get-WtMemoUpdatedOrder $Items)
 }
 
 function Format-WtMemoTime([string]$Stamp) {
@@ -124,16 +129,7 @@ function Set-WtMemoContent($Memo, [string]$Title, [string]$Body, [datetime]$When
 
 # 빠른 이동 결과. 띄어 쓴 낱말이 제목에 모두 들어 있으면 위에, 본문까지 합쳐야 들어 있으면 아래에 (각각 최근 고친 순)
 function Find-WtMemoQuick([object[]]$Items, [string]$Query, [int]$Limit = 50) {
-    $words = @($Query -split '\s+' | Where-Object { $_ })
-    $inTitle = [System.Collections.Generic.List[object]]::new()
-    $inBody = [System.Collections.Generic.List[object]]::new()
-    foreach ($m in $Items) {
-        $title = [string]$m.title
-        if (-not ($words | Where-Object { $title -notlike "*$_*" })) { $inTitle.Add($m); continue }
-        $text = "$title`n$($m.body)"
-        if (-not ($words | Where-Object { $text -notlike "*$_*" })) { $inBody.Add($m) }
-    }
-    @(@($inTitle) + @($inBody) | Select-Object -First $Limit)
+    (Find-WtMemoQuickData $Items $Query $Limit)
 }
 
 # 예전 memo.csv → memo.json. 가져온 개수를 돌려준다.
@@ -167,7 +163,16 @@ function Get-WtMemoModeSetting {
 
 # ---- 화면: 칸 · 탭 상태 ------------------------------------------------------------------------
 
-function Get-WtMemoById([string]$Id) { $script:items | Where-Object { $_.id -eq $Id } | Select-Object -First 1 }
+function Initialize-WtMemoLookup {
+    if ([object]::ReferenceEquals($script:lookupItems, $script:items)) { return }
+    $script:lookupItems = $script:items
+    $lookup = Get-WtMemoLookupData $script:items
+    $script:itemsById = $lookup[0]
+    $script:itemsByTitle = $lookup[1]
+    $script:memoTitles = $lookup[2]
+}
+
+function Get-WtMemoById([string]$Id) { Initialize-WtMemoLookup; $script:itemsById[$Id] }
 
 function Get-WtMemoModifiers { [System.Windows.Input.Keyboard]::Modifiers }
 
@@ -211,7 +216,17 @@ function Save-WtMemoTabs {
         active = [int]$script:active
         ratio  = [Math]::Round([double]$script:ratio, 3)
     }
-    try { $null = Set-WtSetting 'memo.tabs' $value } catch { }   # 설정을 못 남겨도 메모 쓰기는 막지 않는다
+    try {
+        if ($script:items.Count -ge 256) { $null = Invoke-WtQueuedStoreWrite -Action { param($v) Set-WtSetting 'memo.tabs' $v } -ArgumentList (, $value) }
+        else { $null = Set-WtSetting 'memo.tabs' $value }
+    } catch { }   # 설정을 못 남겨도 메모 쓰기는 막지 않는다
+}
+
+function Add-WtMemoUse([string]$Id) {
+    $title = Get-WtMemoTitle $Id
+    if ($script:items.Count -ge 256) {
+        Invoke-WtQueuedStoreWrite -Action { param($id, $name) Add-WtUse -Page 'memo' -Key $id -Title $name -Sub '메모' -Icon 0xE70B } -ArgumentList $Id, $title
+    } else { Add-WtUse -Page 'memo' -Key $Id -Title $title -Sub '메모' -Icon 0xE70B }
 }
 
 # 저장 상태 표시 (칸마다): saved · dirty · writing · error · ''(숨김)
@@ -664,7 +679,7 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
     Update-WtMemoTabStyles
     Sync-WtMemoListSelection
     Save-WtMemoTabs
-    Add-WtUse -Page 'memo' -Key $Id -Title (Get-WtMemoTitle $Id) -Sub '메모' -Icon 0xE70B
+    Add-WtMemoUse $Id
     Add-WtMemoOpened $Id
     $true
 }
@@ -672,7 +687,7 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
 function Select-WtMemoTab($Pane, $Tab) {
     if ([object]::ReferenceEquals($Pane.Current, $Tab)) {
         Set-WtMemoActivePane $Pane
-        Add-WtUse -Page 'memo' -Key $Tab.Id -Title (Get-WtMemoTitle $Tab.Id) -Sub '메모' -Icon 0xE70B
+        Add-WtMemoUse $Tab.Id
         return $true
     }
     if (-not (Save-WtMemoNow)) { return $false }
@@ -683,7 +698,7 @@ function Select-WtMemoTab($Pane, $Tab) {
     Update-WtMemoTabStyles
     Sync-WtMemoListSelection
     Save-WtMemoTabs
-    Add-WtUse -Page 'memo' -Key $Tab.Id -Title (Get-WtMemoTitle $Tab.Id) -Sub '메모' -Icon 0xE70B
+    Add-WtMemoUse $Tab.Id
     Add-WtMemoOpened $Tab.Id
     $true
 }
@@ -899,7 +914,12 @@ function Save-WtMemoNow([switch]$Retry) {
         [void](Set-WtMemoContent $candidate $p.TitleBox.Text (Get-WtMemoEditorText $p.Editor))
         $byId[[string]$m.id] = $candidate
     }
-    $next = @(foreach ($item in $script:items) { if ($byId.Contains([string]$item.id)) { $byId[[string]$item.id] } else { $item } })
+    if ($script:itemsById.Count -eq $script:items.Count) {
+        $next = $script:items.Clone()
+        foreach ($id in $byId.Keys) { $next[[array]::IndexOf($script:items, $script:itemsById[$id])] = $byId[$id] }
+    } else {
+        $next = @(foreach ($item in $script:items) { if ($byId.Contains([string]$item.id)) { $byId[[string]$item.id] } else { $item } })
+    }
     try { Save-WtMemoItems $next }
     catch {
         $msg = $_.Exception.Message
@@ -1030,7 +1050,7 @@ function Switch-WtMemoSource { Set-WtMemoMode $(if ($script:mode -eq 'source') {
 
 # ---- 링크 · 빠른 이동 --------------------------------------------------------------------------
 
-function Get-WtMemoTitles { @($script:items | ForEach-Object { [string]$_.title } | Where-Object { $_ }) }
+function Get-WtMemoTitles { Initialize-WtMemoLookup; $script:memoTitles }
 
 # 본문의 링크를 눌렀을 때. [[제목]]은 제목이 같은 메모를 열고(없으면 그 제목으로 만든다), #태그는 그 태그로 찾는다. 처리했으면 $true
 function Invoke-WtMemoLink($Ed, $Link, [string]$How = 'here') {
@@ -1041,7 +1061,8 @@ function Invoke-WtMemoLink($Ed, $Link, [string]$How = 'here') {
         'wiki' {
             $name = ([string]$Link.Target -split '#')[0].Trim()
             if (-not $name) { return $false }   # [[#제목]]: 같은 글 안 이동은 보기가 한다
-            $m = $script:items | Where-Object { ([string]$_.title).Trim() -eq $name } | Select-Object -First 1
+            Initialize-WtMemoLookup
+            $m = $script:itemsByTitle[$name]
             if ($m) { [void](Open-WtMemo $m.id $How $pane -History) }
             else { [void](Add-WtMemo -Title $name -How $How -Pane $pane -History) }
             return $true
@@ -1082,7 +1103,8 @@ function Update-WtMemoQuickResults {
         if ($snip) { $sub = "$sub · $snip" }
         $rows.Add([pscustomobject]@{ Id = [string]$m.id; Title = (Get-WtMemoTitle $m.id); Sub = $sub; Create = $false })
     }
-    $exact = $script:items | Where-Object { ([string]$_.title).Trim() -eq $query } | Select-Object -First 1
+    Initialize-WtMemoLookup
+    $exact = $script:itemsByTitle[$query]
     if ($query -and -not $exact) { $rows.Add([pscustomobject]@{ Id = ''; Title = "새 메모 만들기: $query"; Sub = ''; Create = $true; Query = $query }) }
     $q.List.ItemsSource = $rows.ToArray()
     if ($rows.Count) { $q.List.SelectedIndex = 0 }
@@ -1110,20 +1132,7 @@ function Invoke-WtMemoQuickPick([switch]$NewTab) {
 # ---- 목록 -------------------------------------------------------------------------------------
 
 function New-WtMemoListItem($Memo) {
-    $pinned = $Memo.pinned -eq $true
-    $cached = $script:rowCache[$Memo.id]
-    if ($cached -and $cached.Day -eq [datetime]::Today -and $cached.Body -ceq $Memo.body -and $cached.Title -ceq $Memo.title -and $cached.Updated -eq $Memo.updated -and $cached.Pinned -eq $pinned) { return $cached.Row }
-    $snippet = if ($cached -and $cached.Body -ceq $Memo.body) { $cached.Row.SnippetValue } else { $null }
-    $row = [pscustomobject]@{ Id = $Memo.id; Title = $Memo.title; Stamp = Format-WtMemoTime $Memo.updated; SnippetSource = [string]$Memo.body; SnippetValue = $snippet
-        PinShown = $(if ($pinned) { 'Visible' } else { 'Collapsed' }) }
-    # 가상 목록에서 보이는 행이 값을 읽을 때만 요약한다. 지역 변수는 캡처하지 않고 행 자체에 둔다.
-    $row | Add-Member -MemberType ScriptProperty -Name Snippet -Value {
-        if ($null -eq $this.SnippetValue) { $this.SnippetValue = Get-WtMarkdownSnippet $this.SnippetSource }
-        $this.SnippetValue
-    }
-    $row | Add-Member -MemberType ScriptProperty -Name Sub -Value { if ($this.Snippet) { "$($this.Stamp) · $($this.Snippet)" } else { $this.Stamp } }
-    $script:rowCache[$Memo.id] = @{ Body = $Memo.body; Title = $Memo.title; Updated = $Memo.updated; Pinned = $pinned; Day = [datetime]::Today; Row = $row }
-    $row
+    (New-WtMemoViewRows -Items @($Memo) -Getters $script:rowGetters -Cache $script:rowCache)[0]
 }
 
 # 목록 선택은 포커스가 있는 칸의 지금 탭 메모를 따라간다
@@ -1132,14 +1141,18 @@ function Sync-WtMemoListSelection {
     if (-not $list) { return }
     $keep = Get-WtMemoCurrentId
     $script:listUpdating = $true
-    try { $list.SelectedItem = $list.Items | Where-Object { [string]$_.Id -eq $keep } | Select-Object -First 1 }
+    try {
+        $selected = $null
+        foreach ($row in $script:listRows) { if ([string]$row.Id -eq $keep) { $selected = $row; break } }
+        $list.SelectedItem = $selected
+    }
     finally { $script:listUpdating = $false }
 }
 
 # 목록에서 메모 하나를 고른다(클릭과 같음: 지금 탭에서 연다). 조건에 걸러져 안 보이면 조건을 지운다
 function Select-WtMemoItem([string]$Id) {
     $list = $script:ui.List
-    $find = { $list.Items | Where-Object { [string]$_.Id -eq $Id } | Select-Object -First 1 }
+    $find = { foreach ($row in $script:listRows) { if ([string]$row.Id -eq $Id) { return $row } } }
     Add-WtMemoListPageUntil $Id
     $li = & $find
     if (-not $li) {
@@ -1157,6 +1170,14 @@ function Select-WtMemoItem([string]$Id) {
 
 # 처음 열 때 화면을 막지 않게 색인은 뒤에서 조금씩 만든다. 그동안 조건 없는 목록은 읽어 둔 메모로 보여 준다
 function Start-WtMemoIndexBuild {
+    if ($script:preparedMemo -and [object]::ReferenceEquals($script:preparedMemo.Document, $script:memoStore.Doc)) {
+        $script:memoIndex = $script:preparedMemo.Index
+        Set-WtMemoIndexProperties $script:memoIndex
+        $script:indexBuild = $null
+        $script:preparedMemo = $null
+        Start-WtMemoLinkBuild
+        return
+    }
     $script:memoIndex = $null
     $folders = try { @(Get-WtMemoFolders $script:memoStore) } catch { @() }
     $script:indexBuild = @{ Index = (New-WtMemoIndex @() -Folders $folders); Items = @($script:items); At = 0 }
@@ -1184,19 +1205,33 @@ function Step-WtMemoIndexBuild([int]$Count) {
 # 받는 연결 수와 연결 조건에 쓰는 해석. 메모마다 마크다운을 읽으므로 화면이 쉴 때만 조금씩 한다
 function Start-WtMemoLinkBuild {
     $script:linkFailed = $false
-    if (-not $script:linkTimer) {
-        $script:linkTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::ApplicationIdle)
-        $script:linkTimer.Interval = [TimeSpan]::FromMilliseconds(30)
-        $script:linkTimer.Add_Tick({
+    if ($script:items.Count -lt 256) {
+        if (-not $script:linkTimer) {
+            $script:linkTimer = [System.Windows.Threading.DispatcherTimer]::new([System.Windows.Threading.DispatcherPriority]::ApplicationIdle)
+            $script:linkTimer.Interval = [TimeSpan]::FromMilliseconds(30)
+            $script:linkTimer.Add_Tick({
                 param($s, $e)
                 try {
                     if ($script:memoIndex -and -not (Step-WtMemoLinks $script:memoIndex)) { return }
                     $s.Stop()
                     if ($script:listWaitLinks) { Update-WtMemoList }
-                } catch { $s.Stop(); $script:linkFailed = $true }   # 실패하면 연결 조건으로 찾을 때 이유를 보여 준다
+                } catch { $s.Stop(); $script:linkFailed = $true }
             })
+        }
+        $script:linkTimer.Start()
+        return
     }
-    $script:linkTimer.Start()
+    if ($script:memoIndex -and $script:memoIndex.LinksReady) { return }
+    if ($script:linkWork -and -not $script:linkWork.Finished) { return }
+    $script:linkWork = Start-WtMemoBackgroundIndex -Items $script:items -Folders @(Get-WtMemoFolders $script:memoStore) -Context $script:items -OnDone {
+        param($w)
+        $script:linkWork = $null
+        if ($w.State -ne 'done') { $script:linkFailed = $true; return }
+        if (-not [object]::ReferenceEquals($w.Context, $script:items)) { Start-WtMemoLinkBuild; return }
+        $script:memoIndex = $w.Result
+        Set-WtMemoIndexProperties $script:memoIndex
+        if ($script:listWaitLinks) { Update-WtMemoList }
+    }
 }
 
 # 찾을 때는 남은 색인을 바로 끝낸다
@@ -1207,6 +1242,7 @@ function Get-WtMemoIndex {
 }
 
 function Update-WtMemoIndexItem($Memo, [switch]$Removed) {
+    $script:rowCache.Remove([string]$Memo.id)
     if ($script:indexBuild) { Start-WtMemoIndexBuild; return }
     if (-not $script:memoIndex) { return }
     if ($Removed) { Update-WtMemoIndex -Index $script:memoIndex -Remove ([string]$Memo.id) }
@@ -1489,8 +1525,13 @@ function Invoke-WtMemoAction([string]$Action, [string]$Id, $Value) {
             'folder' { Set-WtMemoFolder -Id $Id -Folder ([string]$Value) -Store $script:memoStore }
         }
     } catch { Show-WtError $_ '메모 정리'; return }
-    $item = @($script:memoStore.Items | Where-Object { $_.id -ceq $Id })[0]
-    $script:items = @(foreach ($m in $script:items) { if ($m.id -ceq $Id) { $item } else { $m } })
+    $item = $null
+    foreach ($m in $script:memoStore.Items) { if ($m.id -ceq $Id) { $item = $m; break } }
+    $next = $script:items.Clone()
+    # 정리의 id는 ordinal이다. 화면 열기의 대소문자 무시 조회로 바꾸면 A/a 중 다른 행을 덮을 수 있다.
+    $position = [array]::IndexOf([string[]](Get-WtMemoIdArray $script:items), $Id)
+    if ($position -ge 0) { $next[$position] = $item }
+    $script:items = $next
     $script:viewStamp = Get-WtMemoViewStamp
     Update-WtMemoIndexItem $item
     Update-WtMemoList
@@ -1505,18 +1546,21 @@ function ConvertTo-WtMemoListItem($Row) {
 
 function Get-WtMemoListResult {
     $query = Get-WtMemoFilterText
+    $firstList = $script:firstMemoList
+    $script:firstMemoList = $false
     # 조건 없는 처음 목록은 색인을 기다리지 않는다
-    if (-not (Test-WtMemoFiltered) -and -not $script:memoIndex) {
-        $alive = @($script:items | Where-Object { $_.archived -ne $true })
-        $ordered = @($alive | Where-Object { $_.pinned -eq $true }) + @($alive | Where-Object { $_.pinned -ne $true })
-        return @{ Count = $ordered.Count; Items = $ordered; Find = $null }
+    if (-not (Test-WtMemoFiltered) -and ($firstList -or -not $script:memoIndex)) {
+        $ordered = Get-WtMemoInitialOrder $script:items
+        return @{ Count = $ordered.Count; Items = $ordered; Find = $null; Query = $query }
     }
     $index = Get-WtMemoIndex
     # 연결 조건은 해석이 끝나야 답할 수 있다. 화면을 세우지 않고 앞 결과를 둔 채 뒤에서 끝낸 다음 다시 그린다
     $script:listWaitLinks = $false
     if (-not $index.LinksReady -and -not $script:linkFailed) {
         $tree = ConvertFrom-WtMemoQuery $query
-        if (($script:listSort -ceq 'backlinks' -or ($tree.Success -and (Test-WtMemoQueryLinks $tree.Root))) -and -not (Step-WtMemoLinks $index $script:linkWaitMs)) {
+        if (($script:listSort -ceq 'backlinks' -or ($tree.Success -and (Test-WtMemoQueryLinks $tree.Root))) -and
+            ($script:items.Count -ge 256 -or -not (Step-WtMemoLinks $index $script:linkWaitMs))) {
+            Start-WtMemoLinkBuild
             $script:listWaitLinks = $true
             return @{ Error = [pscustomobject]@{ Reason = '연결을 정리하는 중입니다. 끝나면 결과를 보여 줍니다.' } }
         }
@@ -1528,19 +1572,45 @@ function Get-WtMemoListResult {
     }
     $found = Find-WtMemo @params
     if (-not $found.Success) { return @{ Error = $found.Error } }
-    @{ Count = $found.Count; Items = @($found.Items); Find = $found }
+    @{ Count = $found.Count; Items = @($found.Items); Find = $found; Query = $query }
 }
 
 function Get-WtMemoListPage($Result, [int]$Skip, [int]$Take) {
+    $context = "$([bool]$Result.Find)|$($Result.Query)|$([datetime]::Today.Ticks)"
+    if ($script:rowContext -cne $context) { $script:rowCache.Clear(); $script:rowContext = $context }
     if ($Result.Find) {
         # 찾기 결과는 앞 $script:listPage줄만 들고 있다. 스크롤로 더 만든 뒤 다시 그릴 때는 그만큼 새로 만든다
         $have = @($Result.Items)
         $rows = if ($Skip -eq 0 -and ($Take -le $have.Count -or $have.Count -ge $Result.Count)) { $have } else { @(Get-WtMemoResultRows -Result $Result.Find -Skip $Skip -First $Take) }
-        foreach ($row in $rows) { ConvertTo-WtMemoListItem $row }
+        $viewRows = New-WtMemoViewRows -Items $rows -Getters $script:rowGetters -Cache $script:rowCache -Search -Reuse
+        Complete-WtMemoRowText $viewRows
+        $viewRows
         return
     }
     $last = [Math]::Min($Skip + $Take, $Result.Count) - 1
-    if ($last -ge $Skip) { foreach ($m in @($Result.Items[$Skip..$last])) { New-WtMemoListItem $m } }
+    if ($last -ge $Skip) {
+        $viewRows = New-WtMemoViewRows -Items @($Result.Items[$Skip..$last]) -Getters $script:rowGetters -Cache $script:rowCache -Reuse
+        Complete-WtMemoRowText $viewRows
+        $viewRows
+    }
+}
+
+# 바인딩이 같은 ScriptProperty를 여러 번 평가하지 않게 앞/뒤 한 페이지의 표시 문자열을 한 번 완성한다.
+# 먼 위치 사이의 아직 표시되지 않은 행은 같은 getter를 남겨 처음 보일 때 원문으로 완성한다.
+function Complete-WtMemoRowText([object[]]$Rows) {
+    for ($i = 0; $i -lt $Rows.Count; $i++) {
+        if ($i -ge $script:listPage -and $i -lt $Rows.Count - $script:listPage) { $i = $Rows.Count - $script:listPage - 1; continue }
+        $row = $Rows[$i]
+        if ($row.PSObject.Properties['Sub'] -isnot [Management.Automation.PSScriptProperty]) { continue }
+        $stamp = Format-WtMemoTime $row.Updated
+        $snippet = Get-WtMarkdownSnippet $row.SnippetSource
+        $row.StampValue = $stamp; $row.SnippetValue = $snippet
+        $sub = if ($snippet) { "$stamp · $snippet" } else { $stamp }
+        foreach ($pair in @(@('Stamp', $stamp), @('Snippet', $snippet), @('Sub', $sub))) {
+            $row.PSObject.Properties.Remove($pair[0])
+            $row.PSObject.Properties.Add([Management.Automation.PSNoteProperty]::new($pair[0], $pair[1]))
+        }
+    }
 }
 
 # 목록을 다시 그린다. 열린 메모는 다시 채우지 않는다 (편집 중 글자 위치 유지). 편집 중인 메모가 조건에서 빠져도 편집기는 그대로 둔다
@@ -1561,15 +1631,15 @@ function Update-WtMemoList {
     $script:ui.ListNote.Visibility = 'Collapsed'
     $script:listResult = $result
     $script:ui.ListCount.Text = "  $($result.Count)"
-    $take = [Math]::Max($script:listPage, $(if ($script:listRows) { [Math]::Min($script:listRows.Count, $script:listPage * 5) } else { 0 }))
+    # 이미 보던 먼 위치를 유지한다. 앞 200줄로 줄이면 레이아웃 도중 ScrollChanged가 끝까지 다시 붙인다.
+    $take = [Math]::Max($script:listPage, $(if ($script:listRows) { $script:listRows.Count } else { 0 }))
     $rows = @(Get-WtMemoListPage $result 0 $take)
     $script:listUpdating = $true
     try {
         $same = $script:listRows -and $script:listRows.Count -eq $rows.Count
         for ($i = 0; $same -and $i -lt $rows.Count; $i++) { $same = [object]::ReferenceEquals($script:listRows[$i], $rows[$i]) }
         if (-not $same) {
-            $script:listRows = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-            foreach ($row in $rows) { $script:listRows.Add($row) }
+            $script:listRows = [System.Collections.ObjectModel.ObservableCollection[object]]::new([Collections.Generic.IEnumerable[object]]$rows)
             $list.ItemsSource = $script:listRows
         }
     } finally { $script:listUpdating = $false }
@@ -1586,7 +1656,26 @@ function Add-WtMemoListPage {
 
 function Add-WtMemoListPageUntil([string]$Id) {
     if (-not $script:listRows) { return }
-    while (-not @($script:listRows | Where-Object { [string]$_.Id -ceq $Id }).Count -and $script:listRows.Count -lt [int]$script:listResult.Count) { Add-WtMemoListPage }
+    foreach ($row in $script:listRows) { if ([string]$row.Id -ceq $Id) { return } }
+    $r = $script:listResult
+    $position = -1
+    if ($r.Find) {
+        $slot = [array]::IndexOf([string[]]$r.Find.Columns[0], $Id)
+        if ($slot -ge 0) { $position = [array]::IndexOf([int[]]$r.Find.Order, $slot) }
+    } else {
+        for ($i = 0; $i -lt $r.Items.Count; $i++) { if ([string]$r.Items[$i].id -ceq $Id) { $position = $i; break } }
+    }
+    if ($position -lt 0) { return }
+    $take = [Math]::Min($r.Count, [int]([Math]::Ceiling(($position + 1) / [double]$script:listPage) * $script:listPage))
+    $more = @(Get-WtMemoListPage $r $script:listRows.Count ($take - $script:listRows.Count))
+    $all = [object[]]::new($script:listRows.Count + $more.Count)
+    $script:listRows.CopyTo($all, 0)
+    [array]::Copy($more, 0, $all, $script:listRows.Count, $more.Count)
+    $script:listUpdating = $true
+    try {
+        $script:listRows = [Collections.ObjectModel.ObservableCollection[object]]::new([Collections.Generic.IEnumerable[object]]$all)
+        $script:ui.List.ItemsSource = $script:listRows
+    } finally { $script:listUpdating = $false }
 }
 
 # ---- 목차 ---------------------------------------------------------------------------------------
@@ -1953,7 +2042,12 @@ function Update-WtMemoView {
     if (-not (Save-WtMemoNow)) { return }
     $stamp = Get-WtMemoViewStamp
     if ($script:viewStamp -cne $stamp) {
-        $script:items = @(Get-WtMemoSorted (Get-WtMemoItems))
+        $script:rowCache.Clear()
+        $script:firstMemoList = $true
+        $reusePrepared = $script:preparedMemo -and [object]::ReferenceEquals($script:preparedMemo.Document, $script:memoStore.Doc) -and
+            $stamp -ceq "$($script:shortcutStamp)|$([datetime]::Today.Ticks)"
+        if (-not $reusePrepared) { $loaded = @(Get-WtMemoItems) }
+        $script:items = if ($script:preparedMemo) { $script:preparedMemo.Items } else { @(Get-WtMemoSorted $loaded) }
         Start-WtMemoIndexBuild
         $present = @{}
         foreach ($item in $script:items) { $present[$item.id] = $true }
@@ -1979,10 +2073,9 @@ function Update-WtMemoView {
 function Test-WtMemoShortcut([string]$Key) {
     $stamp = Get-WtStoreStamp 'memo'
     if (-not $script:shortcutIds -or $script:shortcutStamp -cne $stamp) {
-        $ids = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         $fresh = $script:viewStamp -ceq "$stamp|$([datetime]::Today.Ticks)"
-        foreach ($item in $(if ($fresh) { $script:items } else { Get-WtMemoItems })) { [void]$ids.Add([string]$item.id) }
-        $script:shortcutIds = $ids
+        $items = if ($fresh) { $script:items } else { @(Get-WtMemoItems) }
+        $script:shortcutIds = [Collections.Generic.HashSet[string]]::new([Collections.Generic.IEnumerable[string]](Get-WtMemoIdArray $items), [StringComparer]::Ordinal)
         $script:shortcutStamp = $stamp
     }
     $script:shortcutIds.Contains($Key)

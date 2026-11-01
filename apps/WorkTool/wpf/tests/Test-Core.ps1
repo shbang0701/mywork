@@ -136,6 +136,42 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     try { $locked1 = Get-WtStoreStamp 'cache-sample'; $locked2 = Get-WtStoreStamp 'cache-sample' } finally { $cacheLock.Dispose() }
     Assert-Wt '저장 표식: 다른 프로그램이 파일을 잡고 있어도 멈추지 않고, 매번 다시 읽게 한다' ($locked1 -cne $locked2)
 
+    # 선택적 비동기 직렬화/대기 생략도 기존 저장 통로의 보유·버전·bak 규칙을 따른다.
+    $queueStorage = Get-Module Storage
+    $queueWriter = & $queueStorage { , $script:writeJob }
+    $queueWait = & $queueStorage { $script:writeWaitMs }
+    $queueGate = New-WtTestGate
+    $queuePath = Get-WtStorePath 'queue-sample'
+    try {
+        Write-WtStore queue-sample -Items @([pscustomobject]@{ id = 'q1'; title = '처음'; future = @{ keep = @(1, 2) } })
+        $queueStore = Open-WtStore queue-sample
+        & $queueStorage { $script:writeJob = { param($p, $json) $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne(); Write-WtDataFile $p $json } }
+        $queueItems = @(Copy-WtItem $queueStore.Items); $queueItems[0].title = '직렬화 밖'
+        $queuedStore = Save-WtStore $queueStore $queueItems -Background -Extra @{ unknown = @('a', 'b') }
+        $enteredQueue = $queueGate.Entered.WaitOne(10000)
+        Assert-Wt '저장 통로: 화면 밖 직렬화는 쓰기 전부터 보유하며 아직 저장됨이 아니다' (
+            $enteredQueue -and (Get-WtDataWriteStatus $queuePath).State -eq 'writing' -and (Read-WtStore queue-sample).items[0].title -eq '직렬화 밖' -and
+            [IO.File]::ReadAllText($queuePath) -notmatch '직렬화 밖')
+        $scopeError = $null
+        try { Invoke-WtQueuedStoreWrite -Action { Write-WtJsonFile (Get-WtStorePath 'queue-config') @{ schema = 1; values = @{ choice = 'x' } }; throw '대기 범위 검사' } } catch { $scopeError = $_.Exception.Message }
+        Assert-Wt '저장 통로: 대기 생략 범위가 실패해도 기본 대기는 복구하고 완성된 JSON은 보유한다' (
+            $scopeError -like '*대기 범위 검사*' -and (& $queueStorage { $script:writeWaitMs }) -eq $queueWait -and (Read-WtJsonFile (Get-WtStorePath 'queue-config')).values.choice -eq 'x')
+        [void]$queueGate.Gate.Set(); Wait-WtTestWrites 30000
+        $queueDoc = [IO.File]::ReadAllText($queuePath) | ConvertFrom-Json -DateKind String
+        $queueBak = [IO.File]::ReadAllText("$queuePath.bak") | ConvertFrom-Json -DateKind String
+        Assert-Wt '저장 통로: 파일 확인 뒤 저장됨 · 모르는 키/칸 유지 · 직전 bak 유지' (
+            (Get-WtDataWriteStatus $queuePath).State -eq 'saved' -and $queueDoc.items[0].title -eq '직렬화 밖' -and $queueBak.items[0].title -eq '처음' -and
+            ($queueDoc.items[0].future.keep -join ',') -eq '1,2' -and ($queueDoc.unknown -join ',') -eq 'a,b')
+        Write-WtJsonFile (Get-WtStorePath 'queue-plain') @{ schema = 1; values = @{ choice = '그대로' } } -Background
+        Wait-WtTestWrites 30000
+        $plainDoc = [IO.File]::ReadAllText((Get-WtStorePath 'queue-plain')) | ConvertFrom-Json
+        Assert-Wt '저장 통로: 일반 JSON의 화면 밖 직렬화도 items 키를 더하지 않고 원래 형식을 유지한다' (
+            $plainDoc.values.choice -ceq '그대로' -and -not $plainDoc.PSObject.Properties['items'])
+    } finally {
+        Remove-WtTestGate $queueGate
+        & $queueStorage { param($writer) $script:writeJob = $writer } $queueWriter
+    }
+
     Write-WtStore -Name 'mig' -Schema 1 -Items @([ordered]@{ id = 'm1' })
     $doc = Read-WtStore -Name 'mig' -Schema 2 -Migrate {
         param($d, $from)

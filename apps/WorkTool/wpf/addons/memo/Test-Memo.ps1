@@ -14,6 +14,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'fixtures/new-memo-perf-fixture.ps1')
 . (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'tests/TestKit.ps1')
 Import-WtTestCore
 Import-Module (Join-Path $PSScriptRoot 'MemoEditor.psm1') -Force -DisableNameChecking
@@ -272,14 +273,23 @@ try {
         Write-Host ('PERF {0} 10회 중앙값 {1:F1}{4} 최댓값 {2:F1}{4} 첫 회 {3:F1}{4}' -f $Label, $medianSample, $orderedSamples[-1], $firstSample, $Unit)
     }
     $perfSeed = 5061581; $perfRandom = [Random]::new($perfSeed)
-    # 본문이 32가지뿐이라 연결 해석도 32번이다. 이 숫자의 「첫 검색」에는 메모마다 본문이 다른 실제 비용이 안 잡힌다
-    $perfBodies = [string[]]::new(32)
+    $realFixture = New-WtMemoPerfFixture -Count 3000 -Seed $perfSeed
+    $uniqueBodies = [Collections.Generic.HashSet[string]]::new([Collections.Generic.IEnumerable[string]][string[]]$realFixture.Document.items.body, [StringComparer]::Ordinal)
+    Assert-WtTest '성능 자료: 서로 다른 본문 3000개 · 2048 낱말 · 평균 1.2KB · 20KB 1%' (
+        $uniqueBodies.Count -eq 3000 -and $realFixture.Vocabulary -ge 2000 -and $realFixture.AverageBodyBytes -ge 1150 -and $realFixture.AverageBodyBytes -le 1300 -and
+        @($realFixture.Document.items | Where-Object { [Text.Encoding]::UTF8.GetByteCount($_.body) -ge 20KB }).Count -eq 30)
+    Assert-WtTest '성능 자료: 연결 절반 · 같은 제목 20쌍 · 고정20 · 보관5% · 삭제1% · 폴더4 · 열람1000' (
+        @($realFixture.Document.items | Where-Object { $_.body.Contains('[[') }).Count -eq 1500 -and
+        @($realFixture.Document.items | Group-Object title | Where-Object Count -eq 2).Count -eq 20 -and
+        @($realFixture.Document.items | Where-Object pinned -eq $true).Count -eq 20 -and @($realFixture.Document.items | Where-Object archived -eq $true).Count -eq 150 -and
+        @($realFixture.Document.items | Where-Object deleted).Count -eq 30 -and $realFixture.Document.folders.Count -eq 4 -and $realFixture.State.items.Count -eq 1000)
+    # 아래 기존 검색 기대값(3000건/고정 제외2970건)은 유지하고, 본문만 모두 다른 실제 크기로 만든다.
+    $perfBodies = [string[]]::new(3000)
     for ($variant = 0; $variant -lt $perfBodies.Length; $variant++) {
-        $perfBody = "자료 $variant " + ('운영 메모 본문 확인 ' * 65) + '권한 오류 복구 절차 #백업 [[대상]]'
-        $perfBodies[$variant] = $perfBody + (' ' * (2048 - [Text.Encoding]::UTF8.GetByteCount($perfBody)))
+        $perfBodies[$variant] = '권한 오류 복구 절차 #백업 [[대상]] ' + $realFixture.Document.items[$variant].body
     }
     $perfMemos = @(for ($i = 0; $i -lt 3000; $i++) { [pscustomobject]@{
-        id = "perf$i"; title = "메모 $i"; body = $perfBodies[$perfRandom.Next($perfBodies.Length)]; tags = @('백업'); folder = 'work'; pinned = ($i % 100 -eq 0)
+        id = "perf$i"; title = "메모 $i"; body = $perfBodies[$i]; tags = @('백업'); folder = 'work'; pinned = ($i % 100 -eq 0)
         created = '2026-10-01T09:00:00+09:00'; updated = '2026-10-26T09:00:00+09:00'
     } })
     $watch = [Diagnostics.Stopwatch]::new()
@@ -295,7 +305,7 @@ try {
         $perfResult = $null; $indexMemory[$repeat] = ([GC]::GetTotalMemory($true) - $memoryBefore) / 1MB
     }
     Assert-WtTest '5a 속도 자료: 새 색인 10개 첫 검색 결과 개수' $validFirst
-    Write-Host "PERF 씨앗 $perfSeed 메모 3000개 본문 UTF-8 각각 2048B (메모리는 입력 자료를 제외한 GC 후 색인 보유량)"
+    Write-Host "PERF 씨앗 $perfSeed 메모 3000개 본문 모두 다름 · 평균 약1.2KB + 검색 검사용 접두어 · 1%는20KB (메모리는 입력 자료를 제외한 GC 후 색인 보유량)"
     Write-MemoPerf '색인 (연결은 첫 검색에 포함)' $indexTimes
     Write-MemoPerf '새 색인의 첫 검색 [권한 오류]' $firstTimes
     Write-MemoPerf '색인 관리 힙' $indexMemory 'MiB'
@@ -706,13 +716,15 @@ try {
         & $storage { $script:writeJob = { param($p, $json) [void][AppDomain]::CurrentDomain.GetData('WtTestGate').Gate.WaitOne(); Write-WtDataFile $p $json } }
         Set-TestBody 0 'slow draft'
         $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        $saveProcess = [Diagnostics.Process]::GetCurrentProcess(); $saveCpu = $saveProcess.TotalProcessorTime
         $savedNow = & $memoModule { Save-WtMemoNow }
-        $saveMs = $watch.ElapsedMilliseconds
+        $saveWallMs = $watch.ElapsedMilliseconds
+        $saveProcess.Refresh(); $saveMs = ($saveProcess.TotalProcessorTime - $saveCpu).TotalMilliseconds
         $writingTexts = @(Get-WtTestTexts $st0)
         $dirtyAfter = & $memoModule { $script:panes[0].Dirty }
         [void]$gate.Gate.Set()
         & $settle 1000
-        Assert-WtTest "메모 안정성: 저장이 늦으면 잠깐만 기다리고(${saveMs}ms) 「저장하는 중」, 파일에 쓰이면 「저장됨」 (다시 저장하지 않는다)" (
+        Assert-WtTest "메모 안정성: 저장이 늦으면 잠깐만 기다리고(벽 ${saveWallMs}ms / CPU ${saveMs}ms) 「저장하는 중」, 파일에 쓰이면 「저장됨」 (다시 저장하지 않는다)" (
             $savedNow -and $saveMs -lt 1500 -and -not $dirtyAfter -and @($writingTexts | Where-Object { $_ -like '저장하는 중*' }).Count -eq 1 -and
             @(Get-WtTestTexts $st0 | Where-Object { $_ -like '저장됨*' }).Count -eq 1 -and ([System.IO.File]::ReadAllText($memoPath) -match 'slow draft')) ($writingTexts -join ' / ')
     } finally {
@@ -883,6 +895,137 @@ try {
         Set-WtMemoMode 'live'; $a
     }
     Assert-WtTest '메모 보기: 탭마다 기억하고 설정에 남긴다' ($modes.Back -ceq 'read' -and $modes.Tip -ceq '읽기 보기 (Ctrl+E)' -and $modes.Saved -like '*read,source*') ($modes | ConvertTo-Json -Compress)
+
+    $caseUpper = New-WtMemo; $caseUpper.id = 'CaseA'; [void](Set-WtMemoContent $caseUpper '대문자 항목' '위 본문')
+    $caseLower = New-WtMemo; $caseLower.id = 'casea'; [void](Set-WtMemoContent $caseLower '소문자 항목' '아래 본문')
+    Save-WtMemoItems @($caseUpper, $caseLower)
+    $caseAction = & $memoModule {
+        $script:viewStamp = $null; Update-WtMemoView
+        Invoke-WtMemoAction 'pin' 'casea' $true
+        @{ Ids = @($script:items.id); Upper = @($script:items | Where-Object id -CEQ 'CaseA')[0]; Lower = @($script:items | Where-Object id -CEQ 'casea')[0] }
+    }
+    Assert-WtTest '메모 정리: 대소문자만 다른 id를 구분하고 다른 행을 덮지 않는다' (
+        $caseAction.Ids.Count -eq 2 -and $caseAction.Upper.title -ceq '대문자 항목' -and -not $caseAction.Upper.pinned -and $caseAction.Lower.pinned -and $caseAction.Lower.body -ceq '아래 본문')
+
+    # ---- 큰 저장소: 직렬화 전부터 보유 · 연속 저장 · 실패 · 종료 확인 · 캐시 ----
+    Wait-WtTestWrites 30000
+    & $memoModule { foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } }; $script:ui = @{}; $script:panes.Clear() }
+    if ($win) { $win.Close(); $win = $null }
+    Stop-WtAllWork
+    $backgroundTest = New-WtTestData 'memo-background'
+    $backgroundFixture = New-WtMemoPerfFixture -Count 320
+    $originalWriter = & $storage { , $script:writeJob }
+    $originalWritingChoice = & $shellModule { , ${function:Show-WtWritingChoice} }
+    $originalWindow = & $shellModule { $script:window }
+    $backgroundGate = $null
+    try {
+        Write-WtJsonFile (Get-WtStorePath memo) $backgroundFixture.Document
+        Wait-WtTestWrites 30000
+        Set-WtAppRoot $backgroundTest.App
+        [void](Wait-WtWork -All -Milliseconds 30000)
+        $backgroundStore = Open-WtMemoStore
+        $backgroundPath = Get-WtStorePath memo
+        $backgroundGate = New-WtTestGate
+        & $storage {
+            $script:writeJob = { param($p, $json) $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne(); Write-WtDataFile $p $json }
+        }
+        & $shellModule {
+            $script:window = $null; $script:testWritingAsked = 0
+            function script:Show-WtWritingChoice { param($Purpose, [switch]$NoCancel) $script:testWritingAsked++; 'cancel' }
+        }
+        $nextItems = Get-WtMemoLiveItems $backgroundStore.Items
+        $firstCopy = Copy-WtItem $nextItems[0]; $firstCopy.title = '화면 밖 첫 저장'; Set-WtItemEdited $firstCopy; $nextItems[0] = $firstCopy
+        $firstSave = Save-WtMemoDataItems $backgroundStore $nextItems
+        $entered = $backgroundGate.Entered.WaitOne(10000)
+        $writingLook = & $memoModule { Get-WtMemoSaveLook }
+        $closeCancelled = & $shellModule { $script:writingDropped = $false; -not (Confirm-WtDataWrites) -and $script:testWritingAsked -eq 1 }
+        Assert-WtTest '화면 밖 저장: 쓰기 전부터 보유 · 저장하는 중 · 종료 취소 때 내용 유지' (
+            $entered -and (Get-WtDataWriteStatus $backgroundPath).State -eq 'writing' -and $writingLook[0] -eq 'writing' -and $closeCancelled -and
+            (Read-WtStore memo).items[0].title -ceq '화면 밖 첫 저장' -and [IO.File]::ReadAllText($backgroundPath) -notmatch '화면 밖 첫 저장')
+        # 다시 읽은 핸들로 저장해 낡은 핸들 거부 규칙도 그대로 지킨다.
+        $secondBase = Open-WtMemoStore
+        $nextItems = Get-WtMemoLiveItems $secondBase.Items
+        $secondCopy = Copy-WtItem $nextItems[0]; $secondCopy.title = '화면 밖 두 번째 저장'; Set-WtItemEdited $secondCopy; $nextItems[0] = $secondCopy
+        $secondSave = Save-WtMemoDataItems $secondBase $nextItems
+        Assert-WtTest '화면 밖 저장: 쓰는 중 다시 저장해도 앞 스냅샷은 불변이고 최신 내용을 보유한다' (
+            $firstSave.Items[0].title -ceq '화면 밖 첫 저장' -and (Read-WtStore memo).items[0].title -ceq '화면 밖 두 번째 저장')
+        [void]$backgroundGate.Gate.Set(); Wait-WtTestWrites 30000
+        $disk = [IO.File]::ReadAllText($backgroundPath) | ConvertFrom-Json -DateKind String
+        $backup = [IO.File]::ReadAllText("$backgroundPath.bak") | ConvertFrom-Json -DateKind String
+        Assert-WtTest '화면 밖 저장: 저장됨은 파일에 쓴 최신 버전 · bak은 직전 버전' (
+            (Get-WtDataWriteStatus $backgroundPath).State -eq 'saved' -and $disk.items[0].title -ceq '화면 밖 두 번째 저장' -and $backup.items[0].title -ceq '화면 밖 첫 저장')
+        Remove-WtTestGate $backgroundGate; $backgroundGate = $null
+        & $storage { $script:writeJob = { param($p, $json) throw [IO.IOException]::new('큰 저장소 검사 실패') } }
+        $failedBase = Open-WtMemoStore
+        $failedSave = Set-WtMemoArchived -Store $failedBase -Id memo-0 -Archived $true
+        Wait-WtTestWrites 30000
+        $failedLook = & $memoModule { Get-WtMemoSaveLook }
+        $failureAsked = & $shellModule { $script:testAsked = @(); $script:testChoices.Clear(); $script:writingDropped = $false; -not (Confirm-WtDataWrites) -and ($script:testAsked -join ',') -eq 'exit' }
+        Assert-WtTest '화면 밖 저장: 실패 내용 보유 · 실패 표시 · 종료 전에 묻기 · 원본 유지' (
+            (Get-WtDataWriteStatus $backgroundPath).State -eq 'failed' -and $failedLook[0] -eq 'error' -and $failureAsked -and
+            (Read-WtStore memo).items[0].archived -eq $true -and ([IO.File]::ReadAllText($backgroundPath) | ConvertFrom-Json).items[0].archived -eq $false)
+        & $storage { param($writer) $script:writeJob = $writer } $originalWriter
+        [void](& $memoModule { Save-WtMemoNow -Retry }); Wait-WtTestWrites 30000
+        Assert-WtTest '화면 밖 저장: Ctrl+S 재시도로 보유 내용을 파일에 쓰고 실패를 해제한다' (
+            (Get-WtDataWriteStatus $backgroundPath).State -eq 'saved' -and ([IO.File]::ReadAllText($backgroundPath) | ConvertFrom-Json).items[0].archived -eq $true)
+
+        $backgroundGate = New-WtTestGate
+        & $storage { $script:writeJob = { param($p, $json) $g = [AppDomain]::CurrentDomain.GetData('WtTestGate'); [void]$g.Entered.Set(); [void]$g.Gate.WaitOne(); Write-WtDataFile $p $json } }
+        Invoke-WtQueuedStoreWrite -Action { Write-WtJsonFile (Get-WtStorePath 'edit-gate') @{ items = @() } }
+        [void]$backgroundGate.Entered.WaitOne(10000)
+        $editable = @(Get-WtMemoItems)
+        [void](Set-WtMemoContent $editable[0] '편집용 항목' '받아들인 본문 #태그')
+        Save-WtMemoItems $editable
+        $editable[0].body = '아직 저장하지 않은 다음 본문'
+        $acceptedBody = (Read-WtStore memo).items[0].body
+        [void]$backgroundGate.Gate.Set(); Wait-WtTestWrites 30000
+        Assert-WtTest '화면 밖 저장: 편집용 항목을 직접 고쳐도 JSON 캐시가 낡지 않고 받아들인 스냅샷은 이후 편집과 분리된다' (
+            $acceptedBody -ceq '받아들인 본문 #태그' -and ([IO.File]::ReadAllText($backgroundPath) | ConvertFrom-Json).items[0].body -ceq '받아들인 본문 #태그')
+        Remove-WtTestGate $backgroundGate; $backgroundGate = $null
+        & $storage { param($writer) $script:writeJob = $writer } $originalWriter
+
+        $cacheItems = @($backgroundFixture.Document.items[0..63]) + @($backgroundFixture.Document.items[100])
+        $cachePath = Get-WtStorePath memo-index-cache
+        $cacheReference = New-WtMemoIndex $cacheItems -Folders $backgroundFixture.Document.folders
+        $expectedLinks = (Find-WtMemo -Index $cacheReference -Query 'has:link').Items.Id -join ','
+        foreach ($cacheCase in 'missing', 'valid', 'stale', 'broken') {
+            switch ($cacheCase) {
+                'missing' { & $storage { param($p) [IO.File]::Delete($p) } $cachePath }
+                'stale' { $staleCache = Read-WtCacheFile $cachePath; $staleCache.Version = 99; Write-WtCacheFile $cachePath $staleCache }
+                'broken' { & $storage { param($p) [IO.File]::WriteAllText($p, '{broken') } $cachePath }
+            }
+            $cacheWork = Start-WtMemoBackgroundIndex -Items $cacheItems -Folders $backgroundFixture.Document.folders
+            $cacheFinished = Wait-WtWork $cacheWork -Milliseconds 30000
+            if ($cacheFinished -and $cacheWork.State -eq 'done') { Set-WtMemoIndexProperties $cacheWork.Result }
+            Assert-WtTest "연결 캐시: $cacheCase 상태에서도 같은 연결 결과를 다시 만든다" (
+                $cacheFinished -and $cacheWork.State -eq 'done' -and $cacheWork.Result.LinksReady -and
+                ((Find-WtMemo -Index $cacheWork.Result -Query 'has:link').Items.Id -join ',') -ceq $expectedLinks -and (Read-WtCacheFile $cachePath).Version -eq 1) $cacheWork.Error
+        }
+        Write-WtJsonFile $backgroundPath ([pscustomobject]@{ schema = 1; saved = '2026-11-01T09:30:00+09:00'; items = $cacheItems; folders = $backgroundFixture.Document.folders })
+        Wait-WtTestWrites 30000
+        Set-WtAppRoot $backgroundTest.App; [void](Wait-WtWork -All -Milliseconds 30000)
+        $loadedBefore = @(Get-WtMemoItems); $stampBefore = Get-WtStoreStamp memo
+        & $storage {
+            param($p)
+            $at = [IO.File]::GetLastWriteTimeUtc($p)
+            $text = [IO.File]::ReadAllText($p).Replace('[[시험 메모 0100]]', '[[시험 메모 0101]]')
+            [IO.File]::WriteAllText($p, $text, [Text.UTF8Encoding]::new($false)); [IO.File]::SetLastWriteTimeUtc($p, $at)
+        } $backgroundPath
+        $loadedAfter = @(Get-WtMemoItems); $stampAfter = Get-WtStoreStamp memo
+        $externalWork = Start-WtMemoBackgroundIndex -Items $loadedAfter -Folders $backgroundFixture.Document.folders
+        $externalFinished = Wait-WtWork $externalWork -Milliseconds 30000
+        if ($externalFinished -and $externalWork.State -eq 'done') { Set-WtMemoIndexProperties $externalWork.Result }
+        Assert-WtTest '연결 캐시: 같은 크기·시각의 외부 memo.json 변경도 다시 읽고 낡은 연결을 버린다' (
+            $stampBefore -cne $stampAfter -and $loadedBefore[0].body.Contains('[[시험 메모 0100]]') -and $loadedAfter[0].body.Contains('[[시험 메모 0101]]') -and
+            $externalFinished -and $externalWork.State -eq 'done' -and (Find-WtMemo -Index $externalWork.Result -Query 'linksto:memo-100').Count -eq 0)
+    } finally {
+        if ($backgroundGate) { Remove-WtTestGate $backgroundGate }
+        & $storage { param($writer) $script:writeJob = $writer } $originalWriter
+        & $shellModule { param($choice, $window) Set-Item Function:script:Show-WtWritingChoice $choice; $script:window = $window } $originalWritingChoice $originalWindow
+        Wait-WtTestWrites 30000; Stop-WtAllWork
+        Set-WtAppRoot $test.App
+        Remove-WtTestData $backgroundTest
+    }
 } finally {
     if ($held) { $held.Dispose() }
     if ($win) { try { $win.Close() } catch { } }

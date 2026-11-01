@@ -511,11 +511,8 @@ function Test-WtMemoQueryLinks($Node) {
 function Update-WtMemoIndexOrder($Index) {
     $c = $Index.Columns
     $titles = [string[]]@($Index.Titles.Keys); [Array]::Sort($titles, [StringComparer]::Ordinal)
-    for ($n = 0; $n -lt $titles.Length; $n++) {
-        foreach ($id in $Index.Titles[$titles[$n]]) { $c.TitleOrdinal[$Index.Slots[$id]] = $n }
-    }
     $ids = [string[]]@($Index.Slots.Keys); [Array]::Sort($ids, [StringComparer]::Ordinal)
-    for ($n = 0; $n -lt $ids.Length; $n++) { $c.IdOrdinal[$Index.Slots[$ids[$n]]] = $n }
+    $script:memoIndexOrderFactory.Invoke($titles, $ids, $Index.Slots, $c.TitleLower, $c.TitleOrdinal, $c.IdOrdinal)
     $Index.OrderDirty = $false
 }
 
@@ -620,8 +617,7 @@ function New-WtMemoIndex {
         SortOrders = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
         TimeCache = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
     }
-    $index.PSObject.Properties.Add([Management.Automation.PSScriptProperty]::new('Entries', { Get-WtMemoIndexEntries $this }))
-    $index.PSObject.Properties.Add([Management.Automation.PSScriptProperty]::new('Sources', { Initialize-WtMemoLinks $this; , $this.LinkSources }))
+    Set-WtMemoIndexProperties $index
     # 처음 나온 id가 지운 줄/빈 id여도 뒤의 중복 줄을 채택하지 않는 옛 규칙을 유지한다.
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $unique = [Collections.Generic.List[object]]::new($Memos.Count)
@@ -632,6 +628,14 @@ function New-WtMemoIndex {
     Set-WtMemoIndexEntry $index $unique.ToArray()
     Update-WtMemoIndexOrder $index
     $index
+}
+
+# 화면 밖 결과의 속성은 받는 모듈에서 다시 묶는다. 끝난 작업의 실행 공간/지역 변수를 붙잡지 않는다.
+function Set-WtMemoIndexProperties($Index) {
+    $Index.PSObject.Properties.Remove('Entries')
+    $Index.PSObject.Properties.Remove('Sources')
+    $Index.PSObject.Properties.Add([Management.Automation.PSScriptProperty]::new('Entries', { Get-WtMemoIndexEntries $this }))
+    $Index.PSObject.Properties.Add([Management.Automation.PSScriptProperty]::new('Sources', { Initialize-WtMemoLinks $this; , $this.LinkSources }))
 }
 
 function Update-WtMemoIndex {
@@ -880,7 +884,11 @@ function Find-WtMemo {
         [Array]::Fill[long]($openedTicks, -1L)
         foreach ($id in $opened.Keys) {
             $text = [string]$opened[$id]
-            if (-not $Index.TimeCache.ContainsKey($text)) { $Index.TimeCache[$text] = Get-WtMemoIndexedTime $text }
+            if (-not $Index.TimeCache.ContainsKey($text)) {
+                $at = [DateTimeOffset]::MinValue
+                $valid = [DateTimeOffset]::TryParseExact($text, "yyyy-MM-dd'T'HH:mm:sszzz", $script:memoInv, [Globalization.DateTimeStyles]::None, [ref]$at)
+                $Index.TimeCache[$text] = if ($valid) { $at } else { Get-WtMemoIndexedTime $text }
+            }
             $stamp = $Index.TimeCache[$text]; $n = $Index.Slots[$id]; $openedTimes[$n] = $stamp
             if ($null -ne $stamp) { $openedTicks[$n] = $stamp.UtcTicks }
         }
@@ -925,7 +933,9 @@ function Open-WtMemoStore { Open-WtStore -Name 'memo' -Schema 1 }
 
 function Save-WtMemoStoreItems($Store, [object[]]$Items, [hashtable]$Extra) {
     if ($Store.Name -cne 'memo') { throw '메모 저장소 핸들이 아닙니다.' }
-    Save-WtStore $Store @(Compress-WtDeletedItems $Items) -Extra $Extra
+    $compact = $Items.Clone()
+    foreach ($i in $script:memoDeletedSlotsFactory.Invoke($Items)) { $compact[$i] = @(Compress-WtDeletedItems (, $Items[$i]))[0] }
+    Save-WtStore $Store $compact -Extra $Extra -Background:($compact.Count -ge 256)
 }
 
 function Get-WtMemoDataStamp($At) {
@@ -948,10 +958,39 @@ function Get-WtMemoFolders {
 }
 
 function Get-WtMemoEditable($Store, [string]$Id) {
-    $edit = Get-WtRecordEdit $Store $Id
+    $edit = Get-WtMemoRecordEdit $Store $Id
     if (-not $edit.Success) { throw $edit.Reason }
     if (Test-WtDeleted $edit.Item) { throw '지운 메모는 정리할 수 없습니다.' }
     $edit
+}
+
+# 정리 기능은 스칼라 칸만 바꾼다. 중첩된 모르는 칸은 공유하되 절대 고치지 않는다.
+function Copy-WtMemoFields($Item) {
+    if ($Item -is [Collections.IDictionary]) {
+        $copy = [ordered]@{}
+        foreach ($name in $Item.Keys) { $copy[$name] = $Item[$name] }
+        return [pscustomobject]$copy
+    }
+    $Item.PSObject.Copy()
+}
+
+# 목록의 참조와 실제로 고칠 한 항목의 속성만 복사한다.
+function Get-WtMemoRecordEdit($Store, [string]$Id) {
+    if ($Store.State -notin 'ok', 'missing') { throw "$($Store.Name).json은 읽지 못해서 저장하지 않습니다. ($($Store.Error))" }
+    $r = [pscustomobject]@{ Success = $false; Reason = ''; Items = $Store.Items.Clone(); Index = -1; Item = $null }
+    if (-not $Id) { $r.Success = $true; return $r }
+    for ($i = 0; $i -lt $r.Items.Count; $i++) {
+        $item = $r.Items[$i]
+        if ($null -ne $item -and $item -isnot [string] -and $item -isnot [ValueType] -and $item -isnot [array] -and [string]$item.id -ceq $Id) {
+            if ($r.Index -ge 0) { $r.Reason = 'id가 겹쳐 편집할 줄을 정할 수 없습니다'; return $r }
+            $r.Index = $i
+        }
+    }
+    if ($r.Index -lt 0) { $r.Reason = '항목을 찾지 못했습니다'; return $r }
+    $r.Item = Copy-WtMemoFields $r.Items[$r.Index]
+    $r.Items[$r.Index] = $r.Item
+    $r.Success = $true
+    $r
 }
 
 function Set-WtMemoFolder {
@@ -1001,15 +1040,17 @@ function Save-WtMemoFolders {
     }
     $removed = New-WtMemoStringSet
     foreach ($folder in $oldFolders) { if (-not $ids.Contains([string]$folder.id)) { [void]$removed.Add([string]$folder.id) } }
-    $items = @(Copy-WtItem @($Store.Items))
-    foreach ($item in $items) {
-        if ((Test-WtRecordObject $item) -and $removed.Contains([string](Get-WtField $item 'folder'))) {
+    $items = $Store.Items.Clone()
+    for ($i = 0; $i -lt $items.Count; $i++) {
+        $item = $items[$i]
+        if ($null -ne $item -and $item -isnot [array] -and $item -isnot [string] -and $item -isnot [ValueType] -and $removed.Contains([string]$item.folder)) {
+            $item = Copy-WtMemoFields $item; $items[$i] = $item
             Set-WtField $item 'folder' $null; Set-WtItemEdited $item (Get-WtMemoDataStamp)
         }
     }
     $saved = Save-WtMemoStoreItems $Store $items -Extra @{ folders = $list.ToArray() }
     # Save-WtStore의 Doc는 열 때의 문서다. 새 핸들에만 Extra를 반영한다(옛 핸들은 그대로).
-    $saved.Doc = if ($Store.Doc) { Copy-WtItem $Store.Doc } else { [pscustomobject]@{} }
+    $saved.Doc = if ($Store.Doc) { $Store.Doc.PSObject.Copy() } else { [pscustomobject]@{} }
     Set-WtField $saved.Doc 'folders' $list.ToArray()
     $saved
 }
@@ -1018,48 +1059,29 @@ function Save-WtMemoFolders {
 function Save-WtMemoDataItems {
     param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Items, [hashtable]$Extra)
     if ($Store.State -notin 'ok', 'missing') { throw $Store.Error }
-    $incoming = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-    foreach ($item in $Items) {
-        $id = Get-WtField $item 'id'
-        if ($id -isnot [string] -or -not $id -or $incoming.ContainsKey($id)) { throw '저장할 메모 id가 없거나 겹칩니다.' }
-        $incoming[$id] = $item
+    $plan = $script:memoSaveFactory.Invoke($Store.Items, $Items)
+    foreach ($i in $plan.Changed) {
+        $old = $plan.Olds[$i]
+        if ($null -ne $old) {
+            $item = $Items[$i]
+            # 형식이 깨진 rev도 기존 PowerShell 비교 규칙을 그대로 따른다.
+            $same = $old.rev -eq $item.rev -and [string]$old.updated -ceq [string]$item.updated -and
+                [string]$old.title -ceq [string]$item.title -and [string]$old.body -ceq [string]$item.body
+            if ($same -and -not (Test-WtDeleted $old)) { $copy = $old }
+            else {
+                $copy = Copy-WtItem $old
+                Merge-WtRecordPatch $copy $item
+                if (Test-WtDeleted $old) { Set-WtField $copy 'deleted' $null; Set-WtItemEdited $copy (Get-WtMemoDataStamp) }
+            }
+        } else { $copy = Copy-WtItem $Items[$i] }
+        $plan.Next[$plan.Targets[$i]] = $copy
     }
-    $original = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-    foreach ($old in $Store.Items) {
-        $id = Get-WtField $old 'id'
-        if ($id -is [string] -and $id -and -not $original.ContainsKey($id)) { $original[$id] = $old }
+    foreach ($i in $plan.Deleted) {
+        $copy = Copy-WtMemoFields $plan.Next[$i]; $now = Get-WtMemoDataStamp
+        Set-WtField $copy 'deleted' $now; Set-WtItemEdited $copy $now
+        $plan.Next[$i] = $copy
     }
-    $active = [Collections.Generic.List[object]]::new()
-    foreach ($item in $Items) {
-        $id = [string]$item.id
-        if ($original.ContainsKey($id)) {
-            $old = $original[$id]
-            # 안 고친 메모는 원자료 그대로 둔다. 메모마다 복사 · 병합하면 메모 3,000개에서 저장 한 번에 화면이 20초 멈춘다.
-            # 고칠 때마다 rev · updated가 바뀌고, 같은 초에 다시 저장하면 제목 · 본문이 다르다
-            $same = [object]::ReferenceEquals($old, $item) -or ($old.rev -eq $item.rev -and [string]$old.updated -ceq [string]$item.updated -and
-                [string]$old.title -ceq [string]$item.title -and [string]$old.body -ceq [string]$item.body)
-            if ($same -and ($null -eq $old.deleted -or -not (Test-WtDeleted $old))) { $active.Add($old); continue }
-            $copy = Copy-WtItem $old; Merge-WtRecordPatch $copy $item
-            if (Test-WtDeleted $old) { Set-WtField $copy 'deleted' $null; Set-WtItemEdited $copy (Get-WtMemoDataStamp) }
-            $active.Add($copy)
-        } else { $active.Add((Copy-WtItem $item)) }
-    }
-    # 활성 목록은 부르는 쪽 순서를 따른다(옛 화면의 같은 초 정렬도 유지).
-    # 숨긴 줄은 원래 자리에 두고 활성 자리만 채운다. 늘어난 분량은 뒤에 더한다.
-    $next = [Collections.Generic.List[object]]::new(); $seen = New-WtMemoStringSet; $at = 0
-    foreach ($old in $Store.Items) {
-        $id = Get-WtField $old 'id'
-        if ($id -isnot [string] -or -not $id -or -not $seen.Add($id)) { $next.Add($old); continue }
-        if ($incoming.ContainsKey($id)) {
-            $next.Add($active[$at]); $at++
-        } elseif (Test-WtDeleted $old) { $next.Add($old) }
-        else {
-            $copy = Copy-WtItem $old; $now = Get-WtMemoDataStamp
-            Set-WtField $copy 'deleted' $now; Set-WtItemEdited $copy $now; $next.Add($copy)
-        }
-    }
-    while ($at -lt $active.Count) { $next.Add($active[$at]); $at++ }
-    Save-WtMemoStoreItems $Store $next.ToArray() -Extra $Extra
+    Save-WtMemoStoreItems $Store $plan.Next -Extra $Extra
 }
 
 # 열람 기록은 메모를 고치지 않는다. Get-WtMemoEditable은 메모 전체를 JSON으로 복사하므로 여기서 쓰면 메모를 열 때마다 화면이 멈춘다
@@ -1082,14 +1104,14 @@ function Set-WtMemoOpened {
     $now = ConvertFrom-WtStamp $At
     if (-not $now) { throw '열람 시각이 앱 시각 모양이 아닙니다.' }
     if ($Store.State -notin 'ok', 'missing') { throw $Store.Error }
-    $edit = Get-WtRecordEdit $Store $Id
+    $edit = Get-WtMemoRecordEdit $Store $Id
     if (-not $edit.Success -and $edit.Reason -ne '항목을 찾지 못했습니다') { throw $edit.Reason }
     if ($edit.Success) {
         $before = ConvertFrom-WtStamp ([string](Get-WtField $edit.Item 'opened'))
         if ($before -and ($now - $before).TotalSeconds -ge 0 -and ($now - $before).TotalSeconds -lt 60) { return $Store }
         Set-WtField $edit.Item 'opened' ($now.ToOffset([timespan]::FromHours(9)).ToString("yyyy-MM-dd'T'HH:mm:sszzz", $script:memoInv))
     } else { $edit.Items += [pscustomobject]@{ id = $Id; opened = (Get-WtMemoDataStamp $now) } }
-    Save-WtStore $Store $edit.Items
+    Save-WtStore $Store $edit.Items -Background:($edit.Items.Count -ge 256)
 }
 
 function Get-WtMemoViews {
@@ -1135,9 +1157,409 @@ function Set-WtMemoViewDeleted {
     Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items)
 }
 
+function Initialize-WtMemoWorker($Context) {
+    foreach ($name in $Context.Keys) { $ExecutionContext.SessionState.PSVariable.Set("script:$name", $Context[$name]) }
+}
+
+# 화면에서 메모 수만큼 반복하는 속성 조회/행 생성은 기존 검색 엔진과 같은 기본 .NET 식 트리로 묶는다.
+function New-WtMemoFieldExpression($Object, [string]$Name, [switch]$String) {
+    $e = [Linq.Expressions.Expression]
+    $ps = $e::Call([Management.Automation.PSObject].GetMethod('AsPSObject', [type[]]@([object])), [Linq.Expressions.Expression[]]@($Object))
+    $base = $e::Property($ps, 'BaseObject')
+    $properties = $e::Property($ps, 'Properties')
+    $property = $e::Call($properties, [Management.Automation.PSMemberInfoCollection[Management.Automation.PSPropertyInfo]].GetMethod('get_Item', [type[]]@([string])), [Linq.Expressions.Expression[]]@($e::Constant($Name)))
+    $none = $e::Constant($null, [object])
+    $value = $e::Condition($e::Equal($property, $e::Constant($null, [Management.Automation.PSPropertyInfo])), $none, $e::Property($property, 'Value'))
+    $value = $e::Condition($e::TypeIs($base, [Collections.IDictionary]),
+        $e::Call($e::Convert($base, [Collections.IDictionary]), [Collections.IDictionary].GetMethod('get_Item'), [Linq.Expressions.Expression[]]@($e::Constant($Name, [object]))), $value)
+    $value = $e::Condition($e::Equal($Object, $none), $none, $value)
+    if ($String) {
+        return $e::Coalesce($e::Convert($e::Call([Management.Automation.LanguagePrimitives].GetMethod('ConvertTo', [type[]]@([object], [type])),
+            [Linq.Expressions.Expression[]]@($value, $e::Constant([string], [type]))), [string]), $e::Constant(''))
+    }
+    $value
+}
+
+function Initialize-WtMemoViewFactories {
+    $e = [Linq.Expressions.Expression]
+    $memoArg = $e::Parameter([object], 'memo')
+    $script:memoUpdatedKeyFactory = $e::Lambda([Func[object, string]], (New-WtMemoFieldExpression $memoArg 'updated' -String), [Linq.Expressions.ParameterExpression[]]@($memoArg)).Compile()
+    $flagEquals = [Management.Automation.LanguagePrimitives].GetMethod('Equals', [type[]]@([object], [object], [bool]))
+    $pinFlag = $e::Call($flagEquals, [Linq.Expressions.Expression[]]@((New-WtMemoFieldExpression $memoArg 'pinned'), $e::Constant($true, [object]), $e::Constant($true)))
+    $archiveFlag = $e::Call($flagEquals, [Linq.Expressions.Expression[]]@((New-WtMemoFieldExpression $memoArg 'archived'), $e::Constant($true, [object]), $e::Constant($true)))
+    $script:memoPinnedFactory = $e::Lambda([Func[object, bool]], $pinFlag, [Linq.Expressions.ParameterExpression[]]@($memoArg)).Compile()
+    $script:memoActiveFactory = $e::Lambda([Func[object, bool]], $e::Not($archiveFlag), [Linq.Expressions.ParameterExpression[]]@($memoArg)).Compile()
+    $inputArg = $e::Parameter([object[]], 'items'); $i = $e::Variable([int], 'i')
+    $item = $e::ArrayIndex($inputArg, $i)
+    $script:memoIdFactory = New-WtMemoArrayFactory ([string]) $inputArg $i ($e::ArrayLength($inputArg)) (New-WtMemoFieldExpression $item 'id' -String)
+    $asObject = $e::Call([Management.Automation.PSObject].GetMethod('AsPSObject', [type[]]@([object])), [Linq.Expressions.Expression[]]@($item))
+    $script:memoDetachedFactory = New-WtMemoArrayFactory ([object]) $inputArg $i ($e::ArrayLength($inputArg)) ($e::Convert($e::Call($asObject, [Management.Automation.PSObject].GetMethod('Copy', [type[]]@())), [object]))
+    $dictType = [Collections.Generic.Dictionary[string, object]]
+    $byId = $e::Variable($dictType, 'ids'); $byTitle = $e::Variable($dictType, 'titles')
+    $titleList = $e::Variable([Collections.Generic.List[string]], 'names')
+    $id = $e::Variable([string], 'id'); $title = $e::Variable([string], 'title'); $trimmed = $e::Variable([string], 'trimmed')
+    $dictNew = $script:memoNewExpression.Invoke($dictType.GetConstructor([type[]]@([Collections.Generic.IEqualityComparer[string]])),
+        [Linq.Expressions.Expression[]]@($e::Constant([StringComparer]::InvariantCultureIgnoreCase, [Collections.Generic.IEqualityComparer[string]])))
+    $step = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($id, (New-WtMemoFieldExpression $item 'id' -String)),
+        $e::Assign($title, (New-WtMemoFieldExpression $item 'title' -String)),
+        $e::Assign($trimmed, $e::Call($title, [string].GetMethod('Trim', [type[]]@()))),
+        $e::IfThen($e::Not($e::Call($byId, $dictType.GetMethod('ContainsKey'), [Linq.Expressions.Expression[]]@($id))),
+            $e::Call($byId, $dictType.GetMethod('Add'), [Linq.Expressions.Expression[]]@($id, $item))),
+        $e::IfThen($e::Not($e::Call($byTitle, $dictType.GetMethod('ContainsKey'), [Linq.Expressions.Expression[]]@($trimmed))),
+            $e::Call($byTitle, $dictType.GetMethod('Add'), [Linq.Expressions.Expression[]]@($trimmed, $item))),
+        $e::IfThen($e::GreaterThan($e::Property($title, 'Length'), $e::Constant(0)),
+            $e::Call($titleList, [Collections.Generic.List[string]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($title)))))
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $id, $title, $trimmed, $byId, $byTitle, $titleList), [Linq.Expressions.Expression[]]@(
+        $e::Assign($byId, $dictNew), $e::Assign($byTitle, $dictNew),
+        $e::Assign($titleList, $script:memoNewExpression.Invoke([Collections.Generic.List[string]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($inputArg)) $step),
+        $e::NewArrayInit([object], [Linq.Expressions.Expression[]]@($byId, $byTitle, $e::Call($titleList, [Collections.Generic.List[string]].GetMethod('ToArray'))))))
+    $script:memoLookupFactory = $e::Lambda([Func[object[], object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($inputArg)).Compile()
+
+    $seen = $e::Variable([Collections.Generic.HashSet[string]], 'seen'); $live = $e::Variable([Collections.Generic.List[object]], 'live')
+    $rawId = $e::Variable([object], 'rawId')
+    $validId = $e::AndAlso($e::TypeIs($rawId, [string]), $e::GreaterThan($e::Property($e::Convert($rawId, [string]), 'Length'), $e::Constant(0)))
+    $take = $e::AndAlso($validId, $e::AndAlso($e::Call($seen, [Collections.Generic.HashSet[string]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($e::Convert($rawId, [string]))), $e::Not((New-WtMemoDeletedExpression $item))))
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $seen, $live, $rawId), [Linq.Expressions.Expression[]]@(
+        $e::Assign($seen, $script:memoNewExpression.Invoke([Collections.Generic.HashSet[string]].GetConstructor([type[]]@([Collections.Generic.IEqualityComparer[string]])), [Linq.Expressions.Expression[]]@($e::Constant([StringComparer]::Ordinal, [Collections.Generic.IEqualityComparer[string]])))),
+        $e::Assign($live, $script:memoNewExpression.Invoke([Collections.Generic.List[object]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($inputArg)) ($e::Block([Linq.Expressions.Expression[]]@(
+            $e::Assign($rawId, (New-WtMemoFieldExpression $item 'id')),
+            $e::IfThen($take, $e::Call($live, [Collections.Generic.List[object]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($item))))))),
+        $e::Call($live, [Collections.Generic.List[object]].GetMethod('ToArray'))))
+    $script:memoLiveFactory = $e::Lambda([Func[object[], object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($inputArg)).Compile()
+    $slots = $e::Variable([Collections.Generic.List[int]], 'slots')
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $slots), [Linq.Expressions.Expression[]]@(
+        $e::Assign($slots, $script:memoNewExpression.Invoke([Collections.Generic.List[int]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($inputArg)) ($e::IfThen((New-WtMemoDeletedExpression $item), $e::Call($slots, [Collections.Generic.List[int]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($i))))),
+        $e::Call($slots, [Collections.Generic.List[int]].GetMethod('ToArray'))))
+    $script:memoDeletedSlotsFactory = $e::Lambda([Func[object[], int[]]], $body, [Linq.Expressions.ParameterExpression[]]@($inputArg)).Compile()
+
+    # 행의 날짜와 미리보기는 표시될 때 기존 함수를 그대로 부른다. 먼 메모까지의 행은 컨트롤 없이 한 번에 만든다.
+    $cache = $e::Parameter([Collections.IDictionary], 'cache'); $getters = $e::Parameter([Management.Automation.ScriptBlock[]], 'getters')
+    $reuse = $e::Parameter([bool], 'reuse')
+    $row = $e::Variable([Management.Automation.PSObject], 'row')
+    $rows = $e::Variable([object[]], 'rows')
+    $cached = $e::Variable([object], 'cached')
+    # 원자료와 검색 결과의 본문 칸 이름만 다르다. 두 대리자로 만들어 행 안에서는 분기하지 않는다.
+    $script:memoViewRowFactories = @{}
+    foreach ($bodyField in 'body', 'Snippet') {
+        $pin = New-WtMemoFieldExpression $item 'pinned'
+        $pinned = $e::Call([Management.Automation.LanguagePrimitives].GetMethod('Equals', [type[]]@([object], [object], [bool])),
+            [Linq.Expressions.Expression[]]@($pin, $e::Constant($true, [object]), $e::Constant($true)))
+        $values = @((New-WtMemoFieldExpression $item 'id' -String), (New-WtMemoFieldExpression $item 'title' -String),
+            (New-WtMemoFieldExpression $item 'updated' -String), $e::Constant($null, [object]),
+            (New-WtMemoFieldExpression $item $bodyField -String), $e::Constant($null, [object]),
+            $e::Condition($pinned, $e::Constant('Visible'), $e::Constant('Collapsed')), $e::Property($null, [datetime].GetProperty('Today')))
+        $newRow = New-WtMemoObjectExpression @('Id', 'Title', 'Updated', 'StampValue', 'SnippetSource', 'SnippetValue', 'PinShown', 'Day') $values
+        $steps = [Collections.Generic.List[Linq.Expressions.Expression]]::new()
+        $steps.Add($e::Assign($row, $e::Convert($newRow, [Management.Automation.PSObject])))
+        $propCtor = [Management.Automation.PSScriptProperty].GetConstructor([type[]]@([string], [Management.Automation.ScriptBlock]))
+        $add = [Management.Automation.PSMemberInfoCollection[Management.Automation.PSPropertyInfo]].GetMethod('Add', [type[]]@([Management.Automation.PSPropertyInfo], [bool]))
+        $j = 0
+        foreach ($name in 'Stamp', 'Snippet', 'Sub') {
+            $prop = $script:memoNewExpression.Invoke($propCtor, [Linq.Expressions.Expression[]]@($e::Constant($name), $e::ArrayIndex($getters, $e::Constant($j))))
+            $steps.Add($e::Call($e::Property($row, 'Properties'), $add, [Linq.Expressions.Expression[]]@($prop, $e::Constant($true))))
+            $j++
+        }
+        $rowObject = $e::Convert($row, [object])
+        $key = $e::Convert($values[0], [object])
+        $same = $e::NotEqual($cached, $e::Constant($null, [object]))
+        foreach ($pair in @(@('Title', 1), @('Updated', 2), @('SnippetSource', 4), @('PinShown', 6))) {
+            $same = $e::AndAlso($same, $e::Call([string].GetMethod('Equals', [type[]]@([string], [string], [StringComparison])),
+                [Linq.Expressions.Expression[]]@((New-WtMemoFieldExpression $cached $pair[0] -String), $values[$pair[1]], $e::Constant([StringComparison]::Ordinal))))
+        }
+        $same = $e::AndAlso($same, $e::Call([Management.Automation.LanguagePrimitives].GetMethod('Equals', [type[]]@([object], [object])),
+            [Linq.Expressions.Expression[]]@((New-WtMemoFieldExpression $cached 'Day'), $e::Convert($values[7], [object]))))
+        $same = $e::AndAlso($e::NotEqual($cached, $e::Constant($null, [object])), $e::OrElse($reuse, $same))
+        $steps.Add($e::Call($cache, [Collections.IDictionary].GetMethod('set_Item'), [Linq.Expressions.Expression[]]@($key, $rowObject)))
+        $steps.Add($e::Assign($e::ArrayAccess($rows, [Linq.Expressions.Expression[]]@($i)), $rowObject))
+        $rowStep = $e::Block([Linq.Expressions.Expression[]]@(
+            $e::Assign($cached, $e::Call($cache, [Collections.IDictionary].GetMethod('get_Item'), [Linq.Expressions.Expression[]]@($key))),
+            $e::IfThenElse($same, $e::Assign($e::ArrayAccess($rows, [Linq.Expressions.Expression[]]@($i)), $cached), $e::Block($steps))))
+        $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $row, $rows, $cached), [Linq.Expressions.Expression[]]@(
+            $e::Assign($rows, $e::NewArrayBounds([object], [Linq.Expressions.Expression[]]@($e::ArrayLength($inputArg)))),
+            (New-WtMemoLoopExpression $i ($e::ArrayLength($inputArg)) $rowStep), $rows))
+        $script:memoViewRowFactories[$bodyField] = $e::Lambda([Func[object[], Management.Automation.ScriptBlock[], Collections.IDictionary, bool, object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($inputArg, $getters, $cache, $reuse)).Compile()
+    }
+}
+
+function New-WtMemoDeletedExpression($Object) {
+    $e = [Linq.Expressions.Expression]
+    $value = New-WtMemoFieldExpression $Object 'deleted'
+    $falseBool = $e::AndAlso($e::TypeIs($value, [bool]), $e::Not($e::Convert($value, [bool])))
+    $text = New-WtMemoFieldExpression $Object 'deleted' -String
+    $e::AndAlso($e::NotEqual($value, $e::Constant($null, [object])), $e::AndAlso($e::Not($falseBool), $e::NotEqual($text, $e::Constant(''))))
+}
+
+# 전체 항목은 참조/위치만 .NET에서 맞춘다. 복사·병합·지운 표시는 바뀐 항목에만 기존 함수로 적용한다.
+function Initialize-WtMemoSaveFactory {
+    $e = [Linq.Expressions.Expression]
+    $source = $e::Parameter([object[]], 'source'); $inputArg = $e::Parameter([object[]], 'incomingItems')
+    $i = $e::Variable([int], 'i'); $at = $e::Variable([int], 'at')
+    $item = $e::Variable([object], 'item'); $old = $e::Variable([object], 'old'); $rawId = $e::Variable([object], 'rawId'); $id = $e::Variable([string], 'id')
+    $dictType = [Collections.Generic.Dictionary[string, object]]
+    $original = $e::Variable($dictType, 'original'); $incoming = $e::Variable([Collections.Generic.HashSet[string]], 'incoming'); $seen = $e::Variable([Collections.Generic.HashSet[string]], 'seen')
+    $active = $e::Variable([object[]], 'active'); $olds = $e::Variable([object[]], 'olds'); $targets = $e::Variable([int[]], 'targets')
+    $next = $e::Variable([Collections.Generic.List[object]], 'next'); $changed = $e::Variable([Collections.Generic.List[int]], 'changed'); $deleted = $e::Variable([Collections.Generic.List[int]], 'deleted')
+    $comparer = $e::Constant([StringComparer]::Ordinal, [Collections.Generic.IEqualityComparer[string]])
+    $newDict = $script:memoNewExpression.Invoke($dictType.GetConstructor([type[]]@([Collections.Generic.IEqualityComparer[string]])), [Linq.Expressions.Expression[]]@($comparer))
+    $newSet = $script:memoNewExpression.Invoke([Collections.Generic.HashSet[string]].GetConstructor([type[]]@([Collections.Generic.IEqualityComparer[string]])), [Linq.Expressions.Expression[]]@($comparer))
+    $newObjectList = $script:memoNewExpression.Invoke([Collections.Generic.List[object]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())
+    $newIntList = $script:memoNewExpression.Invoke([Collections.Generic.List[int]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())
+    $valid = $e::AndAlso($e::TypeIs($rawId, [string]), $e::GreaterThan($e::Property($e::Convert($rawId, [string]), 'Length'), $e::Constant(0)))
+    $readId = $e::Assign($rawId, (New-WtMemoFieldExpression $item 'id'))
+    $setId = $e::Assign($id, $e::Convert($rawId, [string]))
+    $sourceStep = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($item, $e::ArrayIndex($source, $i)), $readId,
+        $e::IfThen($valid, $e::Block([Linq.Expressions.Expression[]]@($setId,
+            $e::IfThen($e::Not($e::Call($original, $dictType.GetMethod('ContainsKey'), [Linq.Expressions.Expression[]]@($id))),
+                $e::Call($original, $dictType.GetMethod('Add'), [Linq.Expressions.Expression[]]@($id, $item))))))))
+    $oldRevision = New-WtMemoFieldExpression $old 'rev'; $newRevision = New-WtMemoFieldExpression $item 'rev'
+    $sameFields = $e::AndAlso($e::Not($e::OrElse($e::TypeIs($oldRevision, [array]), $e::TypeIs($newRevision, [array]))),
+        $e::Call([Management.Automation.LanguagePrimitives].GetMethod('Equals', [type[]]@([object], [object], [bool])), [Linq.Expressions.Expression[]]@($oldRevision, $newRevision, $e::Constant($true))))
+    foreach ($name in 'updated', 'title', 'body') {
+        $sameFields = $e::AndAlso($sameFields, $e::Call([string].GetMethod('Equals', [type[]]@([string], [string], [StringComparison])),
+            [Linq.Expressions.Expression[]]@((New-WtMemoFieldExpression $old $name -String), (New-WtMemoFieldExpression $item $name -String), $e::Constant([StringComparison]::Ordinal))))
+    }
+    $same = $e::AndAlso($e::NotEqual($old, $e::Constant($null, [object])), $e::AndAlso(
+        $e::OrElse($e::Call([object].GetMethod('ReferenceEquals'), [Linq.Expressions.Expression[]]@($old, $item)), $sameFields),
+        $e::Not((New-WtMemoDeletedExpression $old))))
+    $bad = $script:memoNewExpression.Invoke([ArgumentException].GetConstructor([type[]]@([string])), [Linq.Expressions.Expression[]]@($e::Constant('저장할 메모 id가 없거나 겹칩니다.')))
+    $incomingStep = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($item, $e::ArrayIndex($inputArg, $i)), $readId,
+        $e::IfThen($e::Not($valid), $e::Throw($bad)), $setId,
+        $e::IfThen($e::Not($e::Call($incoming, [Collections.Generic.HashSet[string]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($id))), $e::Throw($bad)),
+        $e::Assign($old, $e::Constant($null, [object])),
+        $e::Call($original, $dictType.GetMethod('TryGetValue'), [Linq.Expressions.Expression[]]@($id, $old)),
+        $e::Assign($e::ArrayAccess($olds, [Linq.Expressions.Expression[]]@($i)), $old),
+        $e::IfThenElse($same,
+            $e::Block([Linq.Expressions.Expression[]]@($e::Assign($e::ArrayAccess($active, [Linq.Expressions.Expression[]]@($i)), $old), $e::Empty())),
+            $e::Call($changed, [Collections.Generic.List[int]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($i)))))
+    $addOld = $e::Call($next, [Collections.Generic.List[object]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($item))
+    $addActive = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($e::ArrayAccess($targets, [Linq.Expressions.Expression[]]@($at)), $e::Property($next, 'Count')),
+        $e::Call($next, [Collections.Generic.List[object]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($e::ArrayIndex($active, $at))),
+        $e::PostIncrementAssign($at), $e::Empty()))
+    $nextStep = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($item, $e::ArrayIndex($source, $i)), $readId,
+        $e::IfThenElse($valid,
+            $e::Block([Linq.Expressions.Expression[]]@($setId,
+                $e::IfThenElse($e::Call($seen, [Collections.Generic.HashSet[string]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($id)),
+                    $e::IfThenElse($e::Call($incoming, [Collections.Generic.HashSet[string]].GetMethod('Contains'), [Linq.Expressions.Expression[]]@($id)), $addActive,
+                        $e::Block([Linq.Expressions.Expression[]]@(
+                            $e::IfThen($e::Not((New-WtMemoDeletedExpression $item)), $e::Call($deleted, [Collections.Generic.List[int]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($e::Property($next, 'Count')))), $addOld))), $addOld))), $addOld)))
+    $finish = $e::Label()
+    $tail = $e::Loop($e::IfThenElse($e::LessThan($at, $e::ArrayLength($inputArg)), $addActive, $e::Break($finish)), $finish)
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $at, $item, $old, $rawId, $id, $original, $incoming, $seen, $active, $olds, $targets, $next, $changed, $deleted), [Linq.Expressions.Expression[]]@(
+        $e::Assign($original, $newDict), $e::Assign($incoming, $newSet), $e::Assign($seen, $newSet),
+        $e::Assign($active, $e::Convert($e::Call($inputArg, [array].GetMethod('Clone')), [object[]])),
+        $e::Assign($olds, $e::NewArrayBounds([object], [Linq.Expressions.Expression[]]@($e::ArrayLength($inputArg)))),
+        $e::Assign($targets, $e::NewArrayBounds([int], [Linq.Expressions.Expression[]]@($e::ArrayLength($inputArg)))),
+        $e::Assign($next, $newObjectList), $e::Assign($changed, $newIntList), $e::Assign($deleted, $newIntList),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($source)) $sourceStep), $e::Assign($i, $e::Constant(0)),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($inputArg)) $incomingStep), $e::Assign($i, $e::Constant(0)),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($source)) $nextStep), $tail,
+        (New-WtMemoObjectExpression @('Olds', 'Targets', 'Next', 'Changed', 'Deleted') @($olds, $targets,
+            $e::Call($next, [Collections.Generic.List[object]].GetMethod('ToArray')), $e::Call($changed, [Collections.Generic.List[int]].GetMethod('ToArray')), $e::Call($deleted, [Collections.Generic.List[int]].GetMethod('ToArray'))))))
+    $script:memoSaveFactory = $e::Lambda([Func[object[], object[], object]], $body, [Linq.Expressions.ParameterExpression[]]@($source, $inputArg)).Compile()
+}
+
+function Get-WtMemoLookupData([object[]]$Items) { if ($null -eq $Items) { $Items = [object[]]::new(0) }; , $script:memoLookupFactory.Invoke($Items) }
+function Get-WtMemoIdArray([object[]]$Items) { if ($null -eq $Items) { $Items = [object[]]::new(0) }; , $script:memoIdFactory.Invoke($Items) }
+function Get-WtMemoDetachedItems([object[]]$Items) { if ($null -eq $Items) { $Items = [object[]]::new(0) }; , $script:memoDetachedFactory.Invoke($Items) }
+function Get-WtMemoLiveItems([object[]]$Items) { if ($null -eq $Items) { $Items = [object[]]::new(0) }; , $script:memoLiveFactory.Invoke($Items) }
+function Get-WtMemoUpdatedOrder([object[]]$Items) {
+    if ($null -eq $Items) { return , [object[]]::new(0) }
+    , [Linq.Enumerable]::ToArray[object]([Linq.Enumerable]::OrderByDescending[object, string]($Items, $script:memoUpdatedKeyFactory, [StringComparer]::CurrentCultureIgnoreCase))
+}
+function Get-WtMemoInitialOrder([object[]]$Items) {
+    if ($null -eq $Items) { return , [object[]]::new(0) }
+    , [Linq.Enumerable]::ToArray[object]([Linq.Enumerable]::OrderByDescending[object, bool]([Linq.Enumerable]::Where[object]($Items, $script:memoActiveFactory), $script:memoPinnedFactory))
+}
+
+function Initialize-WtMemoQuickFactory {
+    $e = [Linq.Expressions.Expression]
+    $items = $e::Parameter([object[]], 'items'); $patterns = $e::Parameter([Management.Automation.WildcardPattern[]], 'patterns'); $limit = $e::Parameter([int], 'limit')
+    $i = $e::Variable([int], 'i'); $j = $e::Variable([int], 'j'); $match = $e::Variable([bool], 'match'); $title = $e::Variable([string], 'title'); $text = $e::Variable([string], 'text')
+    $titles = $e::Variable([Collections.Generic.List[object]], 'titles'); $bodies = $e::Variable([Collections.Generic.List[object]], 'bodies')
+    $item = $e::ArrayIndex($items, $i)
+    $test = $e::Call($e::ArrayIndex($patterns, $j), [Management.Automation.WildcardPattern].GetMethod('IsMatch'), [Linq.Expressions.Expression[]]@($text))
+    $check = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($j, $e::Constant(0)), $e::Assign($match, $e::Constant($true)),
+        (New-WtMemoLoopExpression $j ($e::ArrayLength($patterns)) ($e::Assign($match, $e::AndAlso($match, $test))))))
+    $step = $e::Block([Linq.Expressions.Expression[]]@(
+        $e::Assign($title, (New-WtMemoFieldExpression $item 'title' -String)), $e::Assign($text, $title), $check,
+        $e::IfThenElse($match,
+            $e::Call($titles, [Collections.Generic.List[object]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($item)),
+            $e::IfThen($e::LessThan($e::Property($bodies, 'Count'), $limit), $e::Block([Linq.Expressions.Expression[]]@(
+                $e::Assign($text, $e::Call([string].GetMethod('Concat', [type[]]@([string], [string], [string])), [Linq.Expressions.Expression[]]@($title, $e::Constant("`n"), (New-WtMemoFieldExpression $item 'body' -String)))),
+                $check, $e::IfThen($match, $e::Call($bodies, [Collections.Generic.List[object]].GetMethod('Add'), [Linq.Expressions.Expression[]]@($item))))))),
+        $e::PostIncrementAssign($i), $e::Empty()))
+    $done = $e::Label()
+    $loop = $e::Loop($e::IfThenElse($e::AndAlso($e::LessThan($i, $e::ArrayLength($items)), $e::LessThan($e::Property($titles, 'Count'), $limit)), $step, $e::Break($done)), $done)
+    $newList = $script:memoNewExpression.Invoke([Collections.Generic.List[object]].GetConstructor([type[]]@()), [Linq.Expressions.Expression[]]@())
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($i, $j, $match, $title, $text, $titles, $bodies), [Linq.Expressions.Expression[]]@(
+        $e::Assign($titles, $newList), $e::Assign($bodies, $newList), $loop,
+        $e::Call($titles, [Collections.Generic.List[object]].GetMethod('AddRange'), [Linq.Expressions.Expression[]]@($bodies)),
+        $e::IfThen($e::GreaterThan($e::Property($titles, 'Count'), $limit),
+            $e::Call($titles, [Collections.Generic.List[object]].GetMethod('RemoveRange'), [Linq.Expressions.Expression[]]@($limit, $e::Subtract($e::Property($titles, 'Count'), $limit)))),
+        $e::Call($titles, [Collections.Generic.List[object]].GetMethod('ToArray'))))
+    $script:memoQuickFactory = $e::Lambda([Func[object[], Management.Automation.WildcardPattern[], int, object[]]], $body, [Linq.Expressions.ParameterExpression[]]@($items, $patterns, $limit)).Compile()
+}
+
+function Find-WtMemoQuickData([object[]]$Items, [string]$Query, [int]$Limit = 50) {
+    if ($null -eq $Items -or $Limit -eq 0) { return , [object[]]::new(0) }
+    $patterns = [Management.Automation.WildcardPattern[]]@(foreach ($word in ($Query -split '\s+')) {
+        if ($word) { [Management.Automation.WildcardPattern]::new("*$word*", [Management.Automation.WildcardOptions]::IgnoreCase) }
+    })
+    , $script:memoQuickFactory.Invoke($Items, $patterns, $Limit)
+}
+
+function Initialize-WtMemoIndexOrderFactory {
+    $e = [Linq.Expressions.Expression]
+    $titles = $e::Parameter([string[]], 'titles'); $ids = $e::Parameter([string[]], 'ids')
+    $slots = $e::Parameter([Collections.Generic.Dictionary[string, int]], 'slots'); $lower = $e::Parameter([Collections.Generic.List[string]], 'lower')
+    $titleRanks = $e::Parameter([Collections.Generic.List[int]], 'titleRanks'); $idRanks = $e::Parameter([Collections.Generic.List[int]], 'idRanks')
+    $map = $e::Variable([Collections.Generic.Dictionary[string, int]], 'ranks'); $i = $e::Variable([int], 'i'); $slot = $e::Variable([int], 'slot')
+    $dictType = [Collections.Generic.Dictionary[string, int]]
+    $newMap = $script:memoNewExpression.Invoke($dictType.GetConstructor([type[]]@([Collections.Generic.IEqualityComparer[string]])), [Linq.Expressions.Expression[]]@($e::Constant([StringComparer]::Ordinal, [Collections.Generic.IEqualityComparer[string]])))
+    $get = $dictType.GetMethod('get_Item'); $set = [Collections.Generic.List[int]].GetMethod('set_Item')
+    $rank = $e::Call($map, $get, [Linq.Expressions.Expression[]]@($e::Call($lower, [Collections.Generic.List[string]].GetMethod('get_Item'), [Linq.Expressions.Expression[]]@($slot))))
+    $body = $e::Block([Linq.Expressions.ParameterExpression[]]@($map, $i, $slot), [Linq.Expressions.Expression[]]@(
+        $e::Assign($map, $newMap),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($titles)) ($e::Call($map, $dictType.GetMethod('Add'), [Linq.Expressions.Expression[]]@($e::ArrayIndex($titles, $i), $i)))),
+        $e::Assign($i, $e::Constant(0)),
+        (New-WtMemoLoopExpression $i ($e::ArrayLength($ids)) ($e::Block([Linq.Expressions.Expression[]]@(
+            $e::Assign($slot, $e::Call($slots, $get, [Linq.Expressions.Expression[]]@($e::ArrayIndex($ids, $i)))),
+            $e::Call($titleRanks, $set, [Linq.Expressions.Expression[]]@($slot, $rank)),
+            $e::Call($idRanks, $set, [Linq.Expressions.Expression[]]@($slot, $i))))))))
+    $script:memoIndexOrderFactory = $e::Lambda([Action[string[], string[], Collections.Generic.Dictionary[string, int], Collections.Generic.List[string], Collections.Generic.List[int], Collections.Generic.List[int]]], $body,
+        [Linq.Expressions.ParameterExpression[]]@($titles, $ids, $slots, $lower, $titleRanks, $idRanks)).Compile()
+}
+function New-WtMemoViewRows([object[]]$Items, [Management.Automation.ScriptBlock[]]$Getters, [Collections.IDictionary]$Cache, [switch]$Search, [switch]$Reuse) {
+    if ($null -eq $Items) { return , [object[]]::new(0) }
+    , $script:memoViewRowFactories[$(if ($Search) { 'Snippet' } else { 'body' })].Invoke($Items, $Getters, $Cache, [bool]$Reuse)
+}
+
+function Get-WtMemoCachedLinks($Index, $Cache) {
+    if (-not $Cache -or $Cache.Version -ne 1 -or $Cache.Entries -isnot [Collections.IDictionary]) { return }
+    $c = $Index.Columns
+    for ($i = 0; $i -lt $c.Id.Count; $i++) {
+        if (-not $c.Alive[$i]) { continue }
+        $entry = $Cache.Entries[$c.Id[$i]]
+        if (-not $entry -or $entry.Body -isnot [string] -or $entry.Body -cne $c.Body[$i] -or $entry.Outgoing -isnot [array] -or $entry.HasLink -isnot [bool]) { continue }
+        $outgoing = New-WtMemoStringSet
+        $valid = $true
+        foreach ($target in $entry.Outgoing) { if ($target -isnot [string]) { $valid = $false; break }; [void]$outgoing.Add($target) }
+        if ($valid) { $Index.LinkCache[$c.Body[$i]] = @{ Outgoing = $outgoing; HasLink = $entry.HasLink } }
+    }
+}
+
+function New-WtMemoPreparedData($Doc, $Cache, $Context) {
+    Initialize-WtMemoWorker $Context
+    if ($null -ne $Doc -and ($Doc -isnot [pscustomobject] -or $Doc.schema -ne 1 -or $Doc.items -isnot [array])) { return $null }
+    $seen = New-WtMemoStringSet
+    $live = @(foreach ($item in $Doc.items) {
+        $id = Get-WtField $item 'id'
+        if ($id -is [string] -and $id -and $seen.Add($id) -and -not (Test-WtDeleted $item)) { $item }
+    })
+    $live = Get-WtMemoDetachedItems $live
+    $items = @($live | Sort-Object -Property @{ Expression = { [string]$_.updated }; Descending = $true })
+    $folders = if ($null -ne $Doc.folders -and $Doc.folders -is [array]) { $Doc.folders } else { @(Get-WtMemoDefaultFolders) }
+    $index = New-WtMemoIndex $items -Folders $folders
+    Get-WtMemoCachedLinks $index $Cache
+    $allCached = $true
+    for ($i = 0; $i -lt $index.Columns.Id.Count; $i++) { if ($index.Columns.Alive[$i] -and -not $index.LinkCache.ContainsKey($index.Columns.Body[$i])) { $allCached = $false; break } }
+    if ($allCached) { Initialize-WtMemoLinks $index }
+    @{ Items = $items; Live = $live; Index = $index; Document = $Doc }
+}
+
+function Complete-WtMemoBackgroundIndex($Items, $Folders, $CachePath, $Context) {
+    Initialize-WtMemoWorker $Context
+    $index = New-WtMemoIndex $Items -Folders $Folders
+    Get-WtMemoCachedLinks $index (Read-WtCacheFile $CachePath)
+    Initialize-WtMemoLinks $index
+    $entries = @{}
+    $c = $index.Columns
+    for ($i = 0; $i -lt $c.Id.Count; $i++) {
+        if ($c.Alive[$i]) { $entries[$c.Id[$i]] = @{ Body = $c.Body[$i]; HasLink = $c.HasLink[$i]; Outgoing = @($c.Outgoing[$i]) } }
+    }
+    Write-WtCacheFile $CachePath @{ Version = 1; Entries = $entries }
+    $index
+}
+
+function Start-WtMemoBackgroundIndex {
+    param([object[]]$Items, [object[]]$Folders, [scriptblock]$OnDone, $Context)
+    Start-WtWork -Script { param($items, $folders, $cachePath, $context) Complete-WtMemoBackgroundIndex $items $folders $cachePath $context } `
+        -ArgumentList $Items, $Folders, (Get-WtStorePath 'memo-index-cache'), $script:memoWorkerContext `
+        -Functions $script:memoWorkerFunctions -Session Default -OnDone $OnDone -Context $Context
+}
+
+# 같은 함수 정의를 Work에 넘긴다. 묶음(New-Module)에서도 파일 경로나 다시 Import-Module할 모듈이 필요 없다.
+function Register-WtMemoPreparation {
+    $recordModule = (Get-Command ConvertFrom-WtStamp).Module
+    $markdownModule = (Get-Command ConvertTo-WtMarkdownModel).Module
+    $recordFunctions = & $recordModule { Get-Command Get-WtField, Test-WtRecordObject, Test-WtDeleted, ConvertFrom-WtWhole, ConvertFrom-WtStamp, ConvertFrom-WtLegacyStamp, ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, Get-WtStamp }
+    $markdownFunctions = & $markdownModule { Get-Command ConvertTo-WtMarkdownModel, Get-WtMarkdownPipeline, ConvertFrom-WtMd*, Get-WtMdLines, Add-WtMdText, Add-WtMdPlain, Get-WtMdLinkKind, New-WtMdLinkModel, New-WtMdImageModel, Get-WtMdInlineText, Get-WtMdBlocksText, Get-WtMdAnchorKey }
+    $script:memoWorkerContext = & $recordModule {
+        $values = @{}
+        foreach ($name in 'inv', 'ko', 'stampFormat', 'minYear', 'maxYear', 'legacyDates', 'legacyTimes', 'legacyTimesKo', 'legacyStamps', 'legacyStampsKo') { $values[$name] = $ExecutionContext.SessionState.PSVariable.GetValue("script:$name") }
+        $values
+    }
+    $markdownContext = & $markdownModule { @{ callouts = $script:callouts; obsidianRe = $script:obsidianRe } }
+    foreach ($name in $markdownContext.Keys) { $script:memoWorkerContext[$name] = $markdownContext[$name] }
+    $script:memoWorkerContext.memoInv = $script:memoInv
+    $script:memoWorkerContext.memoLinkHint = $script:memoLinkHint
+    $script:memoWorkerContext.memoIndexOrderFactory = $script:memoIndexOrderFactory
+    $script:memoWorkerContext.memoDetachedFactory = $script:memoDetachedFactory
+    $script:memoWorkerFunctions = @(Get-Command New-WtMemoIndex, Set-WtMemoIndexEntry, Update-WtMemoIndexOrder, Get-WtMemoIndexedTime, Get-WtMemoDefaultFolders,
+        New-WtMemoStringSet, Get-WtMemoLinkInfo, Initialize-WtMemoLinks, Update-WtMemoBacklinks, Get-WtMemoIndexEntries, Set-WtMemoIndexProperties,
+        Initialize-WtMemoWorker, Get-WtMemoCachedLinks, Complete-WtMemoBackgroundIndex, Get-WtMemoDetachedItems, Read-WtCacheFile, Write-WtCacheFile) + @($recordFunctions) + @($markdownFunctions)
+    Register-WtStorePreparation -Name 'memo' -Prepare (Get-Command New-WtMemoPreparedData) -Functions $script:memoWorkerFunctions -Context $script:memoWorkerContext -CacheName 'memo-index-cache'
+    Register-WtStorePreparation -Name 'memo-state' -Prepare (Get-Command New-WtMemoStatePreparation) -Functions @() -Context $null
+}
+
+function New-WtMemoStatePreparation($Doc, $Cache, $Context) { $null }
+
+# 첫 입력 때 .NET 대리자/문자열 변환의 첫 실행 비용을 내지 않게 한다. 파일·사용자 자료에는 닿지 않는다.
+function Initialize-WtMemoQueryRuntime {
+    $stamp = [DateTimeOffset]::Now.ToString("yyyy-MM-dd'T'HH:mm:sszzz", $script:memoInv)
+    $sample = @(for ($i = 0; $i -lt 4; $i++) {
+        [pscustomobject]@{ id = "warm-$i"; title = "warm $i"; body = "word #tag [[warm 1]]`n`n- [ ] 항목"; tags = @('tag'); folder = 'work'; pinned = ($i -eq 0); created = $stamp; updated = $stamp }
+    })
+    $index = New-WtMemoIndex $sample
+    $opened = @{ 'warm-0' = $stamp }
+    foreach ($query in 'word', '#tag updated:30d', 'absent', 'has:link') {
+        foreach ($sort in '', 'updated', 'created', 'title', 'opened', 'backlinks') {
+            $parameters = @{ Index = $index; Query = $query; First = 4; OpenedMap = $opened; SkipBacklinks = $true }
+            if ($sort) { $parameters.Sort = $sort }
+            $result = Find-WtMemo @parameters
+            if (-not $result.Success) { throw $result.Error.Reason }
+        }
+    }
+    $getters = [scriptblock[]]@({ $this.Updated }, { $this.SnippetSource }, { $this.Title })
+    [void](New-WtMemoViewRows $sample $getters @{})
+    [void](New-WtMemoViewRows $result.Items $getters @{} -Search)
+    [void](Get-WtMemoLookupData $sample)
+    [void](Get-WtMemoUpdatedOrder $sample)
+    [void](Find-WtMemoQuickData $sample 'word')
+    [void](Find-WtMemoQuickData $sample 'absent')
+    [void]$script:memoSaveFactory.Invoke($sample, $sample)
+    [void](Get-WtMarkdownSnippet "# 제목`n`n[[warm 1]] #tag`n`n- [ ] 항목" 80)
+    if (Get-Command Format-WtMemoTime -ErrorAction SilentlyContinue) { [void](Format-WtMemoTime $stamp) }
+}
+
 # 입력 자료와 무관한 대리자는 모듈을 읽을 때 한 번 준비한다(검색 중 컴파일하지 않는다).
 Initialize-WtMemoSearchEngine
+Initialize-WtMemoViewFactories
+Initialize-WtMemoSaveFactory
+Initialize-WtMemoQuickFactory
+Initialize-WtMemoIndexOrderFactory
+Register-WtMemoPreparation
+Initialize-WtMemoQueryRuntime
 
 Export-ModuleMember -Function ConvertFrom-WtMemoQuery, ConvertTo-WtMemoQuery, New-WtMemoIndex, Update-WtMemoIndex, Add-WtMemoIndexEntries, Find-WtMemo, Get-WtMemoResultRows, Step-WtMemoLinks, Test-WtMemoQueryLinks,
     Set-WtMemoFolder, Set-WtMemoPinned, Set-WtMemoArchived, Get-WtMemoFolders, Save-WtMemoFolders, Set-WtMemoOpened,
-    Get-WtMemoViews, Save-WtMemoView, Set-WtMemoViewDeleted, Open-WtMemoStore, Save-WtMemoDataItems
+    Get-WtMemoViews, Save-WtMemoView, Set-WtMemoViewDeleted, Open-WtMemoStore, Save-WtMemoDataItems, Start-WtMemoBackgroundIndex, Get-WtMemoLookupData, New-WtMemoViewRows, Get-WtMemoUpdatedOrder, Get-WtMemoLiveItems, Get-WtMemoInitialOrder, Set-WtMemoIndexProperties, Find-WtMemoQuickData, Get-WtMemoIdArray, Get-WtMemoDetachedItems
