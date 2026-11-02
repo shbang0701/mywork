@@ -59,6 +59,43 @@ try {
         Set-WtAppRoot $test.App; Initialize-WtSettings
         Remove-WtTestData $compactTest
     }
+    # 별도 실행 공간의 시작 준비도 화면과 같은 삭제·중복 규칙을 쓰고 원자료는 보존한다.
+    $preparedTest = New-WtTestData 'memo-prepared'
+    try {
+        $preparedPath = Get-WtStorePath memo
+        $preparedDoc = @'
+{"schema":1,"futureTop":{"keep":7},"items":[null,["깨진",{"id":"nested"}],9,{"id":""},{"id":"gone","deleted":true},{"id":"gone","title":"되살리면 안 됨"},{"id":"keep","title":"첫 항목","body":"[[Upper]]","updated":"2026-10-20T09:00:00+09:00","deleted":false,"future":{"keep":8}},{"id":"keep","title":"뒤 중복"},{"id":"KEEP","title":"Upper","body":"본문","updated":"2026-10-21T09:00:00+09:00","deleted":""},{"id":"archive","title":"보관","updated":"2026-10-19T09:00:00+09:00","archived":true},{"id":77},{"id":"zero","deleted":0},{"id":"space","deleted":" "},"깨진 글"]}
+'@ | ConvertFrom-Json -Depth 20 -DateKind String
+        Write-WtJsonFile $preparedPath $preparedDoc
+        Wait-WtTestWrites
+        $preparedBefore = [IO.File]::ReadAllText($preparedPath)
+        Set-WtAppRoot $preparedTest.App
+        [void](Wait-WtWork -All -Milliseconds 30000)
+        $prepared = Get-WtStorePreparation memo
+        Assert-WtTest '메모 시작 준비: 별도 실행 공간에서 삭제·중복·id 대소문자·보관 규칙 유지' (
+            $null -ne $prepared -and ($prepared.Value.Live.id -join ',') -ceq 'keep,KEEP,archive' -and
+            ($prepared.Value.Items.id -join ',') -ceq 'KEEP,keep,archive')
+        $preparedLinks = Find-WtMemo -Index $prepared.Value.Index -Query 'linksto:KEEP'
+        Assert-WtTest '메모 시작 준비: 준비한 색인의 메모 연결 결과 유지' (
+            $preparedLinks.Success -and $preparedLinks.Count -eq 1 -and $preparedLinks.Items[0].Id -ceq 'keep')
+        $prepared.Value.Live[0].title = '편집 사본'
+        Assert-WtTest '메모 시작 준비: 편집 사본 분리 · 모르는 칸 · 깨진 원자료 · 파일 보존' (
+            $prepared.Value.Document.items[6].title -ceq '첫 항목' -and $prepared.Value.Live[0].future.keep -eq 8 -and
+            $prepared.Value.Document.futureTop.keep -eq 7 -and $prepared.Value.Document.items.Count -eq 14 -and
+            $null -eq $prepared.Value.Document.items[0] -and $prepared.Value.Document.items[1] -is [array] -and
+            [IO.File]::ReadAllText($preparedPath) -ceq $preparedBefore)
+        Write-WtJsonFile $preparedPath ([pscustomobject]@{ schema = 1; items = @() })
+        Wait-WtTestWrites
+        Set-WtAppRoot $preparedTest.App
+        [void](Wait-WtWork -All -Milliseconds 30000)
+        $preparedEmpty = Get-WtStorePreparation memo
+        Assert-WtTest '메모 시작 준비: 빈 저장소도 빈 배열과 색인으로 준비' (
+            $null -ne $preparedEmpty -and $preparedEmpty.Value.Live -is [array] -and
+            $preparedEmpty.Value.Live.Count -eq 0 -and $preparedEmpty.Value.Index.Slots.Count -eq 0)
+    } finally {
+        Set-WtAppRoot $test.App; Initialize-WtSettings
+        Remove-WtTestData $preparedTest
+    }
     # ---- 예전 데이터 ----
     Write-WtTestLegacyCsv $test 'memo' @'
 "Id","Title","Body","Created","Updated"

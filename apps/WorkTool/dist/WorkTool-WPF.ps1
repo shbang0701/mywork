@@ -15952,12 +15952,8 @@ function Get-WtMemoCachedLinks($Index, $Cache) {
 function New-WtMemoPreparedData($Doc, $Cache, $Context) {
     Initialize-WtMemoWorker $Context
     if ($null -ne $Doc -and ($Doc -isnot [pscustomobject] -or $Doc.schema -ne 1 -or $Doc.items -isnot [array])) { return $null }
-    $seen = New-WtMemoStringSet
-    $live = @(foreach ($item in $Doc.items) {
-        $id = Get-WtField $item 'id'
-        if ($id -is [string] -and $id -and $seen.Add($id) -and -not (Test-WtDeleted $item)) { $item }
-    })
-    $live = Get-WtMemoDetachedItems $live
+    # 화면과 같은 필터를 재사용한다. 준비 작업에서도 항목마다 함수 호출을 되풀이하지 않는다.
+    $live = Get-WtMemoDetachedItems (Get-WtMemoLiveItems $Doc.items)
     $items = @($live | Sort-Object -Property @{ Expression = { [string]$_.updated }; Descending = $true })
     $folders = if ($null -ne $Doc.folders -and $Doc.folders -is [array]) { $Doc.folders } else { @(Get-WtMemoDefaultFolders) }
     $index = New-WtMemoIndex $items -Folders $folders
@@ -16007,9 +16003,10 @@ function Register-WtMemoPreparation {
     $script:memoWorkerContext.memoLinkHint = $script:memoLinkHint
     $script:memoWorkerContext.memoIndexOrderFactory = $script:memoIndexOrderFactory
     $script:memoWorkerContext.memoDetachedFactory = $script:memoDetachedFactory
+    $script:memoWorkerContext.memoLiveFactory = $script:memoLiveFactory
     $script:memoWorkerFunctions = @(Get-Command New-WtMemoIndex, Set-WtMemoIndexEntry, Update-WtMemoIndexOrder, Get-WtMemoIndexedTime, Get-WtMemoDefaultFolders,
         New-WtMemoStringSet, Get-WtMemoLinkInfo, Initialize-WtMemoLinks, Update-WtMemoBacklinks, Get-WtMemoIndexEntries, Set-WtMemoIndexProperties,
-        Initialize-WtMemoWorker, Get-WtMemoCachedLinks, Complete-WtMemoBackgroundIndex, Get-WtMemoDetachedItems, Read-WtCacheFile, Write-WtCacheFile) + @($recordFunctions) + @($markdownFunctions)
+        Initialize-WtMemoWorker, Get-WtMemoCachedLinks, Complete-WtMemoBackgroundIndex, Get-WtMemoDetachedItems, Get-WtMemoLiveItems, Read-WtCacheFile, Write-WtCacheFile) + @($recordFunctions) + @($markdownFunctions)
     Register-WtStorePreparation -Name 'memo' -Prepare (Get-Command New-WtMemoPreparedData) -Functions $script:memoWorkerFunctions -Context $script:memoWorkerContext -CacheName 'memo-index-cache'
     Register-WtStorePreparation -Name 'memo-state' -Prepare (Get-Command New-WtMemoStatePreparation) -Functions @() -Context $null
 }
