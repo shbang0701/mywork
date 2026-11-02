@@ -96,6 +96,48 @@ try {
         Set-WtAppRoot $test.App; Initialize-WtSettings
         Remove-WtTestData $preparedTest
     }
+    # 바로 가기는 원자료에서 id만 읽고, 편집 요청은 여전히 독립된 사본을 돌려준다.
+    $shortcutDataTest = New-WtTestData 'memo-shortcut-data'
+    try {
+        $shortcutDataPath = Get-WtStorePath memo
+        $shortcutDataDoc = [pscustomobject]@{ schema = 1; items = @(
+            [pscustomobject]@{ id = 'a'; title = '원문'; body = '본문'; future = @{ keep = 3 } },
+            [pscustomobject]@{ id = 'A'; title = '대문자'; body = '다른 본문' },
+            [pscustomobject]@{ id = 'gone'; deleted = $true },
+            [pscustomobject]@{ id = 'gone'; title = '뒤 중복' }, $null) }
+        Write-WtJsonFile $shortcutDataPath $shortcutDataDoc
+        Wait-WtTestWrites
+        & (Get-Module Storage) {
+            $p = $script:storePreparations['memo']
+            if ($p -and $p.Work) { Stop-WtWork $p.Work }
+            [void]$script:storePreparations.Remove('memo')
+        }
+        $shortcutDataBefore = [IO.File]::ReadAllText($shortcutDataPath)
+        $shortcutDataCheck = & $memoModule {
+            $script:viewStamp = ''; $script:shortcutStamp = ''; $script:shortcutIds = $null
+            @{ Lower = Test-WtMemoShortcut 'a'; Upper = Test-WtMemoShortcut 'A'; Gone = Test-WtMemoShortcut 'gone'; Missing = Test-WtMemoShortcut 'none' }
+        }
+        Assert-WtTest '메모 바로 가기 자료: 준비 없이도 id 대소문자 · 삭제 뒤 중복 · 없는 항목 판정' (
+            $shortcutDataCheck.Lower -and $shortcutDataCheck.Upper -and -not $shortcutDataCheck.Gone -and -not $shortcutDataCheck.Missing)
+        $shortcutDataEdit = @(Get-WtMemoItems)
+        $shortcutDataEdit[0].title = '편집 사본'
+        $shortcutDataOriginal = & $memoModule { $script:memoStore.Doc.items[0].title }
+        Assert-WtTest '메모 바로 가기 자료: 편집 요청은 계속 사본 · 모르는 칸과 원자료 파일 보존' (
+            $shortcutDataOriginal -ceq '원문' -and $shortcutDataEdit[0].future.keep -eq 3 -and [IO.File]::ReadAllText($shortcutDataPath) -ceq $shortcutDataBefore)
+        $shortcutDataAt = [IO.File]::GetLastWriteTimeUtc($shortcutDataPath)
+        [IO.File]::WriteAllText($shortcutDataPath, $shortcutDataBefore.Replace('"a"', '"x"'), [Text.UTF8Encoding]::new($false))
+        [IO.File]::SetLastWriteTimeUtc($shortcutDataPath, $shortcutDataAt)
+        $shortcutDataChanged = & $memoModule { @{ Old = Test-WtMemoShortcut 'a'; New = Test-WtMemoShortcut 'x'; StoreId = $script:memoStore.Items[0].id } }
+        Assert-WtTest '메모 바로 가기 자료: 같은 크기·시각의 외부 id 변경과 저장 핸들 함께 갱신' (
+            -not $shortcutDataChanged.Old -and $shortcutDataChanged.New -and $shortcutDataChanged.StoreId -ceq 'x')
+        Write-WtJsonFile $shortcutDataPath ([pscustomobject]@{ schema = 1; items = @() })
+        Wait-WtTestWrites
+        Assert-WtTest '메모 바로 가기 자료: 빈 목록으로 바뀌면 기존 id도 사라진다' (-not (& $memoModule { Test-WtMemoShortcut 'x' }) -and @(Get-WtMemoItems).Count -eq 0)
+    } finally {
+        Set-WtAppRoot $test.App; Initialize-WtSettings
+        & $memoModule { $script:viewStamp = ''; $script:shortcutStamp = ''; $script:shortcutIds = $null }
+        Remove-WtTestData $shortcutDataTest
+    }
     # ---- 예전 데이터 ----
     Write-WtTestLegacyCsv $test 'memo' @'
 "Id","Title","Body","Created","Updated"

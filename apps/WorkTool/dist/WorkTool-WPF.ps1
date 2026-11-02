@@ -12334,11 +12334,16 @@ Register-WtSettingDefault 'memo.tabs' $null
 
 # ---- 데이터 (WPF 없이) -------------------------------------------------------------------------
 
-function Get-WtMemoItems {
+# 존재 확인과 편집 목록이 같은 저장 핸들/준비 결과를 쓴다. 편집용 복사는 목록을 요청할 때만 한다.
+function Read-WtMemoStore {
     $script:memoStore = Open-WtMemoStore
     if ($script:memoStore.State -notin 'ok', 'missing') { throw $script:memoStore.Error }
     $prepared = Get-WtStorePreparation 'memo'
     $script:preparedMemo = if ($prepared -and $prepared.Value -and [object]::ReferenceEquals($script:memoStore.Doc, $prepared.Value.Document)) { $prepared.Value } else { $null }
+}
+
+function Get-WtMemoItems {
+    Read-WtMemoStore
     if ($script:preparedMemo) { $script:preparedMemo.Live; return }
     # 편집용 스칼라 칸을 저장 통로가 보유한 항목과 분리한다. 알려지지 않은 중첩 칸은 수정하지 않는다.
     (Get-WtMemoDetachedItems (Get-WtMemoLiveItems $script:memoStore.Items))
@@ -14348,12 +14353,16 @@ function Start-WtMemoQueryWarmUp {
 
 # 바로 가기의 메모가 남아 있는지. 홈을 그릴 때 줄마다 불리므로 memo.json이 바뀌었을 때만 다시 읽고,
 # 메모 화면이 같은 내용을 들고 있으면 파일을 읽지 않는다.
-# 저장소를 직접 열지 않는다: 읽으면 들고 있던 저장 핸들이 낡으므로 Get-WtMemoItems가 핸들을 함께 바꾼다
+# 다시 읽을 때는 저장 핸들도 함께 바꾼다. id 확인에는 편집용 항목 사본이 필요하지 않다.
 function Test-WtMemoShortcut([string]$Key) {
     $stamp = Get-WtStoreStamp 'memo'
     if (-not $script:shortcutIds -or $script:shortcutStamp -cne $stamp) {
         $fresh = $script:viewStamp -ceq "$stamp|$([datetime]::Today.Ticks)"
-        $items = if ($fresh) { $script:items } else { @(Get-WtMemoItems) }
+        if ($fresh) { $items = $script:items }
+        else {
+            Read-WtMemoStore
+            $items = if ($script:preparedMemo) { $script:preparedMemo.Live } else { Get-WtMemoLiveItems $script:memoStore.Items }
+        }
         $script:shortcutIds = [Collections.Generic.HashSet[string]]::new([Collections.Generic.IEnumerable[string]](Get-WtMemoIdArray $items), [StringComparer]::Ordinal)
         $script:shortcutStamp = $stamp
     }
