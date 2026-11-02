@@ -172,6 +172,66 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
         & $queueStorage { param($writer) $script:writeJob = $writer } $queueWriter
     }
 
+    # 작은 글/큰 글의 쓰기 경계에서도 UTF-8 바이트, 끝 개행, 직전 백업과 지문은 같다.
+    $writerPath = Join-Path $test.Data 'writer[utf8].json'
+    [IO.File]::WriteAllText($writerPath, '직전 내용', [Text.UTF8Encoding]::new($false))
+    $writerCases = @(('x' * 65535), ('x' * 65536), (("한글🙂`r`n`t\`"" * 7000) + [char]0xD800))
+    foreach ($text in $writerCases) {
+        $beforeBytes = [IO.File]::ReadAllBytes($writerPath)
+        $beforeHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($beforeBytes))
+        $expectedBytes = [Text.UTF8Encoding]::new($false).GetBytes($text)
+        $expectedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($expectedBytes))
+        $writtenStamp = & $queueStorage { param($path, $value) Write-WtDataFile $path $value } $writerPath $text
+        $actualBytes = [IO.File]::ReadAllBytes($writerPath)
+        $actualHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($actualBytes))
+        $backupHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes("$writerPath.bak")))
+        Assert-Wt "저장 쓰기: $($text.Length)자 UTF-8 바이트·끝 개행·백업·지문 일치" (
+            $actualBytes.Length -eq $expectedBytes.Length -and $actualHash -ceq $expectedHash -and $backupHash -ceq $beforeHash -and
+            $writtenStamp -ceq "$($expectedBytes.Length)|$expectedHash" -and -not [IO.File]::Exists("$writerPath.tmp"))
+    }
+    $lockedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($writerPath)))
+    $retryText = '새 내용' * 22000
+    $writerLock = [IO.File]::Open($writerPath, 'Open', 'ReadWrite', 'None')
+    $writerFailed = $false; $failedStamp = $null
+    try {
+        try { $failedStamp = & $queueStorage { param($path, $value) Write-WtDataFile $path $value } $writerPath $retryText }
+        catch { $writerFailed = $true }
+    } finally { $writerLock.Dispose() }
+    Assert-Wt '저장 쓰기: 큰 글 바꿔치기 실패 때 원본 보존 · 성공 지문을 반환하지 않는다' (
+        $writerFailed -and $null -eq $failedStamp -and $lockedHash -ceq [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($writerPath))))
+    $retriedStamp = & $queueStorage { param($path, $value) Write-WtDataFile $path $value } $writerPath $retryText
+    Assert-Wt '저장 쓰기: 잠금 해제 뒤 재시도 · 직전 원본을 백업한다' (
+        [IO.File]::ReadAllText($writerPath) -ceq $retryText -and $retriedStamp -match '^\d+\|[0-9A-F]{64}$' -and
+        $lockedHash -ceq [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes("$writerPath.bak"))))
+    $largePlainPath = Get-WtStorePath 'large-plain'
+    Write-WtJsonFile $largePlainPath @{ schema = 1; values = @{ text = ('한글' * 40000) } }
+    Wait-WtTestWrites 30000
+    $largePlain = [IO.File]::ReadAllText($largePlainPath) | ConvertFrom-Json
+    Assert-Wt '저장 쓰기: 큰 일반 JSON도 기본 파일 명령을 사용할 세션에서 저장된다' (
+        (Get-WtDataWriteStatus $largePlainPath).State -eq 'saved' -and $largePlain.values.text -ceq ('한글' * 40000))
+
+    # 지문은 바꿔치기 전에 쓴 내용이다. 직후 외부 편집을 우리 문서의 저장 완료 표식으로 채택하지 않는다.
+    $racePath = Get-WtStorePath 'stamp-race'
+    Write-WtStore stamp-race -Items @([pscustomobject]@{ id = 'original'; title = '처음' })
+    $raceStore = Open-WtStore stamp-race
+    try {
+        & $queueStorage {
+            $script:writeJob = {
+                param($p, $json)
+                $written = Write-WtDataFile $p $json
+                [IO.File]::WriteAllText($p, '{"schema":1,"items":[{"id":"external","title":"외부 변경"}]}', [Text.UTF8Encoding]::new($false))
+                $written
+            }
+        }
+        $raceSaved = Save-WtStore $raceStore @([pscustomobject]@{ id = 'original'; title = '앱 저장' }) -Background
+        Wait-WtTestWrites 30000
+        $raceStamp = Get-WtStoreStamp stamp-race
+        $raceVersion = & $queueStorage { param($path) (Get-WtDataFileRecord $path).Accepted.Version } $racePath
+        $raceDisk = Read-WtStore stamp-race
+        Assert-Wt '저장 지문: 바꿔치기 직후 외부 편집을 우리 저장 판으로 오인하지 않는다' (
+            $raceVersion -gt 0 -and $raceDisk.items[0].title -ceq '외부 변경' -and -not $raceStamp.EndsWith("|accepted:$raceVersion"))
+    } finally { & $queueStorage { param($writer) $script:writeJob = $writer } $queueWriter }
+
     Write-WtStore -Name 'mig' -Schema 1 -Items @([ordered]@{ id = 'm1' })
     $doc = Read-WtStore -Name 'mig' -Schema 2 -Migrate {
         param($d, $from)

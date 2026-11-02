@@ -1371,14 +1371,27 @@ function Invoke-WtQueuedStoreWrite {
 # 받아들인 버전 > 확인된 버전인데 쓰는 중인 것이 없으면, 그 내용을 실패로 남겨 둔다(Failed). 버전이 같아져야 「저장됨」이다
 
 # 실제로 쓰기 (화면 밖에서 돈다): 임시 파일에 쓰고 바꿔치기
+function Test-WtLargeDataText([string]$Text) { $Text.Length -ge 65536 }
+
+# 큰 글은 기본 파일 명령으로 한 번 쓰고, 쓴 임시 파일에서 지문을 얻는다.
+# 바꿔치기 전에 계산하므로 그 뒤 다른 프로그램이 원본을 바꿔도 그 내용을 우리 저장 판으로 착각하지 않는다.
 function Write-WtDataFile([string]$Path, [string]$Json) {
     $tmp = "$Path.tmp"
-    [System.IO.File]::WriteAllText($tmp, $Json, [System.Text.UTF8Encoding]::new($false))
+    if (Test-WtLargeDataText $Json) {
+        Microsoft.PowerShell.Management\Set-Content -LiteralPath $tmp -Value $Json -NoNewline -Encoding utf8NoBOM -ErrorAction Stop
+    } else {
+        [System.IO.File]::WriteAllText($tmp, $Json, [System.Text.UTF8Encoding]::new($false))
+    }
+    $stream = [System.IO.File]::OpenRead($tmp)
+    try { $stamp = "$($stream.Length)|$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)))" }
+    finally { $stream.Dispose() }
     if ([System.IO.Path]::Exists($Path)) { [System.IO.File]::Replace($tmp, $Path, "$Path.bak") }
     else { [System.IO.File]::Move($tmp, $Path) }
+    $stamp
 }
 
-# 통로가 돌리는 코드. 검사는 쓰기 앞에 기다림만 끼워 넣는다 (Write-WtDataFile은 그대로 돈다)
+# 통로가 돌리는 코드. 성공하면 쓴 바이트 수|SHA256을 돌려준다.
+# 검사는 쓰기 앞에 기다림만 끼워 넣는다 (Write-WtDataFile과 반환 지문은 그대로 둔다)
 $script:writeJob = { param($p, $json) Write-WtDataFile $p $json }
 
 # 파일 하나의 기록 (버전 · 받아들인 것 · 실패로 남은 것)
@@ -1415,16 +1428,15 @@ function Start-WtDataWriteNext {
         $entry.State = 'writing'
         try {
             $script:writeCurrent = $entry
-            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile, ConvertTo-WtStoreDocumentJson) }
+            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile, Test-WtLargeDataText, ConvertTo-WtStoreDocumentJson) }
             if ($null -ne $entry.Document) {
                 $key = $entry.Path.ToLowerInvariant()
                 if (-not $script:storeSerializers.ContainsKey($key)) { $script:storeSerializers[$key] = [Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new() }
-                # 이 작업이 화면 일과 겹치면 화면 스레드가 약 300ms 멈춘다(메모 3,000개 실측, 원인은 못 찾음). 저장 뒤 화면 일이 먼저 끝나게 잠깐 쉬고 시작한다
-                $text = "param(`$p, `$doc, `$cache, `$factory)`n[System.Threading.Thread]::Sleep($script:writeStartDelayMs)`n`$json = ConvertTo-WtStoreDocumentJson `$doc `$cache `$factory`n& {`n$($script:writeJob.ToString())`n} `$p `$json`n`$bytes = [Text.UTF8Encoding]::new(`$false).GetBytes(`$json)`n`"`$(`$bytes.Length)|`$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(`$bytes)))`""
+                $text = "param(`$p, `$doc, `$cache, `$factory)`n`$json = ConvertTo-WtStoreDocumentJson `$doc `$cache `$factory`n& {`n$($script:writeJob.ToString())`n} `$p `$json"
                 $entry.Work = Start-WtWork -Script $text -ArgumentList $entry.Path, $entry.Document, $script:storeSerializers[$key], $script:jsonPartsFactory -Functions $script:writeFunctions -Session Default -Reserved `
                     -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
             } else {
-                $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Reserved `
+                $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Session $(if (Test-WtLargeDataText $entry.Json) { 'Default' } else { 'Empty' }) -Reserved `
                     -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
             }
         } catch {
@@ -1434,7 +1446,6 @@ function Start-WtDataWriteNext {
     }
 }
 $script:writeFunctions = $null
-$script:writeStartDelayMs = 200   # 큰 저장소의 화면 밖 저장을 시작하기 전에 쉬는 시간
 
 # 쓰기 하나가 끝났을 때 (화면 스레드): 성공이면 확인된 버전을 올리고, 실패면 실패로 남긴다. 그 뒤 다음 차례를 시작한다
 function Complete-WtDataWrite($Work) {
