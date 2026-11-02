@@ -939,7 +939,14 @@ function Open-WtMemoStore { Open-WtStore -Name 'memo' -Schema 1 }
 function Save-WtMemoStoreItems($Store, [object[]]$Items, [hashtable]$Extra) {
     if ($Store.Name -cne 'memo') { throw '메모 저장소 핸들이 아닙니다.' }
     $compact = $Items.Clone()
-    foreach ($i in $script:memoDeletedSlotsFactory.Invoke($Items)) { $compact[$i] = @(Compress-WtDeletedItems (, $Items[$i]))[0] }
+    $slots = $script:memoDeletedSlotsFactory.Invoke($Items)
+    if ($slots.Length) {
+        # 삭제 후보만 모아 한 번에 정리한다. 보존 기한 계산과 함수 호출을 항목마다 반복하지 않는다.
+        $deleted = [object[]]::new($slots.Length)
+        for ($i = 0; $i -lt $slots.Length; $i++) { $deleted[$i] = $Items[$slots[$i]] }
+        $packed = @(Compress-WtDeletedItems $deleted)
+        for ($i = 0; $i -lt $slots.Length; $i++) { $compact[$slots[$i]] = $packed[$i] }
+    }
     Save-WtStore $Store $compact -Extra $Extra -Background:($compact.Count -ge 256)
 }
 

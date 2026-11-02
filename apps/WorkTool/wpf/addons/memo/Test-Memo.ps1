@@ -26,6 +26,39 @@ $held = $null
 $win = $null
 
 try {
+    # 삭제 후보를 묶어 정리해도 원래 자리·보존 기간·편집 전 스냅샷을 지킨다.
+    $compactTest = New-WtTestData 'memo-compact'
+    try {
+        $oldDeleted = Get-WtStamp ([DateTimeOffset]::Now.AddDays(-95))
+        $recentDeleted = Get-WtStamp ([DateTimeOffset]::Now.AddDays(-3))
+        $compactItems = [object[]]::new(8)
+        $compactItems[0] = [pscustomobject]@{ id = 'old'; title = '오래된 내용'; body = '정리'; deleted = $oldDeleted; future = @{ keep = 1 } }
+        $compactItems[1] = $null
+        $compactItems[2] = [pscustomobject]@{ id = 'recent'; title = '최근 내용'; deleted = $recentDeleted; future = @{ keep = 2 } }
+        $compactItems[3] = @('깨진', '목록')
+        $compactItems[4] = [pscustomobject]@{ id = 'invalid'; title = '날짜 모름'; deleted = '잘못된 날짜'; future = 3 }
+        $compactItems[5] = [pscustomobject]@{ id = 'tombstone'; deleted = $oldDeleted }
+        $compactItems[6] = [pscustomobject]@{ id = 'alive'; title = '남길 내용'; deleted = $false }
+        $compactItems[7] = [pscustomobject]@{ id = 'old-last'; body = '마지막 내용'; deleted = $oldDeleted }
+        $compactStore = Open-WtMemoStore
+        $compactSaved = & (Get-Module MemoData) { param($s, $items) Save-WtMemoStoreItems $s $items } $compactStore $compactItems
+        Assert-WtTest '메모 삭제 정리: 여러 오래된 후보만 원래 자리에서 두 칸으로 압축' (
+            $compactSaved.Items.Count -eq 8 -and $compactSaved.Items[0].id -ceq 'old' -and $compactSaved.Items[7].id -ceq 'old-last' -and
+            @($compactSaved.Items[0].PSObject.Properties).Count -eq 2 -and @($compactSaved.Items[7].PSObject.Properties).Count -eq 2)
+        Assert-WtTest '메모 삭제 정리: 최근·잘못된 날짜·최소 묘비·정상·null·깨진 배열 보존' (
+            $null -eq $compactSaved.Items[1] -and ($compactSaved.Items[3] -join ',') -ceq '깨진,목록' -and
+            $compactSaved.Items[2].future.keep -eq 2 -and $compactSaved.Items[4].title -ceq '날짜 모름' -and
+            $compactSaved.Items[5].deleted -ceq $oldDeleted -and $compactSaved.Items[6].title -ceq '남길 내용')
+        Assert-WtTest '메모 삭제 정리: 받은 배열과 옛 항목을 고치지 않는다' (
+            $compactItems[0].title -ceq '오래된 내용' -and $compactItems[7].body -ceq '마지막 내용' -and
+            -not [object]::ReferenceEquals($compactSaved.Items[0], $compactItems[0]) -and
+            [object]::ReferenceEquals($compactSaved.Items[2], $compactItems[2]))
+        $emptyCompact = & (Get-Module MemoData) { param($s) Save-WtMemoStoreItems $s ([object[]]::new(0)) } $compactSaved
+        Assert-WtTest '메모 삭제 정리: 삭제 후보가 없는 빈 목록도 저장된다' ($emptyCompact.Items.Count -eq 0)
+    } finally {
+        Set-WtAppRoot $test.App; Initialize-WtSettings
+        Remove-WtTestData $compactTest
+    }
     # ---- 예전 데이터 ----
     Write-WtTestLegacyCsv $test 'memo' @'
 "Id","Title","Body","Created","Updated"
