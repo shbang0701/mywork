@@ -109,6 +109,11 @@ try {
     function Read-MemoTestText([string]$Path) { & (Get-Module Storage) { param($p) Read-WtJsonText $p } $Path }
     function Read-MemoFixture([string]$Name, [string]$StoreName = 'memo') {
         $doc = Get-Content -LiteralPath (Join-Path $PSScriptRoot "fixtures/$Name.json") -Raw | ConvertFrom-Json -Depth 20 -DateKind String
+        if ($Name -ceq 'memo-v-new') {
+            # 이 자료는 최근 삭제의 모르는 칸 보존을 본다. 고정 날짜가 90일을 넘으면 정상 압축을 실패로 오인한다.
+            $recentRow = @($doc.items | Where-Object id -ceq 'gone')[0]
+            $recentRow.deleted = Get-WtStamp ([DateTimeOffset]::Now.AddDays(-3))
+        }
         Write-WtJsonFile (Get-WtStorePath $StoreName) $doc
         $doc
     }

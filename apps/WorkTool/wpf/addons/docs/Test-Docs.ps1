@@ -208,6 +208,54 @@ try {
     Set-WtSetting 'docs.roots' @(); Set-WtSetting 'docs.last' ''
     & $docsModule { param($worker) $script:worker = $worker; Stop-WtDocs } $originalWorker
     Assert-WtTest '문서 안정성: 끝낸 뒤 남은 조회 · 화면 밖 작업이 없다' ((& $docsModule { $script:jobs.Count }) -eq 0 -and (Get-WtWorkInfo).Running -eq 0 -and (Get-WtWorkInfo).Abandoned -eq 0)
+
+    # 실제 문서 조회 → 셸 정리 → 전용 프로세스 종료를 한 번에 본다. 창·실제 공유 폴더는 사용하지 않는다.
+    # 대조 프로세스는 마지막 종료 호출을 빼서 같은 막힌 조회가 정말 프로세스를 붙잡는지도 확인한다.
+    $exitScript = Join-Path $test.Root 'docs-exit-child.ps1'
+    @'
+param($Source, $App, $Marker, $Mode)
+$ErrorActionPreference = 'Stop'
+. (Join-Path $Source 'tests/TestKit.ps1')
+Import-WtTestCore
+Import-Module (Join-Path $Source 'addons/docs/Docs.psm1') -Force -DisableNameChecking
+if (-not (Test-WtTestWpf)) { exit 30 }
+Set-WtAppRoot $App; Initialize-WtSettings
+$view = New-WtTestView docs
+$gate = New-WtTestGate
+& (Get-Module Docs) { param($hang) $script:worker = $hang } $wtTestHang
+& (Get-Module Docs) { Show-WtDocFolder '\\wt-test\hang\folder' }
+if (-not $gate.Entered.WaitOne(10000)) { [Environment]::Exit(31) }
+$watch = [Diagnostics.Stopwatch]::StartNew()
+$closed = & (Get-Module Shell) { Stop-WtApp }
+$closeMs = $watch.ElapsedMilliseconds
+$work = Get-WtWorkInfo
+[IO.File]::WriteAllText($Marker, (ConvertTo-Json -Compress -InputObject @{ Pid=$PID; Closed=$closed; CloseMs=$closeMs; Running=$work.Running; Abandoned=$work.Abandoned }))
+if ($Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath $PSCommandPath }
+'@ | Set-Content -LiteralPath $exitScript -Encoding utf8
+    foreach ($mode in 'own', 'control') {
+        $childRoot = Join-Path $test.Root "exit-$mode"
+        $childApp = Join-Path $childRoot 'app'; $childData = Join-Path $childRoot 'data'; $marker = Join-Path $childRoot 'closed.json'
+        [void][IO.Directory]::CreateDirectory($childApp); [void][IO.Directory]::CreateDirectory($childData)
+        [IO.File]::WriteAllText((Join-Path $childApp 'datapath.txt'), $childData)
+        $info = [Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))
+        foreach ($arg in '-NoProfile', '-NonInteractive', '-STA', '-File', $exitScript, $wtTestWpfRoot, $childApp, $marker, $mode) { $info.ArgumentList.Add($arg) }
+        $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+        $child = [Diagnostics.Process]::Start($info)
+        try {
+            $ready = [Diagnostics.Stopwatch]::StartNew()
+            while (-not [IO.File]::Exists($marker) -and -not $child.HasExited -and $ready.ElapsedMilliseconds -lt 15000) { Start-Sleep -Milliseconds 25 }
+            if (-not [IO.File]::Exists($marker)) { throw '문서 종료 검사 자식이 정리 결과를 남기지 않았습니다.' }
+            $closedState = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+            $exited = $child.WaitForExit($(if ($mode -eq 'own') { 5000 } else { 1000 }))
+            Assert-WtTest "문서 프로세스 종료($mode): 응답 없는 조회를 버린 뒤 전용 종료 여부" (
+                $closedState.Pid -eq $child.Id -and $closedState.Closed -eq $true -and $closedState.CloseMs -lt 1000 -and
+                $closedState.Running -eq 0 -and $closedState.Abandoned -ge 1 -and
+                $(if ($mode -eq 'own') { $exited -and $child.ExitCode -eq 0 } else { -not $exited })) "(정리 $($closedState.CloseMs)ms · 종료 $exited)"
+        } finally {
+            if (-not $child.HasExited) { $child.Kill(); [void]$child.WaitForExit(5000) }
+            $child.Dispose()
+        }
+    }
 } finally {
     & $docsModule { Stop-WtDocs }
     Remove-WtTestData $test

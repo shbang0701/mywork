@@ -1375,24 +1375,27 @@ function Test-WtLargeDataText([string]$Text) { $Text.Length -ge 65536 }
 
 # 큰 글은 기본 파일 명령으로 한 번 쓰고, 쓴 임시 파일에서 지문을 얻는다.
 # 바꿔치기 전에 계산하므로 그 뒤 다른 프로그램이 원본을 바꿔도 그 내용을 우리 저장 판으로 착각하지 않는다.
-function Write-WtDataFile([string]$Path, [string]$Json) {
+function Write-WtDataFile([string]$Path, [string]$Json, [bool]$Fingerprint = $true) {
     $tmp = "$Path.tmp"
     if (Test-WtLargeDataText $Json) {
         Microsoft.PowerShell.Management\Set-Content -LiteralPath $tmp -Value $Json -NoNewline -Encoding utf8NoBOM -ErrorAction Stop
     } else {
         [System.IO.File]::WriteAllText($tmp, $Json, [System.Text.UTF8Encoding]::new($false))
     }
-    $stream = [System.IO.File]::OpenRead($tmp)
-    try { $stamp = "$($stream.Length)|$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)))" }
-    finally { $stream.Dispose() }
+    # 문서 자체를 보유한 비동기 저장만 완료 지문이 필요하다. 이미 JSON인 일반 저장은 다시 읽고 해시하지 않는다.
+    if ($Fingerprint) {
+        $stream = [System.IO.File]::OpenRead($tmp)
+        try { $stamp = "$($stream.Length)|$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)))" }
+        finally { $stream.Dispose() }
+    }
     if ([System.IO.Path]::Exists($Path)) { [System.IO.File]::Replace($tmp, $Path, "$Path.bak") }
     else { [System.IO.File]::Move($tmp, $Path) }
-    $stamp
+    if ($Fingerprint) { $stamp }
 }
 
-# 통로가 돌리는 코드. 성공하면 쓴 바이트 수|SHA256을 돌려준다.
+# 통로가 돌리는 코드. 문서 저장이면 성공 때 쓴 바이트 수|SHA256을 돌려준다.
 # 검사는 쓰기 앞에 기다림만 끼워 넣는다 (Write-WtDataFile과 반환 지문은 그대로 둔다)
-$script:writeJob = { param($p, $json) Write-WtDataFile $p $json }
+$script:writeJob = { param($p, $json, [bool]$fingerprint = $true) Write-WtDataFile $p $json -Fingerprint:$fingerprint }
 
 # 파일 하나의 기록 (버전 · 받아들인 것 · 실패로 남은 것)
 function Get-WtDataFileRecord([string]$Path) {
@@ -1436,7 +1439,7 @@ function Start-WtDataWriteNext {
                 $entry.Work = Start-WtWork -Script $text -ArgumentList $entry.Path, $entry.Document, $script:storeSerializers[$key], $script:jsonPartsFactory -Functions $script:writeFunctions -Session Default -Reserved `
                     -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
             } else {
-                $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Session $(if (Test-WtLargeDataText $entry.Json) { 'Default' } else { 'Empty' }) -Reserved `
+                $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json, $false -Functions $script:writeFunctions -Session $(if (Test-WtLargeDataText $entry.Json) { 'Default' } else { 'Empty' }) -Reserved `
                     -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
             }
         } catch {
