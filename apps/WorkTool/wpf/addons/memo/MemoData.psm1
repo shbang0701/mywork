@@ -858,12 +858,17 @@ function Find-WtMemo {
         }
         $c = $Index.Columns; $count = $c.Id.Count
         $opened = Get-WtMemoOpenedMap $OpenedMap $Index
-        $candidate = [bool[]]::new($count)
         [bool[]]$pins = $c.Pinned.ToArray(); [bool[]]$archives = $c.Archived.ToArray(); [bool[]]$alive = $c.Alive.ToArray(); [string[]]$ids = $c.Id.ToArray()
         $pinnedOnly = $View -in 'pinned', '고정'; $recentOnly = $View -in 'recent', '최근 열기'
-        for ($n = 0; $n -lt $count; $n++) {
-            $candidate[$n] = $alive[$n] -and ($scope -ne 'active' -or -not $archives[$n]) -and ($scope -ne 'archived' -or $archives[$n]) -and
-                (-not $pinnedOnly -or $pins[$n]) -and (-not $recentOnly -or $opened.ContainsKey($ids[$n]))
+        # 조건 잎과 같은 배열 판정을 쓴다. 검색할 때마다 모든 줄에서 PowerShell 조건식을 다시 실행하지 않는다.
+        if ($scope -eq 'active') { $candidate = $script:memoMaskFactories.not.Invoke([object[]]@($alive, $archives)) }
+        elseif ($scope -eq 'archived') { $candidate = $script:memoMaskFactories.flag.Invoke([object[]]@($alive, $archives)) }
+        else { $candidate = [bool[]]$alive.Clone() }
+        if ($pinnedOnly) { $candidate = $script:memoMaskFactories.flag.Invoke([object[]]@($candidate, $pins)) }
+        if ($recentOnly) {
+            $recent = [bool[]]::new($count)
+            foreach ($id in $opened.Keys) { $recent[$Index.Slots[$id]] = $true }
+            $candidate = $script:memoMaskFactories.flag.Invoke([object[]]@($candidate, $recent))
         }
         $positions = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
         $mask = Get-WtMemoMatchSet $Index $tree.Root ([datetime]::Today) $candidate $positions

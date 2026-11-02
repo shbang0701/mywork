@@ -236,6 +236,37 @@ try {
     Assert-WtTest '5a 정렬/문맥: 세 단계가 고정보다 우선, 긴 본문은 일치 앞뒤 80자' (($ranked.Items.Id -join ',') -ceq 'r1,r2,r3' -and $ranked.Items[2].Snippet.Length -eq 80 -and $ranked.Items[2].Snippet.Contains('대상') -and $ranked.Items[2].SnippetStart -gt 0)
     $caseIndex = New-WtMemoIndex @([pscustomobject]@{ id = 'a'; title = '한글 I'; body = '#표시' }, [pscustomobject]@{ id = 'A'; title = '한글 i'; body = '' })
     Assert-WtTest '5a id: 대소문자 별개, 텍스트 대소문자 무시, 제목 동률은 id ordinal' (((Find-WtMemo -Index $caseIndex -Query 'title:I').Items.Id -join ',') -ceq 'A,a')
+    # 보기를 바꿔도 원래 색인은 그대로이며, 명시한 검색 범위와 보기의 추가 조건을 함께 지킨다.
+    $viewIndex = New-WtMemoIndex @(
+        [pscustomobject]@{ id = 'a'; title = '일반 열람'; body = ''; pinned = $false },
+        [pscustomobject]@{ id = 'A'; title = '고정 미열람'; body = ''; pinned = $true },
+        [pscustomobject]@{ id = 'b'; title = '보관 열람'; body = ''; archived = $true },
+        [pscustomobject]@{ id = 'c'; title = '보관 고정'; body = ''; pinned = $true; archived = $true },
+        [pscustomobject]@{ id = 'd'; title = '삭제'; body = ''; pinned = $true; deleted = $true },
+        [pscustomobject]@{ id = 'e'; title = '일반 미열람'; body = '' })
+    $viewOpened = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    foreach ($id in 'a', 'b', 'c', 'd', 'f', 'missing') { $viewOpened[$id] = '2026-10-01T10:00:00+09:00' }
+    foreach ($case in @(
+        @('normal', '', 'A,a,e'), @('pinned', '', 'A'), @('archived', '', 'b,c'), @('all', '', 'A,a,b,c,e'),
+        @('recent', '', 'a'), @('recent', 'scope:all', 'a,b,c'), @('pinned', 'scope:archived', 'c'), @('pinned', 'scope:all', 'A,c'),
+        @('일반', '', 'A,a,e'), @('고정', '', 'A'), @('보관', '', 'b,c'), @('모두', '', 'A,a,b,c,e'), @('최근 열기', '', 'a'))) {
+        $selectedIds = Get-MemoResultIds (Find-WtMemo -Index $viewIndex -View $case[0] -Query $case[1] -OpenedMap $viewOpened -SkipBacklinks)
+        Assert-WtTest "5a 보기 교차: $($case[0]) / $($case[1])" ($selectedIds -ceq $case[2]) $selectedIds
+    }
+    Assert-WtTest '5a 보기: 열람 기록이 없으면 최근은 비고, 일반은 바뀌지 않는다' (
+        (Find-WtMemo -Index $viewIndex -View recent -SkipBacklinks).Count -eq 0 -and
+        (Get-MemoResultIds (Find-WtMemo -Index $viewIndex -SkipBacklinks)) -ceq 'A,a,e')
+    Update-WtMemoIndex -Index $viewIndex -Remove a
+    Update-WtMemoIndex -Index $viewIndex -Memo ([pscustomobject]@{ id = 'f'; title = '새로 연 메모'; body = ''; pinned = $true })
+    Assert-WtTest '5a 보기: 삭제된 색인 칸 제외 · 새 칸의 최근/고정 반영 · id 대소문자 구분' (
+        (Get-MemoResultIds (Find-WtMemo -Index $viewIndex -View recent -OpenedMap $viewOpened -SkipBacklinks)) -ceq 'f' -and
+        (Get-MemoResultIds (Find-WtMemo -Index $viewIndex -View pinned -SkipBacklinks)) -ceq 'A,f' -and
+        (Get-MemoResultIds (Find-WtMemo -Index $viewIndex -View recent -Query 'scope:all' -OpenedMap $viewOpened -SkipBacklinks)) -ceq 'b,c,f')
+    $emptyViews = @(foreach ($view in 'normal', 'pinned', 'recent', 'archived', 'all') {
+        $emptyResult = Find-WtMemo -Index (New-WtMemoIndex @()) -View $view -OpenedMap $viewOpened -First 0 -SkipBacklinks
+        $emptyResult.Success -and $emptyResult.Count -eq 0 -and $emptyResult.Items.Count -eq 0
+    })
+    Assert-WtTest '5a 보기: 빈 색인의 모든 보기에서 빈 결과' ($emptyViews.Count -eq 5 -and -not ($emptyViews -contains $false))
     $quoted = ConvertFrom-WtMemoQuery '"#표시"'
     Assert-WtTest '5a 글자: 따옴표 속 #은 태그 조건이 아닌 본문 검색' ($quoted.Root.Field -ceq 'text' -and (Get-MemoResultIds (Find-WtMemo -Index $caseIndex -Query $quoted)) -ceq 'a')
 
