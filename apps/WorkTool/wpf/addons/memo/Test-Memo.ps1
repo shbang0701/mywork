@@ -26,6 +26,118 @@ $held = $null
 $win = $null
 
 try {
+    # 삭제 후보를 묶어 정리해도 원래 자리·보존 기간·편집 전 스냅샷을 지킨다.
+    $compactTest = New-WtTestData 'memo-compact'
+    try {
+        $oldDeleted = Get-WtStamp ([DateTimeOffset]::Now.AddDays(-95))
+        $recentDeleted = Get-WtStamp ([DateTimeOffset]::Now.AddDays(-3))
+        $compactItems = [object[]]::new(8)
+        $compactItems[0] = [pscustomobject]@{ id = 'old'; title = '오래된 내용'; body = '정리'; deleted = $oldDeleted; future = @{ keep = 1 } }
+        $compactItems[1] = $null
+        $compactItems[2] = [pscustomobject]@{ id = 'recent'; title = '최근 내용'; deleted = $recentDeleted; future = @{ keep = 2 } }
+        $compactItems[3] = @('깨진', '목록')
+        $compactItems[4] = [pscustomobject]@{ id = 'invalid'; title = '날짜 모름'; deleted = '잘못된 날짜'; future = 3 }
+        $compactItems[5] = [pscustomobject]@{ id = 'tombstone'; deleted = $oldDeleted }
+        $compactItems[6] = [pscustomobject]@{ id = 'alive'; title = '남길 내용'; deleted = $false }
+        $compactItems[7] = [pscustomobject]@{ id = 'old-last'; body = '마지막 내용'; deleted = $oldDeleted }
+        $compactStore = Open-WtMemoStore
+        $compactSaved = & (Get-Module MemoData) { param($s, $items) Save-WtMemoStoreItems $s $items } $compactStore $compactItems
+        Assert-WtTest '메모 삭제 정리: 여러 오래된 후보만 원래 자리에서 두 칸으로 압축' (
+            $compactSaved.Items.Count -eq 8 -and $compactSaved.Items[0].id -ceq 'old' -and $compactSaved.Items[7].id -ceq 'old-last' -and
+            @($compactSaved.Items[0].PSObject.Properties).Count -eq 2 -and @($compactSaved.Items[7].PSObject.Properties).Count -eq 2)
+        Assert-WtTest '메모 삭제 정리: 최근·잘못된 날짜·최소 묘비·정상·null·깨진 배열 보존' (
+            $null -eq $compactSaved.Items[1] -and ($compactSaved.Items[3] -join ',') -ceq '깨진,목록' -and
+            $compactSaved.Items[2].future.keep -eq 2 -and $compactSaved.Items[4].title -ceq '날짜 모름' -and
+            $compactSaved.Items[5].deleted -ceq $oldDeleted -and $compactSaved.Items[6].title -ceq '남길 내용')
+        Assert-WtTest '메모 삭제 정리: 받은 배열과 옛 항목을 고치지 않는다' (
+            $compactItems[0].title -ceq '오래된 내용' -and $compactItems[7].body -ceq '마지막 내용' -and
+            -not [object]::ReferenceEquals($compactSaved.Items[0], $compactItems[0]) -and
+            [object]::ReferenceEquals($compactSaved.Items[2], $compactItems[2]))
+        $emptyCompact = & (Get-Module MemoData) { param($s) Save-WtMemoStoreItems $s ([object[]]::new(0)) } $compactSaved
+        Assert-WtTest '메모 삭제 정리: 삭제 후보가 없는 빈 목록도 저장된다' ($emptyCompact.Items.Count -eq 0)
+    } finally {
+        Set-WtAppRoot $test.App; Initialize-WtSettings
+        Remove-WtTestData $compactTest
+    }
+    # 별도 실행 공간의 시작 준비도 화면과 같은 삭제·중복 규칙을 쓰고 원자료는 보존한다.
+    $preparedTest = New-WtTestData 'memo-prepared'
+    try {
+        $preparedPath = Get-WtStorePath memo
+        $preparedDoc = @'
+{"schema":1,"futureTop":{"keep":7},"items":[null,["깨진",{"id":"nested"}],9,{"id":""},{"id":"gone","deleted":true},{"id":"gone","title":"되살리면 안 됨"},{"id":"keep","title":"첫 항목","body":"[[Upper]]","updated":"2026-10-20T09:00:00+09:00","deleted":false,"future":{"keep":8}},{"id":"keep","title":"뒤 중복"},{"id":"KEEP","title":"Upper","body":"본문","updated":"2026-10-21T09:00:00+09:00","deleted":""},{"id":"archive","title":"보관","updated":"2026-10-19T09:00:00+09:00","archived":true},{"id":77},{"id":"zero","deleted":0},{"id":"space","deleted":" "},"깨진 글"]}
+'@ | ConvertFrom-Json -Depth 20 -DateKind String
+        Write-WtJsonFile $preparedPath $preparedDoc
+        Wait-WtTestWrites
+        $preparedBefore = [IO.File]::ReadAllText($preparedPath)
+        Set-WtAppRoot $preparedTest.App
+        [void](Wait-WtWork -All -Milliseconds 30000)
+        $prepared = Get-WtStorePreparation memo
+        Assert-WtTest '메모 시작 준비: 별도 실행 공간에서 삭제·중복·id 대소문자·보관 규칙 유지' (
+            $null -ne $prepared -and ($prepared.Value.Live.id -join ',') -ceq 'keep,KEEP,archive' -and
+            ($prepared.Value.Items.id -join ',') -ceq 'KEEP,keep,archive')
+        $preparedLinks = Find-WtMemo -Index $prepared.Value.Index -Query 'linksto:KEEP'
+        Assert-WtTest '메모 시작 준비: 준비한 색인의 메모 연결 결과 유지' (
+            $preparedLinks.Success -and $preparedLinks.Count -eq 1 -and $preparedLinks.Items[0].Id -ceq 'keep')
+        $prepared.Value.Live[0].title = '편집 사본'
+        Assert-WtTest '메모 시작 준비: 편집 사본 분리 · 모르는 칸 · 깨진 원자료 · 파일 보존' (
+            $prepared.Value.Document.items[6].title -ceq '첫 항목' -and $prepared.Value.Live[0].future.keep -eq 8 -and
+            $prepared.Value.Document.futureTop.keep -eq 7 -and $prepared.Value.Document.items.Count -eq 14 -and
+            $null -eq $prepared.Value.Document.items[0] -and $prepared.Value.Document.items[1] -is [array] -and
+            [IO.File]::ReadAllText($preparedPath) -ceq $preparedBefore)
+        Write-WtJsonFile $preparedPath ([pscustomobject]@{ schema = 1; items = @() })
+        Wait-WtTestWrites
+        Set-WtAppRoot $preparedTest.App
+        [void](Wait-WtWork -All -Milliseconds 30000)
+        $preparedEmpty = Get-WtStorePreparation memo
+        Assert-WtTest '메모 시작 준비: 빈 저장소도 빈 배열과 색인으로 준비' (
+            $null -ne $preparedEmpty -and $preparedEmpty.Value.Live -is [array] -and
+            $preparedEmpty.Value.Live.Count -eq 0 -and $preparedEmpty.Value.Index.Slots.Count -eq 0)
+    } finally {
+        Set-WtAppRoot $test.App; Initialize-WtSettings
+        Remove-WtTestData $preparedTest
+    }
+    # 바로 가기는 원자료에서 id만 읽고, 편집 요청은 여전히 독립된 사본을 돌려준다.
+    $shortcutDataTest = New-WtTestData 'memo-shortcut-data'
+    try {
+        $shortcutDataPath = Get-WtStorePath memo
+        $shortcutDataDoc = [pscustomobject]@{ schema = 1; items = @(
+            [pscustomobject]@{ id = 'a'; title = '원문'; body = '본문'; future = @{ keep = 3 } },
+            [pscustomobject]@{ id = 'A'; title = '대문자'; body = '다른 본문' },
+            [pscustomobject]@{ id = 'gone'; deleted = $true },
+            [pscustomobject]@{ id = 'gone'; title = '뒤 중복' }, $null) }
+        Write-WtJsonFile $shortcutDataPath $shortcutDataDoc
+        Wait-WtTestWrites
+        & (Get-Module Storage) {
+            $p = $script:storePreparations['memo']
+            if ($p -and $p.Work) { Stop-WtWork $p.Work }
+            [void]$script:storePreparations.Remove('memo')
+        }
+        $shortcutDataBefore = [IO.File]::ReadAllText($shortcutDataPath)
+        $shortcutDataCheck = & $memoModule {
+            $script:viewStamp = ''; $script:shortcutStamp = ''; $script:shortcutIds = $null
+            @{ Lower = Test-WtMemoShortcut 'a'; Upper = Test-WtMemoShortcut 'A'; Gone = Test-WtMemoShortcut 'gone'; Missing = Test-WtMemoShortcut 'none' }
+        }
+        Assert-WtTest '메모 바로 가기 자료: 준비 없이도 id 대소문자 · 삭제 뒤 중복 · 없는 항목 판정' (
+            $shortcutDataCheck.Lower -and $shortcutDataCheck.Upper -and -not $shortcutDataCheck.Gone -and -not $shortcutDataCheck.Missing)
+        $shortcutDataEdit = @(Get-WtMemoItems)
+        $shortcutDataEdit[0].title = '편집 사본'
+        $shortcutDataOriginal = & $memoModule { $script:memoStore.Doc.items[0].title }
+        Assert-WtTest '메모 바로 가기 자료: 편집 요청은 계속 사본 · 모르는 칸과 원자료 파일 보존' (
+            $shortcutDataOriginal -ceq '원문' -and $shortcutDataEdit[0].future.keep -eq 3 -and [IO.File]::ReadAllText($shortcutDataPath) -ceq $shortcutDataBefore)
+        $shortcutDataAt = [IO.File]::GetLastWriteTimeUtc($shortcutDataPath)
+        [IO.File]::WriteAllText($shortcutDataPath, $shortcutDataBefore.Replace('"a"', '"x"'), [Text.UTF8Encoding]::new($false))
+        [IO.File]::SetLastWriteTimeUtc($shortcutDataPath, $shortcutDataAt)
+        $shortcutDataChanged = & $memoModule { @{ Old = Test-WtMemoShortcut 'a'; New = Test-WtMemoShortcut 'x'; StoreId = $script:memoStore.Items[0].id } }
+        Assert-WtTest '메모 바로 가기 자료: 같은 크기·시각의 외부 id 변경과 저장 핸들 함께 갱신' (
+            -not $shortcutDataChanged.Old -and $shortcutDataChanged.New -and $shortcutDataChanged.StoreId -ceq 'x')
+        Write-WtJsonFile $shortcutDataPath ([pscustomobject]@{ schema = 1; items = @() })
+        Wait-WtTestWrites
+        Assert-WtTest '메모 바로 가기 자료: 빈 목록으로 바뀌면 기존 id도 사라진다' (-not (& $memoModule { Test-WtMemoShortcut 'x' }) -and @(Get-WtMemoItems).Count -eq 0)
+    } finally {
+        Set-WtAppRoot $test.App; Initialize-WtSettings
+        & $memoModule { $script:viewStamp = ''; $script:shortcutStamp = ''; $script:shortcutIds = $null }
+        Remove-WtTestData $shortcutDataTest
+    }
     # ---- 예전 데이터 ----
     Write-WtTestLegacyCsv $test 'memo' @'
 "Id","Title","Body","Created","Updated"
@@ -76,6 +188,11 @@ try {
     function Read-MemoTestText([string]$Path) { & (Get-Module Storage) { param($p) Read-WtJsonText $p } $Path }
     function Read-MemoFixture([string]$Name, [string]$StoreName = 'memo') {
         $doc = Get-Content -LiteralPath (Join-Path $PSScriptRoot "fixtures/$Name.json") -Raw | ConvertFrom-Json -Depth 20 -DateKind String
+        if ($Name -ceq 'memo-v-new') {
+            # 이 자료는 최근 삭제의 모르는 칸 보존을 본다. 고정 날짜가 90일을 넘으면 정상 압축을 실패로 오인한다.
+            $recentRow = @($doc.items | Where-Object id -ceq 'gone')[0]
+            $recentRow.deleted = Get-WtStamp ([DateTimeOffset]::Now.AddDays(-3))
+        }
         Write-WtJsonFile (Get-WtStorePath $StoreName) $doc
         $doc
     }
@@ -236,6 +353,37 @@ try {
     Assert-WtTest '5a 정렬/문맥: 세 단계가 고정보다 우선, 긴 본문은 일치 앞뒤 80자' (($ranked.Items.Id -join ',') -ceq 'r1,r2,r3' -and $ranked.Items[2].Snippet.Length -eq 80 -and $ranked.Items[2].Snippet.Contains('대상') -and $ranked.Items[2].SnippetStart -gt 0)
     $caseIndex = New-WtMemoIndex @([pscustomobject]@{ id = 'a'; title = '한글 I'; body = '#표시' }, [pscustomobject]@{ id = 'A'; title = '한글 i'; body = '' })
     Assert-WtTest '5a id: 대소문자 별개, 텍스트 대소문자 무시, 제목 동률은 id ordinal' (((Find-WtMemo -Index $caseIndex -Query 'title:I').Items.Id -join ',') -ceq 'A,a')
+    # 보기를 바꿔도 원래 색인은 그대로이며, 명시한 검색 범위와 보기의 추가 조건을 함께 지킨다.
+    $viewIndex = New-WtMemoIndex @(
+        [pscustomobject]@{ id = 'a'; title = '일반 열람'; body = ''; pinned = $false },
+        [pscustomobject]@{ id = 'A'; title = '고정 미열람'; body = ''; pinned = $true },
+        [pscustomobject]@{ id = 'b'; title = '보관 열람'; body = ''; archived = $true },
+        [pscustomobject]@{ id = 'c'; title = '보관 고정'; body = ''; pinned = $true; archived = $true },
+        [pscustomobject]@{ id = 'd'; title = '삭제'; body = ''; pinned = $true; deleted = $true },
+        [pscustomobject]@{ id = 'e'; title = '일반 미열람'; body = '' })
+    $viewOpened = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    foreach ($id in 'a', 'b', 'c', 'd', 'f', 'missing') { $viewOpened[$id] = '2026-10-01T10:00:00+09:00' }
+    foreach ($case in @(
+        @('normal', '', 'A,a,e'), @('pinned', '', 'A'), @('archived', '', 'b,c'), @('all', '', 'A,a,b,c,e'),
+        @('recent', '', 'a'), @('recent', 'scope:all', 'a,b,c'), @('pinned', 'scope:archived', 'c'), @('pinned', 'scope:all', 'A,c'),
+        @('일반', '', 'A,a,e'), @('고정', '', 'A'), @('보관', '', 'b,c'), @('모두', '', 'A,a,b,c,e'), @('최근 열기', '', 'a'))) {
+        $selectedIds = Get-MemoResultIds (Find-WtMemo -Index $viewIndex -View $case[0] -Query $case[1] -OpenedMap $viewOpened -SkipBacklinks)
+        Assert-WtTest "5a 보기 교차: $($case[0]) / $($case[1])" ($selectedIds -ceq $case[2]) $selectedIds
+    }
+    Assert-WtTest '5a 보기: 열람 기록이 없으면 최근은 비고, 일반은 바뀌지 않는다' (
+        (Find-WtMemo -Index $viewIndex -View recent -SkipBacklinks).Count -eq 0 -and
+        (Get-MemoResultIds (Find-WtMemo -Index $viewIndex -SkipBacklinks)) -ceq 'A,a,e')
+    Update-WtMemoIndex -Index $viewIndex -Remove a
+    Update-WtMemoIndex -Index $viewIndex -Memo ([pscustomobject]@{ id = 'f'; title = '새로 연 메모'; body = ''; pinned = $true })
+    Assert-WtTest '5a 보기: 삭제된 색인 칸 제외 · 새 칸의 최근/고정 반영 · id 대소문자 구분' (
+        (Get-MemoResultIds (Find-WtMemo -Index $viewIndex -View recent -OpenedMap $viewOpened -SkipBacklinks)) -ceq 'f' -and
+        (Get-MemoResultIds (Find-WtMemo -Index $viewIndex -View pinned -SkipBacklinks)) -ceq 'A,f' -and
+        (Get-MemoResultIds (Find-WtMemo -Index $viewIndex -View recent -Query 'scope:all' -OpenedMap $viewOpened -SkipBacklinks)) -ceq 'b,c,f')
+    $emptyViews = @(foreach ($view in 'normal', 'pinned', 'recent', 'archived', 'all') {
+        $emptyResult = Find-WtMemo -Index (New-WtMemoIndex @()) -View $view -OpenedMap $viewOpened -First 0 -SkipBacklinks
+        $emptyResult.Success -and $emptyResult.Count -eq 0 -and $emptyResult.Items.Count -eq 0
+    })
+    Assert-WtTest '5a 보기: 빈 색인의 모든 보기에서 빈 결과' ($emptyViews.Count -eq 5 -and -not ($emptyViews -contains $false))
     $quoted = ConvertFrom-WtMemoQuery '"#표시"'
     Assert-WtTest '5a 글자: 따옴표 속 #은 태그 조건이 아닌 본문 검색' ($quoted.Root.Field -ceq 'text' -and (Get-MemoResultIds (Find-WtMemo -Index $caseIndex -Query $quoted)) -ceq 'a')
 

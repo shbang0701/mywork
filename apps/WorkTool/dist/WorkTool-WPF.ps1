@@ -1156,7 +1156,7 @@ function Set-WtAppRoot([string]$Path) {
 }
 
 # 큰 저장소를 쓰는 탭이 선택적으로 등록한다. 앱 경로가 정해진 뒤에만 시험/사용자 데이터 경로를 연다.
-# 준비 결과는 읽기 검증을 통과한 첫 Read-WtStore에서만 사용하며 외부 변경이면 버린다.
+# 읽은 원자료는 준비 함수에서도 수정하지 않는다. 파일 지문과 읽기 검증을 통과한 경우만 재사용한다.
 function Register-WtStorePreparation {
     param([string]$Name, [Management.Automation.CommandInfo]$Prepare, [Management.Automation.CommandInfo[]]$Functions, $Context, [string]$CacheName)
     $script:storePreparers[$Name] = @{ Prepare = $Prepare; Functions = $Functions; Context = $Context; CacheName = $CacheName }
@@ -1254,16 +1254,29 @@ function Start-WtStorePreparation([string]$Name) {
     $path = Get-WtStorePath $Name
     $cachePath = if ($spec.CacheName) { Get-WtStorePath $spec.CacheName } else { '' }
     try {
+        $ready = [Collections.Concurrent.ConcurrentQueue[object]]::new()
         $functions = @($spec.Functions) + @($spec.Prepare) + @(Get-Command Read-WtPreparedDocument, Read-WtCacheFile)
         $work = Start-WtWork -Script {
-            param($path, $prepare, $context, $cachePath)
+            param($path, $prepare, $context, $cachePath, $ready)
             $read = Read-WtPreparedDocument $path
+            # 원자료/직렬화 조각은 여기서 완성된다. 뒤에서 Value를 붙일 해시 테이블과는 분리해 넘긴다.
+            $ready.Enqueue(@{ Document = $read.Document; Serialization = $read.Serialization; Stamp = $read.Stamp })
             $cache = if ($cachePath) { Read-WtCacheFile $cachePath } else { $null }
             $read.Value = & $prepare $read.Document $cache $context
             $read
-        } -ArgumentList $path, $spec.Prepare.Name, $spec.Context, $cachePath -Functions $functions -Session Default
-        $script:storePreparations[$Name] = @{ Work = $work; Used = $false; Value = $null; Stamp = $null }
+        } -ArgumentList $path, $spec.Prepare.Name, $spec.Context, $cachePath, $ready -Functions $functions -Session Default
+        $script:storePreparations[$Name] = @{ Work = $work; Used = $false; Value = $null; Stamp = $null; Ready = $ready; Read = $null }
     } catch { }   # 준비가 실패하면 보통 읽기가 기존 오류 표시 경로로 알린다.
+}
+
+# 준비 중에도 파일 읽기가 끝났으면 기다리지 않고 받는다. 실패/취소된 작업의 중간 자료는 쓰지 않는다.
+function Get-WtPreparedRead($Preparation) {
+    if (-not $Preparation -or $Preparation.Work.State -ne 'running') { return $null }
+    if ($null -eq $Preparation.Read) {
+        $read = $null
+        if ($Preparation.Ready.TryDequeue([ref]$read)) { $Preparation.Read = $read }
+    }
+    $Preparation.Read
 }
 
 function Get-WtStorePreparation([string]$Name) {
@@ -1371,15 +1384,31 @@ function Invoke-WtQueuedStoreWrite {
 # 받아들인 버전 > 확인된 버전인데 쓰는 중인 것이 없으면, 그 내용을 실패로 남겨 둔다(Failed). 버전이 같아져야 「저장됨」이다
 
 # 실제로 쓰기 (화면 밖에서 돈다): 임시 파일에 쓰고 바꿔치기
-function Write-WtDataFile([string]$Path, [string]$Json) {
+function Test-WtLargeDataText([string]$Text) { $Text.Length -ge 65536 }
+
+# 큰 글은 기본 파일 명령으로 한 번 쓰고, 쓴 임시 파일에서 지문을 얻는다.
+# 바꿔치기 전에 계산하므로 그 뒤 다른 프로그램이 원본을 바꿔도 그 내용을 우리 저장 판으로 착각하지 않는다.
+function Write-WtDataFile([string]$Path, [string]$Json, [bool]$Fingerprint = $true) {
     $tmp = "$Path.tmp"
-    [System.IO.File]::WriteAllText($tmp, $Json, [System.Text.UTF8Encoding]::new($false))
+    if (Test-WtLargeDataText $Json) {
+        Microsoft.PowerShell.Management\Set-Content -LiteralPath $tmp -Value $Json -NoNewline -Encoding utf8NoBOM -ErrorAction Stop
+    } else {
+        [System.IO.File]::WriteAllText($tmp, $Json, [System.Text.UTF8Encoding]::new($false))
+    }
+    # 문서 자체를 보유한 비동기 저장만 완료 지문이 필요하다. 이미 JSON인 일반 저장은 다시 읽고 해시하지 않는다.
+    if ($Fingerprint) {
+        $stream = [System.IO.File]::OpenRead($tmp)
+        try { $stamp = "$($stream.Length)|$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)))" }
+        finally { $stream.Dispose() }
+    }
     if ([System.IO.Path]::Exists($Path)) { [System.IO.File]::Replace($tmp, $Path, "$Path.bak") }
     else { [System.IO.File]::Move($tmp, $Path) }
+    if ($Fingerprint) { $stamp }
 }
 
-# 통로가 돌리는 코드. 검사는 쓰기 앞에 기다림만 끼워 넣는다 (Write-WtDataFile은 그대로 돈다)
-$script:writeJob = { param($p, $json) Write-WtDataFile $p $json }
+# 통로가 돌리는 코드. 문서 저장이면 성공 때 쓴 바이트 수|SHA256을 돌려준다.
+# 검사는 쓰기 앞에 기다림만 끼워 넣는다 (Write-WtDataFile과 반환 지문은 그대로 둔다)
+$script:writeJob = { param($p, $json, [bool]$fingerprint = $true) Write-WtDataFile $p $json -Fingerprint:$fingerprint }
 
 # 파일 하나의 기록 (버전 · 받아들인 것 · 실패로 남은 것)
 function Get-WtDataFileRecord([string]$Path) {
@@ -1415,16 +1444,15 @@ function Start-WtDataWriteNext {
         $entry.State = 'writing'
         try {
             $script:writeCurrent = $entry
-            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile, ConvertTo-WtStoreDocumentJson) }
+            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile, Test-WtLargeDataText, ConvertTo-WtStoreDocumentJson) }
             if ($null -ne $entry.Document) {
                 $key = $entry.Path.ToLowerInvariant()
                 if (-not $script:storeSerializers.ContainsKey($key)) { $script:storeSerializers[$key] = [Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new() }
-                # 이 작업이 화면 일과 겹치면 화면 스레드가 약 300ms 멈춘다(메모 3,000개 실측, 원인은 못 찾음). 저장 뒤 화면 일이 먼저 끝나게 잠깐 쉬고 시작한다
-                $text = "param(`$p, `$doc, `$cache, `$factory)`n[System.Threading.Thread]::Sleep($script:writeStartDelayMs)`n`$json = ConvertTo-WtStoreDocumentJson `$doc `$cache `$factory`n& {`n$($script:writeJob.ToString())`n} `$p `$json`n`$bytes = [Text.UTF8Encoding]::new(`$false).GetBytes(`$json)`n`"`$(`$bytes.Length)|`$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(`$bytes)))`""
+                $text = "param(`$p, `$doc, `$cache, `$factory)`n`$json = ConvertTo-WtStoreDocumentJson `$doc `$cache `$factory`n& {`n$($script:writeJob.ToString())`n} `$p `$json"
                 $entry.Work = Start-WtWork -Script $text -ArgumentList $entry.Path, $entry.Document, $script:storeSerializers[$key], $script:jsonPartsFactory -Functions $script:writeFunctions -Session Default -Reserved `
                     -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
             } else {
-                $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Reserved `
+                $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json, $false -Functions $script:writeFunctions -Session $(if (Test-WtLargeDataText $entry.Json) { 'Default' } else { 'Empty' }) -Reserved `
                     -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
             }
         } catch {
@@ -1434,7 +1462,6 @@ function Start-WtDataWriteNext {
     }
 }
 $script:writeFunctions = $null
-$script:writeStartDelayMs = 200   # 큰 저장소의 화면 밖 저장을 시작하기 전에 쉬는 시간
 
 # 쓰기 하나가 끝났을 때 (화면 스레드): 성공이면 확인된 버전을 올리고, 실패면 실패로 남긴다. 그 뒤 다음 차례를 시작한다
 function Complete-WtDataWrite($Work) {
@@ -1695,16 +1722,22 @@ function Read-WtStore {
     $path = Get-WtStorePath $Name
     $key = $path.ToLowerInvariant()
     $prepared = Get-WtStorePreparation $Name
+    $preparation = $script:storePreparations[$Name]
+    $read = if ($prepared) { $prepared.Work.Result } else { Get-WtPreparedRead $preparation }
     $doc = $null; $hasPrepared = $false
     $pending = Get-WtDataWritePending $path
     if ($pending -and $null -ne $pending.Document) {
         $doc = [pscustomobject]$pending.Document
         $hasPrepared = $true
-    } elseif ($prepared -and -not $prepared.Used -and -not $pending) {
+    } elseif ($preparation -and -not $preparation.Used -and -not $pending -and $read -and
+        ($prepared -or $null -eq $read.Document -or ($read.Document -is [pscustomobject] -and $read.Document.schema -eq $Schema))) {
+        # 형식 변환은 원자료를 바꿀 수 있으므로 준비 중에는 기존 읽기 경로로 간다.
         $stamp = Get-WtStoreStamp $Name
-        if ($stamp -ceq "$path|session:$script:storeSession|$($prepared.Stamp)") {
-            $doc = $prepared.Work.Result.Document; $hasPrepared = $true; $prepared.Used = $true
-            if ($prepared.Work.Result.Serialization) { $script:storeSerializers[$key] = $prepared.Work.Result.Serialization }
+        if ($stamp -ceq "$path|session:$script:storeSession|$($read.Stamp)") {
+            $doc = $read.Document; $hasPrepared = $true
+            # 원자료를 먼저 읽었어도 나중에 완성된 준비 결과를 한 번 채택할 기회는 남긴다.
+            if ($prepared) { $prepared.Used = $true }
+            if ($read.Serialization) { $script:storeSerializers[$key] = $read.Serialization }
         }
     }
     try { $text = if ($hasPrepared) { if ($null -eq $doc) { $null } else { 'prepared' } } else { Read-WtJsonText $path } }
@@ -12301,11 +12334,16 @@ Register-WtSettingDefault 'memo.tabs' $null
 
 # ---- 데이터 (WPF 없이) -------------------------------------------------------------------------
 
-function Get-WtMemoItems {
+# 존재 확인과 편집 목록이 같은 저장 핸들/준비 결과를 쓴다. 편집용 복사는 목록을 요청할 때만 한다.
+function Read-WtMemoStore {
     $script:memoStore = Open-WtMemoStore
     if ($script:memoStore.State -notin 'ok', 'missing') { throw $script:memoStore.Error }
     $prepared = Get-WtStorePreparation 'memo'
     $script:preparedMemo = if ($prepared -and $prepared.Value -and [object]::ReferenceEquals($script:memoStore.Doc, $prepared.Value.Document)) { $prepared.Value } else { $null }
+}
+
+function Get-WtMemoItems {
+    Read-WtMemoStore
     if ($script:preparedMemo) { $script:preparedMemo.Live; return }
     # 편집용 스칼라 칸을 저장 통로가 보유한 항목과 분리한다. 알려지지 않은 중첩 칸은 수정하지 않는다.
     (Get-WtMemoDetachedItems (Get-WtMemoLiveItems $script:memoStore.Items))
@@ -14315,12 +14353,16 @@ function Start-WtMemoQueryWarmUp {
 
 # 바로 가기의 메모가 남아 있는지. 홈을 그릴 때 줄마다 불리므로 memo.json이 바뀌었을 때만 다시 읽고,
 # 메모 화면이 같은 내용을 들고 있으면 파일을 읽지 않는다.
-# 저장소를 직접 열지 않는다: 읽으면 들고 있던 저장 핸들이 낡으므로 Get-WtMemoItems가 핸들을 함께 바꾼다
+# 다시 읽을 때는 저장 핸들도 함께 바꾼다. id 확인에는 편집용 항목 사본이 필요하지 않다.
 function Test-WtMemoShortcut([string]$Key) {
     $stamp = Get-WtStoreStamp 'memo'
     if (-not $script:shortcutIds -or $script:shortcutStamp -cne $stamp) {
         $fresh = $script:viewStamp -ceq "$stamp|$([datetime]::Today.Ticks)"
-        $items = if ($fresh) { $script:items } else { @(Get-WtMemoItems) }
+        if ($fresh) { $items = $script:items }
+        else {
+            Read-WtMemoStore
+            $items = if ($script:preparedMemo) { $script:preparedMemo.Live } else { Get-WtMemoLiveItems $script:memoStore.Items }
+        }
         $script:shortcutIds = [Collections.Generic.HashSet[string]]::new([Collections.Generic.IEnumerable[string]](Get-WtMemoIdArray $items), [StringComparer]::Ordinal)
         $script:shortcutStamp = $stamp
     }
@@ -15324,12 +15366,17 @@ function Find-WtMemo {
         }
         $c = $Index.Columns; $count = $c.Id.Count
         $opened = Get-WtMemoOpenedMap $OpenedMap $Index
-        $candidate = [bool[]]::new($count)
         [bool[]]$pins = $c.Pinned.ToArray(); [bool[]]$archives = $c.Archived.ToArray(); [bool[]]$alive = $c.Alive.ToArray(); [string[]]$ids = $c.Id.ToArray()
         $pinnedOnly = $View -in 'pinned', '고정'; $recentOnly = $View -in 'recent', '최근 열기'
-        for ($n = 0; $n -lt $count; $n++) {
-            $candidate[$n] = $alive[$n] -and ($scope -ne 'active' -or -not $archives[$n]) -and ($scope -ne 'archived' -or $archives[$n]) -and
-                (-not $pinnedOnly -or $pins[$n]) -and (-not $recentOnly -or $opened.ContainsKey($ids[$n]))
+        # 조건 잎과 같은 배열 판정을 쓴다. 검색할 때마다 모든 줄에서 PowerShell 조건식을 다시 실행하지 않는다.
+        if ($scope -eq 'active') { $candidate = $script:memoMaskFactories.not.Invoke([object[]]@($alive, $archives)) }
+        elseif ($scope -eq 'archived') { $candidate = $script:memoMaskFactories.flag.Invoke([object[]]@($alive, $archives)) }
+        else { $candidate = [bool[]]$alive.Clone() }
+        if ($pinnedOnly) { $candidate = $script:memoMaskFactories.flag.Invoke([object[]]@($candidate, $pins)) }
+        if ($recentOnly) {
+            $recent = [bool[]]::new($count)
+            foreach ($id in $opened.Keys) { $recent[$Index.Slots[$id]] = $true }
+            $candidate = $script:memoMaskFactories.flag.Invoke([object[]]@($candidate, $recent))
         }
         $positions = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
         $mask = Get-WtMemoMatchSet $Index $tree.Root ([datetime]::Today) $candidate $positions
@@ -15400,7 +15447,14 @@ function Open-WtMemoStore { Open-WtStore -Name 'memo' -Schema 1 }
 function Save-WtMemoStoreItems($Store, [object[]]$Items, [hashtable]$Extra) {
     if ($Store.Name -cne 'memo') { throw '메모 저장소 핸들이 아닙니다.' }
     $compact = $Items.Clone()
-    foreach ($i in $script:memoDeletedSlotsFactory.Invoke($Items)) { $compact[$i] = @(Compress-WtDeletedItems (, $Items[$i]))[0] }
+    $slots = $script:memoDeletedSlotsFactory.Invoke($Items)
+    if ($slots.Length) {
+        # 삭제 후보만 모아 한 번에 정리한다. 보존 기한 계산과 함수 호출을 항목마다 반복하지 않는다.
+        $deleted = [object[]]::new($slots.Length)
+        for ($i = 0; $i -lt $slots.Length; $i++) { $deleted[$i] = $Items[$slots[$i]] }
+        $packed = @(Compress-WtDeletedItems $deleted)
+        for ($i = 0; $i -lt $slots.Length; $i++) { $compact[$slots[$i]] = $packed[$i] }
+    }
     Save-WtStore $Store $compact -Extra $Extra -Background:($compact.Count -ge 256)
 }
 
@@ -15926,12 +15980,8 @@ function Get-WtMemoCachedLinks($Index, $Cache) {
 function New-WtMemoPreparedData($Doc, $Cache, $Context) {
     Initialize-WtMemoWorker $Context
     if ($null -ne $Doc -and ($Doc -isnot [pscustomobject] -or $Doc.schema -ne 1 -or $Doc.items -isnot [array])) { return $null }
-    $seen = New-WtMemoStringSet
-    $live = @(foreach ($item in $Doc.items) {
-        $id = Get-WtField $item 'id'
-        if ($id -is [string] -and $id -and $seen.Add($id) -and -not (Test-WtDeleted $item)) { $item }
-    })
-    $live = Get-WtMemoDetachedItems $live
+    # 화면과 같은 필터를 재사용한다. 준비 작업에서도 항목마다 함수 호출을 되풀이하지 않는다.
+    $live = Get-WtMemoDetachedItems (Get-WtMemoLiveItems $Doc.items)
     $items = @($live | Sort-Object -Property @{ Expression = { [string]$_.updated }; Descending = $true })
     $folders = if ($null -ne $Doc.folders -and $Doc.folders -is [array]) { $Doc.folders } else { @(Get-WtMemoDefaultFolders) }
     $index = New-WtMemoIndex $items -Folders $folders
@@ -15968,7 +16018,8 @@ function Register-WtMemoPreparation {
     $recordModule = (Get-Command ConvertFrom-WtStamp).Module
     $markdownModule = (Get-Command ConvertTo-WtMarkdownModel).Module
     $recordFunctions = & $recordModule { Get-Command Get-WtField, Test-WtRecordObject, Test-WtDeleted, ConvertFrom-WtWhole, ConvertFrom-WtStamp, ConvertFrom-WtLegacyStamp, ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, Get-WtStamp }
-    $markdownFunctions = & $markdownModule { Get-Command ConvertTo-WtMarkdownModel, Get-WtMarkdownPipeline, ConvertFrom-WtMd*, Get-WtMdLines, Add-WtMdText, Add-WtMdPlain, Get-WtMdLinkKind, New-WtMdLinkModel, New-WtMdImageModel, Get-WtMdInlineText, Get-WtMdBlocksText, Get-WtMdAnchorKey }
+    # 필요한 함수는 이미 이 모듈에 있다. 와일드카드 때문에 설치된 외부 명령까지 찾지 않게 범위를 좁힌다.
+    $markdownFunctions = & $markdownModule { Get-Command -ListImported -CommandType Function ConvertTo-WtMarkdownModel, Get-WtMarkdownPipeline, ConvertFrom-WtMd*, Get-WtMdLines, Add-WtMdText, Add-WtMdPlain, Get-WtMdLinkKind, New-WtMdLinkModel, New-WtMdImageModel, Get-WtMdInlineText, Get-WtMdBlocksText, Get-WtMdAnchorKey }
     $script:memoWorkerContext = & $recordModule {
         $values = @{}
         foreach ($name in 'inv', 'ko', 'stampFormat', 'minYear', 'maxYear', 'legacyDates', 'legacyTimes', 'legacyTimesKo', 'legacyStamps', 'legacyStampsKo') { $values[$name] = $ExecutionContext.SessionState.PSVariable.GetValue("script:$name") }
@@ -15980,9 +16031,10 @@ function Register-WtMemoPreparation {
     $script:memoWorkerContext.memoLinkHint = $script:memoLinkHint
     $script:memoWorkerContext.memoIndexOrderFactory = $script:memoIndexOrderFactory
     $script:memoWorkerContext.memoDetachedFactory = $script:memoDetachedFactory
+    $script:memoWorkerContext.memoLiveFactory = $script:memoLiveFactory
     $script:memoWorkerFunctions = @(Get-Command New-WtMemoIndex, Set-WtMemoIndexEntry, Update-WtMemoIndexOrder, Get-WtMemoIndexedTime, Get-WtMemoDefaultFolders,
         New-WtMemoStringSet, Get-WtMemoLinkInfo, Initialize-WtMemoLinks, Update-WtMemoBacklinks, Get-WtMemoIndexEntries, Set-WtMemoIndexProperties,
-        Initialize-WtMemoWorker, Get-WtMemoCachedLinks, Complete-WtMemoBackgroundIndex, Get-WtMemoDetachedItems, Read-WtCacheFile, Write-WtCacheFile) + @($recordFunctions) + @($markdownFunctions)
+        Initialize-WtMemoWorker, Get-WtMemoCachedLinks, Complete-WtMemoBackgroundIndex, Get-WtMemoDetachedItems, Get-WtMemoLiveItems, Read-WtCacheFile, Write-WtCacheFile) + @($recordFunctions) + @($markdownFunctions)
     Register-WtStorePreparation -Name 'memo' -Prepare (Get-Command New-WtMemoPreparedData) -Functions $script:memoWorkerFunctions -Context $script:memoWorkerContext -CacheName 'memo-index-cache'
     Register-WtStorePreparation -Name 'memo-state' -Prepare (Get-Command New-WtMemoStatePreparation) -Functions @() -Context $null
 }

@@ -119,7 +119,7 @@ function Set-WtAppRoot([string]$Path) {
 }
 
 # 큰 저장소를 쓰는 탭이 선택적으로 등록한다. 앱 경로가 정해진 뒤에만 시험/사용자 데이터 경로를 연다.
-# 준비 결과는 읽기 검증을 통과한 첫 Read-WtStore에서만 사용하며 외부 변경이면 버린다.
+# 읽은 원자료는 준비 함수에서도 수정하지 않는다. 파일 지문과 읽기 검증을 통과한 경우만 재사용한다.
 function Register-WtStorePreparation {
     param([string]$Name, [Management.Automation.CommandInfo]$Prepare, [Management.Automation.CommandInfo[]]$Functions, $Context, [string]$CacheName)
     $script:storePreparers[$Name] = @{ Prepare = $Prepare; Functions = $Functions; Context = $Context; CacheName = $CacheName }
@@ -217,16 +217,29 @@ function Start-WtStorePreparation([string]$Name) {
     $path = Get-WtStorePath $Name
     $cachePath = if ($spec.CacheName) { Get-WtStorePath $spec.CacheName } else { '' }
     try {
+        $ready = [Collections.Concurrent.ConcurrentQueue[object]]::new()
         $functions = @($spec.Functions) + @($spec.Prepare) + @(Get-Command Read-WtPreparedDocument, Read-WtCacheFile)
         $work = Start-WtWork -Script {
-            param($path, $prepare, $context, $cachePath)
+            param($path, $prepare, $context, $cachePath, $ready)
             $read = Read-WtPreparedDocument $path
+            # 원자료/직렬화 조각은 여기서 완성된다. 뒤에서 Value를 붙일 해시 테이블과는 분리해 넘긴다.
+            $ready.Enqueue(@{ Document = $read.Document; Serialization = $read.Serialization; Stamp = $read.Stamp })
             $cache = if ($cachePath) { Read-WtCacheFile $cachePath } else { $null }
             $read.Value = & $prepare $read.Document $cache $context
             $read
-        } -ArgumentList $path, $spec.Prepare.Name, $spec.Context, $cachePath -Functions $functions -Session Default
-        $script:storePreparations[$Name] = @{ Work = $work; Used = $false; Value = $null; Stamp = $null }
+        } -ArgumentList $path, $spec.Prepare.Name, $spec.Context, $cachePath, $ready -Functions $functions -Session Default
+        $script:storePreparations[$Name] = @{ Work = $work; Used = $false; Value = $null; Stamp = $null; Ready = $ready; Read = $null }
     } catch { }   # 준비가 실패하면 보통 읽기가 기존 오류 표시 경로로 알린다.
+}
+
+# 준비 중에도 파일 읽기가 끝났으면 기다리지 않고 받는다. 실패/취소된 작업의 중간 자료는 쓰지 않는다.
+function Get-WtPreparedRead($Preparation) {
+    if (-not $Preparation -or $Preparation.Work.State -ne 'running') { return $null }
+    if ($null -eq $Preparation.Read) {
+        $read = $null
+        if ($Preparation.Ready.TryDequeue([ref]$read)) { $Preparation.Read = $read }
+    }
+    $Preparation.Read
 }
 
 function Get-WtStorePreparation([string]$Name) {
@@ -334,15 +347,31 @@ function Invoke-WtQueuedStoreWrite {
 # 받아들인 버전 > 확인된 버전인데 쓰는 중인 것이 없으면, 그 내용을 실패로 남겨 둔다(Failed). 버전이 같아져야 「저장됨」이다
 
 # 실제로 쓰기 (화면 밖에서 돈다): 임시 파일에 쓰고 바꿔치기
-function Write-WtDataFile([string]$Path, [string]$Json) {
+function Test-WtLargeDataText([string]$Text) { $Text.Length -ge 65536 }
+
+# 큰 글은 기본 파일 명령으로 한 번 쓰고, 쓴 임시 파일에서 지문을 얻는다.
+# 바꿔치기 전에 계산하므로 그 뒤 다른 프로그램이 원본을 바꿔도 그 내용을 우리 저장 판으로 착각하지 않는다.
+function Write-WtDataFile([string]$Path, [string]$Json, [bool]$Fingerprint = $true) {
     $tmp = "$Path.tmp"
-    [System.IO.File]::WriteAllText($tmp, $Json, [System.Text.UTF8Encoding]::new($false))
+    if (Test-WtLargeDataText $Json) {
+        Microsoft.PowerShell.Management\Set-Content -LiteralPath $tmp -Value $Json -NoNewline -Encoding utf8NoBOM -ErrorAction Stop
+    } else {
+        [System.IO.File]::WriteAllText($tmp, $Json, [System.Text.UTF8Encoding]::new($false))
+    }
+    # 문서 자체를 보유한 비동기 저장만 완료 지문이 필요하다. 이미 JSON인 일반 저장은 다시 읽고 해시하지 않는다.
+    if ($Fingerprint) {
+        $stream = [System.IO.File]::OpenRead($tmp)
+        try { $stamp = "$($stream.Length)|$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)))" }
+        finally { $stream.Dispose() }
+    }
     if ([System.IO.Path]::Exists($Path)) { [System.IO.File]::Replace($tmp, $Path, "$Path.bak") }
     else { [System.IO.File]::Move($tmp, $Path) }
+    if ($Fingerprint) { $stamp }
 }
 
-# 통로가 돌리는 코드. 검사는 쓰기 앞에 기다림만 끼워 넣는다 (Write-WtDataFile은 그대로 돈다)
-$script:writeJob = { param($p, $json) Write-WtDataFile $p $json }
+# 통로가 돌리는 코드. 문서 저장이면 성공 때 쓴 바이트 수|SHA256을 돌려준다.
+# 검사는 쓰기 앞에 기다림만 끼워 넣는다 (Write-WtDataFile과 반환 지문은 그대로 둔다)
+$script:writeJob = { param($p, $json, [bool]$fingerprint = $true) Write-WtDataFile $p $json -Fingerprint:$fingerprint }
 
 # 파일 하나의 기록 (버전 · 받아들인 것 · 실패로 남은 것)
 function Get-WtDataFileRecord([string]$Path) {
@@ -378,16 +407,15 @@ function Start-WtDataWriteNext {
         $entry.State = 'writing'
         try {
             $script:writeCurrent = $entry
-            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile, ConvertTo-WtStoreDocumentJson) }
+            if (-not $script:writeFunctions) { $script:writeFunctions = @(Get-Command Write-WtDataFile, Test-WtLargeDataText, ConvertTo-WtStoreDocumentJson) }
             if ($null -ne $entry.Document) {
                 $key = $entry.Path.ToLowerInvariant()
                 if (-not $script:storeSerializers.ContainsKey($key)) { $script:storeSerializers[$key] = [Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new() }
-                # 이 작업이 화면 일과 겹치면 화면 스레드가 약 300ms 멈춘다(메모 3,000개 실측, 원인은 못 찾음). 저장 뒤 화면 일이 먼저 끝나게 잠깐 쉬고 시작한다
-                $text = "param(`$p, `$doc, `$cache, `$factory)`n[System.Threading.Thread]::Sleep($script:writeStartDelayMs)`n`$json = ConvertTo-WtStoreDocumentJson `$doc `$cache `$factory`n& {`n$($script:writeJob.ToString())`n} `$p `$json`n`$bytes = [Text.UTF8Encoding]::new(`$false).GetBytes(`$json)`n`"`$(`$bytes.Length)|`$([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(`$bytes)))`""
+                $text = "param(`$p, `$doc, `$cache, `$factory)`n`$json = ConvertTo-WtStoreDocumentJson `$doc `$cache `$factory`n& {`n$($script:writeJob.ToString())`n} `$p `$json"
                 $entry.Work = Start-WtWork -Script $text -ArgumentList $entry.Path, $entry.Document, $script:storeSerializers[$key], $script:jsonPartsFactory -Functions $script:writeFunctions -Session Default -Reserved `
                     -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
             } else {
-                $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json -Functions $script:writeFunctions -Reserved `
+                $entry.Work = Start-WtWork -Script $script:writeJob -ArgumentList $entry.Path, $entry.Json, $false -Functions $script:writeFunctions -Session $(if (Test-WtLargeDataText $entry.Json) { 'Default' } else { 'Empty' }) -Reserved `
                     -Context $entry -OnDone { param($w) Complete-WtDataWrite $w }
             }
         } catch {
@@ -397,7 +425,6 @@ function Start-WtDataWriteNext {
     }
 }
 $script:writeFunctions = $null
-$script:writeStartDelayMs = 200   # 큰 저장소의 화면 밖 저장을 시작하기 전에 쉬는 시간
 
 # 쓰기 하나가 끝났을 때 (화면 스레드): 성공이면 확인된 버전을 올리고, 실패면 실패로 남긴다. 그 뒤 다음 차례를 시작한다
 function Complete-WtDataWrite($Work) {
@@ -658,16 +685,22 @@ function Read-WtStore {
     $path = Get-WtStorePath $Name
     $key = $path.ToLowerInvariant()
     $prepared = Get-WtStorePreparation $Name
+    $preparation = $script:storePreparations[$Name]
+    $read = if ($prepared) { $prepared.Work.Result } else { Get-WtPreparedRead $preparation }
     $doc = $null; $hasPrepared = $false
     $pending = Get-WtDataWritePending $path
     if ($pending -and $null -ne $pending.Document) {
         $doc = [pscustomobject]$pending.Document
         $hasPrepared = $true
-    } elseif ($prepared -and -not $prepared.Used -and -not $pending) {
+    } elseif ($preparation -and -not $preparation.Used -and -not $pending -and $read -and
+        ($prepared -or $null -eq $read.Document -or ($read.Document -is [pscustomobject] -and $read.Document.schema -eq $Schema))) {
+        # 형식 변환은 원자료를 바꿀 수 있으므로 준비 중에는 기존 읽기 경로로 간다.
         $stamp = Get-WtStoreStamp $Name
-        if ($stamp -ceq "$path|session:$script:storeSession|$($prepared.Stamp)") {
-            $doc = $prepared.Work.Result.Document; $hasPrepared = $true; $prepared.Used = $true
-            if ($prepared.Work.Result.Serialization) { $script:storeSerializers[$key] = $prepared.Work.Result.Serialization }
+        if ($stamp -ceq "$path|session:$script:storeSession|$($read.Stamp)") {
+            $doc = $read.Document; $hasPrepared = $true
+            # 원자료를 먼저 읽었어도 나중에 완성된 준비 결과를 한 번 채택할 기회는 남긴다.
+            if ($prepared) { $prepared.Used = $true }
+            if ($read.Serialization) { $script:storeSerializers[$key] = $read.Serialization }
         }
     }
     try { $text = if ($hasPrepared) { if ($null -eq $doc) { $null } else { 'prepared' } } else { Read-WtJsonText $path } }

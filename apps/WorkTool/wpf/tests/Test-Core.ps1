@@ -172,6 +172,66 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
         & $queueStorage { param($writer) $script:writeJob = $writer } $queueWriter
     }
 
+    # 작은 글/큰 글의 쓰기 경계에서도 UTF-8 바이트, 끝 개행, 직전 백업과 지문은 같다.
+    $writerPath = Join-Path $test.Data 'writer[utf8].json'
+    [IO.File]::WriteAllText($writerPath, '직전 내용', [Text.UTF8Encoding]::new($false))
+    $writerCases = @(('x' * 65535), ('x' * 65536), (("한글🙂`r`n`t\`"" * 7000) + [char]0xD800))
+    foreach ($text in $writerCases) {
+        $beforeBytes = [IO.File]::ReadAllBytes($writerPath)
+        $beforeHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($beforeBytes))
+        $expectedBytes = [Text.UTF8Encoding]::new($false).GetBytes($text)
+        $expectedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($expectedBytes))
+        $writtenStamp = & $queueStorage { param($path, $value) Write-WtDataFile $path $value } $writerPath $text
+        $actualBytes = [IO.File]::ReadAllBytes($writerPath)
+        $actualHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($actualBytes))
+        $backupHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes("$writerPath.bak")))
+        Assert-Wt "저장 쓰기: $($text.Length)자 UTF-8 바이트·끝 개행·백업·지문 일치" (
+            $actualBytes.Length -eq $expectedBytes.Length -and $actualHash -ceq $expectedHash -and $backupHash -ceq $beforeHash -and
+            $writtenStamp -ceq "$($expectedBytes.Length)|$expectedHash" -and -not [IO.File]::Exists("$writerPath.tmp"))
+    }
+    $lockedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($writerPath)))
+    $retryText = '새 내용' * 22000
+    $writerLock = [IO.File]::Open($writerPath, 'Open', 'ReadWrite', 'None')
+    $writerFailed = $false; $failedStamp = $null
+    try {
+        try { $failedStamp = & $queueStorage { param($path, $value) Write-WtDataFile $path $value } $writerPath $retryText }
+        catch { $writerFailed = $true }
+    } finally { $writerLock.Dispose() }
+    Assert-Wt '저장 쓰기: 큰 글 바꿔치기 실패 때 원본 보존 · 성공 지문을 반환하지 않는다' (
+        $writerFailed -and $null -eq $failedStamp -and $lockedHash -ceq [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($writerPath))))
+    $retriedStamp = & $queueStorage { param($path, $value) Write-WtDataFile $path $value } $writerPath $retryText
+    Assert-Wt '저장 쓰기: 잠금 해제 뒤 재시도 · 직전 원본을 백업한다' (
+        [IO.File]::ReadAllText($writerPath) -ceq $retryText -and $retriedStamp -match '^\d+\|[0-9A-F]{64}$' -and
+        $lockedHash -ceq [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes("$writerPath.bak"))))
+    $largePlainPath = Get-WtStorePath 'large-plain'
+    Write-WtJsonFile $largePlainPath @{ schema = 1; values = @{ text = ('한글' * 40000) } }
+    Wait-WtTestWrites 30000
+    $largePlain = [IO.File]::ReadAllText($largePlainPath) | ConvertFrom-Json
+    Assert-Wt '저장 쓰기: 큰 일반 JSON도 기본 파일 명령을 사용할 세션에서 저장된다' (
+        (Get-WtDataWriteStatus $largePlainPath).State -eq 'saved' -and $largePlain.values.text -ceq ('한글' * 40000))
+
+    # 지문은 바꿔치기 전에 쓴 내용이다. 직후 외부 편집을 우리 문서의 저장 완료 표식으로 채택하지 않는다.
+    $racePath = Get-WtStorePath 'stamp-race'
+    Write-WtStore stamp-race -Items @([pscustomobject]@{ id = 'original'; title = '처음' })
+    $raceStore = Open-WtStore stamp-race
+    try {
+        & $queueStorage {
+            $script:writeJob = {
+                param($p, $json)
+                $written = Write-WtDataFile $p $json
+                [IO.File]::WriteAllText($p, '{"schema":1,"items":[{"id":"external","title":"외부 변경"}]}', [Text.UTF8Encoding]::new($false))
+                $written
+            }
+        }
+        $raceSaved = Save-WtStore $raceStore @([pscustomobject]@{ id = 'original'; title = '앱 저장' }) -Background
+        Wait-WtTestWrites 30000
+        $raceStamp = Get-WtStoreStamp stamp-race
+        $raceVersion = & $queueStorage { param($path) (Get-WtDataFileRecord $path).Accepted.Version } $racePath
+        $raceDisk = Read-WtStore stamp-race
+        Assert-Wt '저장 지문: 바꿔치기 직후 외부 편집을 우리 저장 판으로 오인하지 않는다' (
+            $raceVersion -gt 0 -and $raceDisk.items[0].title -ceq '외부 변경' -and -not $raceStamp.EndsWith("|accepted:$raceVersion"))
+    } finally { & $queueStorage { param($writer) $script:writeJob = $writer } $queueWriter }
+
     Write-WtStore -Name 'mig' -Schema 1 -Items @([ordered]@{ id = 'm1' })
     $doc = Read-WtStore -Name 'mig' -Schema 2 -Migrate {
         param($d, $from)
@@ -417,6 +477,112 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Assert-Wt '예전 CSV: BOM UTF-8 · BOM 없는 UTF-8 · CP949 모두 한글이 그대로 읽힌다' (($encResults -join '|') -eq 'bom=utf-8:한글 제목, 쉼표:64|utf8=utf-8:한글 제목, 쉼표:64|cp949=cp949:한글 제목, 쉼표:64') ($encResults -join '|')
     Assert-Wt '예전 CSV: 없으면 $null, 빈 파일이면 빈 줄 목록' ($null -eq (Read-WtLegacyCsv $encDir 'none') -and $(
             [System.IO.File]::WriteAllText((Join-Path $encDir 'empty.csv'), ''); $e = Read-WtLegacyCsv $encDir 'empty'; $e.Rows.Count -eq 0 -and (Import-WtLegacyCsv $encDir 'empty').Count -eq 0))
+
+    # ---- 자료 읽기가 끝난 뒤 나머지 준비가 진행 중인 저장소 (가짜 준비 함수) ----
+    function Invoke-WtReadStageTestPreparation($Doc, $Cache, $Context) {
+        $Context.Document = $Doc
+        $Context.Entered.Set()
+        if (-not $Context.Release.Wait(30000)) { throw '가짜 준비 작업 시간 초과' }
+        if ($Context.Fail) { throw '가짜 준비 실패' }
+        @{ Document = $Doc }
+    }
+    foreach ($readStageCase in 'same', 'changed', 'missing', 'migrate', 'saved', 'root', 'failed', 'future', 'invalid') {
+        $readStageTest = New-WtTestData 'read-stage'
+        $readStageOther = $null
+        $readStageContext = @{ Entered = [Threading.ManualResetEventSlim]::new($false); Release = [Threading.ManualResetEventSlim]::new($false); Document = $null; Fail = ($readStageCase -eq 'failed') }
+        try {
+            $readStagePath = Get-WtStorePath 'ready-probe'
+            $readStageText = '{"schema":1,"future":{"keep":7},"items":[{"id":"before","title":"처음"},null,["깨진"]]}'
+            if ($readStageCase -eq 'future') { $readStageText = $readStageText.Replace('"schema":1', '"schema":9') }
+            if ($readStageCase -eq 'invalid') { $readStageText = '{"schema":1,"items":null}' }
+            [IO.File]::WriteAllText($readStagePath, $readStageText, [Text.UTF8Encoding]::new($false))
+            Register-WtStorePreparation -Name 'ready-probe' -Prepare (Get-Command Invoke-WtReadStageTestPreparation) -Functions @() -Context $readStageContext
+            Set-WtAppRoot $readStageTest.App
+            if (-not $readStageContext.Entered.Wait(10000)) { throw '자료 읽기 뒤 준비 작업에 도달하지 못했습니다.' }
+            switch ($readStageCase) {
+                'same' {
+                    $readStageFirst = Open-WtStore -Name 'ready-probe'
+                    Assert-Wt '읽기 준비: 준비를 기다리지 않고 같은 원자료를 채택 · 부분 준비 결과는 비공개' (
+                        $readStageFirst.State -eq 'ok' -and [object]::ReferenceEquals($readStageFirst.Doc, $readStageContext.Document) -and
+                        $null -eq (Get-WtStorePreparation 'ready-probe') -and -not $readStageContext.Release.IsSet -and
+                        $readStageFirst.Doc.future.keep -eq 7 -and $readStageFirst.Items.Count -eq 3 -and $null -eq $readStageFirst.Items[1])
+                    $readStageSecond = Open-WtStore -Name 'ready-probe'
+                    $readStageStale = $false
+                    try { [void](Save-WtStore $readStageFirst $readStageFirst.Items) } catch { $readStageStale = $true }
+                    Assert-Wt '읽기 준비: 다시 연 핸들은 새 버전 · 이전 핸들 저장 거부' (
+                        $readStageStale -and $readStageSecond.Version -gt $readStageFirst.Version -and [IO.File]::ReadAllText($readStagePath) -ceq $readStageText)
+                    $readStageContext.Release.Set(); [void](Wait-WtWork -All -Milliseconds 30000)
+                    $readStagePrepared = Get-WtStorePreparation 'ready-probe'
+                    $readStageFinal = Open-WtStore -Name 'ready-probe'
+                    Assert-Wt '읽기 준비: 나중에 완성된 준비 결과도 같은 문서로 한 번 채택' (
+                        $null -ne $readStagePrepared -and $readStagePrepared.Used -and
+                        [object]::ReferenceEquals($readStageFinal.Doc, $readStagePrepared.Value.Document))
+                }
+                'changed' {
+                    $readStageAt = [IO.File]::GetLastWriteTimeUtc($readStagePath)
+                    $readStageLength = ([IO.FileInfo]$readStagePath).Length
+                    [IO.File]::WriteAllText($readStagePath, $readStageText.Replace('before', 'after_'), [Text.UTF8Encoding]::new($false))
+                    [IO.File]::SetLastWriteTimeUtc($readStagePath, $readStageAt)
+                    $readStageChanged = Open-WtStore -Name 'ready-probe'
+                    Assert-Wt '읽기 준비: 같은 크기·시각의 외부 변경이면 낡은 원자료를 버린다' (
+                        $readStageChanged.State -eq 'ok' -and $readStageChanged.Items[0].id -ceq 'after_' -and
+                        -not [object]::ReferenceEquals($readStageChanged.Doc, $readStageContext.Document) -and
+                        ([IO.FileInfo]$readStagePath).Length -eq $readStageLength -and [IO.File]::GetLastWriteTimeUtc($readStagePath) -eq $readStageAt)
+                }
+                'missing' {
+                    [IO.File]::Delete($readStagePath)
+                    $readStageMissing = Open-WtStore -Name 'ready-probe'
+                    Assert-Wt '읽기 준비: 파일이 사라지면 예전 내용을 되살리지 않는다' ($readStageMissing.State -eq 'missing' -and $readStageMissing.Items.Count -eq 0)
+                }
+                'migrate' {
+                    $readStageMigrated = Open-WtStore -Name 'ready-probe' -Schema 2 -Migrate { param($doc, $from) $doc.items[0] | Add-Member extra '변환'; $doc }
+                    Assert-Wt '읽기 준비: 형식 변환은 별도 문서를 읽어 진행 중인 준비 원자료와 분리' (
+                        $readStageMigrated.State -eq 'ok' -and $readStageMigrated.Items[0].extra -ceq '변환' -and
+                        $readStageContext.Document.schema -eq 1 -and $null -eq (Get-WtField $readStageContext.Document.items[0] 'extra'))
+                }
+                'saved' {
+                    $readStageBase = Open-WtStore -Name 'ready-probe'
+                    $readStageItems = @(Copy-WtItem $readStageBase.Items)
+                    $readStageItems[0].id = 'after_'
+                    [void](Save-WtStore $readStageBase $readStageItems -Background)
+                    $readStageSaved = Open-WtStore -Name 'ready-probe'
+                    Assert-Wt '읽기 준비: 새로 저장한 판이 진행 중인 예전 준비보다 우선한다' (
+                        $readStageSaved.Items[0].id -ceq 'after_' -and $readStageContext.Document.items[0].id -ceq 'before')
+                    Wait-WtTestWrites
+                }
+                'root' {
+                    & (Get-Module Storage) { [void]$script:storePreparers.Remove('ready-probe') }
+                    $readStageOther = New-WtTestData 'read-stage-other'
+                    [IO.File]::WriteAllText((Get-WtStorePath 'ready-probe'), $readStageText.Replace('before', 'other_'), [Text.UTF8Encoding]::new($false))
+                    $readStageSwitched = Open-WtStore -Name 'ready-probe'
+                    Assert-Wt '읽기 준비: 데이터 폴더를 바꾸면 이전 작업의 원자료를 쓰지 않는다' (
+                        $readStageSwitched.Items[0].id -ceq 'other_' -and -not [object]::ReferenceEquals($readStageSwitched.Doc, $readStageContext.Document))
+                }
+                'failed' {
+                    $readStageContext.Release.Set(); [void](Wait-WtWork -All -Milliseconds 30000)
+                    $readStageFallback = Open-WtStore -Name 'ready-probe'
+                    Assert-Wt '읽기 준비: 나머지 준비가 실패하면 일반 읽기로 돌아간다' (
+                        $readStageFallback.State -eq 'ok' -and $readStageFallback.Items[0].id -ceq 'before' -and
+                        -not [object]::ReferenceEquals($readStageFallback.Doc, $readStageContext.Document))
+                }
+                { $_ -in 'future', 'invalid' } {
+                    $readStageRefused = Open-WtStore -Name 'ready-probe'
+                    $readStageBlocked = $false
+                    try { [void](Save-WtStore $readStageRefused @()) } catch { $readStageBlocked = $true }
+                    Assert-Wt "읽기 준비: $readStageCase 자료도 읽기 검증과 덮어쓰기 금지를 지킨다" (
+                        $readStageRefused.State -eq 'error' -and $readStageBlocked -and [IO.File]::ReadAllText($readStagePath) -ceq $readStageText)
+                }
+            }
+        } finally {
+            $readStageContext.Release.Set()
+            [void](Wait-WtWork -All -Milliseconds 30000)
+            & (Get-Module Storage) { [void]$script:storePreparers.Remove('ready-probe') }
+            Set-WtAppRoot $test.App
+            Remove-WtTestData $readStageOther
+            Remove-WtTestData $readStageTest
+            $readStageContext.Entered.Dispose(); $readStageContext.Release.Dispose()
+        }
+    }
 
     # ---- 휴무일 (core\Calendar.psm1, 고정 시험 자료 tests\fixtures\holidays*.json: 더하기만 하고 고치지 않는다) ----
     [System.IO.File]::Copy((Join-Path $PSScriptRoot 'fixtures\holidays.json'), (Get-WtStorePath 'holidays'), $true)

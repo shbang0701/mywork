@@ -858,12 +858,17 @@ function Find-WtMemo {
         }
         $c = $Index.Columns; $count = $c.Id.Count
         $opened = Get-WtMemoOpenedMap $OpenedMap $Index
-        $candidate = [bool[]]::new($count)
         [bool[]]$pins = $c.Pinned.ToArray(); [bool[]]$archives = $c.Archived.ToArray(); [bool[]]$alive = $c.Alive.ToArray(); [string[]]$ids = $c.Id.ToArray()
         $pinnedOnly = $View -in 'pinned', '고정'; $recentOnly = $View -in 'recent', '최근 열기'
-        for ($n = 0; $n -lt $count; $n++) {
-            $candidate[$n] = $alive[$n] -and ($scope -ne 'active' -or -not $archives[$n]) -and ($scope -ne 'archived' -or $archives[$n]) -and
-                (-not $pinnedOnly -or $pins[$n]) -and (-not $recentOnly -or $opened.ContainsKey($ids[$n]))
+        # 조건 잎과 같은 배열 판정을 쓴다. 검색할 때마다 모든 줄에서 PowerShell 조건식을 다시 실행하지 않는다.
+        if ($scope -eq 'active') { $candidate = $script:memoMaskFactories.not.Invoke([object[]]@($alive, $archives)) }
+        elseif ($scope -eq 'archived') { $candidate = $script:memoMaskFactories.flag.Invoke([object[]]@($alive, $archives)) }
+        else { $candidate = [bool[]]$alive.Clone() }
+        if ($pinnedOnly) { $candidate = $script:memoMaskFactories.flag.Invoke([object[]]@($candidate, $pins)) }
+        if ($recentOnly) {
+            $recent = [bool[]]::new($count)
+            foreach ($id in $opened.Keys) { $recent[$Index.Slots[$id]] = $true }
+            $candidate = $script:memoMaskFactories.flag.Invoke([object[]]@($candidate, $recent))
         }
         $positions = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
         $mask = Get-WtMemoMatchSet $Index $tree.Root ([datetime]::Today) $candidate $positions
@@ -934,7 +939,14 @@ function Open-WtMemoStore { Open-WtStore -Name 'memo' -Schema 1 }
 function Save-WtMemoStoreItems($Store, [object[]]$Items, [hashtable]$Extra) {
     if ($Store.Name -cne 'memo') { throw '메모 저장소 핸들이 아닙니다.' }
     $compact = $Items.Clone()
-    foreach ($i in $script:memoDeletedSlotsFactory.Invoke($Items)) { $compact[$i] = @(Compress-WtDeletedItems (, $Items[$i]))[0] }
+    $slots = $script:memoDeletedSlotsFactory.Invoke($Items)
+    if ($slots.Length) {
+        # 삭제 후보만 모아 한 번에 정리한다. 보존 기한 계산과 함수 호출을 항목마다 반복하지 않는다.
+        $deleted = [object[]]::new($slots.Length)
+        for ($i = 0; $i -lt $slots.Length; $i++) { $deleted[$i] = $Items[$slots[$i]] }
+        $packed = @(Compress-WtDeletedItems $deleted)
+        for ($i = 0; $i -lt $slots.Length; $i++) { $compact[$slots[$i]] = $packed[$i] }
+    }
     Save-WtStore $Store $compact -Extra $Extra -Background:($compact.Count -ge 256)
 }
 
@@ -1460,12 +1472,8 @@ function Get-WtMemoCachedLinks($Index, $Cache) {
 function New-WtMemoPreparedData($Doc, $Cache, $Context) {
     Initialize-WtMemoWorker $Context
     if ($null -ne $Doc -and ($Doc -isnot [pscustomobject] -or $Doc.schema -ne 1 -or $Doc.items -isnot [array])) { return $null }
-    $seen = New-WtMemoStringSet
-    $live = @(foreach ($item in $Doc.items) {
-        $id = Get-WtField $item 'id'
-        if ($id -is [string] -and $id -and $seen.Add($id) -and -not (Test-WtDeleted $item)) { $item }
-    })
-    $live = Get-WtMemoDetachedItems $live
+    # 화면과 같은 필터를 재사용한다. 준비 작업에서도 항목마다 함수 호출을 되풀이하지 않는다.
+    $live = Get-WtMemoDetachedItems (Get-WtMemoLiveItems $Doc.items)
     $items = @($live | Sort-Object -Property @{ Expression = { [string]$_.updated }; Descending = $true })
     $folders = if ($null -ne $Doc.folders -and $Doc.folders -is [array]) { $Doc.folders } else { @(Get-WtMemoDefaultFolders) }
     $index = New-WtMemoIndex $items -Folders $folders
@@ -1502,7 +1510,8 @@ function Register-WtMemoPreparation {
     $recordModule = (Get-Command ConvertFrom-WtStamp).Module
     $markdownModule = (Get-Command ConvertTo-WtMarkdownModel).Module
     $recordFunctions = & $recordModule { Get-Command Get-WtField, Test-WtRecordObject, Test-WtDeleted, ConvertFrom-WtWhole, ConvertFrom-WtStamp, ConvertFrom-WtLegacyStamp, ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, Get-WtStamp }
-    $markdownFunctions = & $markdownModule { Get-Command ConvertTo-WtMarkdownModel, Get-WtMarkdownPipeline, ConvertFrom-WtMd*, Get-WtMdLines, Add-WtMdText, Add-WtMdPlain, Get-WtMdLinkKind, New-WtMdLinkModel, New-WtMdImageModel, Get-WtMdInlineText, Get-WtMdBlocksText, Get-WtMdAnchorKey }
+    # 필요한 함수는 이미 이 모듈에 있다. 와일드카드 때문에 설치된 외부 명령까지 찾지 않게 범위를 좁힌다.
+    $markdownFunctions = & $markdownModule { Get-Command -ListImported -CommandType Function ConvertTo-WtMarkdownModel, Get-WtMarkdownPipeline, ConvertFrom-WtMd*, Get-WtMdLines, Add-WtMdText, Add-WtMdPlain, Get-WtMdLinkKind, New-WtMdLinkModel, New-WtMdImageModel, Get-WtMdInlineText, Get-WtMdBlocksText, Get-WtMdAnchorKey }
     $script:memoWorkerContext = & $recordModule {
         $values = @{}
         foreach ($name in 'inv', 'ko', 'stampFormat', 'minYear', 'maxYear', 'legacyDates', 'legacyTimes', 'legacyTimesKo', 'legacyStamps', 'legacyStampsKo') { $values[$name] = $ExecutionContext.SessionState.PSVariable.GetValue("script:$name") }
@@ -1514,9 +1523,10 @@ function Register-WtMemoPreparation {
     $script:memoWorkerContext.memoLinkHint = $script:memoLinkHint
     $script:memoWorkerContext.memoIndexOrderFactory = $script:memoIndexOrderFactory
     $script:memoWorkerContext.memoDetachedFactory = $script:memoDetachedFactory
+    $script:memoWorkerContext.memoLiveFactory = $script:memoLiveFactory
     $script:memoWorkerFunctions = @(Get-Command New-WtMemoIndex, Set-WtMemoIndexEntry, Update-WtMemoIndexOrder, Get-WtMemoIndexedTime, Get-WtMemoDefaultFolders,
         New-WtMemoStringSet, Get-WtMemoLinkInfo, Initialize-WtMemoLinks, Update-WtMemoBacklinks, Get-WtMemoIndexEntries, Set-WtMemoIndexProperties,
-        Initialize-WtMemoWorker, Get-WtMemoCachedLinks, Complete-WtMemoBackgroundIndex, Get-WtMemoDetachedItems, Read-WtCacheFile, Write-WtCacheFile) + @($recordFunctions) + @($markdownFunctions)
+        Initialize-WtMemoWorker, Get-WtMemoCachedLinks, Complete-WtMemoBackgroundIndex, Get-WtMemoDetachedItems, Get-WtMemoLiveItems, Read-WtCacheFile, Write-WtCacheFile) + @($recordFunctions) + @($markdownFunctions)
     Register-WtStorePreparation -Name 'memo' -Prepare (Get-Command New-WtMemoPreparedData) -Functions $script:memoWorkerFunctions -Context $script:memoWorkerContext -CacheName 'memo-index-cache'
     Register-WtStorePreparation -Name 'memo-state' -Prepare (Get-Command New-WtMemoStatePreparation) -Functions @() -Context $null
 }
