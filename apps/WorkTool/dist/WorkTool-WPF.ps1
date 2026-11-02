@@ -15994,7 +15994,8 @@ function Register-WtMemoPreparation {
     $recordModule = (Get-Command ConvertFrom-WtStamp).Module
     $markdownModule = (Get-Command ConvertTo-WtMarkdownModel).Module
     $recordFunctions = & $recordModule { Get-Command Get-WtField, Test-WtRecordObject, Test-WtDeleted, ConvertFrom-WtWhole, ConvertFrom-WtStamp, ConvertFrom-WtLegacyStamp, ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, Get-WtStamp }
-    $markdownFunctions = & $markdownModule { Get-Command ConvertTo-WtMarkdownModel, Get-WtMarkdownPipeline, ConvertFrom-WtMd*, Get-WtMdLines, Add-WtMdText, Add-WtMdPlain, Get-WtMdLinkKind, New-WtMdLinkModel, New-WtMdImageModel, Get-WtMdInlineText, Get-WtMdBlocksText, Get-WtMdAnchorKey }
+    # 필요한 함수는 이미 이 모듈에 있다. 와일드카드 때문에 설치된 외부 명령까지 찾지 않게 범위를 좁힌다.
+    $markdownFunctions = & $markdownModule { Get-Command -ListImported -CommandType Function ConvertTo-WtMarkdownModel, Get-WtMarkdownPipeline, ConvertFrom-WtMd*, Get-WtMdLines, Add-WtMdText, Add-WtMdPlain, Get-WtMdLinkKind, New-WtMdLinkModel, New-WtMdImageModel, Get-WtMdInlineText, Get-WtMdBlocksText, Get-WtMdAnchorKey }
     $script:memoWorkerContext = & $recordModule {
         $values = @{}
         foreach ($name in 'inv', 'ko', 'stampFormat', 'minYear', 'maxYear', 'legacyDates', 'legacyTimes', 'legacyTimesKo', 'legacyStamps', 'legacyStampsKo') { $values[$name] = $ExecutionContext.SessionState.PSVariable.GetValue("script:$name") }
