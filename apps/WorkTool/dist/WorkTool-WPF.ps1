@@ -1156,7 +1156,7 @@ function Set-WtAppRoot([string]$Path) {
 }
 
 # 큰 저장소를 쓰는 탭이 선택적으로 등록한다. 앱 경로가 정해진 뒤에만 시험/사용자 데이터 경로를 연다.
-# 준비 결과는 읽기 검증을 통과한 첫 Read-WtStore에서만 사용하며 외부 변경이면 버린다.
+# 읽은 원자료는 준비 함수에서도 수정하지 않는다. 파일 지문과 읽기 검증을 통과한 경우만 재사용한다.
 function Register-WtStorePreparation {
     param([string]$Name, [Management.Automation.CommandInfo]$Prepare, [Management.Automation.CommandInfo[]]$Functions, $Context, [string]$CacheName)
     $script:storePreparers[$Name] = @{ Prepare = $Prepare; Functions = $Functions; Context = $Context; CacheName = $CacheName }
@@ -1254,16 +1254,29 @@ function Start-WtStorePreparation([string]$Name) {
     $path = Get-WtStorePath $Name
     $cachePath = if ($spec.CacheName) { Get-WtStorePath $spec.CacheName } else { '' }
     try {
+        $ready = [Collections.Concurrent.ConcurrentQueue[object]]::new()
         $functions = @($spec.Functions) + @($spec.Prepare) + @(Get-Command Read-WtPreparedDocument, Read-WtCacheFile)
         $work = Start-WtWork -Script {
-            param($path, $prepare, $context, $cachePath)
+            param($path, $prepare, $context, $cachePath, $ready)
             $read = Read-WtPreparedDocument $path
+            # 원자료/직렬화 조각은 여기서 완성된다. 뒤에서 Value를 붙일 해시 테이블과는 분리해 넘긴다.
+            $ready.Enqueue(@{ Document = $read.Document; Serialization = $read.Serialization; Stamp = $read.Stamp })
             $cache = if ($cachePath) { Read-WtCacheFile $cachePath } else { $null }
             $read.Value = & $prepare $read.Document $cache $context
             $read
-        } -ArgumentList $path, $spec.Prepare.Name, $spec.Context, $cachePath -Functions $functions -Session Default
-        $script:storePreparations[$Name] = @{ Work = $work; Used = $false; Value = $null; Stamp = $null }
+        } -ArgumentList $path, $spec.Prepare.Name, $spec.Context, $cachePath, $ready -Functions $functions -Session Default
+        $script:storePreparations[$Name] = @{ Work = $work; Used = $false; Value = $null; Stamp = $null; Ready = $ready; Read = $null }
     } catch { }   # 준비가 실패하면 보통 읽기가 기존 오류 표시 경로로 알린다.
+}
+
+# 준비 중에도 파일 읽기가 끝났으면 기다리지 않고 받는다. 실패/취소된 작업의 중간 자료는 쓰지 않는다.
+function Get-WtPreparedRead($Preparation) {
+    if (-not $Preparation -or $Preparation.Work.State -ne 'running') { return $null }
+    if ($null -eq $Preparation.Read) {
+        $read = $null
+        if ($Preparation.Ready.TryDequeue([ref]$read)) { $Preparation.Read = $read }
+    }
+    $Preparation.Read
 }
 
 function Get-WtStorePreparation([string]$Name) {
@@ -1709,16 +1722,22 @@ function Read-WtStore {
     $path = Get-WtStorePath $Name
     $key = $path.ToLowerInvariant()
     $prepared = Get-WtStorePreparation $Name
+    $preparation = $script:storePreparations[$Name]
+    $read = if ($prepared) { $prepared.Work.Result } else { Get-WtPreparedRead $preparation }
     $doc = $null; $hasPrepared = $false
     $pending = Get-WtDataWritePending $path
     if ($pending -and $null -ne $pending.Document) {
         $doc = [pscustomobject]$pending.Document
         $hasPrepared = $true
-    } elseif ($prepared -and -not $prepared.Used -and -not $pending) {
+    } elseif ($preparation -and -not $preparation.Used -and -not $pending -and $read -and
+        ($prepared -or $null -eq $read.Document -or ($read.Document -is [pscustomobject] -and $read.Document.schema -eq $Schema))) {
+        # 형식 변환은 원자료를 바꿀 수 있으므로 준비 중에는 기존 읽기 경로로 간다.
         $stamp = Get-WtStoreStamp $Name
-        if ($stamp -ceq "$path|session:$script:storeSession|$($prepared.Stamp)") {
-            $doc = $prepared.Work.Result.Document; $hasPrepared = $true; $prepared.Used = $true
-            if ($prepared.Work.Result.Serialization) { $script:storeSerializers[$key] = $prepared.Work.Result.Serialization }
+        if ($stamp -ceq "$path|session:$script:storeSession|$($read.Stamp)") {
+            $doc = $read.Document; $hasPrepared = $true
+            # 원자료를 먼저 읽었어도 나중에 완성된 준비 결과를 한 번 채택할 기회는 남긴다.
+            if ($prepared) { $prepared.Used = $true }
+            if ($read.Serialization) { $script:storeSerializers[$key] = $read.Serialization }
         }
     }
     try { $text = if ($hasPrepared) { if ($null -eq $doc) { $null } else { 'prepared' } } else { Read-WtJsonText $path } }
