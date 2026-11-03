@@ -16,7 +16,7 @@
 - **[worktool.zip](worktool.zip)** — WorkTool 새 버전(WPF)을 바로 실행하는 묶음. 압축을 풀고 `Start-WorkTool.cmd`를 더블클릭 (개인 PC용, 아래 「업무 PC로 가져가기」 참고). 예제 `scripts\`가 같이 들어 있어 업무 탭에 바로 보입니다
   - 실행 보조 파일 원본: [start-worktool.cmd](apps/WorkTool/wpf/build/start-worktool.cmd) · [start-launcher.ps1](apps/WorkTool/wpf/build/start-launcher.ps1). 시작 뒤 콘솔 창을 남기지 않습니다.
   - 저장소를 받아 둔 PC는 zip 대신 [start-dev.cmd](apps/WorkTool/wpf/start-dev.cmd)를 더블클릭 — 원본을 바로 띄워서 고친 내용이 바로 보입니다.
-  - [실행 파일 검사](apps/WorkTool/wpf/tests/Test-Launcher.ps1) — 임시 전용 GUI로 콘솔 없는 실행·아이콘·특수문자 경로·시작 오류와 `start-dev.cmd`를 검사합니다.
+  - [실행 파일 검사](apps/WorkTool/wpf/tests/Test-Launcher.ps1) — 단일 파일의 콘솔 없는 분리 실행과 개인 PC 실행 파일·아이콘·특수문자 경로·시작 오류를 검사합니다. `-NoDesktop`은 창 없이 실행 정보와 프로세스 분리만 검사합니다.
 - **[apps/WorkTool/](apps/WorkTool/)** — 업무 통합 GUI 앱 (메모 · 근태 · 일정·알람, 트레이 상주)
   - [design/](apps/WorkTool/design/) — 새 화면 시안 (WPF 전환 기준)
     - [활성 작업 목업](apps/WorkTool/design/README.md#활성-작업-목업) — 프로그램별 창·브라우저 탭 표, 선택 닫기. 폰용 확대본·자동 새로 고침 설정·가짜 데이터·목업 생성 스크립트 포함

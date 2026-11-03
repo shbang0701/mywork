@@ -14,29 +14,44 @@
 #>
 #Requires -Version 7.0
 [CmdletBinding()]
-param()
+param(
+    [Parameter(DontShow)][switch]$AppProcess # 실행 보조가 콘솔 없는 앱 프로세스에만 전달한다
+)
 
 $ErrorActionPreference = 'Stop'
+
+# 단일 파일로 실행해도 개인 PC 실행 보조와 같이 GUI만 남긴다.
+# 사용자가 열어 둔 터미널은 건드리지 않고 즉시 돌려주며, -File 전용 실행 프로세스는 여기서 끝난다.
+if (-not $AppProcess) {
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WorkingDirectory = $PSScriptRoot
+    $startInfo.Environment['DOTNET_TieredCompilation'] = '0'
+    foreach ($launchArg in @('-NoLogo', '-NoProfile', '-STA', '-File', $PSCommandPath, '-AppProcess')) {
+        $startInfo.ArgumentList.Add($launchArg)
+    }
+    foreach ($boundName in $PSBoundParameters.Keys) {
+        if ($boundName -eq 'AppProcess') { continue }
+        $boundValue = $PSBoundParameters[$boundName]
+        if ($boundValue -is [System.Management.Automation.SwitchParameter]) {
+            $startInfo.ArgumentList.Add("-${boundName}:$([bool]$boundValue)")
+        } else {
+            $startInfo.ArgumentList.Add("-$boundName")
+            $startInfo.ArgumentList.Add([string]$boundValue)
+        }
+    }
+    foreach ($launchArg in $args) { $startInfo.ArgumentList.Add([string]$launchArg) }
+    $appChild = [System.Diagnostics.Process]::Start($startInfo)
+    $appChild.Dispose()
+    return
+}
 
 # WPF 창은 STA 스레드에서만 띄울 수 있다
 if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
     Write-Host 'WorkTool은 STA 모드에서 실행해야 합니다. 다음처럼 실행하세요:' -ForegroundColor Yellow
     Write-Host "  pwsh -STA -File `"$PSCommandPath`""
     return
-}
-
-# 계층 컴파일의 백그라운드 처리가 화면 조작과 경합하므로 이 앱의 프로세스에서만 끈다.
-if ($env:DOTNET_TieredCompilation -ne '0') {
-    $previousTiered = [Environment]::GetEnvironmentVariable('DOTNET_TieredCompilation', 'Process')
-    $env:DOTNET_TieredCompilation = '0'
-    try {
-        & (Join-Path $PSHOME 'pwsh.exe') -NoLogo -NoProfile -STA -File $PSCommandPath @PSBoundParameters @args
-        $childExit = $LASTEXITCODE
-    } finally {
-        # 같은 콘솔에서 다음에 켤 때도 실제 런타임 설정과 환경 변수 표식이 어긋나지 않게 되돌린다.
-        [Environment]::SetEnvironmentVariable('DOTNET_TieredCompilation', $previousTiered, 'Process')
-    }
-    exit $childExit
 }
 
 $previousRenderMode = $null

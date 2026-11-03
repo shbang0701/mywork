@@ -1,14 +1,16 @@
 <#
 .SYNOPSIS
-    개인 PC 실행 파일이 콘솔 없이 GUI를 띄우고 보조 프로세스를 끝내는지 검사한다.
+    단일 파일과 개인 PC 실행 파일이 콘솔 없이 앱을 띄우고 실행 보조를 끝내는지 검사한다.
 .DESCRIPTION
     임시 데이터 폴더와 전용 WorkTool 창만 사용한다. 사용자 데이터나 기존 창은 조회하지 않는다.
+.PARAMETER NoDesktop
+    GUI를 띄우지 않고 실행 정보와 단일 파일의 프로세스 분리만 검사한다.
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/tests/Test-Launcher.ps1
 #>
 #Requires -Version 7.0
 [CmdletBinding()]
-param()
+param([switch]$NoDesktop)
 
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { Write-Host 'SKIP 실행 파일 (Windows에서만)'; return }
@@ -128,13 +130,14 @@ Exit-WtOwnProcess -ScriptPath $PSCommandPath
 
     $info = New-WtLaunchStartInfo $entry
     Assert-Launcher '콘솔 생성과 셸 실행을 끈다' ($info.CreateNoWindow -and -not $info.UseShellExecute)
-    Assert-Launcher '특수문자 경로를 하나의 파일 인수로 전달한다' ($info.ArgumentList.Count -eq 5 -and $info.ArgumentList[4] -ceq $entry -and $info.WorkingDirectory -ceq $fixture)
+    Assert-Launcher '특수문자 경로와 앱 프로세스 표식을 전달한다' ($info.ArgumentList.Count -eq 6 -and $info.ArgumentList[4] -ceq $entry -and $info.ArgumentList[5] -ceq '-AppProcess' -and $info.WorkingDirectory -ceq $fixture)
     Assert-Launcher '실행 정책 우회 옵션을 넣지 않는다' (-not ($info.ArgumentList -match 'ExecutionPolicy|Bypass|EncodedCommand'))
     Assert-Launcher 'GUI 프로세스에만 계층 컴파일 끄기를 전달한다' ($info.Environment['DOTNET_TieredCompilation'] -ceq '0')
     Push-Location -LiteralPath $fixture
     try { $relative = New-WtLaunchStartInfo '.\WorkTool-WPF.ps1' } finally { Pop-Location }
     Assert-Launcher '상대 경로는 지금 위치 기준 전체 경로로 넘긴다' ($relative.ArgumentList[4] -ceq $entry -and $relative.WorkingDirectory -ceq $fixture)
 
+    if (-not $NoDesktop) {
     $run = Invoke-WtLauncherCmd $fixture 'Start-WorkTool.cmd'
     $state = $run.State
     Assert-Launcher 'CMD는 끝나고 별도 GUI 프로세스만 계속 실행한다' ($run.Bootstrap.HasExited -and -not $run.Gui.HasExited -and $state.Visible)
@@ -151,32 +154,61 @@ Exit-WtOwnProcess -ScriptPath $PSCommandPath
     $dev = Invoke-WtLauncherCmd $devFixture 'start-dev.cmd'
     Assert-Launcher '저장소 실행 파일(start-dev.cmd)도 CMD는 끝나고 원본 GUI만 STA로 남는다' ($dev.Bootstrap.HasExited -and -not $dev.Gui.HasExited -and $dev.State.Visible -and $dev.State.Apartment -eq 'STA')
     Assert-Launcher '저장소 실행 파일의 GUI도 종료 뒤 프로세스가 끝난다' (Stop-WtLauncherGui $dev $devFixture)
+    } else { Write-Host 'SKIP 실행 파일 GUI · 아이콘 검사 (-NoDesktop)' }
 
-    # 실제 진입 코드만 떼어, 앱 대신 인수/종료 코드를 기록한다. 재실행은 최대 한 번이어야 한다.
+    # 실제 진입 코드만 떼어 앱 대신 기다리는 작업을 실행한다. 시작 프로세스는 작업을 기다리지 않고 끝나야 한다.
     $realEntry = [IO.File]::ReadAllText((Join-Path $root 'Start-WorkTool.ps1'))
     $prefix = $realEntry.Substring(0, $realEntry.IndexOf("`ntry {"))
-    $prefix = $prefix.Replace('param()', 'param([string]$Marker)')
+    $prefix = $prefix.Replace('[Parameter(DontShow)][switch]$AppProcess', '[Parameter(DontShow)][switch]$AppProcess, [string]$Marker')
     $prefix = $prefix.Replace("`$ErrorActionPreference = 'Stop'", "`$ErrorActionPreference = 'Stop'`nAdd-Content -LiteralPath (Join-Path `$PSScriptRoot 'hops.txt') -Value `$PID")
+    # 실제 ProcessStartInfo를 잡아, 자식 실행 때 콘솔 생성을 껐는지도 확인한다.
+    $prefix = $prefix.Replace('$appChild = [System.Diagnostics.Process]::Start($startInfo)', @'
+[pscustomobject]@{ NoWindow = $startInfo.CreateNoWindow; Shell = $startInfo.UseShellExecute; ParentTiered = $env:DOTNET_TieredCompilation } |
+    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'launch.json') -Encoding utf8
+$appChild = [System.Diagnostics.Process]::Start($startInfo)
+'@)
     $probe = Join-Path $fixture 'restart-probe.ps1'
     $probeBody = @'
-[pscustomobject]@{ Marker = $Marker; Tiered = $env:DOTNET_TieredCompilation; Apartment = [string][Threading.Thread]::CurrentThread.GetApartmentState() } |
+[pscustomobject]@{ Pid = $PID; Marker = $Marker; AppProcess = [bool]$AppProcess; Tiered = $env:DOTNET_TieredCompilation; Apartment = [string][Threading.Thread]::CurrentThread.GetApartmentState() } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'restart.json') -Encoding utf8
+$deadline = [datetime]::UtcNow.AddSeconds(20)
+while (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'continue'))) {
+    if ([datetime]::UtcNow -gt $deadline) { exit 24 }
+    Start-Sleep -Milliseconds 25
+}
 exit 23
 '@
     [IO.File]::WriteAllText($probe, ($prefix + "`n" + $probeBody), [Text.UTF8Encoding]::new($false))
     foreach ($tiered in '1','0') {
         [IO.File]::WriteAllText((Join-Path $fixture 'hops.txt'), '')
+        foreach ($name in 'restart.json','launch.json','continue') {
+            $oldProbeFile = Join-Path $fixture $name
+            if (Test-Path -LiteralPath $oldProbeFile) { Remove-Item -LiteralPath $oldProbeFile }
+        }
         $probeInfo = [Diagnostics.ProcessStartInfo]::new()
         $probeInfo.FileName = Join-Path $PSHOME 'pwsh.exe'; $probeInfo.UseShellExecute = $false; $probeInfo.CreateNoWindow = $true
         $probeInfo.Environment['DOTNET_TieredCompilation'] = $tiered
         foreach ($arg in @('-NoLogo','-NoProfile','-STA','-File',$probe,'-Marker',"한글 O'Brien & (검사)! %test%")) { $probeInfo.ArgumentList.Add($arg) }
         $probeProcess = [Diagnostics.Process]::Start($probeInfo); $script:owned.Add($probeProcess)
         if (-not $probeProcess.WaitForExit(15000)) { throw '재실행 검사가 끝나지 않았습니다.' }
-        $probeState = Get-Content (Join-Path $fixture 'restart.json') -Raw | ConvertFrom-Json
+        $probeDeadline = [datetime]::UtcNow.AddSeconds(15)
+        $probeState = $null
+        while (-not $probeState -and [datetime]::UtcNow -lt $probeDeadline) {
+            try { $probeState = Get-Content (Join-Path $fixture 'restart.json') -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop }
+            catch { Start-Sleep -Milliseconds 25 }
+        }
+        Assert-Launcher '분리한 앱 프로세스가 검사 상태를 남긴다' ([bool]$probeState)
+        $probeChild = [Diagnostics.Process]::GetProcessById($probeState.Pid); $script:owned.Add($probeChild)
+        [void]$probeChild.Handle # 별도로 찾은 프로세스도 종료 전 핸들을 잡아야 종료 코드를 읽을 수 있다.
+        $launchState = Get-Content (Join-Path $fixture 'launch.json') -Raw | ConvertFrom-Json
         $hops = @(Get-Content (Join-Path $fixture 'hops.txt') | Where-Object { $_ })
-        Assert-Launcher "계층 컴파일 $tiered 입력: 재실행 횟수·인수·종료 코드 보존" (
-            $hops.Count -eq $(if ($tiered -eq '0') { 1 } else { 2 }) -and $probeProcess.ExitCode -eq 23 -and
-            $probeState.Marker -ceq "한글 O'Brien & (검사)! %test%" -and $probeState.Tiered -ceq '0' -and $probeState.Apartment -eq 'STA')
+        Assert-Launcher "계층 컴파일 $tiered 입력: 실행 보조는 끝나고 콘솔 없는 앱만 별도로 남긴다" (
+            $hops.Count -eq 2 -and $probeProcess.ExitCode -eq 0 -and -not $probeChild.HasExited -and
+            $launchState.NoWindow -and -not $launchState.Shell -and $launchState.ParentTiered -ceq $tiered -and
+            $probeState.Marker -ceq "한글 O'Brien & (검사)! %test%" -and $probeState.AppProcess -and $probeState.Tiered -ceq '0' -and $probeState.Apartment -eq 'STA')
+        Set-Content -LiteralPath (Join-Path $fixture 'continue') -Value 'continue' -Encoding utf8
+        $probeEnded = $probeChild.WaitForExit(15000)
+        Assert-Launcher "분리한 앱 프로세스도 스스로 종료한다 (종료 $probeEnded · 코드 $($probeChild.ExitCode))" ($probeEnded -and $probeChild.ExitCode -eq 23)
     }
 
     $bad = Join-Path $fixture 'bad.ps1'

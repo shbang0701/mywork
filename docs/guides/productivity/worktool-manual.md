@@ -11,7 +11,7 @@ WorkTool WPF의 시작 방법과 탭별 사용법을 설명합니다.
 
 - 업무 PC. `apps/WorkTool/dist/WorkTool-WPF.ps1` 전체를 복사해 같은 이름으로 저장합니다.
 - 개인 PC. `worktool.zip`을 받아 압축을 풀고 `Start-WorkTool.cmd`를 실행합니다.
-- PowerShell 실행. 파일을 저장한 폴더에서 `pwsh -File .\WorkTool-WPF.ps1`을 실행합니다.
+- PowerShell 실행. 파일을 저장한 폴더에서 `pwsh -NoLogo -NoProfile -STA -File .\WorkTool-WPF.ps1`을 실행합니다. 앱은 콘솔 없이 별도로 실행되므로 터미널을 닫아도 됩니다. `pwsh -File`로 연 실행용 프로세스는 자동으로 끝납니다.
 - 업무시간. 처음 켤 때 일하는 요일과 시작·끝·점심 시각을 정하고 **시작**을 누릅니다.
 - 업무시간 수정. **설정 → 업무시간**에서 고칩니다. 근태의 초과근무 계산에도 적용됩니다.
 

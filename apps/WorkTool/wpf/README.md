@@ -82,7 +82,7 @@ zip은 `build/Build-Bundle.ps1`이 묶음 파일과 같이 만듭니다.
 ## 업무 PC에서 실행하기
 
 1. `apps/WorkTool/dist/WorkTool-WPF.ps1`을 복사해서, 예전 WorkTool 폴더(예전 `data` 폴더가 있는 곳)에 같은 이름으로 저장합니다.
-2. `pwsh`에서 `.\WorkTool-WPF.ps1`로 실행합니다.
+2. `pwsh`에서 `.\WorkTool-WPF.ps1`로 실행합니다. 앱은 콘솔 없는 별도 프로세스로 뜨고 명령 입력으로 바로 돌아옵니다. 실행에 쓴 터미널은 닫아도 앱이 계속 실행됩니다. `pwsh -File`로 연 실행용 프로세스는 자동으로 끝납니다.
 3. 확인할 것
    - 창이 뜨고, 왼쪽 메뉴에 홈 · 일정 · 근태 · 메모가 보이는지
    - 탭 위에 마우스를 올리거나 다른 앱과 오가도 PC가 버벅이지 않는지
@@ -106,7 +106,7 @@ zip은 `build/Build-Bundle.ps1`이 묶음 파일과 같이 만듭니다.
 
 앱 창과 Chrome·Edge·웨일 탭 제목을 **프로그램별 표**로 보여 줍니다. 실행하지 않은 작업 표시줄 고정 아이콘, 백그라운드 프로세스, WorkTool 자체 창은 대상이 아닙니다. 관리자 권한 앱이나 보안 프로그램이 정보를 제한하는 창은 읽거나 닫지 못할 수 있습니다.
 
-WorkTool을 띄운 터미널(Windows Terminal · PowerShell 창 · VS Code 등)은 표에 `WorkTool 실행 중`으로 보이지만 닫지 않습니다. 그 창을 닫으면 WorkTool도 함께 꺼지기 때문입니다.
+WorkTool은 실행에 쓴 터미널과 분리됩니다. 터미널을 닫아도 앱이 계속 실행됩니다.
 
 **찾기와 선택**
 - 이름 검색(Ctrl+F), 프로그램 필터, 열 머리글 정렬을 지원합니다. 프로그램 묶음을 접고 펼칠 수 있습니다.
@@ -336,7 +336,7 @@ wpf/
   - 파일 · 폴더를 원래 프로그램 · 탐색기로 여는 것은 `Open-WtPath $path`로만 합니다. `-Reveal`은 탐색기에서 골라 보기, `-OpenTypes`는 폴더와 그 확장자만 열고 나머지는 탐색기에서 골라 보기(마크다운 링크), `-NotFound`는 없을 때 알릴 글입니다. 실행 파일을 열기 전에 묻는 것은 부르는 탭이 합니다(문서 탭). 있는지 확인과 셸 열기를 모두 화면 밖에서 하고, 5초 안에 답이 없으면 알립니다(셸에 넘기기 전이면 열지 않고, 넘긴 뒤면 늦게 열릴 수 있다고 알립니다). `Invoke-Item` · `explorer.exe`를 직접 부르지 않습니다(`tests/Test-Core.ps1`이 검사).
   - 되돌릴 수 없는 일(셸 열기 · 프로세스 만들기)을 화면 밖에서 할 때는 그 직전에 잠금 안에서 취소를 보고 `$WtCancel.Committed`를 둡니다. 쓰는 법은 `core/Work.psm1`의 `Start-WtWork` 도움말에 있습니다. 화면이 넘겨받아야 하는 결과(프로세스)는 만든 쪽이 넘길 때까지 들고 있다가, 넘기기 전에 취소 · 종료되면 만든 쪽이 정리합니다(업무 탭 `Start-WtFlowChild` · `Stop-WtFlowStarting`).
   - 끝낼 때(`Register-WtAddon -OnExit { ... }`)는 남은 작업을 `Stop-WtWork $w`로 버리고 기다리지 않습니다. 버린 작업의 `-OnDone`은 불리지 않습니다. 탭이 자기 상태(진행 중 표시 등)를 함께 정리하려고 직접 부르는 것이고, 남은 것은 셸이 버립니다. 실행 공간의 Stop · Close · Dispose와 시간을 정하지 않은 기다림은 응답 없는 작업이 끝나기를 기다려 앱을 멈추게 하므로 쓰지 않습니다. 셸은 탭의 `-OnExit` 뒤에 남은 작업을 모두 버립니다(`Stop-WtAllWork`).
-  - PowerShell은 프로세스가 끝날 때 열린 실행 공간을 모두 닫으며 그 안의 작업이 끝나기를 기다립니다. 응답 없는 OS 요청은 돌아오지 않으므로, 진입 스크립트(`Start-WorkTool.ps1`, 묶음 파일 `WorkTool-WPF.ps1`)는 앱을 끝낸 뒤 `Exit-WtOwnProcess`로 앱 전용 프로세스를 끝냅니다. `-File`로 이 파일을 띄운 프로세스만 끝냅니다. 개인 PC 실행 파일 · `pwsh -STA -File .\WorkTool-WPF.ps1` · 쓰던 창에서 `.\WorkTool-WPF.ps1`(아래 「성능 설정」의 한 번 다시 실행)은 모두 `-File`로 띄운 새 프로세스에서 앱이 돌아서 끝납니다. `DOTNET_TieredCompilation=0`을 미리 둔 창에서 바로 띄우면 그 창을 끄지 않으려고 끝내지 않습니다(이때는 남은 작업이 끝날 때까지 창을 닫을 때 기다릴 수 있습니다). `tests/Test-Core.ps1` · `tests/Test-Launcher.ps1`이 끝나지 않는 작업을 남긴 채 프로세스가 끝나는지 검사합니다.
+  - PowerShell은 프로세스가 끝날 때 열린 실행 공간을 모두 닫으며 그 안의 작업이 끝나기를 기다립니다. 응답 없는 OS 요청은 돌아오지 않으므로, 진입 스크립트(`Start-WorkTool.ps1`, 묶음 파일 `WorkTool-WPF.ps1`)는 앱을 끝낸 뒤 `Exit-WtOwnProcess`로 앱 전용 프로세스를 끝냅니다. 단일 파일 실행도 콘솔 없는 별도 프로세스로 넘기며, 내부 `-AppProcess` 표식으로 다시 넘기지 않게 합니다. 개인 PC 실행 보조도 같은 표식을 전달합니다. 사용자가 열어 둔 터미널은 종료하지 않습니다. `tests/Test-Core.ps1` · `tests/Test-Launcher.ps1`이 앱 전용 프로세스의 종료와 실행 보조의 분리를 검사합니다.
   - 탭 검사에서 응답 없는 공유 폴더는 `tests/TestKit.ps1`의 `New-WtTestGate` · `$wtTestHang`으로 흉내 냅니다. 외부 프로그램 · 관리자 권한 · 실제 서버 없이, 문을 열 때까지 돌아오지 않는 작업을 만듭니다. `$gate = New-WtTestGate`로 문을 만들고, 탭의 화면 밖 코드(`$script:worker` 같은 바꿔 끼울 수 있는 스크립트 블록)를 `$wtTestHang`으로 바꾼 뒤 `$gate.Entered.WaitOne()`으로 작업이 들어왔는지 봅니다. 끝나면 `Remove-WtTestGate $gate`로 문을 열고 남은 작업을 치웁니다. 예: `addons/docs/Test-Docs.ps1`.
     - 바꿔 끼우는 곳은 OS에 닿는 한 곳만으로 좁힙니다. 그 앞에 기다림만 끼우고 실제 코드는 그대로 돌려서, 상태 바꾸기 · 소유권 처리까지 검사에 들어가게 합니다. 예: 저장은 `Write-WtDataFile` 앞(`tests/Test-Reliability.ps1`), 셸 열기는 `Get-WtPathAttributes` · `Invoke-WtShellStart`(`tests/Test-Core.ps1`), 업무 실행은 `Start-WtFlowChild` 앞(`addons/workflows/Test-Workflows.ps1`).
 
@@ -390,7 +390,7 @@ Set-WtMarkdownText $view $text
 
 - 앱은 `DOTNET_TieredCompilation=0`으로 실행합니다. .NET이 뒤에서 코드를 다시 컴파일하는 동안 화면이 굼떠지는 것을 줄이는 성능 설정입니다([설명](https://learn.microsoft.com/en-us/dotnet/core/runtime-config/compilation#tiered-compilation)). 이 앱의 프로세스에만 적용되고, 실행 정책 · 보안 설정 · 레지스트리 · 사용자 환경 변수는 바꾸지 않습니다.
   - 개인 PC 실행 파일(`Start-WorkTool.cmd` · `start-dev.cmd`)은 GUI 프로세스에만 이 값을 넘깁니다.
-  - 업무 PC에서 `.\WorkTool-WPF.ps1`로 켜면 같은 콘솔에서 이 설정으로 한 번 다시 실행합니다. 그만큼 시작이 조금 늦어집니다.
+  - 업무 PC에서 `.\WorkTool-WPF.ps1`로 켜면 콘솔 없는 앱 프로세스에만 이 값을 넘기고 실행에 쓴 터미널로 바로 돌아옵니다. 부모 콘솔의 환경 변수는 바꾸지 않습니다.
 - 탭에 다시 들어올 때는 데이터나 설정이 바뀐 화면만 다시 만듭니다. 문서 · 활성 작업 · 업무 스크립트 목록은 들어올 때마다 다시 모읍니다.
 - 테마는 변경 불가 브러시와 글자 배율별 치수 계산을 재사용합니다. 달라진 자원만 교체해 이미 열린 화면에도 바로 반영합니다.
 - 저장 중인 같은 버전의 내용 표식은 재사용합니다. 파일에 저장된 뒤에는 기존처럼 본문을 읽어 검사하므로, 크기·수정 시각이 같은 외부 변경도 알아봅니다.
