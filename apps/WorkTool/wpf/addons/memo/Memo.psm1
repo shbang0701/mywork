@@ -2052,7 +2052,9 @@ function Update-WtMemoView {
         $reusePrepared = $script:preparedMemo -and [object]::ReferenceEquals($script:preparedMemo.Document, $script:memoStore.Doc) -and
             $stamp -ceq "$($script:shortcutStamp)|$([datetime]::Today.Ticks)"
         if (-not $reusePrepared) { $loaded = @(Get-WtMemoItems) }
-        $script:items = if ($script:preparedMemo) { $script:preparedMemo.Items } else { @(Get-WtMemoSorted $loaded) }
+        # if 결과로 받으면 항목 하나짜리 배열이 풀리므로 분기 안에서 목록을 대입한다.
+        if ($script:preparedMemo) { $script:items = @($script:preparedMemo.Items) }
+        else { $script:items = @(Get-WtMemoSorted $loaded) }
         Start-WtMemoIndexBuild
         $present = @{}
         foreach ($item in $script:items) { $present[$item.id] = $true }
