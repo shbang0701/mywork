@@ -595,6 +595,34 @@ try {
     }
     function Get-TestBody([int]$Pane) { & $memoModule { param($i) Get-WtMemoEditorText $script:panes[$i].Editor } $Pane }
 
+    # 메모가 하나뿐이면 시작 준비 결과의 목록이 if 식에서 풀려 저장할 때 .Clone()이 실패했다(afcde70).
+    # 준비가 끝난 상태로 메모 탭을 열어야 그 길을 지나므로, 파일을 먼저 쓰고 준비를 다시 돌린 뒤 연다
+    $oneTest = New-WtTestData 'memo-one'
+    try {
+        Set-WtAppRoot $oneTest.App; Initialize-WtSettings
+        & $memoModule { $script:memoStore = $null; $script:preparedMemo = $null }
+        $mOne = New-WtMemo; $mOne.id = 'one'; $mOne.title = 'Only'; $mOne.body = 'only body'
+        Save-WtMemoItems @($mOne)
+        Wait-WtTestWrites
+        Set-WtAppRoot $oneTest.App; Initialize-WtSettings
+        $prepWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        while (-not (Get-WtStorePreparation 'memo') -and $prepWatch.ElapsedMilliseconds -lt 15000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+        $onePrepared = [bool](Get-WtStorePreparation 'memo')
+        & $memoModule { $script:memoStore = $null }
+        Show-TestView
+        Set-TestBody 0 'only body edited'
+        $oneSaved = $false; $oneError = ''
+        try { $oneSaved = & $memoModule { Save-WtMemoNow } } catch { $oneError = $_.Exception.Message }
+        Wait-WtTestWrites
+        $oneState = & $memoModule { [pscustomobject]@{ IsArray = $script:items -is [array]; Count = @($script:items).Count; Current = [string]$script:panes[0].Current.Id } }
+        Assert-WtTest '메모 하나: 시작 준비 뒤 열어 고쳐 저장해도 목록이 배열로 남고 오류가 없다' ($onePrepared -and $oneSaved -and -not $oneError -and $oneState.IsArray -and
+            $oneState.Count -eq 1 -and $oneState.Current -ceq 'one' -and ((Get-WtMemoItems) | Where-Object id -eq 'one').body -ceq 'only body edited') $oneError
+    } finally {
+        Set-WtAppRoot $test.App; Initialize-WtSettings
+        & $memoModule { $script:memoStore = $null; $script:preparedMemo = $null; $script:viewStamp = ''; $script:shortcutStamp = ''; $script:shortcutIds = $null }
+        Remove-WtTestData $oneTest
+    }
+
     $mA = New-WtMemo; $mA.id = 'ma'; $mA.title = 'Alpha'; $mA.body = 'alpha body [[Beta]]'; $mA.updated = '2026-10-24 10:00:00'
     $mB = New-WtMemo; $mB.id = 'mb'; $mB.title = 'Beta'; $mB.body = 'beta body'; $mB.updated = '2026-10-23 10:00:00'
     $mC = New-WtMemo; $mC.id = 'mc'; $mC.title = 'Gamma'; $mC.body = 'has keyword zeta'; $mC.updated = '2026-10-22 10:00:00'
