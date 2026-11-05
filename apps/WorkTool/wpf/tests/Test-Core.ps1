@@ -1264,6 +1264,16 @@ flowchart LR
         $helpView = New-WtHelpPage
         $settingsTabs = $settingsView.Children[1]
         $helpTabs = $helpView.Children[1]
+        Assert-Wt 'PageUp · PageDown 판정: 키 값으로 비교(PageDown = Next, PageUp = Prior)' (
+            (Get-WtPageStep ([System.Windows.Input.Key]::PageUp)) -eq -1 -and (Get-WtPageStep ([System.Windows.Input.Key]::Prior)) -eq -1 -and
+            (Get-WtPageStep ([System.Windows.Input.Key]::PageDown)) -eq 1 -and (Get-WtPageStep ([System.Windows.Input.Key]::Next)) -eq 1 -and
+            (Get-WtPageStep ([System.Windows.Input.Key]::Down)) -eq 0)
+        $pickerPopup = [System.Windows.Controls.Primitives.Popup]::new()
+        $pickerTest = New-WtMonthPicker $pickerPopup { param($m) }
+        $pickerTest.Current = [datetime]'2026-11-01'; $pickerTest.Year = 2026; Update-WtMonthPicker $pickerTest
+        $handled = @(foreach ($key in [System.Windows.Input.Key]::PageDown, [System.Windows.Input.Key]::PageDown, [System.Windows.Input.Key]::PageUp, [System.Windows.Input.Key]::Down) { Invoke-WtMonthPickerKey $pickerTest $key })
+        Assert-Wt '해 · 달 고르기: PageDown 두 번 · PageUp 한 번이면 다음 해, 다른 키는 넘김' ($pickerTest.Year -eq 2027 -and $pickerTest.YearText.Text -ceq '2027년' -and
+            ($handled -join ',') -ceq 'True,True,True,False') "$($pickerTest.Year) / $($handled -join ',')"
         Assert-Wt '설정 하위 탭 다섯: 일반 · 업무시간 · 휴무일 · 탭 · 데이터' (
             $settingsTabs -is [System.Windows.Controls.TabControl] -and ($settingsTabs.Items.Header -join ',') -ceq '일반,업무시간,휴무일,탭,데이터')
         Assert-Wt '도움말 하위 탭 셋: 단축키 · 탭 · 정보' (

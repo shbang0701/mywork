@@ -5014,6 +5014,14 @@ function New-WtPollTimer([scriptblock]$Tick) {
 
 function Get-WtUiWorkBudget { @{ Milliseconds = 16; Items = 32 } }
 
+# PageUp → -1, PageDown → 1, 나머지 → 0. 키 이름 글자로 비교하지 않는다:
+# WPF에서 PageDown은 Next와 같은 값이라 글자로 바꾸면 'Next'가 나와 'PageDown'과 맞지 않는다(PageUp도 Prior와 같은 값)
+function Get-WtPageStep($Key) {
+    if ($Key -eq [System.Windows.Input.Key]::PageUp) { return -1 }
+    if ($Key -eq [System.Windows.Input.Key]::PageDown) { return 1 }
+    0
+}
+
 # 해 · 달 고르기. $Popup은 화면 XAML 안에 둔 Popup이다(그래야 창의 테마 자원을 물려받는다).
 # OnPick { param([datetime]$Month) }는 고른 달의 1일을 받는다. 보고 있는 달은 강조색이다.
 # 키: Esc 닫기, PageUp · PageDown 해 이동, Tab · 화살표로 달 칸 이동, Enter · Space 고르기
@@ -5046,17 +5054,17 @@ function New-WtMonthPicker($Popup, [scriptblock]$OnPick, [scriptblock]$OnToday) 
         [void]$col.Children.Add($today); $picker.Today = $today
     }
     $panel.Child = $col
-    $panel.Add_PreviewKeyDown({
-        param($s, $e)
-        $p = $s.Tag
-        switch ($e.Key) {
-            'Escape' { $p.Popup.IsOpen = $false; $e.Handled = $true }
-            'PageUp' { $p.Year--; Update-WtMonthPicker $p; $e.Handled = $true }
-            'PageDown' { $p.Year++; Update-WtMonthPicker $p; $e.Handled = $true }
-        }
-    })
+    $panel.Add_PreviewKeyDown({ param($s, $e) if (Invoke-WtMonthPickerKey $s.Tag $e.Key) { $e.Handled = $true } })
     $Popup.Child = $panel
     $picker
+}
+# 고르기 창의 키: Esc 닫기, PageUp · PageDown 해 이동. 처리했으면 $true
+function Invoke-WtMonthPickerKey($Picker, $Key) {
+    if ($Key -eq [System.Windows.Input.Key]::Escape) { $Picker.Popup.IsOpen = $false; return $true }
+    $step = Get-WtPageStep $Key
+    if (-not $step) { return $false }
+    $Picker.Year += $step; Update-WtMonthPicker $Picker
+    $true
 }
 function Update-WtMonthPicker($Picker) {
     $Picker.YearText.Text = "$($Picker.Year)년"
@@ -5092,7 +5100,7 @@ function Get-WtVisualChild($Root, [type]$Type) {
     $null
 }
 
-Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker
+Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
 Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, New-WtMinuteInput, New-WtContextMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
@@ -19400,7 +19408,7 @@ function New-WtScheduleView {
     $script:view.MonthButton.Add_Click({ Open-WtMonthPicker $script:picker $script:month })
     $script:view.Days.Add_PreviewKeyDown({
         param($s, $e)
-        $step = switch ($e.Key) { 'PageUp' { -1 } 'PageDown' { 1 } default { 0 } }
+        $step = Get-WtPageStep $e.Key
         if (-not $step) { return }
         $e.Handled = $true
         $script:month = $script:month.AddMonths($step); Update-WtScheduleView

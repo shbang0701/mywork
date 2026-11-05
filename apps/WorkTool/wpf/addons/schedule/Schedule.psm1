@@ -75,7 +75,7 @@ function New-WtScheduleView {
     $script:view.MonthButton.Add_Click({ Open-WtMonthPicker $script:picker $script:month })
     $script:view.Days.Add_PreviewKeyDown({
         param($s, $e)
-        $step = switch ($e.Key) { 'PageUp' { -1 } 'PageDown' { 1 } default { 0 } }
+        $step = Get-WtPageStep $e.Key
         if (-not $step) { return }
         $e.Handled = $true
         $script:month = $script:month.AddMonths($step); Update-WtScheduleView
