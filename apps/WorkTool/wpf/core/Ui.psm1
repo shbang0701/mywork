@@ -1834,6 +1834,53 @@ $script:stylesXaml = @'
   </Style>
   <Style x:Key="Schedule.EventTime" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Width" Value="64"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Margin" Value="0,2,0,0"/></Style>
   <Style x:Key="Schedule.EventTitle" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <!-- 일정 2단계 관련 메모(디자인 README 「일정」): 폼 맨 아래 머리 · 줄 32 · 단추 줄, 일정 · 루틴 줄 끝 개수 -->
+  <Style x:Key="Schedule.LinkSection" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
+  <Style x:Key="Schedule.LinkHead" TargetType="TextBlock" BasedOn="{StaticResource Schedule.FieldLabel}"/>
+  <Style x:Key="Schedule.LinkRow" TargetType="Button" BasedOn="{StaticResource Schedule.EventRow}"><Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/></Style>
+  <Style x:Key="Schedule.LinkBody" TargetType="DockPanel"><Setter Property="Margin" Value="8,0"/></Style>
+  <Style x:Key="Schedule.LinkIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,8,0"/></Style>
+  <Style x:Key="Schedule.LinkTitle" TargetType="TextBlock" BasedOn="{StaticResource Schedule.EventTitle}"/>
+  <Style x:Key="Schedule.LinkScope" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
+  <Style x:Key="Schedule.LinkButtons" TargetType="StackPanel"><Setter Property="Orientation" Value="Horizontal"/><Setter Property="Margin" Value="0,8,0,0"/></Style>
+  <Style x:Key="Schedule.LinkChevron" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="10"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="8,0,0,0"/></Style>
+  <Style x:Key="Schedule.LinkCount" TargetType="StackPanel"><Setter Property="Orientation" Value="Horizontal"/><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.LinkCountIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="0,0,4,0"/></Style>
+  <Style x:Key="Schedule.LinkCountText" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <!-- 메모 고르기 창(New-WtModal 위): 목록 240, 두 줄 48, 이미 붙은 메모는 흐린 제목 + 「붙어 있음」으로 고를 수 없음 -->
+  <DataTemplate x:Key="Memo.PickItem">
+    <StackPanel>
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Right" Text="붙어 있음" Visibility="{Binding LinkedShown}" Style="{DynamicResource T.CaptionMuted}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+        <TextBlock x:Name="PickTitle" Text="{Binding Title}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+      </DockPanel>
+      <TextBlock Text="{Binding Sub}" Style="{DynamicResource T.CaptionMuted}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+    </StackPanel>
+    <DataTemplate.Triggers><DataTrigger Binding="{Binding Linked}" Value="True"><Setter TargetName="PickTitle" Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></DataTrigger></DataTemplate.Triggers>
+  </DataTemplate>
+  <Style x:Key="Memo.PickRow" TargetType="ListBoxItem" BasedOn="{StaticResource Row.TwoLine}">
+    <Setter Property="IsEnabled" Value="{Binding Selectable}"/>
+    <Style.Triggers><Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/><Setter Property="Cursor" Value="Arrow"/></Trigger></Style.Triggers>
+  </Style>
+  <Style x:Key="Memo.PickList" TargetType="ListBox" BasedOn="{StaticResource List}">
+    <Setter Property="ItemTemplate" Value="{StaticResource Memo.PickItem}"/>
+    <Setter Property="ItemContainerStyle" Value="{StaticResource Memo.PickRow}"/>
+    <Setter Property="Height" Value="240"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+  <Style x:Key="Memo.PickEmpty" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="IsHitTestVisible" Value="False"/></Style>
+  <!-- 메모 새 창(New-WtSideWindow): 창 바탕 위 흰 카드(가장자리 8, 위 4), 글 위 24 · 좌우 44(창이 480보다 좁으면 20), 제목 F.Memo.H1 -->
+  <Style x:Key="SideWindow.Body" TargetType="Border" BasedOn="{StaticResource Panel.Surface}"><Setter Property="Margin" Value="8,4,8,8"/></Style>
+  <Style x:Key="SideWindow.ToolText" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0,0,0"/></Style>
+  <Style x:Key="SideWindow.ToolIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/></Style>
+  <Style x:Key="MemoWindow.Text" TargetType="StackPanel"><Setter Property="Margin" Value="44,24,44,24"/><Setter Property="MaxWidth" Value="680"/></Style>
+  <Style x:Key="MemoWindow.TextNarrow" TargetType="StackPanel" BasedOn="{StaticResource MemoWindow.Text}"><Setter Property="Margin" Value="20,24,20,24"/></Style>
+  <Style x:Key="MemoWindow.Title" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H1}"/><Setter Property="FontWeight" Value="{DynamicResource F.Memo.H1.Weight}"/><Setter Property="LineHeight" Value="{DynamicResource F.Memo.H1.LineHeight}"/>
+  </Style>
+  <Style x:Key="MemoWindow.Meta" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Margin" Value="0,4,0,12"/></Style>
   <!-- 설정 → 휴무일: 해 이동 줄과 간단한 표(폭 720, 머리 32 · 행 32, 셀 좌우 12, 행 사이 선 B.Border.Muted). 행은 우클릭 · Delete · F2 -->
   <Style x:Key="T.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></Style>
   <Style x:Key="Holiday.Bar" TargetType="DockPanel"><Setter Property="Width" Value="720"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,4,0,8"/></Style>
@@ -2888,3 +2935,70 @@ function New-WtHomePinContextMenu {
 }
 
 Export-ModuleMember -Function New-WtHomeLayout, New-WtHomePinContextMenu, New-WtHomePinMenuItem, New-WtShortcutCard, New-WtMiniCalendar, New-WtTimeline, Set-WtTimelineLayout, New-WtNextEventLine, Update-WtNextEventLine, Update-WtTimelineNow, Set-WtTargetRowSelected
+
+# ---- 따로 뜨는 창 (일정 2단계: 메모 새 창) -----------------------------------------------------------
+# 앱 창과 같은 32 제목 줄(표식 · 제목 · 최대화 · 닫기) + 도구 줄 40 + 흰 카드 본문. 모양은 여기서만 정하고, 내용은 부르는 탭이 채운다.
+# 앱 창이 떠 있으면 Owner로 붙여 함께 숨고 닫히며, 앱 창의 테마 자원을 합친다(New-WtModal과 같음).
+function Get-WtSideWindowXaml {
+@'
+<Window {NS} Width="640" Height="560" MinWidth="400" MinHeight="300" WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="False"
+    WindowStartupLocation="CenterOwner" UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Ideal"
+    FontFamily="{DynamicResource Font.UI}" FontSize="{DynamicResource F.Body}" Foreground="{DynamicResource B.Text}" Background="{DynamicResource B.Bg.Canvas}">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="32" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
+  <Grid x:Name="Frame">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <DockPanel Height="{DynamicResource F.Chrome.Height}">
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button x:Name="MaxButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최대화" AutomationProperties.Name="최대화">
+          <TextBlock x:Name="MaxGlyph" Text="&#xE922;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+        </Button>
+        <Button x:Name="CloseButton" Style="{DynamicResource Btn.Close}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="닫기" AutomationProperties.Name="닫기">
+          <TextBlock Text="&#xE8BB;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+        </Button>
+      </StackPanel>
+      <StackPanel Orientation="Horizontal">
+        <Border Style="{DynamicResource Shell.Brand}"><TextBlock Text="W" Style="{DynamicResource Shell.BrandLetter}"/></Border>
+        <TextBlock x:Name="TitleText" Style="{DynamicResource T.Sub}" Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+      </StackPanel>
+    </DockPanel>
+    <DockPanel Grid.Row="1" Height="40" Margin="16,0,8,0">
+      <StackPanel x:Name="ToolRight" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"/>
+      <StackPanel x:Name="ToolLeft" Orientation="Horizontal" VerticalAlignment="Center"/>
+    </DockPanel>
+    <Border x:Name="Body" Grid.Row="2" Style="{DynamicResource SideWindow.Body}"/>
+  </Grid>
+</Window>
+'@
+}
+
+# 결과: @{ Window; Title(TextBlock); ToolLeft; ToolRight; Body(Border) }. 보이기(Show)는 부르는 쪽이 한다
+function New-WtSideWindow([string]$Title, [double]$Width = 640, [double]$Height = 560) {
+    $xaml = Get-WtSideWindowXaml
+    $w = ConvertFrom-WtXaml $xaml
+    $owner = if (Get-Command Get-WtWindow -ErrorAction Ignore) { Get-WtWindow } else { $null }
+    if ($owner -and $owner.IsVisible) { $w.Owner = $owner; $w.Resources.MergedDictionaries.Add($owner.Resources) }
+    else { $w.WindowStartupLocation = 'CenterScreen'; $w.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary)) }
+    $w.Width = $Width; $w.Height = $Height; $w.Title = $Title
+    $named = Get-WtNamedElements $w $xaml
+    $named.TitleText.Text = $Title
+    $named.CloseButton.Add_Click({ param($s, $e) [System.Windows.Window]::GetWindow($s).Close() })
+    $named.MaxButton.Add_Click({
+            param($s, $e)
+            $win = [System.Windows.Window]::GetWindow($s)
+            $win.WindowState = if ($win.WindowState -eq 'Maximized') { 'Normal' } else { 'Maximized' }
+        })
+    # 최대화하면 WindowChrome이 창 테두리만큼 화면 밖으로 그리므로 그만큼 안쪽으로 당긴다
+    $w.Add_StateChanged({
+            param($s, $e)
+            $max = $s.WindowState -eq 'Maximized'
+            $s.FindName('MaxGlyph').Text = [string][char]$(if ($max) { 0xE923 } else { 0xE922 })
+            $s.FindName('MaxButton').ToolTip = if ($max) { '이전 크기로 복원' } else { '최대화' }
+            $edge = [System.Windows.SystemParameters]::WindowResizeBorderThickness
+            $s.FindName('Frame').Margin = if ($max) { [System.Windows.Thickness]::new($edge.Left + 2, $edge.Top + 2, $edge.Right + 2, $edge.Bottom + 2) } else { [System.Windows.Thickness]::new(0) }
+        })
+    @{ Window = $w; Title = $named.TitleText; ToolLeft = $named.ToolLeft; ToolRight = $named.ToolRight; Body = $named.Body }
+}
+
+Export-ModuleMember -Function New-WtSideWindow

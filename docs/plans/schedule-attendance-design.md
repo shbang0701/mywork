@@ -705,7 +705,7 @@ schema와 고정 시험 자료는 그대로입니다. 편집 함수는 먼저 �
 - `Add-WtScheduleLink -Store -Id -Page -Key [-Date] [-At]`, `Remove-WtScheduleLink -Store -Id -Page -Key [-Date] [-At]` → `{ Success, Reason, Id, Store }`.
   - 지운 · 읽기 전용 · 고칠 항목은 거부합니다. 일정의 날짜 연결은 실제 회차(반복 규칙 · 건너뛴 날 포함 판단)여야 합니다. 루틴의 날짜 연결은 거부합니다.
   - 없는 연결을 빼거나 이미 있는 연결을 더하면 저장하지 않고 성공(`Store`는 그대로)입니다.
-- 화면은 연결을 바로 저장하고, 열어 둔 편집 폼의 핸들을 결과 `Store`로 바꿉니다. 그래야 폼의 [저장]이 낡은 핸들로 거부되지 않습니다(1.9). 폼 저장(`Save-WtScheduleItem` · `Save-WtRoutine`)은 `links`를 바꾸지 않습니다.
+- 화면은 연결을 바로 저장하고, 목록을 다시 그린 뒤 그때 읽은 핸들을 열어 둔 편집 폼에 넘깁니다. 다시 읽으면 그 전 핸들(저장 결과 `Store` 포함)은 낡기 때문입니다(1.9). 그래야 폼의 [저장]이 낡은 핸들로 거부되지 않습니다. 폼 저장(`Save-WtScheduleItem` · `Save-WtRoutine`)은 `links`를 바꾸지 않습니다.
 
 ### 13.4 탭 사이 약속 — 코어 등록 목록 `Related` (`core/Addons.psm1`)
 

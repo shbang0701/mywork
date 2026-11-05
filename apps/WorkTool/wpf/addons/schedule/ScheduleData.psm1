@@ -15,6 +15,7 @@
 #              주는 월요일에 시작한다(격주를 셀 때). 회차 하나는 "<id>@<원래 날짜>"로 가리킨다
 #   alarms   [ { before: 분 } ]. 시작 몇 분 전(하루 종일은 그날 0시 기준). before가 null이면 꺼진 알람, before가 없는 알람(더 새 앱의 모양)은 울리지 않는다
 #   tags     [ 글 ]
+#   links    [ { page, key, date } ] 선택 칸. 다른 탭 항목(메모 등)과의 연결. date = 회차의 원래 날짜 | null(모든 회차). 루틴도 같은 칸(늘 null). 설계 13장
 #   rev      사람이 고친 횟수(0부터, 고칠 때마다 +1, core\Records.psm1 Set-WtItemEdited). 다시 가져오기가 「이 앱에서 고쳤는지」를 이것으로 본다
 #   created · updated · deleted   앱이 찍는 시각. deleted가 있으면 지운 항목(목록에서 숨김, 90일 뒤 { id, deleted }만 남김)
 #   origin   null 또는 { from: "winforms-csv", at, rev, row: 예전 CSV 줄 그대로, via: "schema1" · prev: 올리기 전 항목(1단계 WPF 파일에서 올렸을 때),
@@ -243,15 +244,16 @@ function Read-WtSchChange($Entry, [string]$Key, $Change) {
 <#
 저장된 항목 하나 → 화면 · 계산용 값. 저장 파일은 바꾸지 않는다(Item에 원래 객체가 그대로 있다).
 State: ok(계산 · 알람에 씀) · readonly(새 버전의 값이 있어 읽기만) · broken(고칠 항목) · deleted(지운 항목)
-나머지: Id · Kind · Title · Note · Start · End · AllDay · LastDay · Repeat(규칙 | $null) · Alarms(int[]) · Tags · Problem(이유)
+나머지: Id · Kind · Title · Note · Start · End · AllDay · LastDay · Repeat(규칙 | $null) · Alarms(int[]) · Tags · Links([{ Page, Key, Date }]) · Problem(이유)
 #>
 function ConvertFrom-WtScheduleItem($Item) {
     $e = [ordered]@{ Id = ''; Item = $Item; State = 'ok'; Problem = ''; Kind = ''; Title = ''; Note = ''
-        Start = $null; End = $null; AllDay = $true; LastDay = $null; Repeat = $null; Alarms = @(); Tags = @() }
+        Start = $null; End = $null; AllDay = $true; LastDay = $null; Repeat = $null; Alarms = @(); Tags = @(); Links = @() }
     if (Test-WtDeleted $Item) { $e.Id = [string]$Item.id; $e.State = 'deleted'; return [pscustomobject]$e }
     if (-not (Test-WtSchObject $Item)) { $e.State = 'broken'; $e.Problem = '항목 모양이 틀렸습니다'; return [pscustomobject]$e }
     $e.Id = [string]$Item.id; $e.Kind = [string]$Item.kind; $e.Title = [string]$Item.title; $e.Note = [string]$Item.note
     $e.Tags = @(foreach ($t in @($Item.tags)) { if ($null -ne $t -and "$t" -ne '') { [string]$t } })
+    $e.Links = @(Read-WtSchLinks $Item)
     $problem = ''
     $timing = Get-WtSchTiming $Item.start $Item.end
     if ($timing.Problem) { $problem = $timing.Problem }
@@ -723,6 +725,9 @@ function Save-WtScheduleItem($Store, $Patch, [string]$Id, [string]$FromDate, [st
             Set-WtItemEdited $previous $At
         } else { [void](Set-WtRecordDeleted $previous $true $At) }
         $edit.Items[$edit.Index] = $previous
+        # 연결: 옛 계열은 null + 나누는 날 앞 날짜, 새 계열은 null + 나누는 날부터의 날짜(설계 13.2)
+        if ($null -ne (Get-WtField $previous 'links')) { Set-WtField $previous 'links' @(Split-WtSchLinks (Get-WtField $previous 'links') $cut -Before) }
+        if ($null -ne (Get-WtField $edit.Item 'links')) { Set-WtField $edit.Item 'links' @(Split-WtSchLinks (Get-WtField $edit.Item 'links') $cut) }
         Set-WtField $edit.Item 'id' (New-WtId)
         Set-WtField $edit.Item 'origin' ([pscustomobject]@{ from = 'split'; id = $Id; at = $At })
         Set-WtField $edit.Item 'created' $At
@@ -790,6 +795,92 @@ function Set-WtScheduleOccurrence($Store, [string]$Id, [string]$OriginalDate, $P
     [pscustomobject]@{ Success = $true; Reason = ''; Id = $Id; Store = $next }
 }
 
+# ---- 다른 탭 항목과의 연결 (links, 설계 13장) ---------------------------------------------------
+
+# 원소 하나 → { Page, Key, Date } | $null(모양이 틀림: 화면 · 계산에서 빼고 저장할 때 그대로 둔다)
+function Read-WtSchLink($Link) {
+    if (-not (Test-WtRecordObject $Link)) { return $null }
+    $page = Get-WtField $Link 'page'; $key = Get-WtField $Link 'key'; $date = Get-WtField $Link 'date'
+    if ($page -isnot [string] -or -not $page -or $key -isnot [string] -or -not $key) { return $null }
+    if ($null -ne $date -and ($date -isnot [string] -or $null -eq (ConvertFrom-WtDateText $date))) { return $null }
+    [pscustomobject]@{ Page = $page; Key = $key; Date = $date }
+}
+function Read-WtSchLinks($Item) {
+    $links = Get-WtField $Item 'links'
+    if ($links -isnot [array]) { return }
+    foreach ($l in $links) { $r = Read-WtSchLink $l; if ($r) { $r } }
+}
+# 계열을 나눌 때 원소를 고른다. -Before: 나누는 날 앞 날짜만(옛 계열), 아니면 그날부터(새 계열). null · 모양이 틀린 원소는 양쪽에 둔다
+function Split-WtSchLinks($Links, [datetime]$Cut, [switch]$Before) {
+    foreach ($l in @($Links)) {
+        $r = Read-WtSchLink $l
+        if (-not $r -or $null -eq $r.Date) { $l; continue }
+        $day = ConvertFrom-WtDateText $r.Date
+        if (($Before -and $day -lt $Cut) -or (-not $Before -and $day -ge $Cut)) { $l }
+    }
+}
+
+# 그 회차에 붙은 연결: date가 null인 것 + 그 날짜인 것. Date를 안 주면 null인 것만(루틴 · 모든 회차)
+function Get-WtScheduleLinks($Entry, $Date) {
+    $text = if ($null -eq $Date) { $null } elseif ($Date -is [datetime]) { ConvertTo-WtDateText $Date } else { [string]$Date }
+    foreach ($l in @($Entry.Links)) { if ($l -and $l.Page -and ($null -eq $l.Date -or ($text -and $l.Date -ceq $text))) { $l } }
+}
+# 저장된 항목(일정 · 루틴) 하나의 연결을 지금 파일에서 읽는다. 편집 폼이 붙이기 · 빼기 뒤에 다시 그릴 때 쓴다
+function Get-WtScheduleItemLinks([string]$Id, $Date) {
+    $data = Get-WtScheduleData
+    if ($data.Error) { throw $data.Error }
+    foreach ($item in @($data.Items)) {
+        if (-not (Test-WtRecordObject $item) -or [string](Get-WtField $item 'id') -cne $Id -or (Test-WtDeleted $item)) { continue }
+        Get-WtScheduleLinks ([pscustomobject]@{ Links = @(Read-WtSchLinks $item) }) $Date
+        return
+    }
+}
+
+# 연결 더하기 · 빼기. 일정 · 루틴 모두. 결과 Success · Reason · Id · Store(다음 저장 핸들, 바뀐 게 없으면 그대로)
+function Set-WtScheduleLinkCore($Store, [string]$Id, [string]$Page, [string]$Key, [string]$Date, [bool]$Add, [string]$At) {
+    $fail = [pscustomobject]@{ Success = $false; Reason = ''; Id = $Id; Store = $Store }
+    if ($Store.Name -cne 'schedule' -or -not (ConvertFrom-WtStamp $At)) { $fail.Reason = '일정 핸들 · 앱 시각을 확인하세요'; return $fail }
+    if (-not $Id -or -not $Page -or -not $Key) { $fail.Reason = '연결할 항목을 고르세요'; return $fail }
+    $day = $null
+    if ($Date) { $day = ConvertFrom-WtDateText $Date; if (-not $day) { $fail.Reason = '회차 날짜를 확인하세요'; return $fail } }
+    $edit = Get-WtRecordEdit $Store $Id
+    if (-not $edit.Success) { $fail.Reason = $edit.Reason; return $fail }
+    $isRoutine = (Get-WtField $edit.Item 'kind') -ceq 'routine'
+    $entry = if ($isRoutine) { ConvertFrom-WtRoutineItem $edit.Item } else { ConvertFrom-WtScheduleItem $edit.Item }
+    if ($entry.State -ne 'ok') { $fail.Reason = $(if ($entry.Problem) { $entry.Problem } else { '지운 항목은 연결할 수 없습니다' }); return $fail }
+    if ($Add -and $day) {
+        if ($isRoutine) { $fail.Reason = '루틴은 모든 날에만 연결합니다'; return $fail }
+        $real = if ($entry.Repeat) { (Get-WtRepeatDates $entry.Repeat $entry.Start $day $day).Count -gt 0 -and -not $entry.Repeat.Skip.Contains($Date) } else { $day -eq $entry.Start.Date }
+        if (-not $real) { $fail.Reason = '일정에 없는 회차입니다'; return $fail }
+    }
+    $raw = Get-WtField $edit.Item 'links'
+    $list = [System.Collections.Generic.List[object]]::new()
+    if ($raw -is [array]) { foreach ($l in $raw) { $list.Add($l) } }
+    $wantDate = if ($Date) { $Date } else { $null }
+    $same = { param($r) $r -and $r.Page -ceq $Page -and $r.Key -ceq $Key -and $r.Date -ceq $wantDate }
+    $changed = $false
+    if ($Add) {
+        $exists = @($list | Where-Object { $r = Read-WtSchLink $_; (& $same $r) -or ($r -and $r.Page -ceq $Page -and $r.Key -ceq $Key -and $null -eq $r.Date) }).Count -gt 0
+        if (-not $exists) { $list.Add([pscustomobject][ordered]@{ page = $Page; key = $Key; date = $wantDate }); $changed = $true }
+    } else {
+        for ($i = $list.Count - 1; $i -ge 0; $i--) { if (& $same (Read-WtSchLink $list[$i])) { $list.RemoveAt($i); $changed = $true } }
+    }
+    if (-not $changed) { return [pscustomobject]@{ Success = $true; Reason = ''; Id = $Id; Store = $Store } }
+    Set-WtField $edit.Item 'links' $list.ToArray()
+    Set-WtItemEdited $edit.Item $At
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At))
+    $script:cache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $Id; Store = $next }
+}
+function Add-WtScheduleLink($Store, [string]$Id, [string]$Page, [string]$Key, [string]$Date, [string]$At = (Get-WtStamp)) {
+    if ($null -eq $Store) { $Store = Open-WtScheduleStore }
+    Set-WtScheduleLinkCore $Store $Id $Page $Key $Date $true $At
+}
+function Remove-WtScheduleLink($Store, [string]$Id, [string]$Page, [string]$Key, [string]$Date, [string]$At = (Get-WtStamp)) {
+    if ($null -eq $Store) { $Store = Open-WtScheduleStore }
+    Set-WtScheduleLinkCore $Store $Id $Page $Key $Date $false $At
+}
+
 # ---- 알람 (앱이 켜져 있는 동안, 소리 · 타이머 없음) --------------------------------------------
 
 function Open-WtScheduleAlarmStore { Open-WtStore -Name 'schedule-state' -Schema 1 }
@@ -852,10 +943,11 @@ function Save-WtScheduleAlarms($Store, [object[]]$Alarms, [string]$At = (Get-WtS
 # 기존 일정 해석기는 routine을 계속 읽기 전용으로 본다. 루틴만 이 해석기로 따로 읽는다.
 function ConvertFrom-WtRoutineItem($Item) {
     $e = [pscustomobject]@{ Id = ''; Title = ''; Item = $Item; State = 'ok'; Problem = ''; Start = $null
-        Freq = ''; Days = @(); Every = $null; From = $null; To = $null; WorkdaysOnly = $false }
+        Freq = ''; Days = @(); Every = $null; From = $null; To = $null; WorkdaysOnly = $false; Links = @() }
     if (-not (Test-WtRecordObject $Item)) { $e.State = 'broken'; $e.Problem = '항목 모양이 틀렸습니다'; return $e }
     $e.Id = [string](Get-WtField $Item 'id'); $e.Title = [string](Get-WtField $Item 'title')
     if (Test-WtDeleted $Item) { $e.State = 'deleted'; return $e }
+    $e.Links = @(Read-WtSchLinks $Item)
     $rule = Get-WtField $Item 'routine'
     $e.Freq = [string](Get-WtField $rule 'freq')
     if ((Get-WtField $Item 'kind') -cne 'routine' -or ((Test-WtRecordObject $rule) -and $e.Freq -cnotin 'daily', 'weekly', 'hourly')) {
@@ -1211,4 +1303,4 @@ Export-ModuleMember -Function Open-WtScheduleStore, Save-WtScheduleItems, Get-Wt
     Import-WtScheduleLegacy, Get-WtScheduleLastImport, Save-WtScheduleItem, Set-WtScheduleDeleted, Set-WtScheduleOccurrence,
     Open-WtScheduleAlarmStore, Get-WtScheduleAlarms, Save-WtScheduleAlarms,
     New-WtRoutine, Save-WtRoutine, Set-WtRoutineDeleted, Get-WtRoutineSlots, Set-WtRoutineCheck, Get-WtRoutineHistory,
-    Get-WtEventDone, Set-WtEventCheck, Get-WtScheduleLanes
+    Get-WtEventDone, Set-WtEventCheck, Get-WtScheduleLanes, Get-WtScheduleLinks, Get-WtScheduleItemLinks, Add-WtScheduleLink, Remove-WtScheduleLink

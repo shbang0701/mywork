@@ -42,6 +42,8 @@ function Read-WtTestDoc { Wait-WtTestWrites; [System.IO.File]::ReadAllText((Get-
 function Get-WtTestKeys($Occurrences) { (@($Occurrences) | ForEach-Object { $_.Key }) -join ',' }
 function Get-WtTestJson($Value) { ConvertTo-Json -InputObject $Value -Depth 20 -Compress }
 function Get-WtTestById($Entries) { $m = @{}; foreach ($e in @($Entries)) { if ($e.Id -and -not $m.ContainsKey($e.Id)) { $m[$e.Id] = $e } }; $m }
+# 논리 트리의 요소를 모두 (폼 안 단추 · 글 찾기)
+function Get-WtTestLogical($Root) { if ($null -eq $Root) { return }; $Root; if ($Root -is [Windows.DependencyObject]) { foreach ($c in [Windows.LogicalTreeHelper]::GetChildren($Root)) { Get-WtTestLogical $c } } }
 function ConvertTo-WtTestItem([string]$Json) { $Json | ConvertFrom-Json -Depth 20 -DateKind String }
 
 try {
@@ -809,6 +811,56 @@ try {
         $cAgain = Set-WtEventCheck -Event $checkOne.Id -Date '2026-11-03' -Done $true -At '2026-11-03T13:00:00+09:00'
         Assert-WtTest '일정 체크 다시: 같은 기록을 되살린다(줄이 늘지 않음)' ($cAgain.Success -and $cAgain.Id -ceq $c1.Id -and (Get-WtEventDone).Contains("$($checkOne.Id)@2026-11-03"))
 
+        # ---- 2단계: 연결(links). 다른 달(2027년 3월)에 만들고 끝나면 지워서 아래 11월 화면 검사와 섞이지 않게 한다 ----
+        $linkOne = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '연결 하루'; start = @{ date = '2027-03-03'; time = '10:00' } }
+        $linkWeekly = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '연결 반복'; start = @{ date = '2027-03-01'; time = '09:00' }; repeat = @{ freq = 'weekly' } }
+        $l1 = Add-WtScheduleLink -Id $linkWeekly.Id -Page memo -Key 'm-all' -At '2027-03-01T09:00:00+09:00'
+        $l2 = Add-WtScheduleLink -Store $l1.Store -Id $linkWeekly.Id -Page memo -Key 'm-day' -Date '2027-03-08' -At '2027-03-01T09:01:00+09:00'
+        $l3 = Add-WtScheduleLink -Store $l2.Store -Id $linkWeekly.Id -Page memo -Key 'm-day' -Date '2027-03-08' -At '2027-03-01T09:02:00+09:00'
+        $l4 = Add-WtScheduleLink -Id $linkWeekly.Id -Page memo -Key 'm-all' -Date '2027-03-15' -At '2027-03-01T09:03:00+09:00'
+        $lBad = Add-WtScheduleLink -Id $linkWeekly.Id -Page memo -Key 'm-x' -Date '2027-03-09' -At '2027-03-01T09:04:00+09:00'
+        $lNone = Add-WtScheduleLink -Id 'no-such-event' -Page memo -Key 'm-x' -At '2027-03-01T09:04:00+09:00'
+        $weekly = (Get-WtTestById (Get-WtScheduleData).Entries)[$linkWeekly.Id]
+        $on8 = (@(Get-WtScheduleLinks $weekly '2027-03-08' | ForEach-Object Key) -join ',')
+        $on15 = (@(Get-WtScheduleLinks $weekly ([datetime]::new(2027, 3, 15)) | ForEach-Object Key) -join ',')
+        Assert-WtTest '연결: 모든 회차(null) · 그 회차(날짜)로 붙고, 같은 연결 · 이미 모든 회차인 것은 바꾸지 않음, 없는 회차 · 일정은 거부' (
+            $l1.Success -and $l2.Success -and $l3.Success -and [object]::ReferenceEquals($l3.Store, $l2.Store) -and $l4.Success -and
+            -not $lBad.Success -and -not $lNone.Success -and $weekly.Links.Count -eq 2 -and $on8 -ceq 'm-all,m-day' -and $on15 -ceq 'm-all' -and
+            [int]$weekly.Item.rev -eq 2) "$on8 / $on15 / rev $($weekly.Item.rev) / $($lBad.Reason)"
+        # 모양이 틀린 원소는 화면에서 빼고 저장할 때 그대로 둔다
+        $rawStore = Open-WtScheduleStore
+        $rawItems = @(Copy-WtItem @($rawStore.Items))
+        $target = @($rawItems | Where-Object { (Test-WtRecordObject $_) -and $_.id -ceq $linkOne.Id })[0]
+        Set-WtField $target 'links' @('junk', [pscustomobject]@{ page = 'memo' }, [pscustomobject][ordered]@{ page = 'memo'; key = 'm-bad'; date = 'bad'; extra = 1 })
+        Save-WtScheduleItems $rawStore $rawItems
+        $l5 = Add-WtScheduleLink -Id $linkOne.Id -Page memo -Key 'm-one' -Date '2027-03-03'
+        $one = (Get-WtTestById (Get-WtScheduleData).Entries)[$linkOne.Id]
+        $rawLinks = @((@((Read-WtTestDoc).items) | Where-Object { $_.id -ceq $linkOne.Id }).links)
+        $l6 = Remove-WtScheduleLink -Id $linkOne.Id -Page memo -Key 'm-one' -Date '2027-03-03'
+        $rawLinks2 = @((@((Read-WtTestDoc).items) | Where-Object { $_.id -ceq $linkOne.Id }).links)
+        Assert-WtTest '연결: 모양이 틀린 원소는 고칠 항목이 아니고 화면에서만 빠지며 저장할 때 남는다, 빼기는 그 원소만' (
+            $l5.Success -and $one.State -eq 'ok' -and $one.Links.Count -eq 1 -and $one.Links[0].Key -ceq 'm-one' -and $rawLinks.Count -eq 4 -and
+            $rawLinks[0] -ceq 'junk' -and $rawLinks[2].extra -eq 1 -and $l6.Success -and $rawLinks2.Count -eq 3) "$($rawLinks.Count) / $($rawLinks2.Count) / $($one.State)"
+        # 반복 규칙을 나누면 옛 계열은 null + 앞 날짜, 새 계열은 null + 그날부터(설계 13.2)
+        $l7 = Add-WtScheduleLink -Id $linkWeekly.Id -Page memo -Key 'm-late' -Date '2027-03-22'
+        $split = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '연결 반복 뒤' } -Id $linkWeekly.Id -FromDate '2027-03-15'
+        $byLink = Get-WtTestById (Get-WtScheduleData).Entries
+        $oldKeys = (@($byLink[$linkWeekly.Id].Links | ForEach-Object Key) -join ','); $newKeys = (@($byLink[$split.Id].Links | ForEach-Object Key) -join ',')
+        Assert-WtTest '연결: 계열을 나누면 날짜 연결은 그 날짜가 든 계열에만 남는다' ($l7.Success -and $split.Success -and $oldKeys -ceq 'm-all,m-day' -and $newKeys -ceq 'm-all,m-late') "$oldKeys / $newKeys"
+        # 루틴: 모든 날만, 규칙을 바꿔 나눠도 연결이 따라간다. 폼 저장은 links를 바꾸지 않는다
+        $linkRoutine = New-WtRoutine -Title '연결 루틴' -Freq daily -Start '2027-03-01'
+        $r1 = Add-WtScheduleLink -Id $linkRoutine.Id -Page memo -Key 'm-r'
+        $r2 = Add-WtScheduleLink -Id $linkRoutine.Id -Page memo -Key 'm-r2' -Date '2027-03-05'
+        $r3 = Save-WtRoutine (Open-WtScheduleStore) @{ title = '연결 루틴 이름' } -Id $linkRoutine.Id
+        $r4 = Save-WtRoutine (Open-WtScheduleStore) @{ routine = @{ freq = 'weekly'; days = @(1, 3) } } -Id $linkRoutine.Id -From '2027-03-10'
+        $routineDoc = @((Read-WtTestDoc).items)
+        $routineLinks = (@($routineDoc | Where-Object { $_.id -ceq $linkRoutine.Id -or $_.id -ceq $r4.Id } | ForEach-Object { "$(@($_.links).Count):$(@($_.links)[0].key)" }) -join ',')
+        $itemLinks = (@(Get-WtScheduleItemLinks $r4.Id | ForEach-Object Key) -join ',')
+        Assert-WtTest '연결 루틴: 날짜 연결은 거부, 이름 저장 · 규칙 나누기 뒤에도 양쪽 계열에 남음' (
+            $r1.Success -and -not $r2.Success -and $r3.Success -and $r4.Success -and $r4.Id -cne $linkRoutine.Id -and $routineLinks -ceq '1:m-r,1:m-r' -and $itemLinks -ceq 'm-r') "$routineLinks / $itemLinks / $($r2.Reason)"
+        foreach ($cleanId in $linkOne.Id, $linkWeekly.Id, $split.Id) { [void](Set-WtScheduleDeleted (Open-WtScheduleStore) -Id $cleanId) }
+        foreach ($cleanId in $linkRoutine.Id, $r4.Id) { [void](Set-WtRoutineDeleted -Id $cleanId) }
+
         $spanA = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '막대 가'; start = @{ date = '2026-11-03'; time = $null }; end = @{ date = '2026-11-06'; time = $null } }
         # 밤을 넘는 시각 일정은 새로 만들지 않으므로(설계) 예전에 저장된 것처럼 저장소에 바로 넣는다
         $nightStore = Open-WtScheduleStore
@@ -887,6 +939,55 @@ try {
         Assert-WtTest '날짜 우클릭 휴무일: 지정하면 칸 머리에 이름, 다시 열면 해제, 해제하면 계산에서 빠짐' (
             $menuHeaders -ceq '새 일정,새 루틴,휴무일로 지정' -and $afterSet -ceq '회사 휴무|True' -and $menuAfter -ceq '새 일정,새 루틴,휴무일 해제' -and
             -not (Get-WtHolidayDates).Contains('2026-11-27')) "$menuHeaders / $afterSet / $menuAfter"
+        # ---- 2단계: 폼의 관련 항목 (코어 등록 목록에 가짜 출처를 등록, 메모 탭에 기대지 않음) ----
+        $fakeTitles = @{ 'f-pick' = '고른 가짜' }
+        Register-WtAddon -Id 'fake-related' -Title '가짜' -Icon 0xE70B -Order 900 -NewView { [Windows.Controls.Grid]::new() } -Related @{
+            Name = '가짜'; Templates = @(@{ Id = 'blank'; Name = '빈 가짜' }, @{ Id = 'call'; Name = '통화 가짜' })
+            Find = { param([string[]]$Keys) foreach ($k in $Keys) { [pscustomobject]@{ Key = $k; Title = [string]$fakeTitles[$k]; Sub = ''; Missing = -not $fakeTitles.ContainsKey($k) } } }
+            Pick = { param([string[]]$Exclude) $script:fakePickExclude = $Exclude -join ','; 'f-pick' }
+            New = { param($Seed) $script:fakeSeed = $Seed; $fakeTitles['f-new'] = $Seed.Title; 'f-new' }
+            Window = { param($Key) $script:fakeWindow = $Key }
+        }
+        # 셸 화면 이동은 이 검사에서 기록만 한다(모듈 안의 같은 이름 함수가 먼저 불린다)
+        & $module { function script:Open-WtPage { param([string]$Id, $Args) $a = $PSBoundParameters['Args']; $script:openedPage = "$Id|$($a.Key)|$($a.Edit)" } }
+        $findLinkButtons = { param($Root) @(Get-WtTestLogical $Root | Where-Object { $_ -is [Windows.Controls.Button] -and [Windows.Automation.AutomationProperties]::GetAutomationId($_) -like 'Schedule-Link*' }) }
+        & $module { Set-WtScheduleDate ([datetime]::new(2027, 4, 12)); Show-WtScheduleForm -Kind event }
+        $newButtons = @(& $findLinkButtons (& $module { $script:form.LinkBox }) | Where-Object { [Windows.Automation.AutomationProperties]::GetAutomationId($_) -match 'LinkNew|LinkPick' })
+        Assert-WtTest '관련 항목: 저장 전 새 일정은 [새 가짜] · [기존 가짜 고르기]를 끄고 이유를 툴팁에' (
+            $newButtons.Count -eq 2 -and -not @($newButtons | Where-Object IsEnabled).Count -and $newButtons[0].ToolTip -ceq '일정을 먼저 저장하세요.') "$($newButtons.Count)"
+        $formEvent = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '폼 연결'; start = @{ date = '2027-04-05'; time = '10:00' }; repeat = @{ freq = 'weekly' } }
+        $openForm = { param($Id) $occ = @(Get-WtScheduleOccurrences (Get-WtScheduleData).Entries ([datetime]'2027-04-12') ([datetime]'2027-04-12') | Where-Object { $_.Entry.Id -ceq $Id })[0]; Show-WtScheduleForm -Kind event -Occurrence $occ }
+        & $module $openForm $formEvent.Id
+        & $module { $src = @(Get-WtRelatedSource -Page 'fake-related')[0]; Invoke-WtScheduleLinkNew $src 'call' }
+        & $module { $src = @(Get-WtRelatedSource -Page 'fake-related')[0]; Invoke-WtScheduleLinkPick $src }
+        $afterAdd = (@(Get-WtScheduleItemLinks $formEvent.Id '2027-04-12' | ForEach-Object { "$($_.Key):$($_.Date)" }) -join ',')
+        $formTexts = @(Get-WtTestLogical (& $module { $script:form.LinkBox }) | Where-Object { $_ -is [Windows.Controls.TextBlock] } | ForEach-Object Text)
+        Assert-WtTest '관련 항목 [새 가짜]: 틀 · 제목(MM-dd 일정 제목)으로 만들어 이 회차에 붙이고 탭을 편집으로 연다, 고르기는 이미 붙은 것을 빼고 모든 회차' (
+            $fakeSeed.Template -ceq 'call' -and $fakeSeed.Title -ceq '04-12 폼 연결' -and $fakeSeed.Subject -ceq '폼 연결' -and
+            (& $module { $script:openedPage }) -ceq 'fake-related|f-new|True' -and $fakePickExclude -ceq 'f-new' -and $afterAdd -ceq 'f-new:2027-04-12,f-pick:' -and
+            $formTexts -contains '04-12 폼 연결' -and $formTexts -contains '이 회차' -and $formTexts -contains '고른 가짜' -and $formTexts -contains '모든 회차') "$afterAdd / $($formTexts -join ' | ')"
+        # 바로 저장한 뒤에도 폼 [저장]이 낡은 핸들로 거부되지 않고, 연결을 지우지 않는다
+        & $module { $script:form.Fields.title.Text = '폼 연결 바꿈'; Save-WtScheduleForm -Scope '이 회차만' }
+        $savedLinks = (@(Get-WtScheduleItemLinks $formEvent.Id '2027-04-12' | ForEach-Object Key) -join ',')
+        Assert-WtTest '관련 항목: 붙인 뒤 폼 저장이 통과하고 연결은 그대로' ((& $module { $null -eq $script:form }) -and $savedLinks -ceq 'f-new,f-pick') $savedLinks
+        [void](Add-WtScheduleLink -Id $formEvent.Id -Page 'fake-related' -Key 'f-gone')
+        [void](Add-WtScheduleLink -Id $formEvent.Id -Page 'off-tab' -Key 'x1')
+        & $module $openForm $formEvent.Id
+        $rowButtons = @(& $findLinkButtons (& $module { $script:form.LinkBox }) | Where-Object { $_.Tag -and $_.Tag.Link })
+        $states = (@($rowButtons | ForEach-Object { "$($_.Tag.Link.Key):$($_.Tag.State):$(@($_.ContextMenu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] }).Count)" }) -join ',')
+        $formTexts = @(Get-WtTestLogical (& $module { $script:form.LinkBox }) | Where-Object { $_ -is [Windows.Controls.TextBlock] } | ForEach-Object Text)
+        $rowButtons[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+        Assert-WtTest '관련 항목: 지운 항목 · 꺼진 탭은 흐리게 연결 빼기만, 정상 줄을 누르면 새 창' (
+            $states -ceq 'f-new:ok:3,f-pick:ok:3,f-gone:missing:1,x1:off:1' -and $formTexts -contains '지운 가짜' -and $formTexts -contains '꺼진 탭' -and
+            $fakeWindow -ceq 'f-new') "$states / $fakeWindow"
+        & $module { param($Row) Invoke-WtScheduleLinkAction 'remove' $Row } $rowButtons[1].Tag
+        $afterRemove = (@(Get-WtScheduleItemLinks $formEvent.Id '2027-04-12' | ForEach-Object Key) -join ',')
+        & $module { Show-WtScheduleDay }
+        $counts = @(Get-WtTestLogical (& $module { $script:detail }) | Where-Object { $_ -is [Windows.Controls.StackPanel] -and [Windows.Automation.AutomationProperties]::GetName($_) -like '관련 항목 *' } | ForEach-Object { [Windows.Automation.AutomationProperties]::GetName($_) })
+        Assert-WtTest '관련 항목: 연결 빼기는 그 원소만, 일정 줄 끝 개수는 정상 연결만 센다' ($afterRemove -ceq 'f-new,f-gone,x1' -and ($counts -join ',') -ceq '관련 항목 1개') "$afterRemove / $($counts -join ',')"
+        [void](Set-WtScheduleDeleted (Open-WtScheduleStore) -Id $formEvent.Id)
+        & $module { Remove-Item function:script:Open-WtPage -ErrorAction Ignore }
+
         [IO.File]::WriteAllText((Get-WtStorePath 'schedule'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))
         & $module { Update-WtScheduleView }
         Assert-WtTest '일정 화면: 못 읽는 파일은 이유 표시 · 새로 만들기 비활성' ((Get-WtTestTexts $view | Where-Object { $_ -like '*더 새 버전*' }).Count -gt 0 -and -not (& $module { $script:side.Add.IsEnabled }))

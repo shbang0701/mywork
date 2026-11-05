@@ -35,6 +35,13 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   WarmUp       켠 뒤 한가할 때 화면을 미리 만들어 둘지 (선택). 처음 누를 때도 빨리 뜨게 하려는 것이다
                'Full' → NewView · Refresh를 미리 부른다. 이 탭의 데이터 파일만 읽고 밖에 영향이 없을 때만 쓴다
                'View' → NewView만 미리 부른다. Refresh가 폴더 조회 · 다른 창 수집처럼 느리거나 밖에 닿을 때 쓴다
+  Related      다른 탭(일정 등)이 이 탭의 항목을 연결할 수 있게 하는 등록 (선택). 설계 13.4
+               @{ Name = '메모'; Templates = @(@{ Id; Name }, ...)
+                  Find = { param([string[]]$Keys) } → 키마다 @{ Key; Title; Sub; Missing }
+                  Pick = { param([string[]]$Exclude) } → 고른 key 또는 $null
+                  New = { param($Seed) } → 새 key. Seed = @{ Template; Title; Subject }
+                  Window = { param($Key) } → 새 창으로 보기 }
+               연결하는 탭은 Get-WtRelatedSource로 받는다. 탭끼리 서로 부르지 않는다
 #>
 function Register-WtAddon {
     param(
@@ -63,12 +70,28 @@ function Register-WtAddon {
         [string[]]$Help = @(),
         [object[]]$Shortcuts = @(),
         [scriptblock]$HelpCard,
-        [object[]]$HomeCards = @()
+        [object[]]$HomeCards = @(),
+        [hashtable]$Related
     )
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
     foreach ($s in $Shortcuts) {
         if (@($s).Count -ne 2) { throw "애드온 '$Id'의 단축키는 @('키', '설명') 모양이어야 합니다." }
+    }
+    $relatedEntry = $null
+    if ($Related) {
+        if (-not ($Related.Name -is [string] -and $Related.Name.Trim())) { throw "애드온 '$Id'의 Related에는 Name(글)이 필요합니다." }
+        foreach ($key in 'Find', 'Pick', 'New', 'Window') {
+            if ($Related[$key] -isnot [scriptblock]) { throw "애드온 '$Id'의 Related에는 $key(함수)가 필요합니다." }
+        }
+        $templates = @(foreach ($t in @($Related.Templates)) {
+                if ($null -eq $t) { continue }
+                if (-not ($t.Id -is [string] -and $t.Id -and $t.Name -is [string] -and $t.Name)) { throw "애드온 '$Id'의 Related 틀은 @{ Id; Name } 모양이어야 합니다." }
+                [pscustomobject]@{ Id = $t.Id; Name = $t.Name }
+            })
+        if (-not $templates.Count) { $templates = @([pscustomobject]@{ Id = 'blank'; Name = "새 $($Related.Name)" }) }
+        $relatedEntry = [pscustomobject]@{ Name = $Related.Name.Trim(); Templates = $templates
+            Find = $Related.Find; Pick = $Related.Pick; New = $Related.New; Window = $Related.Window }
     }
     $cards = @($HomeCards)
     if (-not $PSBoundParameters.ContainsKey('HomeCards') -and $HomeCard) {
@@ -91,6 +114,7 @@ function Register-WtAddon {
             Description = $Description
             SavePending = $SavePending; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
+            Related = $relatedEntry
         })
     # 같은 탭을 다시 등록하면서 표시 함수를 뺐으면 옛 등록도 없앤다.
     Register-WtCalendarSource -Id "addon:$Id" -Page $Id -CalendarItems $CalendarItems
@@ -108,6 +132,16 @@ function Get-WtHomeCards {
 
 function Get-WtCalendarHost {
     Get-WtAddon | Where-Object CalendarHost | Select-Object -First 1
+}
+
+# 연결할 수 있는 항목을 등록한 켜진 탭들(설계 13.4). -Page를 주면 그 탭 하나(꺼졌거나 등록이 없으면 없음)
+function Get-WtRelatedSource([string]$Page) {
+    foreach ($addon in @(Get-WtAddon)) {
+        if (-not $addon.Related) { continue }
+        if ($Page -and $addon.Id -cne $Page) { continue }
+        $r = $addon.Related
+        [pscustomobject]@{ Page = $addon.Id; Name = $r.Name; Icon = $addon.Icon; Templates = @($r.Templates); Find = $r.Find; Pick = $r.Pick; New = $r.New; Window = $r.Window }
+    }
 }
 
 # 달력 출처의 의미(탭 이름 아님)와 업무시간으로 표시만 계산한다. 근무 기록은 쉬는 날보다 우선한다.
@@ -192,4 +226,4 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
         Items = $sorted; Days = $days.ToArray(); Errors = $errors.ToArray() }
 }
 
-Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark
+Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource

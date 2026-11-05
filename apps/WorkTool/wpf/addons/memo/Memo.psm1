@@ -2127,6 +2127,258 @@ function New-WtMemoHomeCard {
     $card
 }
 
+# ---- 다른 탭과 잇기 (일정 2단계, 설계 13.5). 코어 등록 목록 -Related로만 불린다 ----------------------
+
+$script:relatedMap = $null    # id → 메모 (memo.json 표식이 바뀔 때만 다시 만든다. 일정 줄마다 불림)
+$script:relatedStamp = ''
+$script:memoWindows = @{}     # id → 새 창 (메모마다 하나)
+
+function Test-WtMemoViewFresh { [bool]$script:ui.Count -and $script:viewStamp -ceq "$(Get-WtStoreStamp 'memo')|$([datetime]::Today.Ticks)" }
+
+# 지금 메모 목록(지운 것 빼고). 메모 화면이 같은 내용을 들고 있으면 파일을 읽지 않는다
+function Get-WtMemoRelatedLive {
+    if (Test-WtMemoViewFresh) { return , @($script:items) }
+    Read-WtMemoStore
+    $live = if ($script:preparedMemo) { $script:preparedMemo.Live } else { Get-WtMemoLiveItems $script:memoStore.Items }
+    , @($live)
+}
+
+function Get-WtMemoRelatedMap {
+    $stamp = Get-WtStoreStamp 'memo'
+    if ($script:relatedMap -and $script:relatedStamp -ceq $stamp -and -not ($script:ui.Count -and -not [object]::ReferenceEquals($script:relatedItems, $script:items) -and (Test-WtMemoViewFresh))) { return $script:relatedMap }
+    $map = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    $live = Get-WtMemoRelatedLive
+    foreach ($m in $live) { if ($m -and [string]$m.id) { $map[[string]$m.id] = $m } }
+    $script:relatedMap = $map; $script:relatedStamp = $stamp; $script:relatedItems = $script:items
+    $map
+}
+
+# 지운 메모의 제목. 지운 표시가 남은 원자료에서 찾고, 90일이 지나 내용이 비었으면 「지운 메모」
+function Get-WtMemoDeletedTitle([string]$Id) {
+    if ($script:memoStore) {
+        foreach ($i in @($script:memoStore.Items)) {
+            if ((Test-WtRecordObject $i) -and [string](Get-WtField $i 'id') -ceq $Id) { $t = [string](Get-WtField $i 'title'); if ($t) { return $t } }
+        }
+    }
+    '지운 메모'
+}
+
+# Find: 키마다 @{ Key; Title; Sub; Missing }
+function Find-WtMemoRelated([string[]]$Keys) {
+    $map = Get-WtMemoRelatedMap
+    foreach ($key in @($Keys)) {
+        if (-not $key) { continue }
+        $m = $null
+        if ($map.TryGetValue($key, [ref]$m)) {
+            $title = if ([string]$m.title) { [string]$m.title } else { '제목 없음' }
+            [pscustomobject]@{ Key = $key; Title = $title; Sub = "수정일 $(Format-WtMemoTime ([string]$m.updated))"; Missing = $false }
+        } else { [pscustomobject]@{ Key = $key; Title = (Get-WtMemoDeletedTitle $key); Sub = ''; Missing = $true } }
+    }
+}
+
+# New: 메모 저장 통로로 새 메모를 앞에 넣고 id를 돌려준다. Seed = @{ Template = blank | call; Title; Subject }
+function Get-WtMemoTemplateBody([string]$Template, [string]$Subject) {
+    if ($Template -cne 'call') { return '' }
+    @("## 통화: <상대> · $Subject", '- [ ] 할 말 1', '- [ ] 할 말 2', '', '들은 것:', '', '다음 할 일:', '') -join "`r`n"
+}
+function New-WtMemoRelated($Seed) {
+    if ($script:ui.Count -and -not (Save-WtMemoNow)) { throw '고치던 메모를 먼저 저장하지 못했습니다.' }
+    if ($script:ui.Count -and -not (Test-WtMemoViewFresh)) { Update-WtMemoView }
+    $body = Get-WtMemoTemplateBody ([string]$Seed.Template) ([string]$Seed.Subject)
+    $m = New-WtMemo
+    $m.title = ([string]$Seed.Title).Trim(); $m.body = $body; $m.tags = @(Get-WtMemoTags $body)
+    $base = if ($script:ui.Count) { @($script:items) } else { @(Get-WtMemoItems) }
+    $next = @($m) + $base
+    Save-WtMemoItems $next
+    if ($script:ui.Count) {
+        $script:items = $next
+        $script:viewStamp = Get-WtMemoViewStamp
+        Update-WtMemoIndexItem $m
+        Update-WtMemoList
+    }
+    $script:relatedMap = $null
+    [string]$m.id
+}
+
+# 새 창의 할 일 체크: 고치던 칸을 먼저 저장하고, 그 줄의 [ ] ↔ [x]만 바꿔 저장한다. 줄 바꿈 모양은 그대로 둔다
+function Set-WtMemoTaskLine([string]$Id, [int]$Line) {
+    if ($script:ui.Count) {
+        if (-not (Save-WtMemoNow)) { throw '고치던 메모를 먼저 저장하지 못했습니다.' }
+        if (-not (Test-WtMemoViewFresh)) { Update-WtMemoView }
+    }
+    $items = if ($script:ui.Count) { @($script:items) } else { @(Get-WtMemoItems) }
+    $index = -1
+    for ($i = 0; $i -lt $items.Count; $i++) { if ([string]$items[$i].id -ceq $Id) { $index = $i; break } }
+    if ($index -lt 0) { throw '메모를 찾을 수 없습니다. 지웠는지 확인하세요.' }
+    $memo = $items[$index]
+    $lines = ([string]$memo.body) -split "`n"
+    $target = $Line - 1
+    $match = if ($target -ge 0 -and $target -lt $lines.Count) { [regex]::Match($lines[$target], '^(\s*(?:>\s*)*(?:[-*+]|\d{1,9}[.)])\s+\[)([ xX])\]') } else { $null }
+    if (-not $match -or -not $match.Success) { throw '할 일 줄을 찾지 못했습니다. 메모가 바뀌었으면 창을 다시 여세요.' }
+    $mark = if ($match.Groups[2].Value -eq ' ') { 'x' } else { ' ' }
+    $lines[$target] = $lines[$target].Substring(0, $match.Groups[2].Index) + $mark + $lines[$target].Substring($match.Groups[2].Index + 1)
+    $copy = Copy-WtItem $memo
+    [void](Set-WtMemoContent $copy ([string]$memo.title) ($lines -join "`n"))
+    $next = [object[]]$items.Clone(); $next[$index] = $copy
+    Save-WtMemoItems $next
+    if ($script:ui.Count) {
+        $script:items = @(Get-WtMemoSorted $next)
+        $script:viewStamp = Get-WtMemoViewStamp
+        Update-WtMemoIndexItem $copy
+        foreach ($p in $script:panes) { if ($p.Current -and [string]$p.Current.Id -ceq $Id) { Update-WtMemoPaneContent $p } }
+        Update-WtMemoTabTexts; Update-WtMemoList; Update-WtMemoToc
+    }
+    $script:relatedMap = $null
+    $copy
+}
+
+# Pick: 메모 고르기 창(모달). 이미 붙은 메모(Exclude)는 흐리게 두고 고를 수 없다. 고른 id 또는 $null
+function Show-WtMemoPicker([string[]]$Exclude) {
+    $live = Get-WtMemoRelatedLive
+    $index = if (Test-WtMemoViewFresh) { Get-WtMemoIndex } else {
+        $folders = try { @(Get-WtMemoFolders $script:memoStore) } catch { @() }
+        New-WtMemoIndex @($live) -Folders $folders
+    }
+    $modal = New-WtModal '메모 고르기'
+    $search = New-WtSearchBox '찾기'
+    $grid = [Windows.Controls.Grid]::new()
+    $list = [Windows.Controls.ListBox]::new(); Set-WtStyle $list 'Memo.PickList'
+    [Windows.Automation.AutomationProperties]::SetName($list, '메모 목록'); [Windows.Automation.AutomationProperties]::SetName($search.Box, '메모 찾기')
+    $empty = New-WtText '찾은 메모가 없습니다.' 'Memo.PickEmpty'; $empty.Visibility = 'Collapsed'
+    [void]$grid.Children.Add($list); [void]$grid.Children.Add($empty)
+    [void](Add-WtChild $modal.Body $search.Root); [void](Add-WtChild $modal.Body $grid)
+    $attach = New-WtButton '붙이기' Primary; $attach.IsDefault = $false
+    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
+    [void](Add-WtChild $modal.Buttons $attach); [void](Add-WtChild $modal.Buttons $cancel)
+    $ctx = @{ Index = $index; Excluded = [Collections.Generic.HashSet[string]]::new([string[]]@($Exclude | Where-Object { $_ }), [StringComparer]::Ordinal)
+        List = $list; Empty = $empty; Error = $modal.Error; Box = $search.Box; Window = $modal.Window; Attach = $attach; Result = $null; Timer = $null }
+    $timer = [Windows.Threading.DispatcherTimer]::new(); $timer.Interval = [TimeSpan]::FromMilliseconds(120); $timer.Tag = $ctx; $ctx.Timer = $timer
+    $timer.Add_Tick({ param($s, $e) $s.Stop(); Update-WtMemoPickList $s.Tag })
+    foreach ($el in $list, $attach, $modal.Window) { $el.Tag = $ctx }
+    # 찾기 칸의 Tag는 예시 글자(New-WtSearchBox)가 쓰므로, 찾기 칸 처리는 창의 Tag(ctx)를 쓴다
+    $search.Box.Add_TextChanged({ param($s, $e) $c = [Windows.Window]::GetWindow($s).Tag; $c.Timer.Stop(); $c.Timer.Start() })
+    $search.Box.Add_PreviewKeyDown({
+            param($s, $e)
+            $c = [Windows.Window]::GetWindow($s).Tag
+            if ($e.Key -eq [Windows.Input.Key]::Down -and $c.List.Items.Count) { $e.Handled = $true; Move-WtMemoPickFocus $c }
+            elseif ($e.Key -eq [Windows.Input.Key]::Enter) { $e.Handled = $true; $c.Timer.Stop(); Update-WtMemoPickList $c; Complete-WtMemoPick $c }
+        })
+    $list.Add_SelectionChanged({ param($s, $e) $s.Tag.Attach.IsEnabled = $null -ne $s.SelectedItem -and $s.SelectedItem.Selectable })
+    $list.Add_MouseDoubleClick({ param($s, $e) Complete-WtMemoPick $s.Tag })
+    $list.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq [Windows.Input.Key]::Enter) { $e.Handled = $true; Complete-WtMemoPick $s.Tag } })
+    $attach.Add_Click({ param($s, $e) Complete-WtMemoPick $s.Tag })
+    $modal.Window.Add_Loaded({ param($s, $e) [void]$s.Tag.Box.Focus() })
+    $modal.Window.Add_Closed({ param($s, $e) $s.Tag.Timer.Stop() })
+    Update-WtMemoPickList $ctx
+    [void]$modal.Window.ShowDialog()
+    $ctx.Result
+}
+function Update-WtMemoPickList($Ctx) {
+    $found = Find-WtMemo -Index $Ctx.Index -Query ([string]$Ctx.Box.Text) -First 50 -SnippetLimit 50 -SkipBacklinks
+    if (-not $found.Success) {
+        # 쓰다 만 식은 앞 목록을 그대로 두고 이유만 보인다
+        $Ctx.Error.Text = "찾기 식을 확인하세요. $($found.Error.Reason)"; $Ctx.Error.Visibility = 'Visible'; return
+    }
+    $Ctx.Error.Visibility = 'Collapsed'
+    $rows = @(foreach ($r in @($found.Items)) {
+            $id = [string]$r.Id; $linked = $Ctx.Excluded.Contains($id)
+            $snippet = Get-WtMarkdownSnippet ([string]$r.Snippet)
+            $stamp = Format-WtMemoTime ([string]$r.Updated)
+            [pscustomobject]@{ Id = $id; Title = $(if ([string]$r.Title) { [string]$r.Title } else { '제목 없음' }); Sub = $(if ($snippet) { "$stamp · $snippet" } else { $stamp })
+                Linked = $linked; LinkedShown = $(if ($linked) { 'Visible' } else { 'Collapsed' }); Selectable = -not $linked }
+        })
+    $Ctx.List.ItemsSource = $rows
+    $Ctx.Empty.Visibility = if ($rows.Count) { 'Collapsed' } else { 'Visible' }
+    $Ctx.List.SelectedItem = @($rows | Where-Object Selectable | Select-Object -First 1)[0]
+    $Ctx.Attach.IsEnabled = $null -ne $Ctx.List.SelectedItem
+}
+function Move-WtMemoPickFocus($Ctx) {
+    $item = $Ctx.List.SelectedItem
+    if (-not $item) { return }
+    $Ctx.List.ScrollIntoView($item); $Ctx.List.UpdateLayout()
+    $container = $Ctx.List.ItemContainerGenerator.ContainerFromItem($item)
+    if ($container) { [void]$container.Focus() }
+}
+function Complete-WtMemoPick($Ctx) {
+    $item = $Ctx.List.SelectedItem
+    if (-not $item -or -not $item.Selectable) { return }
+    $Ctx.Result = [string]$item.Id
+    $Ctx.Window.DialogResult = $true
+}
+
+# Window: 읽기 보기 새 창. 메모마다 하나이고, 같은 메모를 다시 열면 그 창을 앞으로 가져온다
+function Show-WtMemoWindow([string]$Id) {
+    if ($script:memoWindows.ContainsKey($Id)) {
+        $w = $script:memoWindows[$Id]
+        if ($w.Window.IsVisible) {
+            if ($w.Window.WindowState -eq 'Minimized') { $w.Window.WindowState = 'Normal' }
+            Update-WtMemoWindow $w; [void]$w.Window.Activate(); return $w
+        }
+        $script:memoWindows.Remove($Id)
+    }
+    if (-not (Get-WtMemoRelatedMap).ContainsKey($Id)) { throw '메모를 찾을 수 없습니다. 지웠는지 확인하세요.' }
+    $side = New-WtSideWindow '메모'
+    $w = @{ Id = $Id; Window = $side.Window; Title = $side.Title; Shown = '' }
+    [void]$side.ToolLeft.Children.Add((New-WtText ([string][char]0xE736) 'SideWindow.ToolIcon'))
+    [void]$side.ToolLeft.Children.Add((New-WtText '읽기 보기' 'SideWindow.ToolText'))
+    $open = New-WtButton '메모 탭에서 열기'; $open.Tag = $w; $w.Open = $open
+    $open.Add_Click({
+            param($s, $e)
+            Open-WtPage -Id 'memo' -Args @{ Key = $s.Tag.Id }
+            $main = Get-WtWindow; if ($main) { [void]$main.Activate() }
+        })
+    [void]$side.ToolRight.Children.Add($open)
+    $scroll = [Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'
+    $text = New-WtStack; Set-WtStyle $text 'MemoWindow.Text'; $w.Text = $text
+    $w.Heading = New-WtText '' 'MemoWindow.Title'; $w.Meta = New-WtText '' 'MemoWindow.Meta'
+    $w.View = New-WtMarkdownView -OnTask { param($line, $el) Invoke-WtMemoWindowTask ([string]$el.Tag.State.MemoId) $line }
+    $w.View.Tag.MemoId = $Id
+    foreach ($child in $w.Heading, $w.Meta, $w.View) { [void]$text.Children.Add($child) }
+    $scroll.Content = $text; $side.Body.Child = $scroll
+    $side.Window.Tag = $w
+    $side.Window.Add_Activated({ param($s, $e) try { Update-WtMemoWindow $s.Tag } catch { } })
+    $side.Window.Add_SizeChanged({ param($s, $e) Set-WtStyle $s.Tag.Text $(if ($s.ActualWidth -lt 480) { 'MemoWindow.TextNarrow' } else { 'MemoWindow.Text' }) })
+    $side.Window.Add_Closed({ param($s, $e) $script:memoWindows.Remove($s.Tag.Id) })
+    Update-WtMemoWindow $w
+    $script:memoWindows[$Id] = $w
+    $side.Window.Show()
+    $w
+}
+# 메모가 바뀌었으면 다시 그린다(창이 다시 활성화될 때). 지운 메모면 그렇다고 쓰고 [메모 탭에서 열기]를 끈다
+function Update-WtMemoWindow($W) {
+    $m = $null
+    if (-not (Get-WtMemoRelatedMap).TryGetValue($W.Id, [ref]$m)) {
+        if ($W.Shown -ceq 'missing') { return }
+        $W.Shown = 'missing'; $W.Meta.Text = '지운 메모입니다.'; Set-WtMarkdownText $W.View ''
+        $W.Open.IsEnabled = $false; $W.Open.ToolTip = '지운 메모입니다.'; [Windows.Controls.ToolTipService]::SetShowOnDisabled($W.Open, $true)
+        return
+    }
+    $key = "$($m.updated)|$($m.rev)|$($m.title)|$(([string]$m.body).Length)"
+    if ($W.Shown -ceq $key) { return }
+    $W.Shown = $key
+    $title = if ([string]$m.title) { [string]$m.title } else { '제목 없음' }
+    $W.Window.Title = $title; $W.Title.Text = $title; $W.Heading.Text = $title
+    $W.Meta.Text = "수정일 $(Format-WtMemoTime ([string]$m.updated))"
+    $W.Open.IsEnabled = $true; $W.Open.ToolTip = $null
+    Set-WtMarkdownText $W.View ([string]$m.body)
+}
+function Invoke-WtMemoWindowTask([string]$Id, [int]$Line) {
+    [void](Set-WtMemoTaskLine $Id $Line)
+    if ($script:memoWindows.ContainsKey($Id)) { Update-WtMemoWindow $script:memoWindows[$Id] }
+}
+
+# 다른 탭이 메모 탭을 열 때(Open-WtPage memo @{ Key; Edit }). Edit면 읽기 보기를 편집 보기로 바꾸고 제목 칸으로
+function Open-WtMemoFromArgs($OpenArgs) {
+    if (-not $OpenArgs.Key -or -not (Get-WtMemoById ([string]$OpenArgs.Key))) { return }
+    Clear-WtMemoFilter
+    [void](Open-WtMemo ([string]$OpenArgs.Key))
+    if ($OpenArgs.Edit) {
+        if ($script:mode -eq 'read') { Set-WtMemoMode $script:editMode }
+        $p = Get-WtMemoActivePane
+        if ($p) { [void]$p.TitleBox.Focus() }
+    }
+}
+
 # ---- 도움말 -----------------------------------------------------------------------------------
 
 $script:helpMd = $null
@@ -2209,11 +2461,18 @@ Register-WtDataWriteHandler {
 Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 40 -WarmUp Full `
     -NewView { New-WtMemoView } `
     -Refresh { param($view) Update-WtMemoView } `
-    -OnOpen { param($OpenArgs) if ($OpenArgs.Key -and (Get-WtMemoById ([string]$OpenArgs.Key))) { Clear-WtMemoFilter; [void](Open-WtMemo ([string]$OpenArgs.Key)) } } `
+    -OnOpen { param($OpenArgs) Open-WtMemoFromArgs $OpenArgs } `
+    -Related @{
+        Name = '메모'; Templates = @(@{ Id = 'blank'; Name = '빈 메모' }, @{ Id = 'call'; Name = '통화 메모' })
+        Find = { param([string[]]$Keys) Find-WtMemoRelated $Keys }
+        Pick = { param([string[]]$Exclude) Show-WtMemoPicker $Exclude }
+        New = { param($Seed) New-WtMemoRelated $Seed }
+        Window = { param($Key) [void](Show-WtMemoWindow $Key) }
+    } `
     -ShortcutExists { param($Key) Test-WtMemoShortcut $Key } `
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
     -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
-    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
+    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
     -Help @('마크다운 메모를 탭과 두 칸으로 엽니다.', 'Ctrl+E로 편집 · 원문 · 읽기를 차례로 바꿉니다.', '찾기 칸에 #태그 · folder:업무 · updated:7d 같은 조건을 쓸 수 있습니다.') `
     -Shortcuts @(
         @('Ctrl + N', '새로 만들기 (새 탭)'), @('Ctrl + S', '바로 저장'), @('Ctrl + O', '메모 이름으로 찾아 열기'),
@@ -2231,4 +2490,5 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
     -HelpCard { New-WtMemoMarkdownHelpCard }
 
 Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Format-WtMemoTime, Import-WtMemoLegacy,
-    New-WtMemo, Get-WtMemoTags, Set-WtMemoContent, Save-WtMemoItems
+    New-WtMemo, Get-WtMemoTags, Set-WtMemoContent, Save-WtMemoItems,
+    Find-WtMemoRelated, New-WtMemoRelated, Set-WtMemoTaskLine, Get-WtMemoTemplateBody
