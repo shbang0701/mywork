@@ -667,3 +667,88 @@ schema와 고정 시험 자료는 그대로입니다. 편집 함수는 먼저 �
 - 코어: `core/Calendar.psm1`(공휴일 계산 · 채우기), `core/Shell.psm1`(켤 때 채우기), `core/Ui.psm1`(해 · 달 고르기, 일정 줄 · 막대 · 표 모양), `core/Pages.psm1`(설정 → 휴무일), `tests/Test-Core.ps1`
 - 일정 탭: `addons/schedule/ScheduleData.psm1`(체크 기록 · 막대 줄), `addons/schedule/Schedule.psm1`(화면), `addons/schedule/Test-Schedule.ps1`
 - 문서: 이 문서 · `apps/WorkTool/design/README.md` · `apps/WorkTool/wpf/README.md`
+
+## 13. 일정 2단계 — 일정 · 루틴 ↔ 메모 연결 (2026-11-05)
+
+화면 값은 `apps/WorkTool/design/README.md` 「일정」의 「관련 메모」 · 「메모 고르기」 · 「메모 새 창」에 있습니다. 시안은 같은 폴더의 `schedule-plan-memo*.png`입니다. 이 절은 데이터 약속과 탭 사이 약속만 적습니다. schema는 모두 그대로입니다.
+
+2026-11-05 승호가 정한 것: 일정이 메모를 고릅니다(데이터는 일정 쪽에만, 메모 형식은 그대로). 루틴도 연결합니다. 붙이기 · 빼기는 바로 저장합니다. 저장 전인 새 일정 · 루틴에서는 단추를 끕니다. [새 메모]로 만들면 메모 탭에서 바로 엽니다. 새 창은 메모마다 하나입니다.
+
+### 13.1 칸 `links`
+
+일정(`kind = event`)과 루틴(`kind = routine`) 항목에 선택 칸 `links`(목록)를 더합니다. 칸을 더하는 것이라 schema는 그대로이고(1.1), 옛 앱은 모르는 칸으로 남깁니다(1.2).
+
+```json
+"links": [
+  { "page": "memo", "key": "c0ffee123456", "date": "2026-11-05" },
+  { "page": "memo", "key": "a1b2c3d4e5f6", "date": null }
+]
+```
+
+- `page`: 연결한 탭의 id(지금은 `memo`). `key`: 그 탭 안의 항목 id(메모 id). 홈 바로 가기(`shortcuts.json`)의 `page` · `key`와 같은 모양이라, 나중에 문서 탭 파일도 같은 칸으로 붙일 수 있습니다. 메모 제목을 바꿔도 id로 이어지므로 끊기지 않습니다.
+- `date`: 회차의 **원래 날짜**(12.1의 체크 기록과 같은 키)이면 그 회차에만, `null`이면 모든 회차에 붙습니다.
+  - 일정 [새 메모]는 그 회차 날짜, [기존 메모 고르기]는 `null`입니다. 반복 없는 일정도 같습니다(나중에 반복으로 바꿔도 그 회차에 남게).
+  - 루틴은 날마다 같은 일이라 늘 `null`입니다. 루틴에 날짜 연결은 받지 않습니다.
+- 같은 `page` · `key` · `date`는 하나만 둡니다. 이미 `null`로 붙은 항목을 날짜로 다시 붙이면 아무것도 바꾸지 않습니다.
+- 모양이 틀린 원소(객체가 아님 · `page`나 `key`가 빈 글 · `date`를 못 읽음)는 화면과 계산에서 빼고, 저장할 때 그대로 둡니다. 원소의 모르는 칸도 그대로 둡니다. 이 때문에 항목이 「고칠 항목」이 되지는 않습니다.
+- 연결을 고치면 사람이 고친 것이라 `rev` · `updated`를 올립니다(1.5). 예전 데이터 다시 가져오기는 이 칸을 건드리지 않습니다(CSV가 소유하지 않음, 7.4).
+
+### 13.2 나누기와 연결
+
+- 일정의 반복 규칙을 바꿔 계열을 나누면(2.3), 옛 계열에는 `null` 연결과 나누는 날 **앞** 날짜의 연결이, 새 계열에는 `null` 연결과 나누는 날**부터**의 날짜 연결이 남습니다. 모양이 틀린 원소는 양쪽에 다 남깁니다.
+- 루틴을 나누면(11.2) 연결은 모두 `null`이라 양쪽에 그대로 남습니다.
+
+### 13.3 함수 (`addons/schedule/ScheduleData.psm1`)
+
+- 읽은 값(`ConvertFrom-WtScheduleItem` · `ConvertFrom-WtRoutineItem`)에 `Links`를 더합니다: `[{ Page, Key, Date }]`, `Date`는 글 또는 `$null`. 모양이 틀린 원소는 빠져 있습니다.
+- `Get-WtScheduleLinks Entry [Date]` → 그 회차에 붙은 연결(`Date`가 `null`인 것 + 그 날짜인 것). `Date`를 안 주면 `null`인 것만입니다(루틴).
+- `Add-WtScheduleLink -Store -Id -Page -Key [-Date] [-At]`, `Remove-WtScheduleLink -Store -Id -Page -Key [-Date] [-At]` → `{ Success, Reason, Id, Store }`.
+  - 지운 · 읽기 전용 · 고칠 항목은 거부합니다. 일정의 날짜 연결은 실제 회차(반복 규칙 · 건너뛴 날 포함 판단)여야 합니다. 루틴의 날짜 연결은 거부합니다.
+  - 없는 연결을 빼거나 이미 있는 연결을 더하면 저장하지 않고 성공(`Store`는 그대로)입니다.
+- 화면은 연결을 바로 저장하고, 열어 둔 편집 폼의 핸들을 결과 `Store`로 바꿉니다. 그래야 폼의 [저장]이 낡은 핸들로 거부되지 않습니다(1.9). 폼 저장(`Save-WtScheduleItem` · `Save-WtRoutine`)은 `links`를 바꾸지 않습니다.
+
+### 13.4 탭 사이 약속 — 코어 등록 목록 `Related` (`core/Addons.psm1`)
+
+탭끼리 서로 부르지 않으므로, 연결할 수 있는 항목을 가진 탭이 코어에 등록하고 일정 탭은 코어 목록만 봅니다. 홈 카드 · `CalendarItems`와 같은 방식입니다.
+
+```powershell
+Register-WtAddon -Id 'memo' ... -Related @{
+    Name = '메모'
+    Templates = @(@{ Id = 'blank'; Name = '빈 메모' }, @{ Id = 'call'; Name = '통화 메모' })
+    Find = { param([string[]]$Keys) }   # 키마다 @{ Key; Title; Sub; Missing }
+    Pick = { param([string[]]$Exclude) } # 고른 key 또는 $null (모달)
+    New = { param($Seed) }               # 새 key. Seed = @{ Template; Title; Subject }
+    Window = { param($Key) }             # 새 창으로 보기
+}
+```
+
+- `Get-WtRelatedSource [-Page]` → 켜진 탭의 등록(`Page` · `Name` · `Templates` · `Find` · `Pick` · `New` · `Window`). 설정에서 끈 탭은 빠집니다.
+- 일정 탭은 등록마다 「새 ‹Name›」 · 「기존 ‹Name› 고르기」 단추를 만듭니다. 틀이 둘 이상이면 [새 ‹Name› ⌄] 메뉴입니다. 「‹Name› 탭에서 열기」는 셸의 `Open-WtPage ‹Page› @{ Key }`, 새로 만든 뒤에는 `@{ Key; Edit = $true }`입니다.
+- 등록이 없거나 꺼진 탭의 연결은 「꺼진 탭」으로 흐리게 보이고 연결 빼기만 됩니다. `Find`가 실패하면 그 등록의 연결은 이유를 툴팁에 두고 흐리게 보입니다.
+- 코어에는 탭 이름을 쓰지 않습니다. 코어 검사는 가짜 탭으로 합니다.
+
+### 13.5 메모 쪽 (`addons/memo/Memo.psm1`)
+
+- `memo.json` 형식은 바꾸지 않습니다. 새 메모 · 할 일 체크는 기존 메모 저장 통로(`Save-WtMemoItems`)를 거칩니다.
+- 새 메모 제목은 `MM-dd 일정 제목`입니다(일정은 회차 날짜, 루틴은 고른 날짜). 통화 메모 본문 틀:
+
+  ```
+  ## 통화: <상대> · <일정 제목>
+  - [ ] 할 말 1
+  - [ ] 할 말 2
+
+  들은 것:
+
+  다음 할 일:
+  ```
+
+- `Find`: 지운 메모는 `Missing`(「지운 메모」)입니다. 보관한 메모는 그대로 보입니다. id → 메모 표는 `memo.json` 표식이 바뀔 때만 다시 만듭니다(일정 줄마다 불림).
+- `Pick`: 메모 찾기 문법(`Find-WtMemo`, 보관 제외 · 최대 50개)으로 찾습니다. 이미 붙은 메모는 「붙어 있음」으로 흐리게 두고 고를 수 없습니다.
+- `Window`: 읽기 보기 새 창입니다. 메모마다 하나이고, 같은 메모를 다시 열면 그 창을 앞으로 가져옵니다. 창이 다시 활성화될 때 메모가 바뀌었으면 다시 그립니다. 고치기는 하지 않고 할 일 체크만 됩니다. 체크하면 그 메모를 메모 탭에서 고치던 중이면 먼저 저장하고, 그 줄의 `[ ]` ↔ `[x]`만 바꿔 저장한 뒤 메모 탭의 같은 메모 칸을 다시 그립니다. 줄 바꿈 모양(CRLF · LF)은 그대로 둡니다.
+
+### 13.6 바꾼 파일
+
+- 코어: `core/Addons.psm1`(`Related` 등록), `core/Ui.psm1`(메모 새 창 틀 · 관련 메모 줄 모양), `tests/Test-Core.ps1`
+- 일정 탭: `addons/schedule/ScheduleData.psm1`(`links` 읽기 · 붙이기 · 빼기 · 나누기), `addons/schedule/Schedule.psm1`(폼 관련 메모 · 줄 끝 개수), `addons/schedule/Test-Schedule.ps1`
+- 메모 탭: `addons/memo/Memo.psm1`(등록 · 고르기 창 · 새 창 · 새 메모), `addons/memo/Test-Memo.ps1`
+- 문서: 이 문서 · `docs/plans/memo-design.md` · `apps/WorkTool/design/README.md` · `apps/WorkTool/wpf/README.md`
