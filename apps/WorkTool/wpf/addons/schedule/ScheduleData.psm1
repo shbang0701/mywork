@@ -475,6 +475,31 @@ function Get-WtScheduleDays([object[]]$Entries, [datetime]$From, [int]$Count) {
     , $result.ToArray()
 }
 
+<#
+달력 주마다 여러 날 회차(마지막 날이 시작 날보다 뒤)의 줄(lane)을 정한다. Start는 첫 주의 첫날, Weeks는 주 수.
+조각 하나: Occ · Row(주) · A · B(그 주 안 시작 · 끝 칸 0~6) · Lane · FromPrev(앞 주에서 이어짐) · ToNext(다음 주로 이어짐)
+시작이 이른 것 → 긴 것 → 제목 순으로, 그 주에서 걸친 칸이 모두 비어 있는 가장 낮은 줄을 받는다. 같은 주 안에서는 한 줄로 이어진다
+#>
+function Get-WtScheduleLanes([object[]]$Occurrences, [datetime]$Start, [int]$Weeks) {
+    $first = $Start.Date
+    $multi = @($Occurrences | Where-Object { $null -ne $_ -and $_.LastDay -gt $_.Start.Date } |
+            Sort-Object -Culture 'ko-KR' -Property @{ Expression = { $_.Start } }, @{ Expression = { - ($_.LastDay - $_.Start.Date).Days } }, @{ Expression = { $_.Title } }, @{ Expression = { $_.Key } })
+    $segments = [System.Collections.Generic.List[object]]::new()
+    for ($row = 0; $row -lt $Weeks; $row++) {
+        $weekStart = $first.AddDays($row * 7); $weekEnd = $weekStart.AddDays(6)
+        $taken = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($o in $multi) {
+            if ($o.LastDay -lt $weekStart -or $o.Start.Date -gt $weekEnd) { continue }
+            $a = [Math]::Max(0, ($o.Start.Date - $weekStart).Days); $b = [Math]::Min(6, ($o.LastDay - $weekStart).Days)
+            $lane = 0
+            while (@($a..$b | Where-Object { $taken.Contains("$_|$lane") }).Count) { $lane++ }
+            foreach ($col in $a..$b) { [void]$taken.Add("$col|$lane") }
+            $segments.Add([pscustomobject]@{ Occ = $o; Row = $row; A = $a; B = $b; Lane = $lane; FromPrev = $o.Start.Date -lt $weekStart; ToNext = $o.LastDay -gt $weekEnd })
+        }
+    }
+    $segments.ToArray()   # 조각마다 내보낸다. 부르는 쪽은 @()로 받는다
+}
+
 # ---- 예전 데이터 ------------------------------------------------------------------------------
 
 function New-WtSchRule([string]$Freq, [string[]]$Days) {
@@ -889,9 +914,13 @@ function Get-WtRoutineEntries($Store) {
 }
 
 # work.days와 휴무일은 코어에서, 휴가는 코어 달력 출처에서 묻는다. 다른 탭 함수는 부르지 않는다.
-function Test-WtRoutineDayOff([datetime]$Date) {
+# 근무 요일(work.days)이 아닌 날. 「근무 요일만」 루틴이 이날을 뺀다
+function Test-WtRoutineOffWeekday([datetime]$Date) {
     $day = (([int]$Date.DayOfWeek + 6) % 7) + 1
-    if ($day -notin @(Get-WtSetting 'work.days')) { return $true }
+    $day -notin @(Get-WtSetting 'work.days')
+}
+# 휴무일 · 휴가인 날. 어떤 루틴도 이날에는 차례가 없다(2026-11-05 승호: 휴가 · 휴일에는 루틴을 모으지 않는다)
+function Test-WtRoutineDayOff([datetime]$Date) {
     $holiday = Get-WtHolidayData
     if ($holiday.Error) { throw $holiday.Error }
     if ((Get-WtHolidayDates $Date $Date).Contains((ConvertTo-WtDateText $Date))) { return $true }
@@ -900,12 +929,15 @@ function Test-WtRoutineDayOff([datetime]$Date) {
     @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' }).Count -gt 0
 }
 
-function Get-WtRoutineSlotKeys($Entry, [datetime]$Date) {
+# 그날의 차례 키. DayOff(휴무일 · 휴가인지)를 넘기면 다시 묻지 않는다(여러 루틴을 한 번에 셀 때)
+function Get-WtRoutineSlotKeys($Entry, [datetime]$Date, $DayOff) {
     if ($Entry.State -ne 'ok' -or $Date -lt $Entry.Start) { return }
     $until = ConvertFrom-WtRoutineDate (Get-WtField (Get-WtField $Entry.Item 'routine') 'until')
     if ($until -and $Date.Date -gt $until) { return }
     if ($Entry.Freq -ceq 'weekly' -and ((([int]$Date.DayOfWeek + 6) % 7) + 1) -notin $Entry.Days) { return }
-    if ($Entry.WorkdaysOnly -and (Test-WtRoutineDayOff $Date)) { return }
+    if ($Entry.WorkdaysOnly -and (Test-WtRoutineOffWeekday $Date)) { return }
+    if ($null -eq $DayOff) { $DayOff = Test-WtRoutineDayOff $Date }
+    if ($DayOff) { return }
     $dateText = ConvertTo-WtDateText $Date
     if ($Entry.Freq -cne 'hourly') { $dateText; return }
     for ($minute = [int]$Entry.From.TotalMinutes; $minute -lt $Entry.To.TotalMinutes; $minute += [int]$Entry.Every * 60) {
@@ -1034,6 +1066,7 @@ function Get-WtRoutineSlots($Date, [string]$Now = (Get-WtStamp)) {
     $log = Open-WtStore -Name 'routine-log' -Schema 1
     if ($log.State -notin 'ok', 'missing') { throw "routine-log.json은 읽지 못했습니다. ($($log.Error))" }
     $nowDate = (ConvertFrom-WtStamp $stamp).DateTime
+    $dayOff = if ($entries.Count) { Test-WtRoutineDayOff $day } else { $false }
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $done = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
     foreach ($item in $log.Items) {
@@ -1045,7 +1078,7 @@ function Get-WtRoutineSlots($Date, [string]$Now = (Get-WtStamp)) {
     }
     foreach ($entry in $entries) {
         $nextFound = $false
-        foreach ($slot in @(Get-WtRoutineSlotKeys $entry $day)) {
+        foreach ($slot in @(Get-WtRoutineSlotKeys $entry $day $dayOff)) {
             $key = $entry.Id.Length.ToString($script:inv) + ':' + $entry.Id + $slot
             $record = if ($done.ContainsKey($key)) { $done[$key] } else { $null }
             $isNext = $false
@@ -1091,6 +1124,76 @@ function Set-WtRoutineCheck([string]$Routine, [string]$Slot, [bool]$Done, $Store
     [pscustomobject]@{ Success = $true; Reason = ''; Id = $id; Store = $next }
 }
 
+# ---- 일정 체크 (끝냄) --------------------------------------------------------------------------
+# 일정 회차마다 「끝냄」을 따로 남긴다. 저장소 event-log.json (schema 1, 루틴 체크 routine-log와 같은 모양):
+#   id, event(일정 id), date(회차의 원래 날짜 yyyy-MM-dd), at(체크한 앱 시각), deleted(체크를 풀면 지운 표시), created, updated, rev
+# schedule.json은 건드리지 않는다. 그래서 열어 둔 편집 폼의 저장과 부딪히지 않고, 이 파일을 잃어도 일정은 그대로다.
+# 여러 날 일정도 회차 하나라 체크도 하나다. 키는 회차 키 "<id>@<원래 날짜>"(Get-WtScheduleOccurrences의 Key)와 같다.
+$script:eventDoneCache = $null
+
+function Test-WtEventLogItem($Item) {
+    (Test-WtRecordObject $Item) -and (Get-WtField $Item 'id') -is [string] -and [bool]$Item.id -and
+        (Get-WtField $Item 'event') -is [string] -and [bool]$Item.event -and
+        $null -ne (ConvertFrom-WtDateText ([string](Get-WtField $Item 'date'))) -and
+        $null -ne (ConvertFrom-WtStamp ([string](Get-WtField $Item 'at'))) -and -not (Get-WtRecordProblem $Item)
+}
+
+# 끝낸 회차 키 모음(HashSet, "<id>@<yyyy-MM-dd>"). 파일이 바뀌지 않았으면 다시 읽지 않는다. 못 읽으면 예외(화면이 오류로 보여 준다)
+function Get-WtEventDone {
+    $stamp = Get-WtStoreStamp 'event-log'
+    if ($script:eventDoneCache -and $script:eventDoneCache.Stamp -ceq $stamp) { return , $script:eventDoneCache.Keys }
+    $log = Open-WtStore -Name 'event-log' -Schema 1
+    if ($log.State -notin 'ok', 'missing') { throw "event-log.json은 읽지 못했습니다. ($($log.Error))" }
+    $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($item in $log.Items) {
+        $id = [string](Get-WtField $item 'id')
+        if (-not $id -or -not $seen.Add($id) -or (Test-WtDeleted $item) -or -not (Test-WtEventLogItem $item)) { continue }
+        [void]$keys.Add("$($item.event)@$($item.date)")
+    }
+    $script:eventDoneCache = [pscustomobject]@{ Stamp = $stamp; Keys = $keys }
+    , $keys
+}
+
+# 회차 하나를 끝냄 · 안 끝냄으로 바꾼다. Date는 회차의 원래 날짜(Occurrence.Original). 일정에 없는 회차는 거부한다.
+# Store는 쓰는 event-log 핸들(시험용, 비우면 연다). 돌려주는 값: Success · Reason · Id · Store
+function Set-WtEventCheck([string]$Event, [string]$Date, [bool]$Done, $Store, [string]$At = (Get-WtStamp)) {
+    if ($null -eq $Store) { $Store = Open-WtStore -Name 'event-log' -Schema 1 }
+    $fail = [pscustomobject]@{ Success = $false; Reason = ''; Id = ''; Store = $Store }
+    $day = ConvertFrom-WtDateText $Date
+    if ($Store.Name -cne 'event-log' -or -not (ConvertFrom-WtStamp $At) -or -not $day -or -not $Event) { $fail.Reason = '기록 핸들 · 앱 시각 · 일정 · 날짜를 확인하세요'; return $fail }
+    $entries = @((Get-WtScheduleData).Entries | Where-Object { $_.Id -ceq $Event -and $_.State -eq 'ok' })
+    if ($entries.Count -ne 1) { $fail.Reason = '일정을 찾지 못했습니다'; return $fail }
+    $entry = $entries[0]
+    $real = if (-not $entry.Repeat) { $day -eq $entry.Start.Date } else {
+        $dates = Get-WtRepeatDates $entry.Repeat $entry.Start $day $day   # 목록 하나로 돌려준다. 파이프로 펴서 센다
+        @($dates | Where-Object { $_.Date -eq $day }).Count -gt 0 -and -not $entry.Repeat.Skip.Contains($Date)
+    }
+    if (-not $real) { $fail.Reason = '일정에 없는 회차입니다'; return $fail }
+    $edit = Get-WtRecordEdit $Store ''
+    $matches = @($edit.Items | Where-Object { (Get-WtField $_ 'event') -ceq $Event -and (Get-WtField $_ 'date') -ceq $Date })
+    if ($matches.Count -gt 1) { $fail.Reason = '같은 회차의 체크 기록이 겹칩니다'; return $fail }
+    $id = ''
+    if ($matches.Count) {
+        $item = $matches[0]; $id = [string]$item.id
+        if (-not (Test-WtEventLogItem $item) -or @($edit.Items | Where-Object { (Get-WtField $_ 'id') -ceq $id }).Count -ne 1) { $fail.Reason = '체크 기록의 형식 · id를 확인하세요'; return $fail }
+        if ($Done) {
+            if (Test-WtDeleted $item) {
+                $reason = Set-WtRecordDeleted $item $false $At
+                if ($reason) { $fail.Reason = $reason; return $fail }
+            } else { return [pscustomobject]@{ Success = $true; Reason = ''; Id = $id; Store = $Store } }
+            Set-WtField $item 'at' $At
+        } elseif (-not (Test-WtDeleted $item)) { [void](Set-WtRecordDeleted $item $true $At) }
+        else { return [pscustomobject]@{ Success = $true; Reason = ''; Id = $id; Store = $Store } }
+    } elseif ($Done) {
+        $id = New-WtId
+        $edit.Items += , [pscustomobject][ordered]@{ id = $id; event = $Event; date = $Date; at = $At; deleted = $null; created = $At; updated = $At; rev = 0 }
+    } else { return [pscustomobject]@{ Success = $true; Reason = ''; Id = ''; Store = $Store } }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At))
+    $script:eventDoneCache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $id; Store = $next }
+}
+
 # slot의 날짜로 양끝 포함. 지운 기록도, 지운 루틴의 기록도 원자료 그대로 돌려준다.
 function Get-WtRoutineHistory($From, $To, [string]$Routine, $Store) {
     $first = ConvertFrom-WtRoutineDate $From; $last = ConvertFrom-WtRoutineDate $To
@@ -1107,4 +1210,5 @@ Export-ModuleMember -Function Open-WtScheduleStore, Save-WtScheduleItems, Get-Wt
     Get-WtRepeatDates, Get-WtScheduleOccurrences, Get-WtScheduleDays, ConvertFrom-WtScheduleRow, Update-WtScheduleSchema,
     Import-WtScheduleLegacy, Get-WtScheduleLastImport, Save-WtScheduleItem, Set-WtScheduleDeleted, Set-WtScheduleOccurrence,
     Open-WtScheduleAlarmStore, Get-WtScheduleAlarms, Save-WtScheduleAlarms,
-    New-WtRoutine, Save-WtRoutine, Set-WtRoutineDeleted, Get-WtRoutineSlots, Set-WtRoutineCheck, Get-WtRoutineHistory
+    New-WtRoutine, Save-WtRoutine, Set-WtRoutineDeleted, Get-WtRoutineSlots, Set-WtRoutineCheck, Get-WtRoutineHistory,
+    Get-WtEventDone, Set-WtEventCheck, Get-WtScheduleLanes

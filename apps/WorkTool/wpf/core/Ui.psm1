@@ -1792,9 +1792,9 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.Page" TargetType="Grid"/>
   <Style x:Key="Schedule.Header" TargetType="DockPanel"><Setter Property="Height" Value="{DynamicResource F.Height.Header}"/><Setter Property="Margin" Value="24,0,16,0"/></Style>
   <Style x:Key="Schedule.Body" TargetType="DockPanel"><Setter Property="Margin" Value="16,0,16,16"/></Style>
-  <Style x:Key="Schedule.Month" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="0,0,8,0"/></Style>
+  <Style x:Key="Schedule.Month" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.MonthMove" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
-  <Style x:Key="Schedule.MonthToday" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Height" Value="32"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.MonthToday" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Height" Value="32"/><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.Weekday" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Height" Value="28"/><Setter Property="Padding" Value="8,6,0,0"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></Style>
   <Style x:Key="Schedule.Day" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="Padding" Value="0"/><Setter Property="MinHeight" Value="88"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="BorderThickness" Value="0,0,1,1"/>
@@ -1811,7 +1811,7 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.DateCircle" TargetType="Border"><Setter Property="Width" Value="24"/><Setter Property="Height" Value="24"/><Setter Property="CornerRadius" Value="12"/><Setter Property="Margin" Value="4,6,0,0"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="VerticalAlignment" Value="Top"/></Style>
   <Style x:Key="Schedule.Date" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
 
-  <Style x:Key="Schedule.Holiday" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="8,0,4,0"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Schedule.Holiday" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="34,10,4,0"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
   <Style x:Key="Schedule.Chip" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="2"/><Setter Property="Margin" Value="4,0,4,2"/><Setter Property="Padding" Value="4,0"/><Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/></Style>
   <Style x:Key="Schedule.ChipText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
   <Style x:Key="Schedule.More" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Margin" Value="8,0,4,0"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
@@ -1823,16 +1823,54 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.Form" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
   <Style x:Key="Schedule.Field" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
   <Style x:Key="Schedule.FieldLabel" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,0,8"/></Style>
+  <Style x:Key="Schedule.RangeDash" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="8,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="0,4,0,0"/></Style>
   <Style x:Key="Schedule.Separator" TargetType="Border"><Setter Property="Height" Value="16"/></Style>
   <Style x:Key="Schedule.EventRow" TargetType="Button" BasedOn="{StaticResource Btn}">
-    <Setter Property="Height" Value="32"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+    <Setter Property="Height" Value="Auto"/><Setter Property="MinHeight" Value="32"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
       <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}"><ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/></Border>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <Style x:Key="Schedule.EventTime" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Width" Value="64"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.EventTime" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Width" Value="64"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Margin" Value="0,2,0,0"/></Style>
   <Style x:Key="Schedule.EventTitle" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <!-- 설정 → 휴무일: 해 이동 줄과 간단한 표(폭 720, 머리 32 · 행 32, 셀 좌우 12, 행 사이 선 B.Border.Muted). 행은 우클릭 · Delete · F2 -->
+  <Style x:Key="T.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></Style>
+  <Style x:Key="Holiday.Bar" TargetType="DockPanel"><Setter Property="Width" Value="720"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,4,0,8"/></Style>
+  <Style x:Key="Holiday.Year" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="FontWeight" Value="{DynamicResource F.BodyStrong.Weight}"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="4,0"/></Style>
+  <Style x:Key="Table.Simple" TargetType="StackPanel"><Setter Property="Width" Value="720"/><Setter Property="HorizontalAlignment" Value="Left"/></Style>
+  <Style x:Key="Table.Head" TargetType="Border"><Setter Property="Height" Value="32"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/><Setter Property="BorderThickness" Value="0,0,0,1"/></Style>
+  <Style x:Key="Table.HeadText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="12,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Table.Row" TargetType="Border"><Setter Property="MinHeight" Value="32"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="BorderThickness" Value="0,0,0,1"/><Setter Property="Focusable" Value="True"/><Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger></Style.Triggers>
+  </Style>
+  <Style x:Key="Table.Cell" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Margin" Value="12,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Table.CellSub" TargetType="TextBlock" BasedOn="{StaticResource Table.Cell}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/></Style>
+  <Style x:Key="Table.Empty" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Margin" Value="12,12,0,0"/></Style>
+  <!-- 해 · 달 고르기 (달력 머리줄의 해 · 달 단추 아래 펼침 면): 떠 있는 면 + 위 줄 ‹ 2026년 › + 4 × 3 달 칸 60 × 44 -->
+  <Style x:Key="Picker.Panel" TargetType="Border"><Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Overlay}"/><Setter Property="Padding" Value="10,8,10,10"/></Style>
+  <Style x:Key="Picker.Head" TargetType="DockPanel"><Setter Property="Height" Value="36"/><Setter Property="Margin" Value="0,0,0,4"/></Style>
+  <Style x:Key="Picker.Year" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="FontWeight" Value="{DynamicResource F.BodyStrong.Weight}"/><Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Picker.Month" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Width" Value="60"/><Setter Property="Height" Value="44"/><Setter Property="Margin" Value="2"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="FontSize" Value="{DynamicResource F.Body}"/></Style>
+  <Style x:Key="Picker.Today" TargetType="Button" BasedOn="{StaticResource Btn.Link}"><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,4,0,0"/></Style>
+  <Style x:Key="Picker.MonthSelected" TargetType="Button" BasedOn="{StaticResource Picker.Month}"><Setter Property="Background" Value="{DynamicResource B.Accent}"/><Setter Property="Foreground" Value="{DynamicResource B.OnAccent}"/><Setter Property="FontWeight" Value="{DynamicResource F.BodyStrong.Weight}"/>
+    <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Accent.Hover}"/></Trigger><Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Accent.Pressed}"/></Trigger></Style.Triggers>
+  </Style>
+  <!-- 달력 머리줄: 「2026년 11월 ⌄」 단추(글자 자리는 예전 제목과 같게 왼쪽 -8), ‹ 오늘 › 묶음 -->
+  <Style x:Key="Schedule.MonthButton" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Width" Value="Auto"/><Setter Property="Height" Value="{DynamicResource F.Height.Control}"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="-8,0,0,0"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/></Style>
+  <Style x:Key="Schedule.MonthChevron" TargetType="TextBlock"><Setter Property="FontFamily" Value="{DynamicResource Font.Icon}"/><Setter Property="FontSize" Value="12"/><Setter Property="Margin" Value="4,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/></Style>
+  <!-- 일정 줄: 체크 상자 + [시각 칸 64 · 제목 (+ 여러 날이면 둘째 줄 기간)]. 한 줄 32 · 두 줄 48 -->
+  <Style x:Key="Schedule.EventBody" TargetType="DockPanel"><Setter Property="Margin" Value="0,6,0,6"/></Style>
+  <Style x:Key="Schedule.EventSub" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Schedule.EventCheck" TargetType="CheckBox" BasedOn="{StaticResource Check}"><Setter Property="Margin" Value="0,2,10,0"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Background" Value="Transparent"/></Style>
+  <!-- 달력 칸: 끝낸 일정 칩 앞의 체크 표시(CheckMark E73E 10), 여러 날 막대(흰 바탕 + 1 B.Border.Default, 주를 넘는 쪽은 열어 둠) -->
+  <Style x:Key="Schedule.ChipMark" TargetType="Run"><Setter Property="FontFamily" Value="{DynamicResource Font.Icon}"/><Setter Property="FontSize" Value="10"/></Style>
+  <Style x:Key="Schedule.BarLanes" TargetType="StackPanel"><Setter Property="Margin" Value="0,30,0,0"/><Setter Property="VerticalAlignment" Value="Top"/></Style>
+  <Style x:Key="Schedule.BarLane" TargetType="Grid"><Setter Property="Height" Value="20"/><Setter Property="Margin" Value="0,0,0,2"/></Style>
+  <Style x:Key="Schedule.Bar" TargetType="Border"><Setter Property="Cursor" Value="Hand"/><Setter Property="Height" Value="20"/><Setter Property="Margin" Value="4,0,4,0"/><Setter Property="Padding" Value="3,0"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="2"/></Style>
+  <Style x:Key="Schedule.BarFromPrev" TargetType="Border" BasedOn="{StaticResource Schedule.Bar}"><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="Padding" Value="4,0,3,0"/><Setter Property="BorderThickness" Value="0,1,1,1"/><Setter Property="CornerRadius" Value="0,2,2,0"/></Style>
+  <Style x:Key="Schedule.BarToNext" TargetType="Border" BasedOn="{StaticResource Schedule.Bar}"><Setter Property="Margin" Value="4,0,0,0"/><Setter Property="BorderThickness" Value="1,1,0,1"/><Setter Property="CornerRadius" Value="2,0,0,2"/></Style>
+  <Style x:Key="Schedule.BarMiddle" TargetType="Border" BasedOn="{StaticResource Schedule.Bar}"><Setter Property="Margin" Value="0"/><Setter Property="Padding" Value="4,0,0,0"/><Setter Property="BorderThickness" Value="0,1,0,1"/><Setter Property="CornerRadius" Value="0"/></Style>
   <Style x:Key="Schedule.RoutineCount" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <PopupAnimation x:Key="{x:Static SystemParameters.MenuPopupAnimationKey}">None</PopupAnimation>
   <PopupAnimation x:Key="{x:Static SystemParameters.ToolTipPopupAnimationKey}">None</PopupAnimation>
@@ -2373,6 +2411,68 @@ function New-WtPollTimer([scriptblock]$Tick) {
 
 function Get-WtUiWorkBudget { @{ Milliseconds = 16; Items = 32 } }
 
+# 해 · 달 고르기. $Popup은 화면 XAML 안에 둔 Popup이다(그래야 창의 테마 자원을 물려받는다).
+# OnPick { param([datetime]$Month) }는 고른 달의 1일을 받는다. 보고 있는 달은 강조색이다.
+# 키: Esc 닫기, PageUp · PageDown 해 이동, Tab · 화살표로 달 칸 이동, Enter · Space 고르기
+function New-WtMonthPicker($Popup, [scriptblock]$OnPick, [scriptblock]$OnToday) {
+    $picker = @{ Popup = $Popup; OnPick = $OnPick; OnToday = $OnToday; Year = [datetime]::Today.Year; Current = [datetime]::Today; Buttons = [System.Collections.Generic.List[object]]::new(); YearText = $null }
+    $panel = [System.Windows.Controls.Border]::new(); Set-WtStyle $panel 'Picker.Panel'; $panel.Tag = $picker
+    $col = New-WtStack
+    $head = [System.Windows.Controls.DockPanel]::new(); Set-WtStyle $head 'Picker.Head'
+    foreach ($step in -1, 1) {
+        $tip = if ($step -lt 0) { '이전 해 (PageUp)' } else { '다음 해 (PageDown)' }
+        $b = New-WtButton '' -Kind Icon -Icon $(if ($step -lt 0) { 0xE76B } else { 0xE76C }) -ToolTip $tip
+        [System.Windows.Automation.AutomationProperties]::SetName($b, $tip)
+        $b.Tag = @{ Picker = $picker; Step = $step }
+        $b.Add_Click({ param($s, $e) $s.Tag.Picker.Year += $s.Tag.Step; Update-WtMonthPicker $s.Tag.Picker })
+        [System.Windows.Controls.DockPanel]::SetDock($b, $(if ($step -lt 0) { 'Left' } else { 'Right' }))
+        [void]$head.Children.Add($b)
+    }
+    $picker.YearText = New-WtText '' 'Picker.Year'; [void]$head.Children.Add($picker.YearText)
+    $grid = [System.Windows.Controls.Primitives.UniformGrid]::new(); $grid.Columns = 4
+    for ($m = 1; $m -le 12; $m++) {
+        $b = [System.Windows.Controls.Button]::new(); $b.Content = "${m}월"; $b.Tag = @{ Picker = $picker; Month = $m }
+        $b.Add_Click({ param($s, $e) $p = $s.Tag.Picker; $p.Popup.IsOpen = $false; & $p.OnPick ([datetime]::new($p.Year, $s.Tag.Month, 1)) })
+        [void]$grid.Children.Add($b); $picker.Buttons.Add($b)
+    }
+    [void]$col.Children.Add($head); [void]$col.Children.Add($grid)
+    # 「오늘」: 이번 달 · 오늘로 간다(OnToday를 줬을 때만)
+    if ($OnToday) {
+        $today = New-WtButton '오늘' -Kind Link -ToolTip '오늘로 가기'; Set-WtStyle $today 'Picker.Today'; $today.Tag = $picker
+        $today.Add_Click({ param($s, $e) $p = $s.Tag; $p.Popup.IsOpen = $false; & $p.OnToday })
+        [void]$col.Children.Add($today); $picker.Today = $today
+    }
+    $panel.Child = $col
+    $panel.Add_PreviewKeyDown({
+        param($s, $e)
+        $p = $s.Tag
+        switch ($e.Key) {
+            'Escape' { $p.Popup.IsOpen = $false; $e.Handled = $true }
+            'PageUp' { $p.Year--; Update-WtMonthPicker $p; $e.Handled = $true }
+            'PageDown' { $p.Year++; Update-WtMonthPicker $p; $e.Handled = $true }
+        }
+    })
+    $Popup.Child = $panel
+    $picker
+}
+function Update-WtMonthPicker($Picker) {
+    $Picker.YearText.Text = "$($Picker.Year)년"
+    for ($i = 0; $i -lt 12; $i++) {
+        $b = $Picker.Buttons[$i]
+        $selected = $Picker.Year -eq $Picker.Current.Year -and ($i + 1) -eq $Picker.Current.Month
+        Set-WtStyle $b $(if ($selected) { 'Picker.MonthSelected' } else { 'Picker.Month' })
+        [System.Windows.Automation.AutomationProperties]::SetName($b, "$($Picker.Year)년 $($i + 1)월")
+    }
+}
+# 보고 있는 달($Current)로 맞춰 연다. 그 달 칸에 포커스를 둔다
+function Open-WtMonthPicker($Picker, [datetime]$Current) {
+    $Picker.Current = $Current; $Picker.Year = $Current.Year
+    Update-WtMonthPicker $Picker
+    $Picker.Popup.IsOpen = $true
+    $target = $Picker.Buttons[$Current.Month - 1]
+    [void]$target.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Input, [Action]({ [void]$target.Focus() }.GetNewClosure()))
+}
+
 function New-WtContextMenu {
     $menu = [System.Windows.Controls.ContextMenu]::new()
     Set-WtResource $menu Background 'B.Card'; Set-WtResource $menu Foreground 'B.Text'
@@ -2389,6 +2489,7 @@ function Get-WtVisualChild($Root, [type]$Type) {
     $null
 }
 
+Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker
 Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, New-WtMinuteInput, New-WtContextMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,

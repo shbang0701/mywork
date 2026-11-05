@@ -522,8 +522,8 @@ try {
     foreach ($kind in 'public', 'company', 'personal') {
         $holiday = Set-WtHolidayDate (Get-WtHolidayData).Store '2026-10-28' $kind -At $at
         $offSlots = @(Get-WtRoutineSlots -Date '2026-10-28' -Now $at)
-        Assert-WtTest "루틴 휴무일($kind): workdaysOnly만 제외 · 보통 weekly는 남음" ($holiday.Success -and $offSlots.Count -eq 6 -and
-            @($offSlots | Where-Object { $_.Routine.Id -ceq 'routine-work' }).Count -eq 0 -and @($offSlots | Where-Object { $_.Routine.Id -ceq 'routine-week' }).Count -eq 1)
+        # 2026-11-05 규칙 변경: 휴무일 · 휴가에는 어떤 루틴도 차례가 없다(workdaysOnly는 근무 요일 밖만 뺀다)
+        Assert-WtTest "루틴 휴무일($kind): 모든 루틴 제외" ($holiday.Success -and $offSlots.Count -eq 0) ($offSlots.Slot -join ',')
     }
     Register-WtCalendarSource 'routine-test-leave' {
         param([datetime]$From, [datetime]$To)
@@ -532,8 +532,7 @@ try {
     try {
         $leaveSlots = @(Get-WtRoutineSlots -Date '2026-10-29' -Now $at)
         $leaveCheck = Set-WtRoutineCheck -Routine 'routine-work' -Slot '2026-10-29' -Done $true -At $at
-        Assert-WtTest '루틴 휴가: 코어 달력 등록 목록으로 workdaysOnly 제외 · 그 차례 체크 거부' ($leaveSlots.Count -eq 6 -and
-            @($leaveSlots | Where-Object { $_.Routine.Id -ceq 'routine-work' }).Count -eq 0 -and -not $leaveCheck.Success -and $leaveCheck.Reason)
+        Assert-WtTest '루틴 휴가: 코어 달력 등록 목록으로 모든 루틴 제외 · 그 차례 체크 거부' ($leaveSlots.Count -eq 0 -and -not $leaveCheck.Success -and $leaveCheck.Reason)
     } finally { Register-WtCalendarSource 'routine-test-leave' $null }
     $thread = [Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture; $oldUiCulture = $thread.CurrentUICulture
     $snapshots = @()
@@ -787,6 +786,107 @@ try {
             $cards[1].HomeSlot -ceq 'main' -and $cards[1].HomeOrder -eq 10 -and $cards[2].HomeSlot -ceq 'side' -and $cards[2].HomeOrder -eq 20 -and (Get-WtTestTexts $routineCard) -contains '오늘 루틴')
         [void](Set-WtRoutineDeleted -Id $routine.Id)
         Assert-WtTest '오늘 루틴: 해당 루틴 없으면 카드 없음' ($null -eq (& $module { New-WtRoutineHomeCard }))
+        # ---- 1단계: 일정 체크 · 여러 날 막대 · 기간 폼 · 달 고르기 · 휴무일 지정 ----
+        $checkOne = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '체크 하루'; start = @{ date = '2026-11-03'; time = '10:00' } }
+        $checkWeekly = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '체크 반복'; start = @{ date = '2026-11-02'; time = '09:00' }; repeat = @{ freq = 'weekly' } }
+        Wait-WtTestWrites
+        $scheduleText = [IO.File]::ReadAllText((Get-WtStorePath 'schedule'))
+        $c1 = Set-WtEventCheck -Event $checkOne.Id -Date '2026-11-03' -Done $true -At '2026-11-03T11:00:00+09:00'
+        $c2 = Set-WtEventCheck -Event $checkWeekly.Id -Date '2026-11-09' -Done $true -At '2026-11-09T10:00:00+09:00'
+        $cBad = Set-WtEventCheck -Event $checkWeekly.Id -Date '2026-11-10' -Done $true -At '2026-11-09T10:00:00+09:00'
+        $cNone = Set-WtEventCheck -Event 'no-such-event' -Date '2026-11-10' -Done $true -At '2026-11-09T10:00:00+09:00'
+        $doneKeys = Get-WtEventDone
+        Wait-WtTestWrites
+        Assert-WtTest '일정 체크: 회차마다 따로 남기고 없는 회차 · 없는 일정은 거부, schedule.json은 그대로' (
+            $c1.Success -and $c2.Success -and -not $cBad.Success -and -not $cNone.Success -and $doneKeys.Contains("$($checkOne.Id)@2026-11-03") -and
+            $doneKeys.Contains("$($checkWeekly.Id)@2026-11-09") -and -not $doneKeys.Contains("$($checkWeekly.Id)@2026-11-02") -and
+            [IO.File]::ReadAllText((Get-WtStorePath 'schedule')) -ceq $scheduleText) "$($cBad.Reason) / $($cNone.Reason)"
+        $cOff = Set-WtEventCheck -Event $checkOne.Id -Date '2026-11-03' -Done $false -At '2026-11-03T12:00:00+09:00'
+        Wait-WtTestWrites
+        $logDoc = [IO.File]::ReadAllText((Get-WtStorePath 'event-log')) | ConvertFrom-Json -Depth 20 -DateKind String
+        Assert-WtTest '일정 체크 풀기: 기록은 지운 표시로 남고 끝낸 모음에서 빠진다' ($cOff.Success -and -not (Get-WtEventDone).Contains("$($checkOne.Id)@2026-11-03") -and
+            @($logDoc.items | Where-Object { $_.id -ceq $c1.Id -and $_.deleted }).Count -eq 1)
+        $cAgain = Set-WtEventCheck -Event $checkOne.Id -Date '2026-11-03' -Done $true -At '2026-11-03T13:00:00+09:00'
+        Assert-WtTest '일정 체크 다시: 같은 기록을 되살린다(줄이 늘지 않음)' ($cAgain.Success -and $cAgain.Id -ceq $c1.Id -and (Get-WtEventDone).Contains("$($checkOne.Id)@2026-11-03"))
+
+        $spanA = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '막대 가'; start = @{ date = '2026-11-03'; time = $null }; end = @{ date = '2026-11-06'; time = $null } }
+        # 밤을 넘는 시각 일정은 새로 만들지 않으므로(설계) 예전에 저장된 것처럼 저장소에 바로 넣는다
+        $nightStore = Open-WtScheduleStore
+        $night = [pscustomobject][ordered]@{ id = 'night-span'; kind = 'event'; title = '막대 나'; note = ''; start = [pscustomobject]@{ date = '2026-11-05'; time = '22:00' }
+            end = [pscustomobject]@{ date = '2026-11-06'; time = '02:00' }; repeat = $null; alarms = @(); tags = @(); rev = 0; created = $null; updated = '2026-11-01T09:00:00+09:00'; deleted = $null; origin = $null }
+        Save-WtScheduleItems $nightStore (@($nightStore.Items) + @($night))
+        $spanC = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '막대 다'; start = @{ date = '2026-11-13'; time = $null }; end = @{ date = '2026-11-17'; time = $null } }
+        $novStart = [datetime]::new(2026, 11, 1)
+        $lanes = @(Get-WtScheduleLanes @(Get-WtScheduleOccurrences (Get-WtScheduleData).Entries $novStart $novStart.AddDays(34)) $novStart 5 | Where-Object { $_.Occ.Title -like '막대 *' })
+        $laneText = (@($lanes | ForEach-Object { "$($_.Occ.Title):$($_.Row):$($_.A)-$($_.B):$($_.Lane):$([int]$_.FromPrev)$([int]$_.ToNext)" }) -join ' ')
+        Assert-WtTest '여러 날 줄: 먼저 시작한 것이 아래 줄 0, 겹치면 줄 1, 주를 넘으면 앞 · 뒤 표시' (
+            $laneText -ceq '막대 가:0:2-5:0:00 막대 나:0:4-5:1:00 막대 다:1:5-6:0:01 막대 다:2:0-2:0:10') $laneText
+        & $module { Set-WtScheduleDate ([datetime]::new(2026, 11, 5)) }
+        $view.UpdateLayout()
+        $cells = & $module { ,$script:cells }
+        $barTexts = @(& $module { $script:view.Bars.Children } | ForEach-Object { $_.Children } | ForEach-Object { $_.Children } | ForEach-Object { $_.Child.Text } | Where-Object { $_ -like '*막대*' })
+        Assert-WtTest '여러 날 막대: 겹침 층에 주마다 이어 그리고, 그 칸의 칩 자리는 비워 둔다' (
+            ($barTexts -join ',') -ceq '막대 가,22:00 막대 나,막대 다,막대 다' -and $cells[3].Chips[0].Visibility -eq 'Hidden' -and
+            $cells[3].Chips[1].Visibility -eq 'Visible' -and $cells[4].Chips[0].Visibility -eq 'Hidden' -and $cells[4].Chips[1].Visibility -eq 'Hidden' -and
+            $cells[4].More.Visibility -eq 'Visible') "$($barTexts -join ',') / $($cells[3].Chips[1].Child.Text) / $($cells[4].More.Text)"
+        $listTexts = @(Get-WtTestTexts (& $module { $script:detail }))
+        Assert-WtTest '일정 목록: 여러 날 일정은 둘째 줄에 기간 · 며칠째, 밤 넘김은 시작 · 끝 시각' (
+            $listTexts -contains '11월 3일 ~ 6일 · 3일째' -and $listTexts -contains '11월 5일 22:00 ~ 6일 02:00' -and $listTexts -contains '하루 종일') ($listTexts -join ' | ')
+        & $module { Set-WtScheduleDate ([datetime]::new(2026, 11, 6)) }
+        Assert-WtTest '일정 목록: 밤 넘김 일정의 끝나는 날 시각 칸은 「~끝 시각」' (@(Get-WtTestTexts (& $module { $script:detail })) -contains '~02:00')
+        & $module { Set-WtScheduleDate ([datetime]::new(2026, 11, 3)) }
+        $key = "$($checkOne.Id)@2026-11-03"
+        $rowCheck = & $module { param($k) @($script:detail.Content.Children[0].Content.Children | Where-Object { $_ -is [Windows.Controls.DockPanel] } | ForEach-Object { $_.Children[0] } | Where-Object { $_ -is [Windows.Controls.CheckBox] -and [Windows.Automation.AutomationProperties]::GetAutomationId($_) -ceq "Schedule-Check-$k" })[0] } $key
+        $checkedBefore = [bool]$rowCheck.IsChecked
+        $peer = [Windows.Automation.Peers.CheckBoxAutomationPeer]::new($rowCheck); ([Windows.Automation.Provider.IToggleProvider]$peer.GetPattern([Windows.Automation.Peers.PatternInterface]::Toggle)).Toggle()
+        Assert-WtTest '일정 목록 체크 상자: 체크 상태를 보여 주고, 누르면 기록을 바꾼다' ($checkedBefore -and -not (Get-WtEventDone).Contains($key))
+        & $module { $script:month = [datetime]::new(2026, 11, 1); Update-WtScheduleView }
+        $cells = & $module { ,$script:cells }
+        [void](Set-WtEventCheck -Event $checkOne.Id -Date '2026-11-03' -Done $true)   # 화면에서 푼 시각보다 뒤여야 하므로 지금 시각
+        & $module { Update-WtScheduleView }
+        $doneChip = @($cells[2].Chips | Where-Object { $_.Visibility -eq 'Visible' -and $_.Child.Inlines.Count -eq 2 })
+        Assert-WtTest '달력 칩: 끝낸 일정은 체크 표시를 앞에 붙이고 흐린 글자' ($doneChip.Count -eq 1 -and ([Windows.Documents.Run]$doneChip[0].Child.Inlines.LastInline).Text -ceq ' 10:00 체크 하루' -and
+            $doneChip[0].Child.Foreground -eq $view.FindResource('B.Text.Tertiary')) (@($cells[2].Chips | ForEach-Object { "$($_.Visibility):$($_.Child.Text):$($_.Child.Inlines.Count)" }) -join ' / ')
+
+        & $module { Set-WtScheduleDate ([datetime]::new(2026, 11, 10)); Show-WtScheduleForm -Kind event; $f = $script:form.Fields; $f.title.Text = '폼 기간'; $f.allDay.IsChecked = $true; $f.endDate.Text = '2026-11-08'; Save-WtScheduleForm }
+        $endError = & $module { $script:form.Errors.endDate.Text }
+        & $module { $script:form.Fields.endDate.Text = '2026-11-12'; Save-WtScheduleForm }
+        $formSpan = @((Get-WtScheduleData).Entries | Where-Object Title -ceq '폼 기간')
+        Assert-WtTest '일정 폼 기간: 끝 날짜가 앞이면 오류, 맞으면 하루 종일 여러 날로 저장' ($endError -like '끝 날짜를 확인하세요*' -and $formSpan.Count -eq 1 -and
+            $formSpan[0].AllDay -and $formSpan[0].Start -eq [datetime]::new(2026, 11, 10) -and $formSpan[0].LastDay -eq [datetime]::new(2026, 11, 12)) $endError
+        & $module { Show-WtScheduleForm -Kind event; $f = $script:form.Fields; $f.title.Text = '폼 밤'; $f.date.Text = '2026-11-20'; $f.start.Text = '22:00'; $f.endDate.Text = '2026-11-21'; $script:forced = "$($f.allDay.IsChecked)|$($f.allDay.IsEnabled)"; Save-WtScheduleForm }
+        $night2 = @((Get-WtScheduleData).Entries | Where-Object Title -ceq '폼 밤')
+        Assert-WtTest '일정 폼 기간: 끝 날짜가 뒤면 하루 종일로 고정해 저장(밤 넘는 시각 일정은 만들지 않음)' ((& $module { $script:forced }) -ceq 'True|False' -and
+            $night2.Count -eq 1 -and $night2[0].AllDay -and $night2[0].LastDay -eq [datetime]::new(2026, 11, 21)) (& $module { $script:forced })
+        & $module { Show-WtScheduleDay }
+        $formOpen = & $module { param($Id) $occ = @(Get-WtScheduleOccurrences (Get-WtScheduleData).Entries ([datetime]'2026-11-10') ([datetime]'2026-11-10') | Where-Object { $_.Entry.Id -ceq $Id })[0]; Show-WtScheduleForm -Kind event -Occurrence $occ; $script:form.Fields.endDate.Text } $formSpan[0].Id
+        Assert-WtTest '일정 폼 기간: 고칠 때 끝 날짜 칸에 마지막 날을 보여 준다' ($formOpen -ceq '2026-11-12') $formOpen
+        & $module { Show-WtScheduleDay }
+
+        $picked = & $module { & $script:picker.OnPick ([datetime]::new(2027, 3, 1)); "$($script:month.ToString('yyyy-MM-dd'))|$($script:view.Month.Text)" }
+        & $module { $script:picker.Current = [datetime]::new(2026, 11, 1); $script:picker.Year = 2026; Update-WtMonthPicker $script:picker }
+        $pickerButtons = & $module { ,@($script:picker.Buttons) }
+        $pickerButtons[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+        $todayLink = & $module { $script:picker.Today }
+        $todayLink.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+        $afterToday = & $module { "$($script:month -eq [datetime]::new([datetime]::Today.Year, [datetime]::Today.Month, 1))|$($script:selected -eq [datetime]::Today)|$($script:view.Nav.Children.Count)" }
+        & $module { $script:month = [datetime]::new(2026, 1, 1); Update-WtScheduleView }
+        Assert-WtTest '달 고르기 「오늘」: 이번 달 · 오늘을 고른다, 달력 머리줄에는 ‹ 오늘 › 없음' ($afterToday -ceq 'True|True|0') $afterToday
+        Assert-WtTest '달 고르기: 고른 달로 옮기고, 보고 있는 달 칸은 강조 모양' ($picked -ceq '2027-03-01|2027년 3월' -and
+            $pickerButtons[10].Style -eq $view.FindResource('Picker.MonthSelected') -and $pickerButtons[9].Style -eq $view.FindResource('Picker.Month') -and
+            (& $module { $script:month }) -eq [datetime]::new(2026, 1, 1)) $picked
+
+        & $module { $script:month = [datetime]::new(2026, 11, 1); Update-WtScheduleView }
+        $cells = & $module { ,$script:cells }
+        $menuHeaders = & $module { param($b) Update-WtScheduleDayMenu $b; @($b.ContextMenu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] } | ForEach-Object Header) -join ',' } $cells[26].Button
+        & $module { Set-WtScheduleHoliday '2026-11-27' @('company') $true '회사 휴무' }
+        $cells = & $module { ,$script:cells }
+        $afterSet = "$($cells[26].Holiday.Text)|$((Get-WtHolidayDates).Contains('2026-11-27'))"
+        $menuAfter = & $module { param($b) Update-WtScheduleDayMenu $b; @($b.ContextMenu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] } | ForEach-Object Header) -join ',' } $cells[26].Button
+        & $module { Set-WtScheduleHoliday '2026-11-27' @('company') $false }
+        Assert-WtTest '날짜 우클릭 휴무일: 지정하면 칸 머리에 이름, 다시 열면 해제, 해제하면 계산에서 빠짐' (
+            $menuHeaders -ceq '새 일정,새 루틴,휴무일로 지정' -and $afterSet -ceq '회사 휴무|True' -and $menuAfter -ceq '새 일정,새 루틴,휴무일 해제' -and
+            -not (Get-WtHolidayDates).Contains('2026-11-27')) "$menuHeaders / $afterSet / $menuAfter"
         [IO.File]::WriteAllText((Get-WtStorePath 'schedule'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))
         & $module { Update-WtScheduleView }
         Assert-WtTest '일정 화면: 못 읽는 파일은 이유 표시 · 새로 만들기 비활성' ((Get-WtTestTexts $view | Where-Object { $_ -like '*더 새 버전*' }).Count -gt 0 -and -not (& $module { $script:side.Add.IsEnabled }))

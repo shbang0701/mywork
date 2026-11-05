@@ -230,8 +230,180 @@ function New-WtSettingsPage {
     $workCard = New-WtCard
     $workCard.Child = $work.Root
     New-WtTabbedPage '설정' @(
-        @('일반', (New-WtThemeCard)), @('업무시간', $workCard),
+        @('일반', (New-WtThemeCard)), @('업무시간', $workCard), @('휴무일', (New-WtHolidayCard)),
         @('탭', (New-WtMenuCard)), @('데이터', (New-WtDataCard)))
+}
+
+# ---- 휴무일: 공휴일 자동 채우기 · 해마다 목록 · 더하기 · 이름 바꾸기 · 지우기 (저장은 core\Calendar.psm1) ----
+# 일정 · 근태 탭을 꺼도 휴무일은 계산에 쓰이므로 설정 화면(코어)에 둔다. 일정 달력 우클릭으로도 회사 · 개인 휴무를 넣는다.
+$script:holidayUi = $null
+$script:holidayKinds = [ordered]@{ public = '공휴일'; company = '회사 휴무'; personal = '개인 휴무' }
+
+function New-WtHolidayCard {
+    $card = New-WtCard
+    $col = New-WtStack Vertical
+    [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
+    $auto = [System.Windows.Controls.CheckBox]::new(); Set-WtStyle $auto 'Check'
+    $auto.Content = '자동으로 넣기'; $auto.IsChecked = [bool](Get-WtSetting 'holidays.auto')
+    [System.Windows.Automation.AutomationProperties]::SetName($auto, '공휴일 자동으로 넣기')
+    $auto.Add_Click({ param($s, $e) Set-WtSetting 'holidays.auto' ([bool]$s.IsChecked); Update-WtHolidayTable })
+    $again = New-WtButton '다시 계산' -Kind Link -ToolTip '고른 해의 자동 공휴일을 계산대로 다시 넣습니다. 지운 자동 공휴일도 다시 들어옵니다.'
+    $again.Add_Click({ Invoke-WtHolidayFill -Force; Update-WtHolidayTable })
+    $line = New-WtStack Horizontal 12
+    foreach ($child in @($auto, (New-WtText '설 · 추석 · 대체공휴일 포함' 'T.Sub'), $again)) { $child.VerticalAlignment = 'Center'; [void](Add-WtChild $line $child) }
+    [void](Add-WtChild $col (New-WtSettingRow '공휴일' $line))
+    $bar = [System.Windows.Controls.DockPanel]::new(); Set-WtStyle $bar 'Holiday.Bar'
+    $add = New-WtButton '휴무일 추가' -Icon 0xE710; $add.Add_Click({ Show-WtHolidayDialog })
+    [System.Windows.Controls.DockPanel]::SetDock($add, 'Right'); [void]$bar.Children.Add($add)
+    $nav = New-WtStack Horizontal 4
+    $yearText = New-WtText '' 'Holiday.Year'
+    foreach ($step in -1, 0, 1) {
+        if ($step -eq 0) { [void](Add-WtChild $nav $yearText); continue }
+        $tip = if ($step -lt 0) { '이전 해' } else { '다음 해' }
+        $b = New-WtButton '' -Kind Icon -Icon $(if ($step -lt 0) { 0xE76B } else { 0xE76C }) -ToolTip $tip
+        [System.Windows.Automation.AutomationProperties]::SetName($b, $tip); $b.Tag = $step
+        $b.Add_Click({ param($s, $e) $script:holidayUi.Year += [int]$s.Tag; Update-WtHolidayTable })
+        [void](Add-WtChild $nav $b)
+    }
+    [void]$bar.Children.Add($nav)
+    $table = New-WtStack Vertical; Set-WtStyle $table 'Table.Simple'
+    [void](Add-WtChild $col $bar); [void](Add-WtChild $col $table)
+    $script:holidayUi = @{ Year = [datetime]::Today.Year; YearText = $yearText; Table = $table }
+    Update-WtHolidayTable
+    $card.Child = $col
+    $card
+}
+
+# 자동 공휴일 채우기. -Force는 고른 해를 계산대로 다시 맞춘다(설정을 꺼 두었어도 한다)
+function Invoke-WtHolidayFill([switch]$Force) {
+    try {
+        $r = Update-WtAutoHolidays -Years @($script:holidayUi.Year) -Force:$Force
+        if (-not $r.Success) { throw $r.Reason }
+    } catch { Show-WtMessage "공휴일을 넣지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
+}
+
+# 고른 해의 표. 자동으로 넣기가 켜져 있으면 처음 보는 해도 채운다(한 번만, 지운 날은 되살리지 않음)
+function Update-WtHolidayTable {
+    $ui = $script:holidayUi; if (-not $ui) { return }
+    $ui.YearText.Text = "$($ui.Year)년"
+    if ([bool](Get-WtSetting 'holidays.auto')) { try { [void](Update-WtAutoHolidays -Years @($ui.Year)) } catch { } }
+    $table = $ui.Table; $table.Children.Clear()
+    $data = Get-WtHolidayData
+    if ($data.Error) { [void](Add-WtChild $table (New-WtText $data.Error 'T.Error')); return }
+    $head = [System.Windows.Controls.Border]::new(); Set-WtStyle $head 'Table.Head'
+    $head.Child = New-WtHolidayRowGrid @('날짜', '요일', '이름', '종류', '넣은 곳') 'Table.HeadText'
+    [void](Add-WtChild $table $head)
+    $rows = @($data.Entries | Where-Object { $_.State -in 'ok', 'readonly' -and $_.Date -and $_.Date.Year -eq $ui.Year } | Sort-Object Date, Kind)
+    $ko = [System.Globalization.CultureInfo]::GetCultureInfo('ko-KR')
+    foreach ($entry in $rows) {
+        $origin = Get-WtField $entry.Item 'origin'
+        $from = if (Test-WtRecordObject $origin) { [string](Get-WtField $origin 'from') } else { '' }
+        $where = switch ($from) { 'auto' { '자동' } 'paste' { '붙여 넣기' } default { '직접' } }
+        $kind = if ($script:holidayKinds.Contains($entry.Kind)) { $script:holidayKinds[$entry.Kind] } else { $entry.Kind }
+        $row = [System.Windows.Controls.Border]::new(); Set-WtStyle $row 'Table.Row'
+        $row.Child = New-WtHolidayRowGrid @($entry.Date.ToString('M월 d일', $ko), $entry.Date.ToString('ddd', $ko), $entry.Name, $kind, $where) 'Table.Cell'
+        [System.Windows.Automation.AutomationProperties]::SetName($row, "$($entry.Date.ToString('M월 d일', $ko)) $($entry.Name) $kind")
+        $row.Tag = $entry
+        $menu = New-WtContextMenu
+        foreach ($action in '이름 바꾸기', '지우기') {
+            $item = [System.Windows.Controls.MenuItem]::new(); $item.Header = $action; $item.Tag = @{ Entry = $entry; Action = $action }
+            $item.IsEnabled = $entry.State -eq 'ok'
+            $item.Add_Click({ param($s, $e) if ($s.Tag.Action -eq '지우기') { Remove-WtHolidayEntry $s.Tag.Entry } else { Show-WtHolidayDialog -Entry $s.Tag.Entry } })
+            [void]$menu.Items.Add($item)
+        }
+        $row.ContextMenu = $menu
+        $row.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Delete' -and $s.Tag.State -eq 'ok') { Remove-WtHolidayEntry $s.Tag; $e.Handled = $true } elseif ($e.Key -eq 'F2' -and $s.Tag.State -eq 'ok') { Show-WtHolidayDialog -Entry $s.Tag; $e.Handled = $true } })
+        [void](Add-WtChild $table $row)
+    }
+    if (-not $rows.Count) { [void](Add-WtChild $table (New-WtText '이 해에는 휴무일이 없습니다.' 'Table.Empty')) }
+}
+# 표 한 줄: 날짜 110 · 요일 56 · 이름(나머지) · 종류 110 · 넣은 곳 90. 머리 줄과 같은 칸을 쓴다
+function New-WtHolidayRowGrid([string[]]$Values, [string]$Style) {
+    $grid = [System.Windows.Controls.Grid]::new()
+    $widths = @(110, 56, -1, 110, 90)
+    for ($i = 0; $i -lt 5; $i++) {
+        $column = [System.Windows.Controls.ColumnDefinition]::new()
+        $column.Width = if ($widths[$i] -lt 0) { [System.Windows.GridLength]::new(1, 'Star') } else { [System.Windows.GridLength]::new($widths[$i]) }
+        $grid.ColumnDefinitions.Add($column)
+        $text = New-WtText $Values[$i] $(if ($Style -eq 'Table.Cell' -and $i -in 1, 3, 4) { 'Table.CellSub' } else { $Style })
+        [System.Windows.Controls.Grid]::SetColumn($text, $i); [void]$grid.Children.Add($text)
+    }
+    $grid
+}
+function Remove-WtHolidayEntry($Entry) {
+    try {
+        $r = Set-WtHolidayDate (Get-WtHolidayData).Store $Entry.DateText $Entry.Kind -Enabled $false
+        if (-not $r.Success) { throw $r.Reason }
+    } catch { Show-WtMessage "휴무일을 지우지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
+    Update-WtHolidayTable
+}
+
+# 휴무일 추가(날짜 ~ 끝 날짜, 이름, 종류) 또는 이름 바꾸기(-Entry). 하루 하나씩 저장한다(연휴는 날마다 한 항목)
+function Show-WtHolidayDialog($Entry) {
+    $dialog = New-WtModal $(if ($Entry) { '휴무일 이름 바꾸기' } else { '휴무일 추가' })
+    $fields = @{}
+    $today = [datetime]::Today
+    $first = if ($script:holidayUi -and $script:holidayUi.Year -ne $today.Year) { [datetime]::new($script:holidayUi.Year, 1, 1) } else { $today }
+    if (-not $Entry) {
+        [void](Add-WtChild $dialog.Body (New-WtText '날짜' 'Setting.Label'))
+        $range = New-WtStack Horizontal 8
+        foreach ($key in 'From', 'To') {
+            $box = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $box 'Input'; $box.Width = 140; $box.Text = ConvertTo-WtDateText $first
+            [System.Windows.Automation.AutomationProperties]::SetName($box, $(if ($key -eq 'From') { '시작 날짜' } else { '끝 날짜' }))
+            $fields[$key] = $box; [void](Add-WtChild $range $box)
+            if ($key -eq 'From') { $dash = New-WtText '~' 'Schedule.RangeDash'; [void](Add-WtChild $range $dash) }
+        }
+        [void](Add-WtChild $dialog.Body $range)
+    }
+    [void](Add-WtChild $dialog.Body (New-WtText '이름' 'Setting.Label'))
+    $name = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $name 'Input'; $name.Text = if ($Entry) { $Entry.Name } else { '회사 휴무' }
+    [System.Windows.Automation.AutomationProperties]::SetName($name, '이름'); $fields.Name = $name
+    [void](Add-WtChild $dialog.Body $name)
+    if (-not $Entry) {
+        [void](Add-WtChild $dialog.Body (New-WtText '종류' 'Setting.Label'))
+        $kind = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $kind 'Combo'
+        foreach ($k in $script:holidayKinds.Keys) { [void]$kind.Items.Add($script:holidayKinds[$k]) }
+        $kind.SelectedIndex = 1; [System.Windows.Automation.AutomationProperties]::SetName($kind, '종류'); $fields.Kind = $kind
+        [void](Add-WtChild $dialog.Body $kind)
+    }
+    $ok = New-WtButton $(if ($Entry) { '바꾸기' } else { '추가' }) -Kind Primary; $ok.IsDefault = $true
+    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
+    $dialog.Window.Tag = @{ Fields = $fields; Entry = $Entry; Error = $dialog.Error }
+    $ok.Tag = $dialog.Window
+    $ok.Add_Click({
+        param($s, $e)
+        $w = $s.Tag
+        $reason = Save-WtHolidayDialog $w.Tag.Fields $w.Tag.Entry
+        if ($reason) { $w.Tag.Error.Text = $reason; $w.Tag.Error.Visibility = 'Visible' } else { $w.DialogResult = $true }
+    })
+    [void](Add-WtChild $dialog.Buttons $ok); [void](Add-WtChild $dialog.Buttons $cancel)
+    $dialog.Window.Add_ContentRendered({ param($s, $e) $f = $s.Tag.Fields; $target = if ($f.From) { $f.From } else { $f.Name }; [void]$target.Focus(); $target.SelectAll() })
+    if ($dialog.Window.ShowDialog() -eq $true) { Update-WtHolidayTable }
+}
+# 대화상자 값 저장. 틀리면 이유를 돌려준다(저장 안 함)
+function Save-WtHolidayDialog($Fields, $Entry) {
+    $name = $Fields.Name.Text.Trim()
+    if (-not $name) { return '이름을 입력하세요.' }
+    try {
+        if ($Entry) {
+            $r = Set-WtHolidayDate (Get-WtHolidayData).Store $Entry.DateText $Entry.Kind -Name $name -Note $Entry.Note
+            if (-not $r.Success) { return $r.Reason }
+            return ''
+        }
+        $from = ConvertFrom-WtDateText $Fields.From.Text.Trim(); $to = ConvertFrom-WtDateText $Fields.To.Text.Trim()
+        if (-not $from) { return '시작 날짜를 확인하세요. 예: 2026-12-31' }
+        if (-not $to -or $to -lt $from) { return '끝 날짜를 확인하세요. 시작 날짜와 같거나 뒤여야 합니다.' }
+        if (($to - $from).Days -gt 30) { return '한 번에 31일까지 넣을 수 있습니다.' }
+        $kind = @($script:holidayKinds.Keys)[$Fields.Kind.SelectedIndex]
+        $store = (Get-WtHolidayData).Store
+        for ($d = $from; $d -le $to; $d = $d.AddDays(1)) {
+            $r = Set-WtHolidayDate $store (ConvertTo-WtDateText $d) $kind -Name $name
+            if (-not $r.Success) { return $r.Reason }
+            $store = $r.Store
+        }
+        if ($script:holidayUi) { $script:holidayUi.Year = $from.Year }
+        ''
+    } catch { $_.Exception.Message }
 }
 
 # ---- 업무시간: 첫 설정과 일반 설정이 같은 입력 · 검사를 사용한다. ------------------------------
