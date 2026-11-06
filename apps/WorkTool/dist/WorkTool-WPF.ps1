@@ -4437,6 +4437,53 @@ $script:stylesXaml = @'
   </Style>
   <Style x:Key="Schedule.EventTime" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Width" Value="64"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Margin" Value="0,2,0,0"/></Style>
   <Style x:Key="Schedule.EventTitle" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <!-- 일정 2단계 관련 메모(디자인 README 「일정」): 폼 맨 아래 머리 · 줄 32 · 단추 줄, 일정 · 루틴 줄 끝 개수 -->
+  <Style x:Key="Schedule.LinkSection" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
+  <Style x:Key="Schedule.LinkHead" TargetType="TextBlock" BasedOn="{StaticResource Schedule.FieldLabel}"/>
+  <Style x:Key="Schedule.LinkRow" TargetType="Button" BasedOn="{StaticResource Schedule.EventRow}"><Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/></Style>
+  <Style x:Key="Schedule.LinkBody" TargetType="DockPanel"><Setter Property="Margin" Value="8,0"/></Style>
+  <Style x:Key="Schedule.LinkIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,8,0"/></Style>
+  <Style x:Key="Schedule.LinkTitle" TargetType="TextBlock" BasedOn="{StaticResource Schedule.EventTitle}"/>
+  <Style x:Key="Schedule.LinkScope" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
+  <Style x:Key="Schedule.LinkButtons" TargetType="StackPanel"><Setter Property="Orientation" Value="Horizontal"/><Setter Property="Margin" Value="0,8,0,0"/></Style>
+  <Style x:Key="Schedule.LinkChevron" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="10"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="8,0,0,0"/></Style>
+  <Style x:Key="Schedule.LinkCount" TargetType="StackPanel"><Setter Property="Orientation" Value="Horizontal"/><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.LinkCountIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="0,0,4,0"/></Style>
+  <Style x:Key="Schedule.LinkCountText" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <!-- 메모 고르기 창(New-WtModal 위): 목록 240, 두 줄 48, 이미 붙은 메모는 흐린 제목 + 「붙어 있음」으로 고를 수 없음 -->
+  <DataTemplate x:Key="Memo.PickItem">
+    <StackPanel>
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Right" Text="붙어 있음" Visibility="{Binding LinkedShown}" Style="{DynamicResource T.CaptionMuted}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+        <TextBlock x:Name="PickTitle" Text="{Binding Title}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+      </DockPanel>
+      <TextBlock Text="{Binding Sub}" Style="{DynamicResource T.CaptionMuted}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+    </StackPanel>
+    <DataTemplate.Triggers><DataTrigger Binding="{Binding Linked}" Value="True"><Setter TargetName="PickTitle" Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></DataTrigger></DataTemplate.Triggers>
+  </DataTemplate>
+  <Style x:Key="Memo.PickRow" TargetType="ListBoxItem" BasedOn="{StaticResource Row.TwoLine}">
+    <Setter Property="IsEnabled" Value="{Binding Selectable}"/>
+    <Style.Triggers><Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/><Setter Property="Cursor" Value="Arrow"/></Trigger></Style.Triggers>
+  </Style>
+  <Style x:Key="Memo.PickList" TargetType="ListBox" BasedOn="{StaticResource List}">
+    <Setter Property="ItemTemplate" Value="{StaticResource Memo.PickItem}"/>
+    <Setter Property="ItemContainerStyle" Value="{StaticResource Memo.PickRow}"/>
+    <Setter Property="Height" Value="240"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+  </Style>
+  <Style x:Key="Memo.PickEmpty" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="IsHitTestVisible" Value="False"/></Style>
+  <!-- 메모 새 창(New-WtSideWindow): 창 바탕 위 흰 카드(가장자리 8, 위 4), 글 위 24 · 좌우 44(창이 480보다 좁으면 20), 제목 F.Memo.H1 -->
+  <Style x:Key="SideWindow.Body" TargetType="Border" BasedOn="{StaticResource Panel.Surface}"><Setter Property="Margin" Value="8,4,8,8"/></Style>
+  <Style x:Key="SideWindow.ToolText" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0,0,0"/></Style>
+  <Style x:Key="SideWindow.ToolIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/></Style>
+  <Style x:Key="MemoWindow.Text" TargetType="StackPanel"><Setter Property="Margin" Value="44,24,44,24"/><Setter Property="MaxWidth" Value="680"/></Style>
+  <Style x:Key="MemoWindow.TextNarrow" TargetType="StackPanel" BasedOn="{StaticResource MemoWindow.Text}"><Setter Property="Margin" Value="20,24,20,24"/></Style>
+  <Style x:Key="MemoWindow.Title" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.H1}"/><Setter Property="FontWeight" Value="{DynamicResource F.Memo.H1.Weight}"/><Setter Property="LineHeight" Value="{DynamicResource F.Memo.H1.LineHeight}"/>
+  </Style>
+  <Style x:Key="MemoWindow.Meta" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Margin" Value="0,4,0,12"/></Style>
   <!-- 설정 → 휴무일: 해 이동 줄과 간단한 표(폭 720, 머리 32 · 행 32, 셀 좌우 12, 행 사이 선 B.Border.Muted). 행은 우클릭 · Delete · F2 -->
   <Style x:Key="T.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></Style>
   <Style x:Key="Holiday.Bar" TargetType="DockPanel"><Setter Property="Width" Value="720"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,4,0,8"/></Style>
@@ -5491,6 +5538,73 @@ function New-WtHomePinContextMenu {
 }
 
 Export-ModuleMember -Function New-WtHomeLayout, New-WtHomePinContextMenu, New-WtHomePinMenuItem, New-WtShortcutCard, New-WtMiniCalendar, New-WtTimeline, Set-WtTimelineLayout, New-WtNextEventLine, Update-WtNextEventLine, Update-WtTimelineNow, Set-WtTargetRowSelected
+
+# ---- 따로 뜨는 창 (일정 2단계: 메모 새 창) -----------------------------------------------------------
+# 앱 창과 같은 32 제목 줄(표식 · 제목 · 최대화 · 닫기) + 도구 줄 40 + 흰 카드 본문. 모양은 여기서만 정하고, 내용은 부르는 탭이 채운다.
+# 앱 창이 떠 있으면 Owner로 붙여 함께 숨고 닫히며, 앱 창의 테마 자원을 합친다(New-WtModal과 같음).
+function Get-WtSideWindowXaml {
+@'
+<Window {NS} Width="640" Height="560" MinWidth="400" MinHeight="300" WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="False"
+    WindowStartupLocation="CenterOwner" UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Ideal"
+    FontFamily="{DynamicResource Font.UI}" FontSize="{DynamicResource F.Body}" Foreground="{DynamicResource B.Text}" Background="{DynamicResource B.Bg.Canvas}">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="32" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
+  <Grid x:Name="Frame">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <DockPanel Height="{DynamicResource F.Chrome.Height}">
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button x:Name="MaxButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최대화" AutomationProperties.Name="최대화">
+          <TextBlock x:Name="MaxGlyph" Text="&#xE922;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+        </Button>
+        <Button x:Name="CloseButton" Style="{DynamicResource Btn.Close}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="닫기" AutomationProperties.Name="닫기">
+          <TextBlock Text="&#xE8BB;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+        </Button>
+      </StackPanel>
+      <StackPanel Orientation="Horizontal">
+        <Border Style="{DynamicResource Shell.Brand}"><TextBlock Text="W" Style="{DynamicResource Shell.BrandLetter}"/></Border>
+        <TextBlock x:Name="TitleText" Style="{DynamicResource T.Sub}" Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+      </StackPanel>
+    </DockPanel>
+    <DockPanel Grid.Row="1" Height="40" Margin="16,0,8,0">
+      <StackPanel x:Name="ToolRight" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"/>
+      <StackPanel x:Name="ToolLeft" Orientation="Horizontal" VerticalAlignment="Center"/>
+    </DockPanel>
+    <Border x:Name="Body" Grid.Row="2" Style="{DynamicResource SideWindow.Body}"/>
+  </Grid>
+</Window>
+'@
+}
+
+# 결과: @{ Window; Title(TextBlock); ToolLeft; ToolRight; Body(Border) }. 보이기(Show)는 부르는 쪽이 한다
+function New-WtSideWindow([string]$Title, [double]$Width = 640, [double]$Height = 560) {
+    $xaml = Get-WtSideWindowXaml
+    $w = ConvertFrom-WtXaml $xaml
+    $owner = if (Get-Command Get-WtWindow -ErrorAction Ignore) { Get-WtWindow } else { $null }
+    if ($owner -and $owner.IsVisible) { $w.Owner = $owner; $w.Resources.MergedDictionaries.Add($owner.Resources) }
+    else { $w.WindowStartupLocation = 'CenterScreen'; $w.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary)) }
+    $w.Width = $Width; $w.Height = $Height; $w.Title = $Title
+    $named = Get-WtNamedElements $w $xaml
+    $named.TitleText.Text = $Title
+    $named.CloseButton.Add_Click({ param($s, $e) [System.Windows.Window]::GetWindow($s).Close() })
+    $named.MaxButton.Add_Click({
+            param($s, $e)
+            $win = [System.Windows.Window]::GetWindow($s)
+            $win.WindowState = if ($win.WindowState -eq 'Maximized') { 'Normal' } else { 'Maximized' }
+        })
+    # 최대화하면 WindowChrome이 창 테두리만큼 화면 밖으로 그리므로 그만큼 안쪽으로 당긴다
+    $w.Add_StateChanged({
+            param($s, $e)
+            $max = $s.WindowState -eq 'Maximized'
+            $s.FindName('MaxGlyph').Text = [string][char]$(if ($max) { 0xE923 } else { 0xE922 })
+            $s.FindName('MaxButton').ToolTip = if ($max) { '이전 크기로 복원' } else { '최대화' }
+            $edge = [System.Windows.SystemParameters]::WindowResizeBorderThickness
+            $s.FindName('Frame').Margin = if ($max) { [System.Windows.Thickness]::new($edge.Left + 2, $edge.Top + 2, $edge.Right + 2, $edge.Bottom + 2) } else { [System.Windows.Thickness]::new(0) }
+        })
+    @{ Window = $w; Title = $named.TitleText; ToolLeft = $named.ToolLeft; ToolRight = $named.ToolRight; Body = $named.Body }
+}
+
+Export-ModuleMember -Function New-WtSideWindow
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Ui.psm1 끝 ----
 
@@ -8498,6 +8612,13 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   WarmUp       켠 뒤 한가할 때 화면을 미리 만들어 둘지 (선택). 처음 누를 때도 빨리 뜨게 하려는 것이다
                'Full' → NewView · Refresh를 미리 부른다. 이 탭의 데이터 파일만 읽고 밖에 영향이 없을 때만 쓴다
                'View' → NewView만 미리 부른다. Refresh가 폴더 조회 · 다른 창 수집처럼 느리거나 밖에 닿을 때 쓴다
+  Related      다른 탭(일정 등)이 이 탭의 항목을 연결할 수 있게 하는 등록 (선택). 설계 13.4
+               @{ Name = '메모'; Templates = @(@{ Id; Name }, ...)
+                  Find = { param([string[]]$Keys) } → 키마다 @{ Key; Title; Sub; Missing }
+                  Pick = { param([string[]]$Exclude) } → 고른 key 또는 $null
+                  New = { param($Seed) } → 새 key. Seed = @{ Template; Title; Subject }
+                  Window = { param($Key) } → 새 창으로 보기 }
+               연결하는 탭은 Get-WtRelatedSource로 받는다. 탭끼리 서로 부르지 않는다
 #>
 function Register-WtAddon {
     param(
@@ -8526,12 +8647,28 @@ function Register-WtAddon {
         [string[]]$Help = @(),
         [object[]]$Shortcuts = @(),
         [scriptblock]$HelpCard,
-        [object[]]$HomeCards = @()
+        [object[]]$HomeCards = @(),
+        [hashtable]$Related
     )
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
     foreach ($s in $Shortcuts) {
         if (@($s).Count -ne 2) { throw "애드온 '$Id'의 단축키는 @('키', '설명') 모양이어야 합니다." }
+    }
+    $relatedEntry = $null
+    if ($Related) {
+        if (-not ($Related.Name -is [string] -and $Related.Name.Trim())) { throw "애드온 '$Id'의 Related에는 Name(글)이 필요합니다." }
+        foreach ($key in 'Find', 'Pick', 'New', 'Window') {
+            if ($Related[$key] -isnot [scriptblock]) { throw "애드온 '$Id'의 Related에는 $key(함수)가 필요합니다." }
+        }
+        $templates = @(foreach ($t in @($Related.Templates)) {
+                if ($null -eq $t) { continue }
+                if (-not ($t.Id -is [string] -and $t.Id -and $t.Name -is [string] -and $t.Name)) { throw "애드온 '$Id'의 Related 틀은 @{ Id; Name } 모양이어야 합니다." }
+                [pscustomobject]@{ Id = $t.Id; Name = $t.Name }
+            })
+        if (-not $templates.Count) { $templates = @([pscustomobject]@{ Id = 'blank'; Name = "새 $($Related.Name)" }) }
+        $relatedEntry = [pscustomobject]@{ Name = $Related.Name.Trim(); Templates = $templates
+            Find = $Related.Find; Pick = $Related.Pick; New = $Related.New; Window = $Related.Window }
     }
     $cards = @($HomeCards)
     if (-not $PSBoundParameters.ContainsKey('HomeCards') -and $HomeCard) {
@@ -8554,6 +8691,7 @@ function Register-WtAddon {
             Description = $Description
             SavePending = $SavePending; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
+            Related = $relatedEntry
         })
     # 같은 탭을 다시 등록하면서 표시 함수를 뺐으면 옛 등록도 없앤다.
     Register-WtCalendarSource -Id "addon:$Id" -Page $Id -CalendarItems $CalendarItems
@@ -8571,6 +8709,16 @@ function Get-WtHomeCards {
 
 function Get-WtCalendarHost {
     Get-WtAddon | Where-Object CalendarHost | Select-Object -First 1
+}
+
+# 연결할 수 있는 항목을 등록한 켜진 탭들(설계 13.4). -Page를 주면 그 탭 하나(꺼졌거나 등록이 없으면 없음)
+function Get-WtRelatedSource([string]$Page) {
+    foreach ($addon in @(Get-WtAddon)) {
+        if (-not $addon.Related) { continue }
+        if ($Page -and $addon.Id -cne $Page) { continue }
+        $r = $addon.Related
+        [pscustomobject]@{ Page = $addon.Id; Name = $r.Name; Icon = $addon.Icon; Templates = @($r.Templates); Find = $r.Find; Pick = $r.Pick; New = $r.New; Window = $r.Window }
+    }
 }
 
 # 달력 출처의 의미(탭 이름 아님)와 업무시간으로 표시만 계산한다. 근무 기록은 쉬는 날보다 우선한다.
@@ -8655,7 +8803,7 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
         Items = $sorted; Days = $days.ToArray(); Errors = $errors.ToArray() }
 }
 
-Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark
+Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Addons.psm1 끝 ----
 
@@ -14803,6 +14951,258 @@ function New-WtMemoHomeCard {
     $card
 }
 
+# ---- 다른 탭과 잇기 (일정 2단계, 설계 13.5). 코어 등록 목록 -Related로만 불린다 ----------------------
+
+$script:relatedMap = $null    # id → 메모 (memo.json 표식이 바뀔 때만 다시 만든다. 일정 줄마다 불림)
+$script:relatedStamp = ''
+$script:memoWindows = @{}     # id → 새 창 (메모마다 하나)
+
+function Test-WtMemoViewFresh { [bool]$script:ui.Count -and $script:viewStamp -ceq "$(Get-WtStoreStamp 'memo')|$([datetime]::Today.Ticks)" }
+
+# 지금 메모 목록(지운 것 빼고). 메모 화면이 같은 내용을 들고 있으면 파일을 읽지 않는다
+function Get-WtMemoRelatedLive {
+    if (Test-WtMemoViewFresh) { return , @($script:items) }
+    Read-WtMemoStore
+    $live = if ($script:preparedMemo) { $script:preparedMemo.Live } else { Get-WtMemoLiveItems $script:memoStore.Items }
+    , @($live)
+}
+
+function Get-WtMemoRelatedMap {
+    $stamp = Get-WtStoreStamp 'memo'
+    if ($script:relatedMap -and $script:relatedStamp -ceq $stamp -and -not ($script:ui.Count -and -not [object]::ReferenceEquals($script:relatedItems, $script:items) -and (Test-WtMemoViewFresh))) { return $script:relatedMap }
+    $map = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    $live = Get-WtMemoRelatedLive
+    foreach ($m in $live) { if ($m -and [string]$m.id) { $map[[string]$m.id] = $m } }
+    $script:relatedMap = $map; $script:relatedStamp = $stamp; $script:relatedItems = $script:items
+    $map
+}
+
+# 지운 메모의 제목. 지운 표시가 남은 원자료에서 찾고, 90일이 지나 내용이 비었으면 「지운 메모」
+function Get-WtMemoDeletedTitle([string]$Id) {
+    if ($script:memoStore) {
+        foreach ($i in @($script:memoStore.Items)) {
+            if ((Test-WtRecordObject $i) -and [string](Get-WtField $i 'id') -ceq $Id) { $t = [string](Get-WtField $i 'title'); if ($t) { return $t } }
+        }
+    }
+    '지운 메모'
+}
+
+# Find: 키마다 @{ Key; Title; Sub; Missing }
+function Find-WtMemoRelated([string[]]$Keys) {
+    $map = Get-WtMemoRelatedMap
+    foreach ($key in @($Keys)) {
+        if (-not $key) { continue }
+        $m = $null
+        if ($map.TryGetValue($key, [ref]$m)) {
+            $title = if ([string]$m.title) { [string]$m.title } else { '제목 없음' }
+            [pscustomobject]@{ Key = $key; Title = $title; Sub = "수정일 $(Format-WtMemoTime ([string]$m.updated))"; Missing = $false }
+        } else { [pscustomobject]@{ Key = $key; Title = (Get-WtMemoDeletedTitle $key); Sub = ''; Missing = $true } }
+    }
+}
+
+# New: 메모 저장 통로로 새 메모를 앞에 넣고 id를 돌려준다. Seed = @{ Template = blank | call; Title; Subject }
+function Get-WtMemoTemplateBody([string]$Template, [string]$Subject) {
+    if ($Template -cne 'call') { return '' }
+    @("## 통화: <상대> · $Subject", '- [ ] 할 말 1', '- [ ] 할 말 2', '', '들은 것:', '', '다음 할 일:', '') -join "`r`n"
+}
+function New-WtMemoRelated($Seed) {
+    if ($script:ui.Count -and -not (Save-WtMemoNow)) { throw '고치던 메모를 먼저 저장하지 못했습니다.' }
+    if ($script:ui.Count -and -not (Test-WtMemoViewFresh)) { Update-WtMemoView }
+    $body = Get-WtMemoTemplateBody ([string]$Seed.Template) ([string]$Seed.Subject)
+    $m = New-WtMemo
+    $m.title = ([string]$Seed.Title).Trim(); $m.body = $body; $m.tags = @(Get-WtMemoTags $body)
+    $base = if ($script:ui.Count) { @($script:items) } else { @(Get-WtMemoItems) }
+    $next = @($m) + $base
+    Save-WtMemoItems $next
+    if ($script:ui.Count) {
+        $script:items = $next
+        $script:viewStamp = Get-WtMemoViewStamp
+        Update-WtMemoIndexItem $m
+        Update-WtMemoList
+    }
+    $script:relatedMap = $null
+    [string]$m.id
+}
+
+# 새 창의 할 일 체크: 고치던 칸을 먼저 저장하고, 그 줄의 [ ] ↔ [x]만 바꿔 저장한다. 줄 바꿈 모양은 그대로 둔다
+function Set-WtMemoTaskLine([string]$Id, [int]$Line) {
+    if ($script:ui.Count) {
+        if (-not (Save-WtMemoNow)) { throw '고치던 메모를 먼저 저장하지 못했습니다.' }
+        if (-not (Test-WtMemoViewFresh)) { Update-WtMemoView }
+    }
+    $items = if ($script:ui.Count) { @($script:items) } else { @(Get-WtMemoItems) }
+    $index = -1
+    for ($i = 0; $i -lt $items.Count; $i++) { if ([string]$items[$i].id -ceq $Id) { $index = $i; break } }
+    if ($index -lt 0) { throw '메모를 찾을 수 없습니다. 지웠는지 확인하세요.' }
+    $memo = $items[$index]
+    $lines = ([string]$memo.body) -split "`n"
+    $target = $Line - 1
+    $match = if ($target -ge 0 -and $target -lt $lines.Count) { [regex]::Match($lines[$target], '^(\s*(?:>\s*)*(?:[-*+]|\d{1,9}[.)])\s+\[)([ xX])\]') } else { $null }
+    if (-not $match -or -not $match.Success) { throw '할 일 줄을 찾지 못했습니다. 메모가 바뀌었으면 창을 다시 여세요.' }
+    $mark = if ($match.Groups[2].Value -eq ' ') { 'x' } else { ' ' }
+    $lines[$target] = $lines[$target].Substring(0, $match.Groups[2].Index) + $mark + $lines[$target].Substring($match.Groups[2].Index + 1)
+    $copy = Copy-WtItem $memo
+    [void](Set-WtMemoContent $copy ([string]$memo.title) ($lines -join "`n"))
+    $next = [object[]]$items.Clone(); $next[$index] = $copy
+    Save-WtMemoItems $next
+    if ($script:ui.Count) {
+        $script:items = @(Get-WtMemoSorted $next)
+        $script:viewStamp = Get-WtMemoViewStamp
+        Update-WtMemoIndexItem $copy
+        foreach ($p in $script:panes) { if ($p.Current -and [string]$p.Current.Id -ceq $Id) { Update-WtMemoPaneContent $p } }
+        Update-WtMemoTabTexts; Update-WtMemoList; Update-WtMemoToc
+    }
+    $script:relatedMap = $null
+    $copy
+}
+
+# Pick: 메모 고르기 창(모달). 이미 붙은 메모(Exclude)는 흐리게 두고 고를 수 없다. 고른 id 또는 $null
+function Show-WtMemoPicker([string[]]$Exclude) {
+    $live = Get-WtMemoRelatedLive
+    $index = if (Test-WtMemoViewFresh) { Get-WtMemoIndex } else {
+        $folders = try { @(Get-WtMemoFolders $script:memoStore) } catch { @() }
+        New-WtMemoIndex @($live) -Folders $folders
+    }
+    $modal = New-WtModal '메모 고르기'
+    $search = New-WtSearchBox '찾기'
+    $grid = [Windows.Controls.Grid]::new()
+    $list = [Windows.Controls.ListBox]::new(); Set-WtStyle $list 'Memo.PickList'
+    [Windows.Automation.AutomationProperties]::SetName($list, '메모 목록'); [Windows.Automation.AutomationProperties]::SetName($search.Box, '메모 찾기')
+    $empty = New-WtText '찾은 메모가 없습니다.' 'Memo.PickEmpty'; $empty.Visibility = 'Collapsed'
+    [void]$grid.Children.Add($list); [void]$grid.Children.Add($empty)
+    [void](Add-WtChild $modal.Body $search.Root); [void](Add-WtChild $modal.Body $grid)
+    $attach = New-WtButton '붙이기' Primary; $attach.IsDefault = $false
+    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
+    [void](Add-WtChild $modal.Buttons $attach); [void](Add-WtChild $modal.Buttons $cancel)
+    $ctx = @{ Index = $index; Excluded = [Collections.Generic.HashSet[string]]::new([string[]]@($Exclude | Where-Object { $_ }), [StringComparer]::Ordinal)
+        List = $list; Empty = $empty; Error = $modal.Error; Box = $search.Box; Window = $modal.Window; Attach = $attach; Result = $null; Timer = $null }
+    $timer = [Windows.Threading.DispatcherTimer]::new(); $timer.Interval = [TimeSpan]::FromMilliseconds(120); $timer.Tag = $ctx; $ctx.Timer = $timer
+    $timer.Add_Tick({ param($s, $e) $s.Stop(); Update-WtMemoPickList $s.Tag })
+    foreach ($el in $list, $attach, $modal.Window) { $el.Tag = $ctx }
+    # 찾기 칸의 Tag는 예시 글자(New-WtSearchBox)가 쓰므로, 찾기 칸 처리는 창의 Tag(ctx)를 쓴다
+    $search.Box.Add_TextChanged({ param($s, $e) $c = [Windows.Window]::GetWindow($s).Tag; $c.Timer.Stop(); $c.Timer.Start() })
+    $search.Box.Add_PreviewKeyDown({
+            param($s, $e)
+            $c = [Windows.Window]::GetWindow($s).Tag
+            if ($e.Key -eq [Windows.Input.Key]::Down -and $c.List.Items.Count) { $e.Handled = $true; Move-WtMemoPickFocus $c }
+            elseif ($e.Key -eq [Windows.Input.Key]::Enter) { $e.Handled = $true; $c.Timer.Stop(); Update-WtMemoPickList $c; Complete-WtMemoPick $c }
+        })
+    $list.Add_SelectionChanged({ param($s, $e) $s.Tag.Attach.IsEnabled = $null -ne $s.SelectedItem -and $s.SelectedItem.Selectable })
+    $list.Add_MouseDoubleClick({ param($s, $e) Complete-WtMemoPick $s.Tag })
+    $list.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq [Windows.Input.Key]::Enter) { $e.Handled = $true; Complete-WtMemoPick $s.Tag } })
+    $attach.Add_Click({ param($s, $e) Complete-WtMemoPick $s.Tag })
+    $modal.Window.Add_Loaded({ param($s, $e) [void]$s.Tag.Box.Focus() })
+    $modal.Window.Add_Closed({ param($s, $e) $s.Tag.Timer.Stop() })
+    Update-WtMemoPickList $ctx
+    [void]$modal.Window.ShowDialog()
+    $ctx.Result
+}
+function Update-WtMemoPickList($Ctx) {
+    $found = Find-WtMemo -Index $Ctx.Index -Query ([string]$Ctx.Box.Text) -First 50 -SnippetLimit 50 -SkipBacklinks
+    if (-not $found.Success) {
+        # 쓰다 만 식은 앞 목록을 그대로 두고 이유만 보인다
+        $Ctx.Error.Text = "찾기 식을 확인하세요. $($found.Error.Reason)"; $Ctx.Error.Visibility = 'Visible'; return
+    }
+    $Ctx.Error.Visibility = 'Collapsed'
+    $rows = @(foreach ($r in @($found.Items)) {
+            $id = [string]$r.Id; $linked = $Ctx.Excluded.Contains($id)
+            $snippet = Get-WtMarkdownSnippet ([string]$r.Snippet)
+            $stamp = Format-WtMemoTime ([string]$r.Updated)
+            [pscustomobject]@{ Id = $id; Title = $(if ([string]$r.Title) { [string]$r.Title } else { '제목 없음' }); Sub = $(if ($snippet) { "$stamp · $snippet" } else { $stamp })
+                Linked = $linked; LinkedShown = $(if ($linked) { 'Visible' } else { 'Collapsed' }); Selectable = -not $linked }
+        })
+    $Ctx.List.ItemsSource = $rows
+    $Ctx.Empty.Visibility = if ($rows.Count) { 'Collapsed' } else { 'Visible' }
+    $Ctx.List.SelectedItem = @($rows | Where-Object Selectable | Select-Object -First 1)[0]
+    $Ctx.Attach.IsEnabled = $null -ne $Ctx.List.SelectedItem
+}
+function Move-WtMemoPickFocus($Ctx) {
+    $item = $Ctx.List.SelectedItem
+    if (-not $item) { return }
+    $Ctx.List.ScrollIntoView($item); $Ctx.List.UpdateLayout()
+    $container = $Ctx.List.ItemContainerGenerator.ContainerFromItem($item)
+    if ($container) { [void]$container.Focus() }
+}
+function Complete-WtMemoPick($Ctx) {
+    $item = $Ctx.List.SelectedItem
+    if (-not $item -or -not $item.Selectable) { return }
+    $Ctx.Result = [string]$item.Id
+    $Ctx.Window.DialogResult = $true
+}
+
+# Window: 읽기 보기 새 창. 메모마다 하나이고, 같은 메모를 다시 열면 그 창을 앞으로 가져온다
+function Show-WtMemoWindow([string]$Id) {
+    if ($script:memoWindows.ContainsKey($Id)) {
+        $w = $script:memoWindows[$Id]
+        if ($w.Window.IsVisible) {
+            if ($w.Window.WindowState -eq 'Minimized') { $w.Window.WindowState = 'Normal' }
+            Update-WtMemoWindow $w; [void]$w.Window.Activate(); return $w
+        }
+        $script:memoWindows.Remove($Id)
+    }
+    if (-not (Get-WtMemoRelatedMap).ContainsKey($Id)) { throw '메모를 찾을 수 없습니다. 지웠는지 확인하세요.' }
+    $side = New-WtSideWindow '메모'
+    $w = @{ Id = $Id; Window = $side.Window; Title = $side.Title; Shown = '' }
+    [void]$side.ToolLeft.Children.Add((New-WtText ([string][char]0xE736) 'SideWindow.ToolIcon'))
+    [void]$side.ToolLeft.Children.Add((New-WtText '읽기 보기' 'SideWindow.ToolText'))
+    $open = New-WtButton '메모 탭에서 열기'; $open.Tag = $w; $w.Open = $open
+    $open.Add_Click({
+            param($s, $e)
+            Open-WtPage -Id 'memo' -Args @{ Key = $s.Tag.Id }
+            $main = Get-WtWindow; if ($main) { [void]$main.Activate() }
+        })
+    [void]$side.ToolRight.Children.Add($open)
+    $scroll = [Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'
+    $text = New-WtStack; Set-WtStyle $text 'MemoWindow.Text'; $w.Text = $text
+    $w.Heading = New-WtText '' 'MemoWindow.Title'; $w.Meta = New-WtText '' 'MemoWindow.Meta'
+    $w.View = New-WtMarkdownView -OnTask { param($line, $el) Invoke-WtMemoWindowTask ([string]$el.Tag.State.MemoId) $line }
+    $w.View.Tag.MemoId = $Id
+    foreach ($child in $w.Heading, $w.Meta, $w.View) { [void]$text.Children.Add($child) }
+    $scroll.Content = $text; $side.Body.Child = $scroll
+    $side.Window.Tag = $w
+    $side.Window.Add_Activated({ param($s, $e) try { Update-WtMemoWindow $s.Tag } catch { } })
+    $side.Window.Add_SizeChanged({ param($s, $e) Set-WtStyle $s.Tag.Text $(if ($s.ActualWidth -lt 480) { 'MemoWindow.TextNarrow' } else { 'MemoWindow.Text' }) })
+    $side.Window.Add_Closed({ param($s, $e) $script:memoWindows.Remove($s.Tag.Id) })
+    Update-WtMemoWindow $w
+    $script:memoWindows[$Id] = $w
+    $side.Window.Show()
+    $w
+}
+# 메모가 바뀌었으면 다시 그린다(창이 다시 활성화될 때). 지운 메모면 그렇다고 쓰고 [메모 탭에서 열기]를 끈다
+function Update-WtMemoWindow($W) {
+    $m = $null
+    if (-not (Get-WtMemoRelatedMap).TryGetValue($W.Id, [ref]$m)) {
+        if ($W.Shown -ceq 'missing') { return }
+        $W.Shown = 'missing'; $W.Meta.Text = '지운 메모입니다.'; Set-WtMarkdownText $W.View ''
+        $W.Open.IsEnabled = $false; $W.Open.ToolTip = '지운 메모입니다.'; [Windows.Controls.ToolTipService]::SetShowOnDisabled($W.Open, $true)
+        return
+    }
+    $key = "$($m.updated)|$($m.rev)|$($m.title)|$(([string]$m.body).Length)"
+    if ($W.Shown -ceq $key) { return }
+    $W.Shown = $key
+    $title = if ([string]$m.title) { [string]$m.title } else { '제목 없음' }
+    $W.Window.Title = $title; $W.Title.Text = $title; $W.Heading.Text = $title
+    $W.Meta.Text = "수정일 $(Format-WtMemoTime ([string]$m.updated))"
+    $W.Open.IsEnabled = $true; $W.Open.ToolTip = $null
+    Set-WtMarkdownText $W.View ([string]$m.body)
+}
+function Invoke-WtMemoWindowTask([string]$Id, [int]$Line) {
+    [void](Set-WtMemoTaskLine $Id $Line)
+    if ($script:memoWindows.ContainsKey($Id)) { Update-WtMemoWindow $script:memoWindows[$Id] }
+}
+
+# 다른 탭이 메모 탭을 열 때(Open-WtPage memo @{ Key; Edit }). Edit면 읽기 보기를 편집 보기로 바꾸고 제목 칸으로
+function Open-WtMemoFromArgs($OpenArgs) {
+    if (-not $OpenArgs.Key -or -not (Get-WtMemoById ([string]$OpenArgs.Key))) { return }
+    Clear-WtMemoFilter
+    [void](Open-WtMemo ([string]$OpenArgs.Key))
+    if ($OpenArgs.Edit) {
+        if ($script:mode -eq 'read') { Set-WtMemoMode $script:editMode }
+        $p = Get-WtMemoActivePane
+        if ($p) { [void]$p.TitleBox.Focus() }
+    }
+}
+
 # ---- 도움말 -----------------------------------------------------------------------------------
 
 $script:helpMd = $null
@@ -14885,11 +15285,18 @@ Register-WtDataWriteHandler {
 Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 40 -WarmUp Full `
     -NewView { New-WtMemoView } `
     -Refresh { param($view) Update-WtMemoView } `
-    -OnOpen { param($OpenArgs) if ($OpenArgs.Key -and (Get-WtMemoById ([string]$OpenArgs.Key))) { Clear-WtMemoFilter; [void](Open-WtMemo ([string]$OpenArgs.Key)) } } `
+    -OnOpen { param($OpenArgs) Open-WtMemoFromArgs $OpenArgs } `
+    -Related @{
+        Name = '메모'; Templates = @(@{ Id = 'blank'; Name = '빈 메모' }, @{ Id = 'call'; Name = '통화 메모' })
+        Find = { param([string[]]$Keys) Find-WtMemoRelated $Keys }
+        Pick = { param([string[]]$Exclude) Show-WtMemoPicker $Exclude }
+        New = { param($Seed) New-WtMemoRelated $Seed }
+        Window = { param($Key) [void](Show-WtMemoWindow $Key) }
+    } `
     -ShortcutExists { param($Key) Test-WtMemoShortcut $Key } `
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
     -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
-    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
+    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
     -Help @('마크다운 메모를 탭과 두 칸으로 엽니다.', 'Ctrl+E로 편집 · 원문 · 읽기를 차례로 바꿉니다.', '찾기 칸에 #태그 · folder:업무 · updated:7d 같은 조건을 쓸 수 있습니다.') `
     -Shortcuts @(
         @('Ctrl + N', '새로 만들기 (새 탭)'), @('Ctrl + S', '바로 저장'), @('Ctrl + O', '메모 이름으로 찾아 열기'),
@@ -14907,7 +15314,8 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
     -HelpCard { New-WtMemoMarkdownHelpCard }
 
 Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Format-WtMemoTime, Import-WtMemoLegacy,
-    New-WtMemo, Get-WtMemoTags, Set-WtMemoContent, Save-WtMemoItems
+    New-WtMemo, Get-WtMemoTags, Set-WtMemoContent, Save-WtMemoItems,
+    Find-WtMemoRelated, New-WtMemoRelated, Set-WtMemoTaskLine, Get-WtMemoTemplateBody
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\memo\Memo.psm1 끝 ----
 
@@ -19631,6 +20039,8 @@ function New-WtRoutineList([datetime]$Date) {
                 $counter = New-WtText ("$(@($all | Where-Object Done).Count)/$($all.Count)") 'Schedule.RoutineCount'
                 [Windows.Controls.DockPanel]::SetDock($counter, 'Right'); [void]$row.Children.Add($counter)
             }
+            $linkCount = New-WtScheduleLinkCount @(Get-WtScheduleLinks $slot.Routine)
+            if ($linkCount) { [Windows.Controls.DockPanel]::SetDock($linkCount, 'Right'); [void]$row.Children.Add($linkCount) }
             $check = [Windows.Controls.CheckBox]::new(); Set-WtStyle $check 'Checklist.Row'
             $label = $(if ($hourly) { $slot.Slot.Substring(11) + ' ' }) + $slot.Routine.Title
             $check.Content = New-WtText $label 'Schedule.EventTitle'
@@ -19754,6 +20164,8 @@ function New-WtEventRow($Occ, [datetime]$Day, $DoneKeys) {
     $button = New-WtButton ''; Set-WtStyle $button 'Schedule.EventRow'
     $content = [Windows.Controls.DockPanel]::new(); Set-WtStyle $content 'Schedule.EventBody'
     $when = New-WtText (Get-WtEventWhen $Occ $Day) 'Schedule.EventTime'; [Windows.Controls.DockPanel]::SetDock($when, 'Left'); [void]$content.Children.Add($when)
+    $linkCount = New-WtScheduleLinkCount @(Get-WtScheduleLinks $Occ.Entry $Occ.Original)
+    if ($linkCount) { [Windows.Controls.DockPanel]::SetDock($linkCount, 'Right'); [void]$content.Children.Add($linkCount) }
     $text = New-WtStack; $title = New-WtText $Occ.Title 'Schedule.EventTitle'; [void]$text.Children.Add($title)
     if ($done) { Set-WtResource $title Foreground 'B.Text.Tertiary' }
     $span = Get-WtEventSpan $Occ $Day
@@ -19814,6 +20226,169 @@ function New-WtScheduleCombo([string[]]$Values, [string]$Selected) {
 function New-WtScheduleCheck([string]$Label, [bool]$Checked) {
     $checkBox = [Windows.Controls.CheckBox]::new(); Set-WtStyle $checkBox Check; $checkBox.Content = $Label; $checkBox.IsChecked = $Checked; $checkBox
 }
+# ---- 관련 메모 (2단계, 설계 13장). 다른 탭은 코어 등록 목록(Get-WtRelatedSource)으로만 부른다 ----
+
+# 연결 → 화면 줄 정보. 출처마다 Find를 한 번 부른다. State: ok · missing(지운 항목) · off(꺼진 탭) · error(읽지 못함)
+function Get-WtScheduleLinkRows([object[]]$Links) {
+    $Links = @($Links | Where-Object { $_ -and $_.Page -and $_.Key })
+    $sources = @{}; foreach ($s in @(Get-WtRelatedSource)) { $sources[$s.Page] = $s }
+    $found = @{}; $failed = @{}
+    foreach ($page in @($Links | ForEach-Object Page | Select-Object -Unique)) {
+        $found[$page] = @{}
+        if (-not $sources.ContainsKey($page)) { continue }
+        try {
+            foreach ($hit in @(& $sources[$page].Find ([string[]]@($Links | Where-Object Page -CEQ $page | ForEach-Object Key)))) {
+                if ($hit -and $hit.Key) { $found[$page][[string]$hit.Key] = $hit }
+            }
+        } catch { $failed[$page] = $_.Exception.Message }
+    }
+    foreach ($l in @($Links)) {
+        $src = $sources[$l.Page]; $hit = if ($found.ContainsKey($l.Page)) { $found[$l.Page][$l.Key] } else { $null }
+        $state = if (-not $src) { 'off' } elseif ($failed.ContainsKey($l.Page)) { 'error' } elseif (-not $hit -or $hit.Missing) { 'missing' } else { 'ok' }
+        $title = if ($hit -and $hit.Title) { [string]$hit.Title } elseif ($state -eq 'off') { '꺼진 탭의 항목' } else { $l.Key }
+        [pscustomobject]@{ Link = $l; Source = $src; State = $state; Title = $title; Sub = $(if ($hit) { [string]$hit.Sub } else { '' }); Reason = [string]$failed[$l.Page] }
+    }
+}
+
+# 일정 · 루틴 줄 끝의 관련 메모 수(아이콘 12 + 숫자). 지운 항목 · 꺼진 탭은 세지 않는다. 없으면 $null
+function New-WtScheduleLinkCount([object[]]$Links) {
+    if (-not @($Links).Count) { return $null }
+    $rows = @(Get-WtScheduleLinkRows $Links | Where-Object State -EQ 'ok')
+    if (-not $rows.Count) { return $null }
+    $box = New-WtStack Horizontal; Set-WtStyle $box 'Schedule.LinkCount'
+    $icon = New-WtText ([string][char]$(if ($rows[0].Source.Icon) { $rows[0].Source.Icon } else { 0xE70B })) 'Schedule.LinkCountIcon'
+    [void]$box.Children.Add($icon); [void]$box.Children.Add((New-WtText ([string]$rows.Count) 'Schedule.LinkCountText'))
+    $box.ToolTip = (@($rows | ForEach-Object Title) -join [Environment]::NewLine)
+    [Windows.Automation.AutomationProperties]::SetName($box, "관련 항목 $($rows.Count)개")
+    $box
+}
+
+function Set-WtScheduleLinkError([string]$Message) {
+    $f = $script:form; if (-not $f -or -not $f.LinkError) { return }
+    $f.LinkError.Text = $Message; $f.LinkError.Visibility = if ($Message) { 'Visible' } else { 'Collapsed' }
+}
+
+# 폼 맨 아래 「관련 메모 n」: 줄 · 우클릭 · [새 메모 ⌄] · [기존 메모 고르기]. 붙이기 · 빼기 뒤에 이 함수로 다시 그린다
+function Update-WtScheduleLinks {
+    $f = $script:form; if (-not $f -or -not $f.LinkBox) { return }
+    $box = $f.LinkBox; $box.Children.Clear()
+    $sources = @(Get-WtRelatedSource)
+    if (-not $sources.Count) { $box.Visibility = 'Collapsed'; return }
+    $box.Visibility = 'Visible'
+    $links = @(); $readError = ''
+    if ($f.Id) { try { $links = @(Get-WtScheduleItemLinks $f.Id $f.LinkDate) } catch { $readError = $_.Exception.Message } }
+    $rows = @(Get-WtScheduleLinkRows $links)
+    $label = if ($sources.Count -eq 1) { "관련 $($sources[0].Name)" } else { '관련 항목' }
+    $head = New-WtText $label 'Schedule.LinkHead'
+    $count = [Windows.Documents.Run]::new("  $(@($rows | Where-Object State -EQ 'ok').Count)")
+    $count.SetResourceReference([Windows.Documents.TextElement]::ForegroundProperty, 'B.Text.Tertiary'); $head.Inlines.Add($count)
+    [void]$box.Children.Add($head)
+    foreach ($row in $rows) {
+        $button = New-WtButton ''; Set-WtStyle $button 'Schedule.LinkRow'
+        $body = [Windows.Controls.DockPanel]::new(); Set-WtStyle $body 'Schedule.LinkBody'
+        $glyph = if ($row.Source -and $row.Source.Icon) { $row.Source.Icon } else { 0xE70B }
+        $icon = New-WtText ([string][char]$glyph) 'Schedule.LinkIcon'; [Windows.Controls.DockPanel]::SetDock($icon, 'Left'); [void]$body.Children.Add($icon)
+        $name = if ($row.Source) { $row.Source.Name } else { '항목' }
+        $scopeText = switch ($row.State) {
+            'off' { '꺼진 탭' }; 'missing' { "지운 $name" }; 'error' { '읽지 못함' }
+            default { if ($f.Repeat) { if ($row.Link.Date) { '이 회차' } else { '모든 회차' } } else { '' } }
+        }
+        $scope = New-WtText $scopeText 'Schedule.LinkScope'; [Windows.Controls.DockPanel]::SetDock($scope, 'Right'); [void]$body.Children.Add($scope)
+        $title = New-WtText $row.Title 'Schedule.LinkTitle'; [void]$body.Children.Add($title)
+        if ($row.State -ne 'ok') { Set-WtResource $title Foreground 'B.Text.Disabled'; Set-WtResource $icon Foreground 'B.Text.Disabled' }
+        $button.Content = $body; $button.Tag = $row
+        $button.ToolTip = if ($row.State -eq 'error') { $row.Reason } elseif ($row.Sub) { "$($row.Title)$([Environment]::NewLine)$($row.Sub)" } else { $row.Title }
+        [Windows.Automation.AutomationProperties]::SetName($button, "$($row.Title) $scopeText".Trim())
+        [Windows.Automation.AutomationProperties]::SetAutomationId($button, "Schedule-Link-$($row.Link.Page)-$($row.Link.Key)")
+        $button.Add_Click({ param($s, $e) if ($s.Tag.State -eq 'ok') { Invoke-WtScheduleLinkAction 'window' $s.Tag } })
+        $menu = New-WtHomePinContextMenu
+        # if 식으로 받으면 원소 하나짜리 목록이 풀리므로 분기 안에서 대입한다
+        if ($row.State -eq 'ok') { $actions = @(@('window', '새 창으로 보기'), @('open', "$name 탭에서 열기"), '-', @('remove', '연결 빼기')) } else { $actions = @(, @('remove', '연결 빼기')) }
+        foreach ($a in $actions) {
+            if ($a -is [string]) { [void]$menu.Items.Add([Windows.Controls.Separator]::new()); continue }
+            $item = [Windows.Controls.MenuItem]::new(); $item.Header = $a[1]; $item.Tag = @{ Action = $a[0]; Row = $row }
+            $item.Add_Click({ param($s, $e) Invoke-WtScheduleLinkAction $s.Tag.Action $s.Tag.Row }); [void]$menu.Items.Add($item)
+        }
+        $button.ContextMenu = $menu
+        [void]$box.Children.Add($button)
+    }
+    $bar = New-WtStack Horizontal 8; Set-WtStyle $bar 'Schedule.LinkButtons'
+    $why = if ($f.Kind -eq 'routine') { '루틴을 먼저 저장하세요.' } else { '일정을 먼저 저장하세요.' }
+    foreach ($src in $sources) {
+        $templates = @($src.Templates)
+        $new = New-WtButton "새 $($src.Name)"
+        if ($templates.Count -gt 1) {
+            $content = New-WtStack Horizontal; $label = [Windows.Controls.TextBlock]::new(); $label.Text = "새 $($src.Name)"; $label.VerticalAlignment = 'Center'
+            [void]$content.Children.Add($label); [void]$content.Children.Add((New-WtText ([string][char]0xE70D) 'Schedule.LinkChevron')); $new.Content = $content
+            $menu = New-WtHomePinContextMenu
+            foreach ($t in $templates) {
+                $item = [Windows.Controls.MenuItem]::new(); $item.Header = $t.Name; $item.Tag = @{ Source = $src; Template = $t.Id }
+                $item.Add_Click({ param($s, $e) Invoke-WtScheduleLinkNew $s.Tag.Source $s.Tag.Template }); [void]$menu.Items.Add($item)
+            }
+            $new.ContextMenu = $menu
+            $new.Add_Click({ param($s, $e) $s.ContextMenu.PlacementTarget = $s; $s.ContextMenu.Placement = 'Bottom'; $s.ContextMenu.IsOpen = $true })
+        } else {
+            $new.Tag = @{ Source = $src; Template = $templates[0].Id }
+            $new.Add_Click({ param($s, $e) Invoke-WtScheduleLinkNew $s.Tag.Source $s.Tag.Template })
+        }
+        $pick = New-WtButton "기존 $($src.Name) 고르기"; $pick.Tag = $src
+        $pick.Add_Click({ param($s, $e) Invoke-WtScheduleLinkPick $s.Tag })
+        foreach ($b in $new, $pick) {
+            [Windows.Automation.AutomationProperties]::SetName($b, $(if ($b -eq $new) { "새 $($src.Name)" } else { "기존 $($src.Name) 고르기" }))
+            [Windows.Automation.AutomationProperties]::SetAutomationId($b, "Schedule-Link$(if ($b -eq $new) { 'New' } else { 'Pick' })-$($src.Page)")
+            if (-not $f.Id) { $b.IsEnabled = $false; $b.ToolTip = $why; [Windows.Controls.ToolTipService]::SetShowOnDisabled($b, $true) }
+            [void](Add-WtChild $bar $b)
+        }
+    }
+    [void]$box.Children.Add($bar)
+    $f.LinkError = New-WtText '' 'Schedule.Error'; $f.LinkError.Visibility = 'Collapsed'; [void]$box.Children.Add($f.LinkError)
+    if ($readError) { Set-WtScheduleLinkError $readError }
+}
+
+# 붙이기 · 빼기는 바로 저장하고 폼의 핸들을 새 핸들로 바꾼다(폼 [저장]이 낡은 핸들로 거부되지 않게, 설계 13.3).
+# 다시 그리면서 파일을 다시 읽으면 그 전 핸들은 낡으므로(1.9) 다시 그린 뒤의 핸들을 받는다
+function Set-WtScheduleLinkResult($Result) {
+    if (-not $Result.Success) { throw $Result.Reason }
+    $script:form.Store = $Result.Store
+    Update-WtScheduleLinks
+    $data = Get-WtScheduleData
+    if (-not $data.Error) { $script:form.Store = $data.Store }
+}
+function Invoke-WtScheduleLinkNew($Source, [string]$Template) {
+    $f = $script:form; if (-not $f -or -not $f.Id) { return }
+    try {
+        $subject = $f.Fields.title.Text.Trim(); if (-not $subject) { $subject = $f.LinkSubject }
+        $day = if ($f.LinkDate) { ConvertFrom-WtDateText $f.LinkDate } else { $script:selected }
+        $seed = @{ Template = $Template; Title = "$($day.ToString('MM-dd', $script:inv)) $subject"; Subject = $subject }
+        $key = [string](@(& $Source.New $seed) | Select-Object -Last 1)
+        if (-not $key) { throw "새 $($Source.Name)을(를) 만들지 못했습니다." }
+        Set-WtScheduleLinkResult (Add-WtScheduleLink -Store (Get-WtScheduleData).Store -Id $f.Id -Page $Source.Page -Key $key -Date $f.LinkDate)
+        Open-WtPage -Id $Source.Page -Args @{ Key = $key; Edit = $true }
+    } catch { Set-WtScheduleLinkError $_.Exception.Message }
+}
+function Invoke-WtScheduleLinkPick($Source) {
+    $f = $script:form; if (-not $f -or -not $f.Id) { return }
+    try {
+        $existing = [string[]]@(Get-WtScheduleItemLinks $f.Id $f.LinkDate | Where-Object Page -CEQ $Source.Page | ForEach-Object Key)
+        $key = [string](@(& $Source.Pick $existing) | Select-Object -Last 1)
+        if (-not $key) { return }
+        Set-WtScheduleLinkResult (Add-WtScheduleLink -Store (Get-WtScheduleData).Store -Id $f.Id -Page $Source.Page -Key $key)
+    } catch { Set-WtScheduleLinkError $_.Exception.Message }
+}
+function Invoke-WtScheduleLinkAction([string]$Action, $Row) {
+    $f = $script:form
+    try {
+        switch ($Action) {
+            'window' { [void](& $Row.Source.Window $Row.Link.Key) }
+            'open' { Open-WtPage -Id $Row.Source.Page -Args @{ Key = $Row.Link.Key } }
+            'remove' {
+                if (-not $f -or -not $f.Id) { return }
+                Set-WtScheduleLinkResult (Remove-WtScheduleLink -Store (Get-WtScheduleData).Store -Id $f.Id -Page $Row.Link.Page -Key $Row.Link.Key -Date $Row.Link.Date)
+            }
+        }
+    } catch { Set-WtScheduleLinkError $_.Exception.Message }
+}
+
 function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Occurrence, [string]$Id) {
     $store = (Get-WtScheduleData).Store; $entry = $null
     if ($Kind -eq 'routine' -and $Id) { $entry = @($store.Items | Where-Object id -CEQ $Id)[0] }
@@ -19860,6 +20435,12 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
         $script:form.Fields.workdays.ToolTip = '체크하면 근무 요일(설정 → 업무시간)이 아닌 날을 뺍니다. 휴무일 · 휴가에는 늘 빠집니다.'
         $script:form.Fields.freq.Add_SelectionChanged({ Update-WtScheduleFormFields })
     }
+    $f0 = $script:form
+    $f0.LinkDate = if ($Kind -eq 'event' -and $Occurrence) { ConvertTo-WtDateText $Occurrence.Original } else { $null }
+    $f0.Repeat = [bool]($Kind -eq 'event' -and $Occurrence -and $Occurrence.Entry.Repeat)
+    $f0.LinkSubject = if ($Occurrence) { [string]$Occurrence.Title } elseif ($entry) { [string]$entry.title } else { '' }
+    $f0.LinkBox = New-WtStack; Set-WtStyle $f0.LinkBox 'Schedule.LinkSection'; [void]$col.Children.Add($f0.LinkBox)
+    Update-WtScheduleLinks
     $save.Add_Click({ Save-WtScheduleForm }); $cancel.Add_Click({ Show-WtScheduleDay }); $delete.Add_Click({ Remove-WtScheduleForm })
     Update-WtScheduleFormFields; $script:detail.Content = $body
     if ($script:side.Rail.Visibility -eq 'Visible') { $script:side.Open.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent)) }
@@ -20053,6 +20634,7 @@ New-Module -Name 'WorkTool.addon.schedule.ScheduleData' -ScriptBlock {
 #              주는 월요일에 시작한다(격주를 셀 때). 회차 하나는 "<id>@<원래 날짜>"로 가리킨다
 #   alarms   [ { before: 분 } ]. 시작 몇 분 전(하루 종일은 그날 0시 기준). before가 null이면 꺼진 알람, before가 없는 알람(더 새 앱의 모양)은 울리지 않는다
 #   tags     [ 글 ]
+#   links    [ { page, key, date } ] 선택 칸. 다른 탭 항목(메모 등)과의 연결. date = 회차의 원래 날짜 | null(모든 회차). 루틴도 같은 칸(늘 null). 설계 13장
 #   rev      사람이 고친 횟수(0부터, 고칠 때마다 +1, core\Records.psm1 Set-WtItemEdited). 다시 가져오기가 「이 앱에서 고쳤는지」를 이것으로 본다
 #   created · updated · deleted   앱이 찍는 시각. deleted가 있으면 지운 항목(목록에서 숨김, 90일 뒤 { id, deleted }만 남김)
 #   origin   null 또는 { from: "winforms-csv", at, rev, row: 예전 CSV 줄 그대로, via: "schema1" · prev: 올리기 전 항목(1단계 WPF 파일에서 올렸을 때),
@@ -20281,15 +20863,16 @@ function Read-WtSchChange($Entry, [string]$Key, $Change) {
 <#
 저장된 항목 하나 → 화면 · 계산용 값. 저장 파일은 바꾸지 않는다(Item에 원래 객체가 그대로 있다).
 State: ok(계산 · 알람에 씀) · readonly(새 버전의 값이 있어 읽기만) · broken(고칠 항목) · deleted(지운 항목)
-나머지: Id · Kind · Title · Note · Start · End · AllDay · LastDay · Repeat(규칙 | $null) · Alarms(int[]) · Tags · Problem(이유)
+나머지: Id · Kind · Title · Note · Start · End · AllDay · LastDay · Repeat(규칙 | $null) · Alarms(int[]) · Tags · Links([{ Page, Key, Date }]) · Problem(이유)
 #>
 function ConvertFrom-WtScheduleItem($Item) {
     $e = [ordered]@{ Id = ''; Item = $Item; State = 'ok'; Problem = ''; Kind = ''; Title = ''; Note = ''
-        Start = $null; End = $null; AllDay = $true; LastDay = $null; Repeat = $null; Alarms = @(); Tags = @() }
+        Start = $null; End = $null; AllDay = $true; LastDay = $null; Repeat = $null; Alarms = @(); Tags = @(); Links = @() }
     if (Test-WtDeleted $Item) { $e.Id = [string]$Item.id; $e.State = 'deleted'; return [pscustomobject]$e }
     if (-not (Test-WtSchObject $Item)) { $e.State = 'broken'; $e.Problem = '항목 모양이 틀렸습니다'; return [pscustomobject]$e }
     $e.Id = [string]$Item.id; $e.Kind = [string]$Item.kind; $e.Title = [string]$Item.title; $e.Note = [string]$Item.note
     $e.Tags = @(foreach ($t in @($Item.tags)) { if ($null -ne $t -and "$t" -ne '') { [string]$t } })
+    $e.Links = @(Read-WtSchLinks $Item)
     $problem = ''
     $timing = Get-WtSchTiming $Item.start $Item.end
     if ($timing.Problem) { $problem = $timing.Problem }
@@ -20761,6 +21344,9 @@ function Save-WtScheduleItem($Store, $Patch, [string]$Id, [string]$FromDate, [st
             Set-WtItemEdited $previous $At
         } else { [void](Set-WtRecordDeleted $previous $true $At) }
         $edit.Items[$edit.Index] = $previous
+        # 연결: 옛 계열은 null + 나누는 날 앞 날짜, 새 계열은 null + 나누는 날부터의 날짜(설계 13.2)
+        if ($null -ne (Get-WtField $previous 'links')) { Set-WtField $previous 'links' @(Split-WtSchLinks (Get-WtField $previous 'links') $cut -Before) }
+        if ($null -ne (Get-WtField $edit.Item 'links')) { Set-WtField $edit.Item 'links' @(Split-WtSchLinks (Get-WtField $edit.Item 'links') $cut) }
         Set-WtField $edit.Item 'id' (New-WtId)
         Set-WtField $edit.Item 'origin' ([pscustomobject]@{ from = 'split'; id = $Id; at = $At })
         Set-WtField $edit.Item 'created' $At
@@ -20828,6 +21414,92 @@ function Set-WtScheduleOccurrence($Store, [string]$Id, [string]$OriginalDate, $P
     [pscustomobject]@{ Success = $true; Reason = ''; Id = $Id; Store = $next }
 }
 
+# ---- 다른 탭 항목과의 연결 (links, 설계 13장) ---------------------------------------------------
+
+# 원소 하나 → { Page, Key, Date } | $null(모양이 틀림: 화면 · 계산에서 빼고 저장할 때 그대로 둔다)
+function Read-WtSchLink($Link) {
+    if (-not (Test-WtRecordObject $Link)) { return $null }
+    $page = Get-WtField $Link 'page'; $key = Get-WtField $Link 'key'; $date = Get-WtField $Link 'date'
+    if ($page -isnot [string] -or -not $page -or $key -isnot [string] -or -not $key) { return $null }
+    if ($null -ne $date -and ($date -isnot [string] -or $null -eq (ConvertFrom-WtDateText $date))) { return $null }
+    [pscustomobject]@{ Page = $page; Key = $key; Date = $date }
+}
+function Read-WtSchLinks($Item) {
+    $links = Get-WtField $Item 'links'
+    if ($links -isnot [array]) { return }
+    foreach ($l in $links) { $r = Read-WtSchLink $l; if ($r) { $r } }
+}
+# 계열을 나눌 때 원소를 고른다. -Before: 나누는 날 앞 날짜만(옛 계열), 아니면 그날부터(새 계열). null · 모양이 틀린 원소는 양쪽에 둔다
+function Split-WtSchLinks($Links, [datetime]$Cut, [switch]$Before) {
+    foreach ($l in @($Links)) {
+        $r = Read-WtSchLink $l
+        if (-not $r -or $null -eq $r.Date) { $l; continue }
+        $day = ConvertFrom-WtDateText $r.Date
+        if (($Before -and $day -lt $Cut) -or (-not $Before -and $day -ge $Cut)) { $l }
+    }
+}
+
+# 그 회차에 붙은 연결: date가 null인 것 + 그 날짜인 것. Date를 안 주면 null인 것만(루틴 · 모든 회차)
+function Get-WtScheduleLinks($Entry, $Date) {
+    $text = if ($null -eq $Date) { $null } elseif ($Date -is [datetime]) { ConvertTo-WtDateText $Date } else { [string]$Date }
+    foreach ($l in @($Entry.Links)) { if ($l -and $l.Page -and ($null -eq $l.Date -or ($text -and $l.Date -ceq $text))) { $l } }
+}
+# 저장된 항목(일정 · 루틴) 하나의 연결을 지금 파일에서 읽는다. 편집 폼이 붙이기 · 빼기 뒤에 다시 그릴 때 쓴다
+function Get-WtScheduleItemLinks([string]$Id, $Date) {
+    $data = Get-WtScheduleData
+    if ($data.Error) { throw $data.Error }
+    foreach ($item in @($data.Items)) {
+        if (-not (Test-WtRecordObject $item) -or [string](Get-WtField $item 'id') -cne $Id -or (Test-WtDeleted $item)) { continue }
+        Get-WtScheduleLinks ([pscustomobject]@{ Links = @(Read-WtSchLinks $item) }) $Date
+        return
+    }
+}
+
+# 연결 더하기 · 빼기. 일정 · 루틴 모두. 결과 Success · Reason · Id · Store(다음 저장 핸들, 바뀐 게 없으면 그대로)
+function Set-WtScheduleLinkCore($Store, [string]$Id, [string]$Page, [string]$Key, [string]$Date, [bool]$Add, [string]$At) {
+    $fail = [pscustomobject]@{ Success = $false; Reason = ''; Id = $Id; Store = $Store }
+    if ($Store.Name -cne 'schedule' -or -not (ConvertFrom-WtStamp $At)) { $fail.Reason = '일정 핸들 · 앱 시각을 확인하세요'; return $fail }
+    if (-not $Id -or -not $Page -or -not $Key) { $fail.Reason = '연결할 항목을 고르세요'; return $fail }
+    $day = $null
+    if ($Date) { $day = ConvertFrom-WtDateText $Date; if (-not $day) { $fail.Reason = '회차 날짜를 확인하세요'; return $fail } }
+    $edit = Get-WtRecordEdit $Store $Id
+    if (-not $edit.Success) { $fail.Reason = $edit.Reason; return $fail }
+    $isRoutine = (Get-WtField $edit.Item 'kind') -ceq 'routine'
+    $entry = if ($isRoutine) { ConvertFrom-WtRoutineItem $edit.Item } else { ConvertFrom-WtScheduleItem $edit.Item }
+    if ($entry.State -ne 'ok') { $fail.Reason = $(if ($entry.Problem) { $entry.Problem } else { '지운 항목은 연결할 수 없습니다' }); return $fail }
+    if ($Add -and $day) {
+        if ($isRoutine) { $fail.Reason = '루틴은 모든 날에만 연결합니다'; return $fail }
+        $real = if ($entry.Repeat) { (Get-WtRepeatDates $entry.Repeat $entry.Start $day $day).Count -gt 0 -and -not $entry.Repeat.Skip.Contains($Date) } else { $day -eq $entry.Start.Date }
+        if (-not $real) { $fail.Reason = '일정에 없는 회차입니다'; return $fail }
+    }
+    $raw = Get-WtField $edit.Item 'links'
+    $list = [System.Collections.Generic.List[object]]::new()
+    if ($raw -is [array]) { foreach ($l in $raw) { $list.Add($l) } }
+    $wantDate = if ($Date) { $Date } else { $null }
+    $same = { param($r) $r -and $r.Page -ceq $Page -and $r.Key -ceq $Key -and $r.Date -ceq $wantDate }
+    $changed = $false
+    if ($Add) {
+        $exists = @($list | Where-Object { $r = Read-WtSchLink $_; (& $same $r) -or ($r -and $r.Page -ceq $Page -and $r.Key -ceq $Key -and $null -eq $r.Date) }).Count -gt 0
+        if (-not $exists) { $list.Add([pscustomobject][ordered]@{ page = $Page; key = $Key; date = $wantDate }); $changed = $true }
+    } else {
+        for ($i = $list.Count - 1; $i -ge 0; $i--) { if (& $same (Read-WtSchLink $list[$i])) { $list.RemoveAt($i); $changed = $true } }
+    }
+    if (-not $changed) { return [pscustomobject]@{ Success = $true; Reason = ''; Id = $Id; Store = $Store } }
+    Set-WtField $edit.Item 'links' $list.ToArray()
+    Set-WtItemEdited $edit.Item $At
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At))
+    $script:cache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $Id; Store = $next }
+}
+function Add-WtScheduleLink($Store, [string]$Id, [string]$Page, [string]$Key, [string]$Date, [string]$At = (Get-WtStamp)) {
+    if ($null -eq $Store) { $Store = Open-WtScheduleStore }
+    Set-WtScheduleLinkCore $Store $Id $Page $Key $Date $true $At
+}
+function Remove-WtScheduleLink($Store, [string]$Id, [string]$Page, [string]$Key, [string]$Date, [string]$At = (Get-WtStamp)) {
+    if ($null -eq $Store) { $Store = Open-WtScheduleStore }
+    Set-WtScheduleLinkCore $Store $Id $Page $Key $Date $false $At
+}
+
 # ---- 알람 (앱이 켜져 있는 동안, 소리 · 타이머 없음) --------------------------------------------
 
 function Open-WtScheduleAlarmStore { Open-WtStore -Name 'schedule-state' -Schema 1 }
@@ -20890,10 +21562,11 @@ function Save-WtScheduleAlarms($Store, [object[]]$Alarms, [string]$At = (Get-WtS
 # 기존 일정 해석기는 routine을 계속 읽기 전용으로 본다. 루틴만 이 해석기로 따로 읽는다.
 function ConvertFrom-WtRoutineItem($Item) {
     $e = [pscustomobject]@{ Id = ''; Title = ''; Item = $Item; State = 'ok'; Problem = ''; Start = $null
-        Freq = ''; Days = @(); Every = $null; From = $null; To = $null; WorkdaysOnly = $false }
+        Freq = ''; Days = @(); Every = $null; From = $null; To = $null; WorkdaysOnly = $false; Links = @() }
     if (-not (Test-WtRecordObject $Item)) { $e.State = 'broken'; $e.Problem = '항목 모양이 틀렸습니다'; return $e }
     $e.Id = [string](Get-WtField $Item 'id'); $e.Title = [string](Get-WtField $Item 'title')
     if (Test-WtDeleted $Item) { $e.State = 'deleted'; return $e }
+    $e.Links = @(Read-WtSchLinks $Item)
     $rule = Get-WtField $Item 'routine'
     $e.Freq = [string](Get-WtField $rule 'freq')
     if ((Get-WtField $Item 'kind') -cne 'routine' -or ((Test-WtRecordObject $rule) -and $e.Freq -cnotin 'daily', 'weekly', 'hourly')) {
@@ -21249,7 +21922,7 @@ Export-ModuleMember -Function Open-WtScheduleStore, Save-WtScheduleItems, Get-Wt
     Import-WtScheduleLegacy, Get-WtScheduleLastImport, Save-WtScheduleItem, Set-WtScheduleDeleted, Set-WtScheduleOccurrence,
     Open-WtScheduleAlarmStore, Get-WtScheduleAlarms, Save-WtScheduleAlarms,
     New-WtRoutine, Save-WtRoutine, Set-WtRoutineDeleted, Get-WtRoutineSlots, Set-WtRoutineCheck, Get-WtRoutineHistory,
-    Get-WtEventDone, Set-WtEventCheck, Get-WtScheduleLanes
+    Get-WtEventDone, Set-WtEventCheck, Get-WtScheduleLanes, Get-WtScheduleLinks, Get-WtScheduleItemLinks, Add-WtScheduleLink, Remove-WtScheduleLink
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\schedule\ScheduleData.psm1 끝 ----
 

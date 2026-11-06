@@ -59,6 +59,50 @@ try {
         Set-WtAppRoot $test.App; Initialize-WtSettings
         Remove-WtTestData $compactTest
     }
+    # ---- 일정 2단계: 다른 탭이 메모를 잇는 등록(-Related). 메모 화면 없이도 된다 ----
+    $relatedTest = New-WtTestData 'memo-related'
+    try {
+        $taskMemo = New-WtMemo; $taskMemo.title = '절차 메모'; $taskMemo.body = "- [ ] 하나`r`n- [x] 둘`r`n본문"
+        $goneMemo = New-WtMemo; $goneMemo.title = '지울 메모'
+        Save-WtMemoItems @($taskMemo, $goneMemo)
+        Save-WtMemoItems @($taskMemo)
+        $related = @(Find-WtMemoRelated @($taskMemo.id, $goneMemo.id, 'no-such-memo'))
+        Assert-WtTest '메모 잇기 Find: 있는 메모는 제목, 지운 · 없는 메모는 Missing' (
+            $related.Count -eq 3 -and $related[0].Title -ceq '절차 메모' -and -not $related[0].Missing -and $related[1].Missing -and
+            $related[1].Title -cin @('지울 메모', '지운 메모') -and $related[2].Missing -and $related[2].Title -ceq '지운 메모') (($related | ForEach-Object { "$($_.Title):$($_.Missing)" }) -join ',')
+        $newId = New-WtMemoRelated @{ Template = 'call'; Title = ' 11-05 SRV-01 점검 '; Subject = 'SRV-01 점검' }
+        $blankId = New-WtMemoRelated @{ Template = 'blank'; Title = '11-05 빈 메모'; Subject = '빈 메모' }
+        $afterNew = @(Get-WtMemoItems)
+        $callMemo = @($afterNew | Where-Object id -CEQ $newId)[0]
+        Assert-WtTest '메모 잇기 New: 제목 · 통화 틀로 앞에 만들고 id를 돌려준다, 빈 메모는 본문 없음' (
+            $callMemo -and $callMemo.title -ceq '11-05 SRV-01 점검' -and ([string]$callMemo.body).StartsWith("## 통화: <상대> · SRV-01 점검`r`n- [ ] 할 말 1") -and
+            $afterNew[0].id -ceq $blankId -and $afterNew[1].id -ceq $newId -and [string](@($afterNew | Where-Object id -CEQ $blankId)[0].body) -ceq '' -and
+            -not @(Find-WtMemoRelated @($newId))[0].Missing) ([string]$callMemo.body)
+        $toggled = Set-WtMemoTaskLine $taskMemo.id 1
+        $stored = @(Get-WtMemoItems | Where-Object id -CEQ $taskMemo.id)[0]
+        $badLine = try { [void](Set-WtMemoTaskLine $taskMemo.id 3); $false } catch { $true }
+        Assert-WtTest '메모 잇기 체크: 그 줄의 [ ] ↔ [x]만 바꾸고 CRLF는 그대로, 할 일이 아닌 줄은 거부' (
+            [string]$stored.body -ceq "- [x] 하나`r`n- [x] 둘`r`n본문" -and [string]$toggled.updated -and $badLine) ([string]$stored.body)
+        $pickRows = & $memoModule {
+            param($Exclude)
+            $live = Get-WtMemoRelatedLive
+            $ctx = @{ Index = (New-WtMemoIndex @($live) -Folders @()); Excluded = [Collections.Generic.HashSet[string]]::new([string[]]@($Exclude), [StringComparer]::Ordinal)
+                List = [Windows.Controls.ListBox]::new(); Empty = [Windows.Controls.TextBlock]::new(); Error = [Windows.Controls.TextBlock]::new()
+                Box = [Windows.Controls.TextBox]::new(); Attach = [Windows.Controls.Button]::new(); Result = $null }
+            $ctx.Box.Text = 'SRV-01'
+            Update-WtMemoPickList $ctx
+            $first = "$(@($ctx.List.ItemsSource).Count)|$($ctx.List.SelectedItem.Id -ceq $Exclude)|$($ctx.Attach.IsEnabled)"
+            $ctx.Box.Text = 'title:("'
+            Update-WtMemoPickList $ctx
+            "$first|$(@($ctx.List.ItemsSource).Count)|$($ctx.Error.Visibility)"
+        } $newId
+        Assert-WtTest '메모 고르기: 메모 찾기 문법으로 찾고, 이미 붙은 메모는 고를 수 없으며, 틀린 식은 앞 목록을 둔다' ($pickRows -ceq '1|False|False|1|Visible') $pickRows
+    } finally {
+        Set-WtAppRoot $test.App; Initialize-WtSettings
+        & $memoModule { $script:relatedMap = $null }
+        Remove-WtTestData $relatedTest
+    }
+
     # 별도 실행 공간의 시작 준비도 화면과 같은 삭제·중복 규칙을 쓰고 원자료는 보존한다.
     $preparedTest = New-WtTestData 'memo-prepared'
     try {

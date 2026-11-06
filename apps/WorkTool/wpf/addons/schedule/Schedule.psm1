@@ -298,6 +298,8 @@ function New-WtRoutineList([datetime]$Date) {
                 $counter = New-WtText ("$(@($all | Where-Object Done).Count)/$($all.Count)") 'Schedule.RoutineCount'
                 [Windows.Controls.DockPanel]::SetDock($counter, 'Right'); [void]$row.Children.Add($counter)
             }
+            $linkCount = New-WtScheduleLinkCount @(Get-WtScheduleLinks $slot.Routine)
+            if ($linkCount) { [Windows.Controls.DockPanel]::SetDock($linkCount, 'Right'); [void]$row.Children.Add($linkCount) }
             $check = [Windows.Controls.CheckBox]::new(); Set-WtStyle $check 'Checklist.Row'
             $label = $(if ($hourly) { $slot.Slot.Substring(11) + ' ' }) + $slot.Routine.Title
             $check.Content = New-WtText $label 'Schedule.EventTitle'
@@ -421,6 +423,8 @@ function New-WtEventRow($Occ, [datetime]$Day, $DoneKeys) {
     $button = New-WtButton ''; Set-WtStyle $button 'Schedule.EventRow'
     $content = [Windows.Controls.DockPanel]::new(); Set-WtStyle $content 'Schedule.EventBody'
     $when = New-WtText (Get-WtEventWhen $Occ $Day) 'Schedule.EventTime'; [Windows.Controls.DockPanel]::SetDock($when, 'Left'); [void]$content.Children.Add($when)
+    $linkCount = New-WtScheduleLinkCount @(Get-WtScheduleLinks $Occ.Entry $Occ.Original)
+    if ($linkCount) { [Windows.Controls.DockPanel]::SetDock($linkCount, 'Right'); [void]$content.Children.Add($linkCount) }
     $text = New-WtStack; $title = New-WtText $Occ.Title 'Schedule.EventTitle'; [void]$text.Children.Add($title)
     if ($done) { Set-WtResource $title Foreground 'B.Text.Tertiary' }
     $span = Get-WtEventSpan $Occ $Day
@@ -481,6 +485,169 @@ function New-WtScheduleCombo([string[]]$Values, [string]$Selected) {
 function New-WtScheduleCheck([string]$Label, [bool]$Checked) {
     $checkBox = [Windows.Controls.CheckBox]::new(); Set-WtStyle $checkBox Check; $checkBox.Content = $Label; $checkBox.IsChecked = $Checked; $checkBox
 }
+# ---- 관련 메모 (2단계, 설계 13장). 다른 탭은 코어 등록 목록(Get-WtRelatedSource)으로만 부른다 ----
+
+# 연결 → 화면 줄 정보. 출처마다 Find를 한 번 부른다. State: ok · missing(지운 항목) · off(꺼진 탭) · error(읽지 못함)
+function Get-WtScheduleLinkRows([object[]]$Links) {
+    $Links = @($Links | Where-Object { $_ -and $_.Page -and $_.Key })
+    $sources = @{}; foreach ($s in @(Get-WtRelatedSource)) { $sources[$s.Page] = $s }
+    $found = @{}; $failed = @{}
+    foreach ($page in @($Links | ForEach-Object Page | Select-Object -Unique)) {
+        $found[$page] = @{}
+        if (-not $sources.ContainsKey($page)) { continue }
+        try {
+            foreach ($hit in @(& $sources[$page].Find ([string[]]@($Links | Where-Object Page -CEQ $page | ForEach-Object Key)))) {
+                if ($hit -and $hit.Key) { $found[$page][[string]$hit.Key] = $hit }
+            }
+        } catch { $failed[$page] = $_.Exception.Message }
+    }
+    foreach ($l in @($Links)) {
+        $src = $sources[$l.Page]; $hit = if ($found.ContainsKey($l.Page)) { $found[$l.Page][$l.Key] } else { $null }
+        $state = if (-not $src) { 'off' } elseif ($failed.ContainsKey($l.Page)) { 'error' } elseif (-not $hit -or $hit.Missing) { 'missing' } else { 'ok' }
+        $title = if ($hit -and $hit.Title) { [string]$hit.Title } elseif ($state -eq 'off') { '꺼진 탭의 항목' } else { $l.Key }
+        [pscustomobject]@{ Link = $l; Source = $src; State = $state; Title = $title; Sub = $(if ($hit) { [string]$hit.Sub } else { '' }); Reason = [string]$failed[$l.Page] }
+    }
+}
+
+# 일정 · 루틴 줄 끝의 관련 메모 수(아이콘 12 + 숫자). 지운 항목 · 꺼진 탭은 세지 않는다. 없으면 $null
+function New-WtScheduleLinkCount([object[]]$Links) {
+    if (-not @($Links).Count) { return $null }
+    $rows = @(Get-WtScheduleLinkRows $Links | Where-Object State -EQ 'ok')
+    if (-not $rows.Count) { return $null }
+    $box = New-WtStack Horizontal; Set-WtStyle $box 'Schedule.LinkCount'
+    $icon = New-WtText ([string][char]$(if ($rows[0].Source.Icon) { $rows[0].Source.Icon } else { 0xE70B })) 'Schedule.LinkCountIcon'
+    [void]$box.Children.Add($icon); [void]$box.Children.Add((New-WtText ([string]$rows.Count) 'Schedule.LinkCountText'))
+    $box.ToolTip = (@($rows | ForEach-Object Title) -join [Environment]::NewLine)
+    [Windows.Automation.AutomationProperties]::SetName($box, "관련 항목 $($rows.Count)개")
+    $box
+}
+
+function Set-WtScheduleLinkError([string]$Message) {
+    $f = $script:form; if (-not $f -or -not $f.LinkError) { return }
+    $f.LinkError.Text = $Message; $f.LinkError.Visibility = if ($Message) { 'Visible' } else { 'Collapsed' }
+}
+
+# 폼 맨 아래 「관련 메모 n」: 줄 · 우클릭 · [새 메모 ⌄] · [기존 메모 고르기]. 붙이기 · 빼기 뒤에 이 함수로 다시 그린다
+function Update-WtScheduleLinks {
+    $f = $script:form; if (-not $f -or -not $f.LinkBox) { return }
+    $box = $f.LinkBox; $box.Children.Clear()
+    $sources = @(Get-WtRelatedSource)
+    if (-not $sources.Count) { $box.Visibility = 'Collapsed'; return }
+    $box.Visibility = 'Visible'
+    $links = @(); $readError = ''
+    if ($f.Id) { try { $links = @(Get-WtScheduleItemLinks $f.Id $f.LinkDate) } catch { $readError = $_.Exception.Message } }
+    $rows = @(Get-WtScheduleLinkRows $links)
+    $label = if ($sources.Count -eq 1) { "관련 $($sources[0].Name)" } else { '관련 항목' }
+    $head = New-WtText $label 'Schedule.LinkHead'
+    $count = [Windows.Documents.Run]::new("  $(@($rows | Where-Object State -EQ 'ok').Count)")
+    $count.SetResourceReference([Windows.Documents.TextElement]::ForegroundProperty, 'B.Text.Tertiary'); $head.Inlines.Add($count)
+    [void]$box.Children.Add($head)
+    foreach ($row in $rows) {
+        $button = New-WtButton ''; Set-WtStyle $button 'Schedule.LinkRow'
+        $body = [Windows.Controls.DockPanel]::new(); Set-WtStyle $body 'Schedule.LinkBody'
+        $glyph = if ($row.Source -and $row.Source.Icon) { $row.Source.Icon } else { 0xE70B }
+        $icon = New-WtText ([string][char]$glyph) 'Schedule.LinkIcon'; [Windows.Controls.DockPanel]::SetDock($icon, 'Left'); [void]$body.Children.Add($icon)
+        $name = if ($row.Source) { $row.Source.Name } else { '항목' }
+        $scopeText = switch ($row.State) {
+            'off' { '꺼진 탭' }; 'missing' { "지운 $name" }; 'error' { '읽지 못함' }
+            default { if ($f.Repeat) { if ($row.Link.Date) { '이 회차' } else { '모든 회차' } } else { '' } }
+        }
+        $scope = New-WtText $scopeText 'Schedule.LinkScope'; [Windows.Controls.DockPanel]::SetDock($scope, 'Right'); [void]$body.Children.Add($scope)
+        $title = New-WtText $row.Title 'Schedule.LinkTitle'; [void]$body.Children.Add($title)
+        if ($row.State -ne 'ok') { Set-WtResource $title Foreground 'B.Text.Disabled'; Set-WtResource $icon Foreground 'B.Text.Disabled' }
+        $button.Content = $body; $button.Tag = $row
+        $button.ToolTip = if ($row.State -eq 'error') { $row.Reason } elseif ($row.Sub) { "$($row.Title)$([Environment]::NewLine)$($row.Sub)" } else { $row.Title }
+        [Windows.Automation.AutomationProperties]::SetName($button, "$($row.Title) $scopeText".Trim())
+        [Windows.Automation.AutomationProperties]::SetAutomationId($button, "Schedule-Link-$($row.Link.Page)-$($row.Link.Key)")
+        $button.Add_Click({ param($s, $e) if ($s.Tag.State -eq 'ok') { Invoke-WtScheduleLinkAction 'window' $s.Tag } })
+        $menu = New-WtHomePinContextMenu
+        # if 식으로 받으면 원소 하나짜리 목록이 풀리므로 분기 안에서 대입한다
+        if ($row.State -eq 'ok') { $actions = @(@('window', '새 창으로 보기'), @('open', "$name 탭에서 열기"), '-', @('remove', '연결 빼기')) } else { $actions = @(, @('remove', '연결 빼기')) }
+        foreach ($a in $actions) {
+            if ($a -is [string]) { [void]$menu.Items.Add([Windows.Controls.Separator]::new()); continue }
+            $item = [Windows.Controls.MenuItem]::new(); $item.Header = $a[1]; $item.Tag = @{ Action = $a[0]; Row = $row }
+            $item.Add_Click({ param($s, $e) Invoke-WtScheduleLinkAction $s.Tag.Action $s.Tag.Row }); [void]$menu.Items.Add($item)
+        }
+        $button.ContextMenu = $menu
+        [void]$box.Children.Add($button)
+    }
+    $bar = New-WtStack Horizontal 8; Set-WtStyle $bar 'Schedule.LinkButtons'
+    $why = if ($f.Kind -eq 'routine') { '루틴을 먼저 저장하세요.' } else { '일정을 먼저 저장하세요.' }
+    foreach ($src in $sources) {
+        $templates = @($src.Templates)
+        $new = New-WtButton "새 $($src.Name)"
+        if ($templates.Count -gt 1) {
+            $content = New-WtStack Horizontal; $label = [Windows.Controls.TextBlock]::new(); $label.Text = "새 $($src.Name)"; $label.VerticalAlignment = 'Center'
+            [void]$content.Children.Add($label); [void]$content.Children.Add((New-WtText ([string][char]0xE70D) 'Schedule.LinkChevron')); $new.Content = $content
+            $menu = New-WtHomePinContextMenu
+            foreach ($t in $templates) {
+                $item = [Windows.Controls.MenuItem]::new(); $item.Header = $t.Name; $item.Tag = @{ Source = $src; Template = $t.Id }
+                $item.Add_Click({ param($s, $e) Invoke-WtScheduleLinkNew $s.Tag.Source $s.Tag.Template }); [void]$menu.Items.Add($item)
+            }
+            $new.ContextMenu = $menu
+            $new.Add_Click({ param($s, $e) $s.ContextMenu.PlacementTarget = $s; $s.ContextMenu.Placement = 'Bottom'; $s.ContextMenu.IsOpen = $true })
+        } else {
+            $new.Tag = @{ Source = $src; Template = $templates[0].Id }
+            $new.Add_Click({ param($s, $e) Invoke-WtScheduleLinkNew $s.Tag.Source $s.Tag.Template })
+        }
+        $pick = New-WtButton "기존 $($src.Name) 고르기"; $pick.Tag = $src
+        $pick.Add_Click({ param($s, $e) Invoke-WtScheduleLinkPick $s.Tag })
+        foreach ($b in $new, $pick) {
+            [Windows.Automation.AutomationProperties]::SetName($b, $(if ($b -eq $new) { "새 $($src.Name)" } else { "기존 $($src.Name) 고르기" }))
+            [Windows.Automation.AutomationProperties]::SetAutomationId($b, "Schedule-Link$(if ($b -eq $new) { 'New' } else { 'Pick' })-$($src.Page)")
+            if (-not $f.Id) { $b.IsEnabled = $false; $b.ToolTip = $why; [Windows.Controls.ToolTipService]::SetShowOnDisabled($b, $true) }
+            [void](Add-WtChild $bar $b)
+        }
+    }
+    [void]$box.Children.Add($bar)
+    $f.LinkError = New-WtText '' 'Schedule.Error'; $f.LinkError.Visibility = 'Collapsed'; [void]$box.Children.Add($f.LinkError)
+    if ($readError) { Set-WtScheduleLinkError $readError }
+}
+
+# 붙이기 · 빼기는 바로 저장하고 폼의 핸들을 새 핸들로 바꾼다(폼 [저장]이 낡은 핸들로 거부되지 않게, 설계 13.3).
+# 다시 그리면서 파일을 다시 읽으면 그 전 핸들은 낡으므로(1.9) 다시 그린 뒤의 핸들을 받는다
+function Set-WtScheduleLinkResult($Result) {
+    if (-not $Result.Success) { throw $Result.Reason }
+    $script:form.Store = $Result.Store
+    Update-WtScheduleLinks
+    $data = Get-WtScheduleData
+    if (-not $data.Error) { $script:form.Store = $data.Store }
+}
+function Invoke-WtScheduleLinkNew($Source, [string]$Template) {
+    $f = $script:form; if (-not $f -or -not $f.Id) { return }
+    try {
+        $subject = $f.Fields.title.Text.Trim(); if (-not $subject) { $subject = $f.LinkSubject }
+        $day = if ($f.LinkDate) { ConvertFrom-WtDateText $f.LinkDate } else { $script:selected }
+        $seed = @{ Template = $Template; Title = "$($day.ToString('MM-dd', $script:inv)) $subject"; Subject = $subject }
+        $key = [string](@(& $Source.New $seed) | Select-Object -Last 1)
+        if (-not $key) { throw "새 $($Source.Name)을(를) 만들지 못했습니다." }
+        Set-WtScheduleLinkResult (Add-WtScheduleLink -Store (Get-WtScheduleData).Store -Id $f.Id -Page $Source.Page -Key $key -Date $f.LinkDate)
+        Open-WtPage -Id $Source.Page -Args @{ Key = $key; Edit = $true }
+    } catch { Set-WtScheduleLinkError $_.Exception.Message }
+}
+function Invoke-WtScheduleLinkPick($Source) {
+    $f = $script:form; if (-not $f -or -not $f.Id) { return }
+    try {
+        $existing = [string[]]@(Get-WtScheduleItemLinks $f.Id $f.LinkDate | Where-Object Page -CEQ $Source.Page | ForEach-Object Key)
+        $key = [string](@(& $Source.Pick $existing) | Select-Object -Last 1)
+        if (-not $key) { return }
+        Set-WtScheduleLinkResult (Add-WtScheduleLink -Store (Get-WtScheduleData).Store -Id $f.Id -Page $Source.Page -Key $key)
+    } catch { Set-WtScheduleLinkError $_.Exception.Message }
+}
+function Invoke-WtScheduleLinkAction([string]$Action, $Row) {
+    $f = $script:form
+    try {
+        switch ($Action) {
+            'window' { [void](& $Row.Source.Window $Row.Link.Key) }
+            'open' { Open-WtPage -Id $Row.Source.Page -Args @{ Key = $Row.Link.Key } }
+            'remove' {
+                if (-not $f -or -not $f.Id) { return }
+                Set-WtScheduleLinkResult (Remove-WtScheduleLink -Store (Get-WtScheduleData).Store -Id $f.Id -Page $Row.Link.Page -Key $Row.Link.Key -Date $Row.Link.Date)
+            }
+        }
+    } catch { Set-WtScheduleLinkError $_.Exception.Message }
+}
+
 function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Occurrence, [string]$Id) {
     $store = (Get-WtScheduleData).Store; $entry = $null
     if ($Kind -eq 'routine' -and $Id) { $entry = @($store.Items | Where-Object id -CEQ $Id)[0] }
@@ -527,6 +694,12 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
         $script:form.Fields.workdays.ToolTip = '체크하면 근무 요일(설정 → 업무시간)이 아닌 날을 뺍니다. 휴무일 · 휴가에는 늘 빠집니다.'
         $script:form.Fields.freq.Add_SelectionChanged({ Update-WtScheduleFormFields })
     }
+    $f0 = $script:form
+    $f0.LinkDate = if ($Kind -eq 'event' -and $Occurrence) { ConvertTo-WtDateText $Occurrence.Original } else { $null }
+    $f0.Repeat = [bool]($Kind -eq 'event' -and $Occurrence -and $Occurrence.Entry.Repeat)
+    $f0.LinkSubject = if ($Occurrence) { [string]$Occurrence.Title } elseif ($entry) { [string]$entry.title } else { '' }
+    $f0.LinkBox = New-WtStack; Set-WtStyle $f0.LinkBox 'Schedule.LinkSection'; [void]$col.Children.Add($f0.LinkBox)
+    Update-WtScheduleLinks
     $save.Add_Click({ Save-WtScheduleForm }); $cancel.Add_Click({ Show-WtScheduleDay }); $delete.Add_Click({ Remove-WtScheduleForm })
     Update-WtScheduleFormFields; $script:detail.Content = $body
     if ($script:side.Rail.Visibility -eq 'Visible') { $script:side.Open.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent)) }

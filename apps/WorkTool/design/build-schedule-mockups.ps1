@@ -1,15 +1,21 @@
 <#
 .SYNOPSIS
-    일정 탭 다음 단계(일정 체크 · 여러 날 막대 · 키워드와 관련 메모 · 메모 새 창) 검토용 SVG와 PNG를 만든다.
+    일정 탭 단계별 시안(1단계: 체크 · 여러 날 막대 · 휴무일, 2단계: 일정 ↔ 메모 연결 · 메모 새 창) SVG와 PNG를 만든다.
 .DESCRIPTION
     PowerShell 7과 Windows 기본 WPF 어셈블리만 쓴다. 데이터 폴더를 읽지 않고, 아래 가짜 일정으로 그림만 그린다.
     색 · 글자 · 치수는 디자인 README 3판(하늘)의 값이다. 앱은 Theme · Ui 리소스를 쓰므로 이 파일의 값은 그림용이다.
+.PARAMETER Part
+    만들 시안 묶음. all(기본) · phase1(schedule-plan-list 등 1단계) · memo(schedule-plan-memo* 2단계)
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/design/build-schedule-mockups.ps1
+.EXAMPLE
+    pwsh -NoProfile -STA -File apps/WorkTool/design/build-schedule-mockups.ps1 -Part memo
 #>
 #Requires -Version 7.0
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('all', 'phase1', 'memo')][string]$Part = 'all'
+)
 
 # ===== 설정 (목업 생성용, 앱 설정이 아님) =====
 $Config = @{
@@ -382,11 +388,12 @@ function Add-EventRow([double]$Y, [string]$When, [string]$Title, [bool]$Done, [i
     if ($Sub) { [void](Add-Line 1090 ($Y + 26) 16 $Sub 12 $Ink.Text3 -Max (1256 - 1090)) }
     $Y + $(if ($Sub) { 48 } else { 32 })
 }
-function Add-DayList {
+function Add-DayList([switch]$Memo) {
+    # -Memo: 2단계 시안. 줄 끝에 관련 메모 수(메모 아이콘 12 + 숫자)
     $y = 88
     $y = Add-EventRow $y '하루 종일' '서버 이전 작업' $false 0 '11월 3일 ~ 6일 · 3일째'
-    $y = Add-EventRow $y '10:00' '주간 점검' $true
-    $y = Add-EventRow $y '14:00' 'SRV-01 펌웨어 업데이트' $false
+    $y = Add-EventRow $y '10:00' '주간 점검' $true $(if ($Memo) { 2 } else { 0 })
+    $y = Add-EventRow $y '14:00' 'SRV-01 펌웨어 업데이트' $false $(if ($Memo) { 1 } else { 0 })
     $y = Add-EventRow $y '16:00' '월간 보고 준비' $false
     $y = Add-EventRow $y '22:00' '야간 패치' $false 0 '~ 11월 6일 02:00'
     $y += 16
@@ -395,7 +402,12 @@ function Add-DayList {
     $y += 32
     Add-Check 1000 ($y + 6) $false
     [void](Add-Line 1026 $y 28 '17:00 장비실 온도 확인' 14 $Ink.Text)
-    [void](Add-Line 1256 $y 28 '0/5' 12 $Ink.Text3 -Right)
+    $pw = Add-Line 1256 $y 28 '0/5' 12 $Ink.Text3 -Right
+    if ($Memo) {
+        $nx = 1256 - $pw - 12
+        $nw = Add-Line $nx $y 28 '1' 12 $Ink.Text3 -Right
+        Add-Glyph ($nx - $nw - 16) $y 12 28 0xE70B 12 $Ink.Text3
+    }
 }
 
 # ---- 설정 → 휴무일 ---------------------------------------------------------------------------
@@ -447,6 +459,162 @@ function Add-SettingsHolidays {
     }
 }
 
+# ---- 2단계: 일정 ↔ 메모 연결 -----------------------------------------------------------------
+
+# 편집 폼 칸: 라벨 F.Body · B.Text.Secondary, 아래 8, 칸 32, 필드 사이 12. 다음 필드 Y를 돌려준다
+function Add-FormField([double]$Y, [string]$Label, [string]$Value, [switch]$Combo) {
+    [void](Add-Line 1000 $Y 20 $Label 14 $Ink.Text2)
+    Add-Input 1000 ($Y + 28) 256 $Value -Combo:$Combo
+    $Y + 72
+}
+# 「시작 ~ 끝」 두 칸 한 줄. ~는 좌우 8
+function Add-FormRange([double]$Y, [string]$Label, [string]$From, [string]$To) {
+    [void](Add-Line 1000 $Y 20 $Label 14 $Ink.Text2)
+    $dw = Measure-Text '~' 14
+    $iw = (256 - 16 - $dw) / 2
+    Add-Input 1000 ($Y + 28) $iw $From
+    [void](Add-Line (1000 + $iw + 8) ($Y + 28) 32 '~' 14 $Ink.Text2)
+    Add-Input (1000 + $iw + 16 + $dw) ($Y + 28) $iw $To
+    $Y + 72
+}
+# 기본 버튼 + 펼침 표시(ChevronDown 10). 폭을 돌려준다. -Open이면 누른 상태(메뉴가 열림)
+function Add-DropBtn([double]$X, [double]$Y, [string]$Text, [switch]$Open) {
+    $tw = Measure-Text $Text 14
+    $w = 12 + $tw + 8 + 10 + 12
+    Add-Frame $X $Y $w 32 $(if ($Open) { $Ink.Hover } else { $Ink.Surface }) $Ink.Strong 4
+    [void](Add-Line ($X + 12) $Y 32 $Text 14 $Ink.Text)
+    Add-Glyph ($X + 12 + $tw + 8) $Y 10 32 0xE70D 10 $Ink.Text2
+    $w
+}
+# 관련 메모 줄(32): 메모 아이콘 16 · 제목 F.Body · 오른쪽 끝 붙은 범위 F.Caption · B.Text.Tertiary. 지운 메모는 흐리게
+function Add-MemoLinkRow([double]$Y, [string]$Title, [string]$Scope, [switch]$Missing, [switch]$Hover) {
+    if ($Hover) { Add-Box 1000 $Y 256 32 $Ink.Hover '' 4 }
+    $fg = if ($Missing) { $Ink.Off } else { $Ink.Text }
+    Add-Glyph 1008 $Y 16 32 0xE70B 16 $(if ($Missing) { $Ink.Off } else { $Ink.Text2 })
+    $sw = Add-Line 1248 $Y 32 $Scope 12 $Ink.Text3 -Right
+    [void](Add-Line 1032 $Y 32 $Title 14 $fg -Max (1248 - $sw - 8 - 1032))
+}
+# 일정 편집 폼(반복 일정 「주간 점검」 11월 5일 회차) + 맨 아래 관련 메모. [새 메모] 단추의 Y를 돌려준다
+function Add-EventForm([switch]$NewOpen, [switch]$RowHover) {
+    $y = 88
+    $y = Add-FormField $y '제목' '주간 점검'
+    $y = Add-FormRange $y '날짜' '2026-11-05' '2026-11-05'
+    Add-Check 1000 ($y + 2) $false
+    [void](Add-Line 1026 $y 20 '하루 종일' 14 $Ink.Text)
+    $y += 32
+    $y = Add-FormRange $y '시각' '10:00' '10:30'
+    $y = Add-FormField $y '반복' '매주' -Combo
+    $y = Add-FormField $y '끝나는 날' ''
+    $y = Add-FormField $y '알람' '10분 전' -Combo
+    $lw = Add-Line 1000 $y 20 '관련 메모' 14 $Ink.Text2
+    [void](Add-Line (1000 + $lw + 8) $y 20 '2' 14 $Ink.Text3)
+    $y += 28
+    Add-MemoLinkRow $y '11-05 주간 점검' '이 회차'; $y += 32
+    Add-MemoLinkRow $y '주간 점검 절차' '모든 회차' -Hover:$RowHover; $y += 32
+    Add-MemoLinkRow $y '옛 점검 메모' '지운 메모' -Missing; $y += 32
+    $y += 8
+    $nw = Add-DropBtn 1000 $y '새 메모' -Open:$NewOpen
+    [void](Add-Btn (1000 + $nw + 8) $y '기존 메모 고르기')
+    # 아래 단추 줄: 삭제 | 저장(주) · 취소 (지금 폼과 같음)
+    [void](Add-Btn 1000 744 '삭제')
+    $cancelW = Add-Btn 1256 744 '취소' -Right
+    [void](Add-Btn (1256 - $cancelW - 8) 744 '저장' 'primary' -Right)
+    $y
+}
+# 루틴 편집 폼(시간마다) + 맨 아래 관련 메모. 루틴은 날짜마다 따로 붙이지 않고 늘 모든 날이라 범위 글자가 없다
+function Add-RoutineForm {
+    $y = 88
+    $y = Add-FormField $y '제목' '장비실 온도 확인'
+    $y = Add-FormField $y '주기' '시간마다' -Combo
+    $y = Add-FormField $y '간격 시간' '2'
+    $y = Add-FormField $y '시작' '09:00'
+    $y = Add-FormField $y '끝 시각' '17:00'
+    Add-Check 1000 ($y + 2) $true
+    [void](Add-Line 1026 $y 20 '근무 요일만' 14 $Ink.Text)
+    $y += 32
+    $lw = Add-Line 1000 $y 20 '관련 메모' 14 $Ink.Text2
+    [void](Add-Line (1000 + $lw + 8) $y 20 '1' 14 $Ink.Text3)
+    $y += 28
+    Add-MemoLinkRow $y '장비실 온도 기록 방법' ''; $y += 32
+    $y += 8
+    $nw = Add-DropBtn 1000 $y '새 메모'
+    [void](Add-Btn (1000 + $nw + 8) $y '기존 메모 고르기')
+    [void](Add-Btn 1000 744 '삭제')
+    $cancelW = Add-Btn 1256 744 '취소' -Right
+    [void](Add-Btn (1256 - $cancelW - 8) 744 '저장' 'primary' -Right)
+}
+# 기존 메모 고르기: New-WtModal(폭 480, 안쪽 24, 제목 F.Subtitle) 위에 찾기 칸 + 두 줄 목록(48) + [붙이기] [취소]
+function Add-PickDialog([double]$X, [double]$Y) {
+    $w = 480; $listH = 5 * 48 + 2
+    $h = 24 + 24 + 12 + 32 + 8 + $listH + 24 + 32 + 24
+    Add-Raised $X $Y $w $h
+    [void](Add-Line ($X + 24) ($Y + 24) 24 '메모 고르기' 16 $Ink.Text $true)
+    # 찾기 칸(포커스: 2 B.Accent), 찾기 아이콘 14 왼쪽 10, 글자 왼쪽 32
+    $sy = $Y + 60
+    Add-Box ($X + 25) ($sy + 1) 430 30 $Ink.Surface $Ink.Accent 4 2
+    Add-Glyph ($X + 34) $sy 14 32 0xE721 14 $Ink.Text2
+    [void](Add-Line ($X + 56) $sy 32 '점검' 14 $Ink.Text)
+    # 목록: 1 B.Border.Default 테두리, 줄 48(제목 F.Body + 수정일 · 미리보기 F.Caption), 줄 사이 1 B.Border.Muted
+    $ly = $sy + 40
+    Add-Frame ($X + 24) $ly 432 $listH $Ink.Surface $Ink.Border 4
+    $rows = @(
+        @{ T = '주간 점검 절차'; S = '10월 28일 · 백업 작업 결과 확인, 디스크 사용량 확인'; Linked = $true }
+        @{ T = '스토리지 점검 절차'; S = '10월 2일 · 1. 관리 콘솔에 접속한다'; Sel = $true }
+        @{ T = '분기 점검 결과'; S = '9월 30일 · 요약: 디스크 교체 2건' }
+        @{ T = '장비실 점검 기록'; S = '9월 12일 · 온도 · 습도 · 누수 감지기' }
+        @{ T = '점검 일정 메모'; S = '8월 20일 · 다음 분기 점검 날짜 후보' }
+    )
+    $ry = $ly + 1
+    foreach ($r in $rows) {
+        if ($r['Sel']) { Add-Box ($X + 25) $ry 430 48 $Ink.Selected; Add-Box ($X + 25) ($ry + 16) 3 16 $Ink.Accent '' 1.5 }
+        $right = $X + 444
+        if ($r['Linked']) { $right -= (Add-Line $right ($ry + 6) 20 '붙어 있음' 12 $Ink.Text3 -Right) + 8 }
+        [void](Add-Line ($X + 37) ($ry + 6) 20 $r.T 14 $(if ($r['Linked']) { $Ink.Text3 } else { $Ink.Text }) -Max ($right - $X - 37))
+        [void](Add-Line ($X + 37) ($ry + 26) 16 $r.S 12 $Ink.Text3 -Max (444 - 37))
+        if ($r -ne $rows[-1]) { Add-Box ($X + 25) ($ry + 47) 430 1 $Ink.Muted }
+        $ry += 48
+    }
+    $by = $Y + $h - 24 - 32
+    $cancelW = Add-Btn ($X + 456) $by '취소' -Right
+    [void](Add-Btn ($X + 456 - $cancelW - 8) $by '붙이기' 'primary' -Right)
+}
+# 메모 새 창(읽기 보기). 창 틀은 앱 창과 같은 32 제목 줄, 도구 줄 40(왼쪽 보기 표시, 오른쪽 [메모 탭에서 열기]),
+# 본문은 창 바탕 위 흰 카드(가장자리 8, 글 왼쪽 44). 블록: @{ K = 'h1'|'h2'|'meta'|'task'|'p'; T; Done; Tag }
+function Add-ReadWindow([double]$X, [double]$Y, [double]$W, [double]$H, [string]$Title, [object[]]$Blocks) {
+    Add-Frame $X $Y $W $H $Ink.Canvas $Ink.Border 8
+    Add-Box ($X + 12) ($Y + 8) 16 16 $Ink.Accent '' 4
+    Add-Center ($X + 12) ($Y + 8) 16 16 'W' 10 $Ink.OnAccent $true
+    [void](Add-Line ($X + 36) $Y 32 $Title 12 $Ink.Text2 -Max ($W - 36 - 92 - 8))
+    Add-Glyph ($X + $W - 92) $Y 46 32 0xE922 10 $Ink.Text2
+    Add-Glyph ($X + $W - 46) $Y 46 32 0xE8BB 10 $Ink.Text2
+    Add-Glyph ($X + 16) ($Y + 32) 16 40 0xE736 16 $Ink.Text2
+    [void](Add-Line ($X + 40) ($Y + 32) 40 '읽기 보기' 12 $Ink.Text3)
+    [void](Add-Btn ($X + $W - 8) ($Y + 36) '메모 탭에서 열기' -Right)
+    Add-Box ($X + 8) ($Y + 76) ($W - 16) ($H - 84) $Ink.Surface '' 8
+    $bx = $X + 8 + 44; $by = $Y + 76 + 24
+    foreach ($b in $Blocks) {
+        switch ($b.K) {
+            'h1' { [void](Add-Line $bx $by 32 $b.T 24 $Ink.Text $true); $by += 36 }
+            'meta' {
+                $mw = Add-Line $bx $by 20 $b.T 12 $Ink.Text3
+                if ($b['Tag']) {
+                    $tw = (Measure-Text $b.Tag 12) + 16
+                    Add-Box ($bx + $mw + 12) $by $tw 20 $Ink.Selected '' 4
+                    [void](Add-Line ($bx + $mw + 20) $by 20 $b.Tag 12 $Ink.Accent)
+                }
+                $by += 36
+            }
+            'h2' { $by += 8; [void](Add-Line $bx $by 26 $b.T 18 $Ink.Text $true); $by += 34 }
+            'task' {
+                Add-Check $bx ($by + 6) ([bool]$b['Done'])
+                [void](Add-Line ($bx + 26) $by 28 $b.T 15 $(if ($b['Done']) { $Ink.Text3 } else { $Ink.Text }))
+                $by += 28
+            }
+            'p' { $by += 8; [void](Add-Line $bx $by 24 $b.T 15 $Ink.Text); $by += 24 }
+        }
+    }
+}
+
 # ---- 화면 짜기 -------------------------------------------------------------------------------
 
 function Add-MainWindow([switch]$TitleOpen) {
@@ -478,13 +646,57 @@ $script:showHolidays = $true
 $settings = Use-Scene
 Add-SettingsHolidays
 
+# ---- 2단계 장면: 일정 ↔ 메모 연결 ---------------------------------------------------------------
+
+$memoList = Use-Scene
+Add-MainWindow
+Add-DayList -Memo
+
+$memoForm = Use-Scene
+Add-MainWindow
+[void](Add-EventForm)
+
+$memoNew = Use-Scene
+Add-MainWindow
+$newY = Add-EventForm -NewOpen
+[void](Add-Menu 1000 ($newY + 36) 160 @(@{ T = '빈 메모'; Hover = $true }, '통화 메모'))
+
+$memoRow = Use-Scene
+Add-MainWindow
+[void](Add-EventForm -RowHover)
+[void](Add-Menu 1064 640 184 @('새 창으로 보기', '메모 탭에서 열기', '-', '연결 빼기'))
+
+$memoRoutine = Use-Scene
+Add-MainWindow
+Add-RoutineForm
+
+$memoPick = Use-Scene
+Add-MainWindow
+[void](Add-EventForm)
+Add-PickDialog 400 180
+
+$memoWindow = Use-Scene
+Add-MainWindow
+[void](Add-EventForm)
+Add-ReadWindow 232 96 640 560 '주간 점검 절차' @(
+    @{ K = 'h1'; T = '주간 점검 절차' }, @{ K = 'meta'; T = '수정일 10월 28일'; Tag = '#점검' }
+    @{ K = 'task'; T = '백업 작업 결과 확인'; Done = $true }, @{ K = 'task'; T = '디스크 사용량 확인 (SRV-01 · SRV-02)'; Done = $true }
+    @{ K = 'task'; T = '장비실 온도 기록' }, @{ K = 'task'; T = '보안 패치 목록 확인' }
+    @{ K = 'h2'; T = '참고' }, @{ K = 'p'; T = '결과는 \\NAS-01\점검 폴더에 저장합니다.' }
+)
+
+$memoCall = Use-Scene
+Add-MainWindow
+Add-DayList -Memo
+Add-ReadWindow 232 120 640 440 '11-05 SRV-01 펌웨어 업데이트' @(
+    @{ K = 'h1'; T = '11-05 SRV-01 펌웨어 업데이트' }, @{ K = 'meta'; T = '수정일 오늘 13:52' }
+    @{ K = 'h2'; T = '통화: <상대> · SRV-01 펌웨어 업데이트' }
+    @{ K = 'task'; T = '할 말 1' }, @{ K = 'task'; T = '할 말 2' }
+    @{ K = 'p'; T = '들은 것:' }, @{ K = 'p'; T = '다음 할 일:' }
+)
+
 # 폰에서 읽는 확대본: 바뀌는 곳만 잘라 키운다
 $phoneH = 6000   # 넉넉히 칠하고, 내보낼 때 실제 높이로 자른다
-$phone = Use-Scene
-Add-Box 0 0 720 $phoneH $Ink.Canvas
-[void](Add-Text 24 24 '일정 탭 1단계 — 시안' 30 $Ink.Text $true)
-[void](Add-Text 24 72 '가짜 데이터 · 색 하늘 · 오늘 11월 5일 목요일' 18 $Ink.Text3)
-$y = 128
 # 폰 폭(720)에서 읽히게 설명은 18, 넘치면 낱말 단위로 줄을 바꾼다
 function Add-Wrapped([double]$X, [string]$Value, [double]$Size, [string]$Color, [double]$Max, [double]$LineH) {
     $line = ''
@@ -509,11 +721,34 @@ function Add-Section([string]$Title, [string[]]$Notes, [object[]]$Crops) {
     foreach ($n in $Notes) { Add-Wrapped 24 $n 18 $Ink.Text2 672 28 }
     $script:y += 40
 }
+# 폰 장면 머리. 장면을 돌려주고 $y를 첫 절 자리로 둔다
+function New-PhoneScene([string]$Title) {
+    $scene = Use-Scene
+    Add-Box 0 0 720 $phoneH $Ink.Canvas
+    [void](Add-Text 24 24 $Title 30 $Ink.Text $true)
+    [void](Add-Text 24 72 '가짜 데이터 · 색 하늘 · 오늘 11월 5일 목요일' 18 $Ink.Text3)
+    $script:y = 128
+    , $scene
+}
+
+$phone = New-PhoneScene '일정 탭 1단계 — 시안'
 Add-Section '① 머리줄: 달 고르기' @('「2026년 11월」을 누르면 해와 달을 골라 바로 갑니다. 아래 「오늘」은 이번 달 · 오늘로 갑니다.', '달력 칸에서는 PageUp · PageDown으로 달을 옮깁니다. ‹ 오늘 ›는 3단계 표 보기에 둡니다.') @(, @(200, 32, 420, 300, $picker))
 Add-Section '② 일정 줄 = 체크 상자 + 시각 + 제목' @('체크는 회차마다 따로 남고, 체크하면 루틴처럼 흐려집니다.', '여러 날 일정은 둘째 줄에 기간과 며칠째인지 씁니다.') @(, @(984, 32, 288, 328, $list))
 Add-Section '③ 여러 날 일정 = 이어진 막대' @('같은 주 안에서는 막대 하나로 잇고 제목은 한 번만 씁니다.', '주를 넘기면 다음 줄 첫 칸에 제목을 다시 씁니다. (전체 그림의 DR 훈련)', '체크한 일정은 칩 앞에 ✓를 붙이고 흐리게 둡니다.') @(, @((Get-CellX 2), 88, (4 * $cw), 160, $list))
 Add-Section '④ 휴무일 지정: 날짜 우클릭' @('우클릭 → 휴무일로 지정 → 회사 휴무 · 개인 휴무를 고르면 바로 칠해집니다.', '휴무일 이름은 날짜 옆에 써서 여러 날 막대가 어긋나지 않게 했습니다.') @(@(700, 500, 520, 220, $menu), @((Get-CellX 4), 500, (3 * $cw), 156, $list))
 Add-Section '⑤ 설정 → 휴무일' @('공휴일은 해마다 자동으로 계산합니다. 설 · 추석 · 부처님오신날 · 대체공휴일까지, 인터넷은 쓰지 않습니다.', '선거일 · 임시공휴일 · 회사 휴무만 [휴무일 추가]로 넣고, 이름과 종류는 여기서 고칩니다.') @(, @(200, 32, 640, 600, $settings))
+$phoneEnd = $y
+
+$memoPhone = New-PhoneScene '일정 탭 2단계 — 일정 ↔ 메모 연결 시안'
+Add-Section '① 일정 · 루틴 줄 끝 = 관련 메모 수' @('메모가 붙은 일정 · 루틴은 줄 끝에 메모 아이콘과 개수가 보입니다.', '줄을 누르면 지금처럼 편집 폼이 열립니다.') @(, @(984, 32, 288, 340, $memoList))
+Add-Section '② 편집 폼 맨 아래 「관련 메모」' @('오른쪽 글자는 붙은 범위입니다. [새 메모]로 만든 것은 「이 회차」, [기존 메모 고르기]로 붙인 것은 「모든 회차」입니다. 반복이 없는 일정은 범위를 쓰지 않습니다.', '지운 메모는 흐리게 남고 연결 빼기만 됩니다.', '메모 줄을 누르면 새 창(⑥)이 열립니다.') @(, @(984, 540, 288, 252, $memoForm))
+Add-Section '③ [새 메모 ⌄] → 빈 메모 · 통화 메모' @('만들면 바로 이 일정(이 회차)에 붙습니다. 제목은 「11-05 주간 점검」처럼 날짜 + 일정 제목입니다.') @(, @(984, 640, 288, 160, $memoNew))
+Add-Section '④ [기존 메모 고르기]' @('메모 찾기와 같은 문법(#태그 · title: 등)으로 찾습니다. 이미 붙은 메모는 「붙어 있음」으로 흐리게 보입니다.', '[붙이기] · 두 번 클릭 · Enter로 붙입니다. 절차서처럼 매번 쓰는 메모용입니다.') @(, @(392, 172, 496, 438, $memoPick))
+Add-Section '⑤ 메모 줄 우클릭' @('새 창으로 보기 · 메모 탭에서 열기 · 연결 빼기. 지운 메모는 연결 빼기만 있습니다.') @(, @(984, 540, 288, 230, $memoRow))
+Add-Section '⑥ 메모 새 창 = 읽기 보기' @('고칠 수는 없고 할 일 체크만 됩니다. 고치려면 [메모 탭에서 열기]를 누릅니다.', '앱 창과 따로 움직이는 창이라 일정을 보면서 옆에 띄워 둘 수 있습니다.') @(, @(224, 88, 656, 576, $memoWindow))
+Add-Section '⑦ 통화 메모 틀' @('전화하기 전에 할 말을 적어 두고, 통화하면서 체크합니다. 「<상대>」만 바꿔 씁니다.') @(, @(224, 112, 656, 456, $memoCall))
+Add-Section '⑧ 루틴도 같은 자리' @('루틴 편집 폼 맨 아래에도 「관련 메모」가 있습니다. 루틴은 날마다 같은 일이라 새 메모 · 고른 메모 모두 모든 날에 붙고, 범위 글자는 쓰지 않습니다.', '규칙을 바꿔 루틴이 새 계열로 나뉘어도 연결은 따라갑니다.') @(, @(984, 460, 288, 332, $memoRoutine))
+$memoPhoneEnd = $y
 
 # ---- 내보내기 --------------------------------------------------------------------------------
 
@@ -597,9 +832,18 @@ function Export-Scene([string]$Name, [int]$Width, [int]$Height, $Shapes, [string
     Write-Host "만듦: $png"
 }
 
-$desc = '가짜 데이터 시안. 2026년 11월, 오늘 11월 5일. 머리줄 달 고르기 · 오늘, 일정 줄 체크 상자, 여러 날 막대, 우클릭 휴무일 지정, 설정의 휴무일 목록.'
-Export-Scene "$($Config.Name)-list" 1280 800 $list 'WorkTool 일정 1단계 — 체크 상자와 여러 날 막대 시안' $desc
-Export-Scene "$($Config.Name)-picker" 1280 800 $picker 'WorkTool 일정 1단계 — 달 고르기 시안' $desc
-Export-Scene "$($Config.Name)-holiday" 1280 800 $menu 'WorkTool 일정 1단계 — 우클릭 휴무일 지정 시안' $desc
-Export-Scene "$($Config.Name)-settings" 1280 800 $settings 'WorkTool 설정 → 휴무일 시안' $desc
-Export-Scene "$($Config.Name)-phone" 720 ([int][math]::Ceiling($y + 8)) $phone 'WorkTool 일정 1단계 — 폰 열람용 확대본' $desc
+if ($Part -in 'all', 'phase1') {
+    $desc = '가짜 데이터 시안. 2026년 11월, 오늘 11월 5일. 머리줄 달 고르기 · 오늘, 일정 줄 체크 상자, 여러 날 막대, 우클릭 휴무일 지정, 설정의 휴무일 목록.'
+    Export-Scene "$($Config.Name)-list" 1280 800 $list 'WorkTool 일정 1단계 — 체크 상자와 여러 날 막대 시안' $desc
+    Export-Scene "$($Config.Name)-picker" 1280 800 $picker 'WorkTool 일정 1단계 — 달 고르기 시안' $desc
+    Export-Scene "$($Config.Name)-holiday" 1280 800 $menu 'WorkTool 일정 1단계 — 우클릭 휴무일 지정 시안' $desc
+    Export-Scene "$($Config.Name)-settings" 1280 800 $settings 'WorkTool 설정 → 휴무일 시안' $desc
+    Export-Scene "$($Config.Name)-phone" 720 ([int][math]::Ceiling($phoneEnd + 8)) $phone 'WorkTool 일정 1단계 — 폰 열람용 확대본' $desc
+}
+if ($Part -in 'all', 'memo') {
+    $desc = '가짜 데이터 시안. 2026년 11월, 오늘 11월 5일. 일정 편집 폼 아래 관련 메모 목록, 새 메모 · 기존 메모 고르기, 메모 줄 우클릭, 메모 새 창(읽기 보기), 통화 메모 틀.'
+    Export-Scene "$($Config.Name)-memo" 1280 800 $memoForm 'WorkTool 일정 2단계 — 편집 폼의 관련 메모 시안' $desc
+    Export-Scene "$($Config.Name)-memo-pick" 1280 800 $memoPick 'WorkTool 일정 2단계 — 기존 메모 고르기 시안' $desc
+    Export-Scene "$($Config.Name)-memo-window" 1280 800 $memoWindow 'WorkTool 일정 2단계 — 메모 새 창 시안' $desc
+    Export-Scene "$($Config.Name)-memo-phone" 720 ([int][math]::Ceiling($memoPhoneEnd + 8)) $memoPhone 'WorkTool 일정 2단계 — 폰 열람용 확대본' $desc
+}

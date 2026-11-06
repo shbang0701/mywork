@@ -808,6 +808,23 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Register-WtAddon -Id 'test-a' -Title '가2' -Order 10 -NewView { }
     Assert-Wt '같은 ID로 다시 등록하면 바꾼다' (@(Get-WtAddon -All | Where-Object Id -eq 'test-a').Count -eq 1 -and (Get-WtAddon -Id 'test-a').Title -eq '가2')
 
+    # ---- 연결 등록 목록 Related (가짜 탭, 일정 2단계 설계 13.4) ----
+    $relatedSpec = @{ Name = '가짜 항목'; Find = { param($Keys) }; Pick = { param($Exclude) }; New = { param($Seed) 'k1' }; Window = { param($Key) } }
+    Register-WtAddon -Id 'test-related' -Title '가짜 연결' -Icon 0xE8A5 -NewView { } -Related $relatedSpec
+    Register-WtAddon -Id 'test-related2' -Title '가짜 연결 2' -NewView { } -Related (@{ Templates = @(@{ Id = 'a'; Name = '가' }, @{ Id = 'b'; Name = '나' }) } + $relatedSpec)
+    $relatedBad = foreach ($bad in @(@{ Find = { } }, @{ Name = '빠짐'; Find = { }; Pick = { }; New = { } }, @{ Name = '틀'; Find = { }; Pick = { }; New = { }; Window = { }; Templates = @(@{ Id = 'x' }) })) {
+        try { Register-WtAddon -Id 'test-related-bad' -Title '나쁨' -NewView { } -Related $bad; 'ok' } catch { 'throw' }
+    }
+    $rel = @(Get-WtRelatedSource | Where-Object Page -like 'test-related*')
+    Set-WtSetting 'addons.disabled' @('test-related2')
+    $relOff = @(Get-WtRelatedSource | Where-Object Page -like 'test-related*' | ForEach-Object Page) -join ','
+    Set-WtSetting 'addons.disabled' @()
+    Assert-Wt '연결 등록: Name · Find · Pick · New · Window가 있어야 하고, 틀이 없으면 「새 ‹Name›」 하나, 끈 탭은 빠진다' (
+        ($relatedBad -join ',') -ceq 'throw,throw,throw' -and $rel.Count -eq 2 -and $rel[0].Page -ceq 'test-related' -and $rel[0].Icon -eq 0xE8A5 -and
+        @($rel[0].Templates).Count -eq 1 -and $rel[0].Templates[0].Name -ceq '새 가짜 항목' -and (@($rel[1].Templates | ForEach-Object Id) -join ',') -ceq 'a,b' -and
+        (& $rel[0].New @{}) -ceq 'k1' -and $relOff -ceq 'test-related' -and @(Get-WtRelatedSource -Page 'test-related').Count -eq 1 -and
+        @(Get-WtRelatedSource -Page 'test-a').Count -eq 0) "$($relatedBad -join ',') / $relOff"
+
     # ---- 달력 등록 목록 (가짜 탭) ----
     Register-WtAddon -Id 'test-calendar' -Title '가짜 달력' -NewView { } -CalendarItems {
         param([datetime]$From, [datetime]$To)
