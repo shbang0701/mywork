@@ -2086,7 +2086,8 @@ New-Module -Name 'WorkTool.Calendar' -ScriptBlock {
 #   - 연휴는 날마다 한 항목. 같은 날에 여러 항목이 있어도 된다(계산에는 하루로 센다)
 #   - 모르는 kind가 든 항목은 읽기 전용이고 계산에서 뺀다. 저장할 때는 그대로 둔다
 #   - 날짜를 못 읽는 항목은 「고칠 항목」으로 두고 계산에서 뺀다. 나머지 항목은 그대로 쓴다
-# 공휴일 목록은 사람이 1년에 한 번 붙여 넣는다(외부에서 받아오지 않는다). 붙여 넣기 · 편집 화면과 달력 표시 등록은 2단계에서 더한다.
+# 공휴일은 앱이 해마다 계산해 채운다(Update-WtAutoHolidays, 설정 holidays.auto). 외부에서 받아오지 않는다.
+# 임시공휴일 · 선거일 · 회사 · 개인 휴무는 사람이 넣는다(설정 → 휴무일, 일정 달력 우클릭). 붙여 넣기도 그대로 쓸 수 있다.
 
 $ErrorActionPreference = 'Stop'
 
@@ -2094,6 +2095,7 @@ $script:holidaySchema = 1
 $script:holidayKinds = @('public', 'company', 'personal')
 $script:holidayCache = $null
 $script:calendarSources = [System.Collections.Generic.List[object]]::new()
+Register-WtSettingDefault 'holidays.auto' $true   # 공휴일 자동 채우기
 
 # 항목 하나를 계산용으로 읽는다. State: ok · readonly(새 버전 값) · broken(고칠 항목) · deleted
 function ConvertFrom-WtHolidayItem($Item) {
@@ -2234,6 +2236,110 @@ function Import-WtHolidayPaste($Store, [string]$Text, [int]$Year, [string]$At = 
     [pscustomobject]@{ Success = $true; Reason = ''; Errors = @(); Store = $next }
 }
 
+# ---- 공휴일 자동 계산 -------------------------------------------------------------------------
+# 인터넷 없이 .NET 한국 음력 달력(KoreanLunisolarCalendar)으로 설 · 추석 · 부처님오신날까지 계산한다(2000~2050년).
+# 임시공휴일 · 선거일은 계산하지 않는다(사람이 넣는다). 대체공휴일(관공서의 공휴일에 관한 규정):
+#   설 · 추석 연휴(3일): 2014년부터. 연휴의 일요일, 연휴와 겹친 다른 공휴일마다 연휴 다음 첫 평일
+#   어린이날 2014년부터 · 삼일절 · 광복절 · 개천절 · 한글날 2021-08-15부터 · 부처님오신날 · 성탄절 2023-05-04부터:
+#     토 · 일이나 다른 공휴일과 겹치면 다음 첫 평일. 한 날에 공휴일이 여럿 겹쳐도 대체공휴일은 하루다
+#   신정 · 현충일은 대체공휴일이 없다. 「평일」은 토 · 일 · 공휴일 · 앞서 정한 대체공휴일이 아닌 날이다
+$script:lunar = [System.Globalization.KoreanLunisolarCalendar]::new()
+$script:substituteFrom = @{ lunar = [datetime]'2014-01-01'; child = [datetime]'2014-01-01'; national = [datetime]'2021-08-15'; late = [datetime]'2023-05-04' }
+
+# 음력 날짜 → 양력. 윤달이 있는 해는 윤달부터 달 번호가 하나 밀린다(GetLeapMonth가 그 번호, 0이면 윤달 없음)
+function ConvertFrom-WtLunarDate([int]$Year, [int]$Month, [int]$Day) {
+    $leap = $script:lunar.GetLeapMonth($Year)
+    $index = if ($leap -gt 0 -and $Month -ge $leap) { $Month + 1 } else { $Month }
+    $script:lunar.ToDateTime($Year, $index, $Day, 0, 0, 0, 0).Date
+}
+
+# 그해 공휴일(대체공휴일 포함), 날짜순. 항목: Date · DateText · Name. 계산할 수 없는 해(2000년 앞 · 2050년 뒤)는 빈 목록
+function Get-WtKoreanHolidays([int]$Year) {
+    if ($Year -lt 2000 -or $Year -gt 2050) { return @() }
+    $base = [System.Collections.Generic.List[object]]::new()
+    foreach ($f in @(@(1, 1, '신정', ''), @(3, 1, '삼일절', 'national'), @(5, 5, '어린이날', 'child'), @(6, 6, '현충일', ''),
+            @(8, 15, '광복절', 'national'), @(10, 3, '개천절', 'national'), @(10, 9, '한글날', 'national'), @(12, 25, '성탄절', 'late'))) {
+        $base.Add([pscustomobject]@{ Date = [datetime]::new($Year, $f[0], $f[1]); Name = $f[2]; Rule = $f[3]; Group = $f[2]; End = $null })
+    }
+    $base.Add([pscustomobject]@{ Date = (ConvertFrom-WtLunarDate $Year 4 8); Name = '부처님오신날'; Rule = 'late'; Group = '부처님오신날'; End = $null })
+    foreach ($p in @(@(1, 1, '설날'), @(8, 15, '추석'))) {
+        $day = ConvertFrom-WtLunarDate $Year $p[0] $p[1]
+        foreach ($k in -1, 0, 1) {
+            $base.Add([pscustomobject]@{ Date = $day.AddDays($k); Name = $(if ($k) { "$($p[2]) 연휴" } else { $p[2] }); Rule = 'lunar'; Group = $p[2]; End = $day.AddDays(1) })
+        }
+    }
+    $taken = [System.Collections.Generic.HashSet[datetime]]::new()
+    foreach ($b in $base) { [void]$taken.Add($b.Date) }
+    # 대체공휴일이 필요한 날: (찾기 시작할 날, 붙일 이름). 한 날짜에서 하나, 연휴는 그 일요일 · 겹친 날마다 하나
+    $needs = [System.Collections.Generic.List[object]]::new()
+    foreach ($group in @($base | Group-Object { $_.Date.Ticks } | Sort-Object { [long]$_.Name })) {
+        $here = @($group.Group)
+        $date = $here[0].Date
+        $eligible = @($here | Where-Object { $_.Rule -and $date -ge $script:substituteFrom[$_.Rule] })
+        if (-not $eligible.Count) { continue }
+        $overlap = @($here | ForEach-Object Group | Select-Object -Unique).Count -ge 2
+        $weekend = @($eligible | Where-Object { $date.DayOfWeek -eq 'Sunday' -or ($_.Rule -ne 'lunar' -and $date.DayOfWeek -eq 'Saturday') }).Count -gt 0
+        if (-not $overlap -and -not $weekend) { continue }
+        $anchor = $date
+        foreach ($e in $eligible) { if ($e.End -and $e.End -gt $anchor) { $anchor = $e.End } }
+        $needs.Add([pscustomobject]@{ Anchor = $anchor; Name = (@($eligible | ForEach-Object Group | Select-Object -Unique) -join ' · ') })
+    }
+    $result = [System.Collections.Generic.List[object]]::new()
+    foreach ($b in $base) { $result.Add([pscustomobject]@{ Date = $b.Date; DateText = (ConvertTo-WtDateText $b.Date); Name = $b.Name }) }
+    foreach ($n in @($needs | Sort-Object Anchor)) {
+        $d = $n.Anchor.AddDays(1)
+        while ($d.DayOfWeek -eq 'Saturday' -or $d.DayOfWeek -eq 'Sunday' -or $taken.Contains($d)) { $d = $d.AddDays(1) }
+        [void]$taken.Add($d)
+        $result.Add([pscustomobject]@{ Date = $d; DateText = (ConvertTo-WtDateText $d); Name = "대체공휴일 ($($n.Name))" })
+    }
+    @($result | Sort-Object Date, Name)
+}
+
+<#
+자동 공휴일을 holidays.json에 채운다(공휴일 · origin.from = auto). 해마다 한 번만 채우고, 채운 해를 맨 위 autoYears에 적는다.
+그래서 사람이 지운 날은 되살아나지 않고, 고친 이름도 그대로다. 그날 이미 공휴일이 있으면(붙여 넣기 · 직접) 더하지 않는다.
+-Force(설정의 「다시 계산」)는 그 해의 자동 항목을 계산 결과로 다시 맞춘다(지운 자동 항목은 되살리고, 계산에 없는 자동 항목은 지운다).
+설정 holidays.auto가 꺼져 있으면 아무것도 하지 않는다(-Force는 끈 상태에서도 쓴다).
+돌려주는 값: Success · Reason · Added(더한 수) · Store
+#>
+function Update-WtAutoHolidays([int[]]$Years, [string]$At = (Get-WtStamp), [switch]$Force) {
+    $data = Get-WtHolidayData
+    $fail = [pscustomobject]@{ Success = $false; Reason = ''; Added = 0; Store = $data.Store }
+    if ($data.Error) { $fail.Reason = $data.Error; return $fail }
+    if (-not (ConvertFrom-WtStamp $At)) { $fail.Reason = '앱 시각을 확인하세요'; return $fail }
+    if (-not $Force -and -not [bool](Get-WtSetting 'holidays.auto')) { return [pscustomobject]@{ Success = $true; Reason = ''; Added = 0; Store = $data.Store } }
+    $doneYears = [System.Collections.Generic.SortedSet[int]]::new()
+    $saved = if ($data.Store.Doc) { $data.Store.Doc.PSObject.Properties['autoYears'] } else { $null }
+    if ($saved) { foreach ($y in @($saved.Value)) { $n = 0; if ([int]::TryParse([string]$y, [ref]$n)) { [void]$doneYears.Add($n) } } }
+    $todo = @($Years | Where-Object { $_ -ge 2000 -and $_ -le 2050 -and ($Force -or -not $doneYears.Contains($_)) } | Select-Object -Unique)
+    if (-not $todo.Count) { return [pscustomobject]@{ Success = $true; Reason = ''; Added = 0; Store = $data.Store } }
+    $edit = Get-WtRecordEdit $data.Store ''
+    $added = 0
+    foreach ($year in $todo) {
+        $want = @{}
+        foreach ($h in (Get-WtKoreanHolidays $year)) { if (-not $want.ContainsKey($h.DateText)) { $want[$h.DateText] = $h.Name } }
+        $public = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($item in $edit.Items) {
+            $entry = ConvertFrom-WtHolidayItem $item
+            if ($entry.State -ne 'ok' -or $entry.Date.Year -ne $year -or $entry.Kind -cne 'public') { continue }
+            $origin = Get-WtField $item 'origin'
+            $from = if (Test-WtRecordObject $origin) { [string](Get-WtField $origin 'from') } else { '' }
+            if ($Force -and $from -ceq 'auto' -and -not $want.ContainsKey($entry.DateText)) { [void](Set-WtRecordDeleted $item $true $At); continue }
+            [void]$public.Add($entry.DateText)
+        }
+        foreach ($dateText in @($want.Keys | Sort-Object)) {
+            if (-not $public.Add($dateText)) { continue }
+            $edit.Items += , [pscustomobject][ordered]@{ id = New-WtId; date = $dateText; name = $want[$dateText]; kind = 'public'; note = ''; rev = 0
+                created = $At; updated = $At; deleted = $null; origin = [pscustomobject]@{ from = 'auto'; at = $At } }
+            $added++
+        }
+        [void]$doneYears.Add($year)
+    }
+    $next = Save-WtStore $data.Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At)) -Extra @{ autoYears = @($doneYears) }
+    $script:holidayCache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Added = $added; Store = $next }
+}
+
 function Get-WtHolidayCalendarItems([datetime]$From, [datetime]$To) {
     $data = Get-WtHolidayData
     if ($data.Error) { throw $data.Error }
@@ -2257,7 +2363,8 @@ function Get-WtCalendarSource { $script:calendarSources.ToArray() }
 Register-WtCalendarSource -Id 'holidays' -CalendarItems { param([datetime]$From, [datetime]$To) Get-WtHolidayCalendarItems $From $To }
 
 Export-ModuleMember -Function ConvertFrom-WtHolidayItem, Get-WtHolidayData, Get-WtHolidayDates, Save-WtHolidayItems,
-    Set-WtHolidayDate, ConvertFrom-WtHolidayPaste, Import-WtHolidayPaste, Get-WtHolidayCalendarItems, Register-WtCalendarSource, Get-WtCalendarSource
+    Set-WtHolidayDate, ConvertFrom-WtHolidayPaste, Import-WtHolidayPaste, Get-WtHolidayCalendarItems, Register-WtCalendarSource, Get-WtCalendarSource,
+    ConvertFrom-WtLunarDate, Get-WtKoreanHolidays, Update-WtAutoHolidays
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Calendar.psm1 끝 ----
 
@@ -4288,9 +4395,9 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.Page" TargetType="Grid"/>
   <Style x:Key="Schedule.Header" TargetType="DockPanel"><Setter Property="Height" Value="{DynamicResource F.Height.Header}"/><Setter Property="Margin" Value="24,0,16,0"/></Style>
   <Style x:Key="Schedule.Body" TargetType="DockPanel"><Setter Property="Margin" Value="16,0,16,16"/></Style>
-  <Style x:Key="Schedule.Month" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="0,0,8,0"/></Style>
+  <Style x:Key="Schedule.Month" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.MonthMove" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
-  <Style x:Key="Schedule.MonthToday" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Height" Value="32"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.MonthToday" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Height" Value="32"/><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.Weekday" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Height" Value="28"/><Setter Property="Padding" Value="8,6,0,0"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></Style>
   <Style x:Key="Schedule.Day" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="Padding" Value="0"/><Setter Property="MinHeight" Value="88"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="BorderThickness" Value="0,0,1,1"/>
@@ -4307,7 +4414,7 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.DateCircle" TargetType="Border"><Setter Property="Width" Value="24"/><Setter Property="Height" Value="24"/><Setter Property="CornerRadius" Value="12"/><Setter Property="Margin" Value="4,6,0,0"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="VerticalAlignment" Value="Top"/></Style>
   <Style x:Key="Schedule.Date" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
 
-  <Style x:Key="Schedule.Holiday" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="8,0,4,0"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Schedule.Holiday" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="34,10,4,0"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
   <Style x:Key="Schedule.Chip" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="2"/><Setter Property="Margin" Value="4,0,4,2"/><Setter Property="Padding" Value="4,0"/><Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/></Style>
   <Style x:Key="Schedule.ChipText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
   <Style x:Key="Schedule.More" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Margin" Value="8,0,4,0"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
@@ -4319,16 +4426,54 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.Form" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
   <Style x:Key="Schedule.Field" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
   <Style x:Key="Schedule.FieldLabel" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,0,8"/></Style>
+  <Style x:Key="Schedule.RangeDash" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="8,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="0,4,0,0"/></Style>
   <Style x:Key="Schedule.Separator" TargetType="Border"><Setter Property="Height" Value="16"/></Style>
   <Style x:Key="Schedule.EventRow" TargetType="Button" BasedOn="{StaticResource Btn}">
-    <Setter Property="Height" Value="32"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+    <Setter Property="Height" Value="Auto"/><Setter Property="MinHeight" Value="32"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
       <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}"><ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/></Border>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <Style x:Key="Schedule.EventTime" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Width" Value="64"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.EventTime" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Width" Value="64"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Margin" Value="0,2,0,0"/></Style>
   <Style x:Key="Schedule.EventTitle" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <!-- 설정 → 휴무일: 해 이동 줄과 간단한 표(폭 720, 머리 32 · 행 32, 셀 좌우 12, 행 사이 선 B.Border.Muted). 행은 우클릭 · Delete · F2 -->
+  <Style x:Key="T.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></Style>
+  <Style x:Key="Holiday.Bar" TargetType="DockPanel"><Setter Property="Width" Value="720"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,4,0,8"/></Style>
+  <Style x:Key="Holiday.Year" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="FontWeight" Value="{DynamicResource F.BodyStrong.Weight}"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="4,0"/></Style>
+  <Style x:Key="Table.Simple" TargetType="StackPanel"><Setter Property="Width" Value="720"/><Setter Property="HorizontalAlignment" Value="Left"/></Style>
+  <Style x:Key="Table.Head" TargetType="Border"><Setter Property="Height" Value="32"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/><Setter Property="BorderThickness" Value="0,0,0,1"/></Style>
+  <Style x:Key="Table.HeadText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="12,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Table.Row" TargetType="Border"><Setter Property="MinHeight" Value="32"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="BorderThickness" Value="0,0,0,1"/><Setter Property="Focusable" Value="True"/><Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger></Style.Triggers>
+  </Style>
+  <Style x:Key="Table.Cell" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Margin" Value="12,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Table.CellSub" TargetType="TextBlock" BasedOn="{StaticResource Table.Cell}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/></Style>
+  <Style x:Key="Table.Empty" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Margin" Value="12,12,0,0"/></Style>
+  <!-- 해 · 달 고르기 (달력 머리줄의 해 · 달 단추 아래 펼침 면): 떠 있는 면 + 위 줄 ‹ 2026년 › + 4 × 3 달 칸 60 × 44 -->
+  <Style x:Key="Picker.Panel" TargetType="Border"><Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Overlay}"/><Setter Property="Padding" Value="10,8,10,10"/></Style>
+  <Style x:Key="Picker.Head" TargetType="DockPanel"><Setter Property="Height" Value="36"/><Setter Property="Margin" Value="0,0,0,4"/></Style>
+  <Style x:Key="Picker.Year" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="FontWeight" Value="{DynamicResource F.BodyStrong.Weight}"/><Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Picker.Month" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Width" Value="60"/><Setter Property="Height" Value="44"/><Setter Property="Margin" Value="2"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="FontSize" Value="{DynamicResource F.Body}"/></Style>
+  <Style x:Key="Picker.Today" TargetType="Button" BasedOn="{StaticResource Btn.Link}"><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,4,0,0"/></Style>
+  <Style x:Key="Picker.MonthSelected" TargetType="Button" BasedOn="{StaticResource Picker.Month}"><Setter Property="Background" Value="{DynamicResource B.Accent}"/><Setter Property="Foreground" Value="{DynamicResource B.OnAccent}"/><Setter Property="FontWeight" Value="{DynamicResource F.BodyStrong.Weight}"/>
+    <Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Accent.Hover}"/></Trigger><Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Accent.Pressed}"/></Trigger></Style.Triggers>
+  </Style>
+  <!-- 달력 머리줄: 「2026년 11월 ⌄」 단추(글자 자리는 예전 제목과 같게 왼쪽 -8), ‹ 오늘 › 묶음 -->
+  <Style x:Key="Schedule.MonthButton" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Width" Value="Auto"/><Setter Property="Height" Value="{DynamicResource F.Height.Control}"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="-8,0,0,0"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/></Style>
+  <Style x:Key="Schedule.MonthChevron" TargetType="TextBlock"><Setter Property="FontFamily" Value="{DynamicResource Font.Icon}"/><Setter Property="FontSize" Value="12"/><Setter Property="Margin" Value="4,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/></Style>
+  <!-- 일정 줄: 체크 상자 + [시각 칸 64 · 제목 (+ 여러 날이면 둘째 줄 기간)]. 한 줄 32 · 두 줄 48 -->
+  <Style x:Key="Schedule.EventBody" TargetType="DockPanel"><Setter Property="Margin" Value="0,6,0,6"/></Style>
+  <Style x:Key="Schedule.EventSub" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Schedule.EventCheck" TargetType="CheckBox" BasedOn="{StaticResource Check}"><Setter Property="Margin" Value="0,2,10,0"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Background" Value="Transparent"/></Style>
+  <!-- 달력 칸: 끝낸 일정 칩 앞의 체크 표시(CheckMark E73E 10), 여러 날 막대(흰 바탕 + 1 B.Border.Default, 주를 넘는 쪽은 열어 둠) -->
+  <Style x:Key="Schedule.ChipMark" TargetType="Run"><Setter Property="FontFamily" Value="{DynamicResource Font.Icon}"/><Setter Property="FontSize" Value="10"/></Style>
+  <Style x:Key="Schedule.BarLanes" TargetType="StackPanel"><Setter Property="Margin" Value="0,30,0,0"/><Setter Property="VerticalAlignment" Value="Top"/></Style>
+  <Style x:Key="Schedule.BarLane" TargetType="Grid"><Setter Property="Height" Value="20"/><Setter Property="Margin" Value="0,0,0,2"/></Style>
+  <Style x:Key="Schedule.Bar" TargetType="Border"><Setter Property="Cursor" Value="Hand"/><Setter Property="Height" Value="20"/><Setter Property="Margin" Value="4,0,4,0"/><Setter Property="Padding" Value="3,0"/><Setter Property="VerticalAlignment" Value="Top"/><Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="2"/></Style>
+  <Style x:Key="Schedule.BarFromPrev" TargetType="Border" BasedOn="{StaticResource Schedule.Bar}"><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="Padding" Value="4,0,3,0"/><Setter Property="BorderThickness" Value="0,1,1,1"/><Setter Property="CornerRadius" Value="0,2,2,0"/></Style>
+  <Style x:Key="Schedule.BarToNext" TargetType="Border" BasedOn="{StaticResource Schedule.Bar}"><Setter Property="Margin" Value="4,0,0,0"/><Setter Property="BorderThickness" Value="1,1,0,1"/><Setter Property="CornerRadius" Value="2,0,0,2"/></Style>
+  <Style x:Key="Schedule.BarMiddle" TargetType="Border" BasedOn="{StaticResource Schedule.Bar}"><Setter Property="Margin" Value="0"/><Setter Property="Padding" Value="4,0,0,0"/><Setter Property="BorderThickness" Value="0,1,0,1"/><Setter Property="CornerRadius" Value="0"/></Style>
   <Style x:Key="Schedule.RoutineCount" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <PopupAnimation x:Key="{x:Static SystemParameters.MenuPopupAnimationKey}">None</PopupAnimation>
   <PopupAnimation x:Key="{x:Static SystemParameters.ToolTipPopupAnimationKey}">None</PopupAnimation>
@@ -4869,6 +5014,76 @@ function New-WtPollTimer([scriptblock]$Tick) {
 
 function Get-WtUiWorkBudget { @{ Milliseconds = 16; Items = 32 } }
 
+# PageUp → -1, PageDown → 1, 나머지 → 0. 키 이름 글자로 비교하지 않는다:
+# WPF에서 PageDown은 Next와 같은 값이라 글자로 바꾸면 'Next'가 나와 'PageDown'과 맞지 않는다(PageUp도 Prior와 같은 값)
+function Get-WtPageStep($Key) {
+    if ($Key -eq [System.Windows.Input.Key]::PageUp) { return -1 }
+    if ($Key -eq [System.Windows.Input.Key]::PageDown) { return 1 }
+    0
+}
+
+# 해 · 달 고르기. $Popup은 화면 XAML 안에 둔 Popup이다(그래야 창의 테마 자원을 물려받는다).
+# OnPick { param([datetime]$Month) }는 고른 달의 1일을 받는다. 보고 있는 달은 강조색이다.
+# 키: Esc 닫기, PageUp · PageDown 해 이동, Tab · 화살표로 달 칸 이동, Enter · Space 고르기
+function New-WtMonthPicker($Popup, [scriptblock]$OnPick, [scriptblock]$OnToday) {
+    $picker = @{ Popup = $Popup; OnPick = $OnPick; OnToday = $OnToday; Year = [datetime]::Today.Year; Current = [datetime]::Today; Buttons = [System.Collections.Generic.List[object]]::new(); YearText = $null }
+    $panel = [System.Windows.Controls.Border]::new(); Set-WtStyle $panel 'Picker.Panel'; $panel.Tag = $picker
+    $col = New-WtStack
+    $head = [System.Windows.Controls.DockPanel]::new(); Set-WtStyle $head 'Picker.Head'
+    foreach ($step in -1, 1) {
+        $tip = if ($step -lt 0) { '이전 해 (PageUp)' } else { '다음 해 (PageDown)' }
+        $b = New-WtButton '' -Kind Icon -Icon $(if ($step -lt 0) { 0xE76B } else { 0xE76C }) -ToolTip $tip
+        [System.Windows.Automation.AutomationProperties]::SetName($b, $tip)
+        $b.Tag = @{ Picker = $picker; Step = $step }
+        $b.Add_Click({ param($s, $e) $s.Tag.Picker.Year += $s.Tag.Step; Update-WtMonthPicker $s.Tag.Picker })
+        [System.Windows.Controls.DockPanel]::SetDock($b, $(if ($step -lt 0) { 'Left' } else { 'Right' }))
+        [void]$head.Children.Add($b)
+    }
+    $picker.YearText = New-WtText '' 'Picker.Year'; [void]$head.Children.Add($picker.YearText)
+    $grid = [System.Windows.Controls.Primitives.UniformGrid]::new(); $grid.Columns = 4
+    for ($m = 1; $m -le 12; $m++) {
+        $b = [System.Windows.Controls.Button]::new(); $b.Content = "${m}월"; $b.Tag = @{ Picker = $picker; Month = $m }
+        $b.Add_Click({ param($s, $e) $p = $s.Tag.Picker; $p.Popup.IsOpen = $false; & $p.OnPick ([datetime]::new($p.Year, $s.Tag.Month, 1)) })
+        [void]$grid.Children.Add($b); $picker.Buttons.Add($b)
+    }
+    [void]$col.Children.Add($head); [void]$col.Children.Add($grid)
+    # 「오늘」: 이번 달 · 오늘로 간다(OnToday를 줬을 때만)
+    if ($OnToday) {
+        $today = New-WtButton '오늘' -Kind Link -ToolTip '오늘로 가기'; Set-WtStyle $today 'Picker.Today'; $today.Tag = $picker
+        $today.Add_Click({ param($s, $e) $p = $s.Tag; $p.Popup.IsOpen = $false; & $p.OnToday })
+        [void]$col.Children.Add($today); $picker.Today = $today
+    }
+    $panel.Child = $col
+    $panel.Add_PreviewKeyDown({ param($s, $e) if (Invoke-WtMonthPickerKey $s.Tag $e.Key) { $e.Handled = $true } })
+    $Popup.Child = $panel
+    $picker
+}
+# 고르기 창의 키: Esc 닫기, PageUp · PageDown 해 이동. 처리했으면 $true
+function Invoke-WtMonthPickerKey($Picker, $Key) {
+    if ($Key -eq [System.Windows.Input.Key]::Escape) { $Picker.Popup.IsOpen = $false; return $true }
+    $step = Get-WtPageStep $Key
+    if (-not $step) { return $false }
+    $Picker.Year += $step; Update-WtMonthPicker $Picker
+    $true
+}
+function Update-WtMonthPicker($Picker) {
+    $Picker.YearText.Text = "$($Picker.Year)년"
+    for ($i = 0; $i -lt 12; $i++) {
+        $b = $Picker.Buttons[$i]
+        $selected = $Picker.Year -eq $Picker.Current.Year -and ($i + 1) -eq $Picker.Current.Month
+        Set-WtStyle $b $(if ($selected) { 'Picker.MonthSelected' } else { 'Picker.Month' })
+        [System.Windows.Automation.AutomationProperties]::SetName($b, "$($Picker.Year)년 $($i + 1)월")
+    }
+}
+# 보고 있는 달($Current)로 맞춰 연다. 그 달 칸에 포커스를 둔다
+function Open-WtMonthPicker($Picker, [datetime]$Current) {
+    $Picker.Current = $Current; $Picker.Year = $Current.Year
+    Update-WtMonthPicker $Picker
+    $Picker.Popup.IsOpen = $true
+    $target = $Picker.Buttons[$Current.Month - 1]
+    [void]$target.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Input, [Action]({ [void]$target.Focus() }.GetNewClosure()))
+}
+
 function New-WtContextMenu {
     $menu = [System.Windows.Controls.ContextMenu]::new()
     Set-WtResource $menu Background 'B.Card'; Set-WtResource $menu Foreground 'B.Text'
@@ -4885,6 +5100,7 @@ function Get-WtVisualChild($Root, [type]$Type) {
     $null
 }
 
+Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
 Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, New-WtMinuteInput, New-WtContextMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
@@ -8781,8 +8997,180 @@ function New-WtSettingsPage {
     $workCard = New-WtCard
     $workCard.Child = $work.Root
     New-WtTabbedPage '설정' @(
-        @('일반', (New-WtThemeCard)), @('업무시간', $workCard),
+        @('일반', (New-WtThemeCard)), @('업무시간', $workCard), @('휴무일', (New-WtHolidayCard)),
         @('탭', (New-WtMenuCard)), @('데이터', (New-WtDataCard)))
+}
+
+# ---- 휴무일: 공휴일 자동 채우기 · 해마다 목록 · 더하기 · 이름 바꾸기 · 지우기 (저장은 core\Calendar.psm1) ----
+# 일정 · 근태 탭을 꺼도 휴무일은 계산에 쓰이므로 설정 화면(코어)에 둔다. 일정 달력 우클릭으로도 회사 · 개인 휴무를 넣는다.
+$script:holidayUi = $null
+$script:holidayKinds = [ordered]@{ public = '공휴일'; company = '회사 휴무'; personal = '개인 휴무' }
+
+function New-WtHolidayCard {
+    $card = New-WtCard
+    $col = New-WtStack Vertical
+    [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
+    $auto = [System.Windows.Controls.CheckBox]::new(); Set-WtStyle $auto 'Check'
+    $auto.Content = '자동으로 넣기'; $auto.IsChecked = [bool](Get-WtSetting 'holidays.auto')
+    [System.Windows.Automation.AutomationProperties]::SetName($auto, '공휴일 자동으로 넣기')
+    $auto.Add_Click({ param($s, $e) Set-WtSetting 'holidays.auto' ([bool]$s.IsChecked); Update-WtHolidayTable })
+    $again = New-WtButton '다시 계산' -Kind Link -ToolTip '고른 해의 자동 공휴일을 계산대로 다시 넣습니다. 지운 자동 공휴일도 다시 들어옵니다.'
+    $again.Add_Click({ Invoke-WtHolidayFill -Force; Update-WtHolidayTable })
+    $line = New-WtStack Horizontal 12
+    foreach ($child in @($auto, (New-WtText '설 · 추석 · 대체공휴일 포함' 'T.Sub'), $again)) { $child.VerticalAlignment = 'Center'; [void](Add-WtChild $line $child) }
+    [void](Add-WtChild $col (New-WtSettingRow '공휴일' $line))
+    $bar = [System.Windows.Controls.DockPanel]::new(); Set-WtStyle $bar 'Holiday.Bar'
+    $add = New-WtButton '휴무일 추가' -Icon 0xE710; $add.Add_Click({ Show-WtHolidayDialog })
+    [System.Windows.Controls.DockPanel]::SetDock($add, 'Right'); [void]$bar.Children.Add($add)
+    $nav = New-WtStack Horizontal 4
+    $yearText = New-WtText '' 'Holiday.Year'
+    foreach ($step in -1, 0, 1) {
+        if ($step -eq 0) { [void](Add-WtChild $nav $yearText); continue }
+        $tip = if ($step -lt 0) { '이전 해' } else { '다음 해' }
+        $b = New-WtButton '' -Kind Icon -Icon $(if ($step -lt 0) { 0xE76B } else { 0xE76C }) -ToolTip $tip
+        [System.Windows.Automation.AutomationProperties]::SetName($b, $tip); $b.Tag = $step
+        $b.Add_Click({ param($s, $e) $script:holidayUi.Year += [int]$s.Tag; Update-WtHolidayTable })
+        [void](Add-WtChild $nav $b)
+    }
+    [void]$bar.Children.Add($nav)
+    $table = New-WtStack Vertical; Set-WtStyle $table 'Table.Simple'
+    [void](Add-WtChild $col $bar); [void](Add-WtChild $col $table)
+    $script:holidayUi = @{ Year = [datetime]::Today.Year; YearText = $yearText; Table = $table }
+    Update-WtHolidayTable
+    $card.Child = $col
+    $card
+}
+
+# 자동 공휴일 채우기. -Force는 고른 해를 계산대로 다시 맞춘다(설정을 꺼 두었어도 한다)
+function Invoke-WtHolidayFill([switch]$Force) {
+    try {
+        $r = Update-WtAutoHolidays -Years @($script:holidayUi.Year) -Force:$Force
+        if (-not $r.Success) { throw $r.Reason }
+    } catch { Show-WtMessage "공휴일을 넣지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
+}
+
+# 고른 해의 표. 자동으로 넣기가 켜져 있으면 처음 보는 해도 채운다(한 번만, 지운 날은 되살리지 않음)
+function Update-WtHolidayTable {
+    $ui = $script:holidayUi; if (-not $ui) { return }
+    $ui.YearText.Text = "$($ui.Year)년"
+    if ([bool](Get-WtSetting 'holidays.auto')) { try { [void](Update-WtAutoHolidays -Years @($ui.Year)) } catch { } }
+    $table = $ui.Table; $table.Children.Clear()
+    $data = Get-WtHolidayData
+    if ($data.Error) { [void](Add-WtChild $table (New-WtText $data.Error 'T.Error')); return }
+    $head = [System.Windows.Controls.Border]::new(); Set-WtStyle $head 'Table.Head'
+    $head.Child = New-WtHolidayRowGrid @('날짜', '요일', '이름', '종류', '넣은 곳') 'Table.HeadText'
+    [void](Add-WtChild $table $head)
+    $rows = @($data.Entries | Where-Object { $_.State -in 'ok', 'readonly' -and $_.Date -and $_.Date.Year -eq $ui.Year } | Sort-Object Date, Kind)
+    $ko = [System.Globalization.CultureInfo]::GetCultureInfo('ko-KR')
+    foreach ($entry in $rows) {
+        $origin = Get-WtField $entry.Item 'origin'
+        $from = if (Test-WtRecordObject $origin) { [string](Get-WtField $origin 'from') } else { '' }
+        $where = switch ($from) { 'auto' { '자동' } 'paste' { '붙여 넣기' } default { '직접' } }
+        $kind = if ($script:holidayKinds.Contains($entry.Kind)) { $script:holidayKinds[$entry.Kind] } else { $entry.Kind }
+        $row = [System.Windows.Controls.Border]::new(); Set-WtStyle $row 'Table.Row'
+        $row.Child = New-WtHolidayRowGrid @($entry.Date.ToString('M월 d일', $ko), $entry.Date.ToString('ddd', $ko), $entry.Name, $kind, $where) 'Table.Cell'
+        [System.Windows.Automation.AutomationProperties]::SetName($row, "$($entry.Date.ToString('M월 d일', $ko)) $($entry.Name) $kind")
+        $row.Tag = $entry
+        $menu = New-WtContextMenu
+        foreach ($action in '이름 바꾸기', '지우기') {
+            $item = [System.Windows.Controls.MenuItem]::new(); $item.Header = $action; $item.Tag = @{ Entry = $entry; Action = $action }
+            $item.IsEnabled = $entry.State -eq 'ok'
+            $item.Add_Click({ param($s, $e) if ($s.Tag.Action -eq '지우기') { Remove-WtHolidayEntry $s.Tag.Entry } else { Show-WtHolidayDialog -Entry $s.Tag.Entry } })
+            [void]$menu.Items.Add($item)
+        }
+        $row.ContextMenu = $menu
+        $row.Add_KeyDown({ param($s, $e) if ($e.Key -eq 'Delete' -and $s.Tag.State -eq 'ok') { Remove-WtHolidayEntry $s.Tag; $e.Handled = $true } elseif ($e.Key -eq 'F2' -and $s.Tag.State -eq 'ok') { Show-WtHolidayDialog -Entry $s.Tag; $e.Handled = $true } })
+        [void](Add-WtChild $table $row)
+    }
+    if (-not $rows.Count) { [void](Add-WtChild $table (New-WtText '이 해에는 휴무일이 없습니다.' 'Table.Empty')) }
+}
+# 표 한 줄: 날짜 110 · 요일 56 · 이름(나머지) · 종류 110 · 넣은 곳 90. 머리 줄과 같은 칸을 쓴다
+function New-WtHolidayRowGrid([string[]]$Values, [string]$Style) {
+    $grid = [System.Windows.Controls.Grid]::new()
+    $widths = @(110, 56, -1, 110, 90)
+    for ($i = 0; $i -lt 5; $i++) {
+        $column = [System.Windows.Controls.ColumnDefinition]::new()
+        $column.Width = if ($widths[$i] -lt 0) { [System.Windows.GridLength]::new(1, 'Star') } else { [System.Windows.GridLength]::new($widths[$i]) }
+        $grid.ColumnDefinitions.Add($column)
+        $text = New-WtText $Values[$i] $(if ($Style -eq 'Table.Cell' -and $i -in 1, 3, 4) { 'Table.CellSub' } else { $Style })
+        [System.Windows.Controls.Grid]::SetColumn($text, $i); [void]$grid.Children.Add($text)
+    }
+    $grid
+}
+function Remove-WtHolidayEntry($Entry) {
+    try {
+        $r = Set-WtHolidayDate (Get-WtHolidayData).Store $Entry.DateText $Entry.Kind -Enabled $false
+        if (-not $r.Success) { throw $r.Reason }
+    } catch { Show-WtMessage "휴무일을 지우지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
+    Update-WtHolidayTable
+}
+
+# 휴무일 추가(날짜 ~ 끝 날짜, 이름, 종류) 또는 이름 바꾸기(-Entry). 하루 하나씩 저장한다(연휴는 날마다 한 항목)
+function Show-WtHolidayDialog($Entry) {
+    $dialog = New-WtModal $(if ($Entry) { '휴무일 이름 바꾸기' } else { '휴무일 추가' })
+    $fields = @{}
+    $today = [datetime]::Today
+    $first = if ($script:holidayUi -and $script:holidayUi.Year -ne $today.Year) { [datetime]::new($script:holidayUi.Year, 1, 1) } else { $today }
+    if (-not $Entry) {
+        [void](Add-WtChild $dialog.Body (New-WtText '날짜' 'Setting.Label'))
+        $range = New-WtStack Horizontal 8
+        foreach ($key in 'From', 'To') {
+            $box = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $box 'Input'; $box.Width = 140; $box.Text = ConvertTo-WtDateText $first
+            [System.Windows.Automation.AutomationProperties]::SetName($box, $(if ($key -eq 'From') { '시작 날짜' } else { '끝 날짜' }))
+            $fields[$key] = $box; [void](Add-WtChild $range $box)
+            if ($key -eq 'From') { $dash = New-WtText '~' 'Schedule.RangeDash'; [void](Add-WtChild $range $dash) }
+        }
+        [void](Add-WtChild $dialog.Body $range)
+    }
+    [void](Add-WtChild $dialog.Body (New-WtText '이름' 'Setting.Label'))
+    $name = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $name 'Input'; $name.Text = if ($Entry) { $Entry.Name } else { '회사 휴무' }
+    [System.Windows.Automation.AutomationProperties]::SetName($name, '이름'); $fields.Name = $name
+    [void](Add-WtChild $dialog.Body $name)
+    if (-not $Entry) {
+        [void](Add-WtChild $dialog.Body (New-WtText '종류' 'Setting.Label'))
+        $kind = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $kind 'Combo'
+        foreach ($k in $script:holidayKinds.Keys) { [void]$kind.Items.Add($script:holidayKinds[$k]) }
+        $kind.SelectedIndex = 1; [System.Windows.Automation.AutomationProperties]::SetName($kind, '종류'); $fields.Kind = $kind
+        [void](Add-WtChild $dialog.Body $kind)
+    }
+    $ok = New-WtButton $(if ($Entry) { '바꾸기' } else { '추가' }) -Kind Primary; $ok.IsDefault = $true
+    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
+    $dialog.Window.Tag = @{ Fields = $fields; Entry = $Entry; Error = $dialog.Error }
+    $ok.Tag = $dialog.Window
+    $ok.Add_Click({
+        param($s, $e)
+        $w = $s.Tag
+        $reason = Save-WtHolidayDialog $w.Tag.Fields $w.Tag.Entry
+        if ($reason) { $w.Tag.Error.Text = $reason; $w.Tag.Error.Visibility = 'Visible' } else { $w.DialogResult = $true }
+    })
+    [void](Add-WtChild $dialog.Buttons $ok); [void](Add-WtChild $dialog.Buttons $cancel)
+    $dialog.Window.Add_ContentRendered({ param($s, $e) $f = $s.Tag.Fields; $target = if ($f.From) { $f.From } else { $f.Name }; [void]$target.Focus(); $target.SelectAll() })
+    if ($dialog.Window.ShowDialog() -eq $true) { Update-WtHolidayTable }
+}
+# 대화상자 값 저장. 틀리면 이유를 돌려준다(저장 안 함)
+function Save-WtHolidayDialog($Fields, $Entry) {
+    $name = $Fields.Name.Text.Trim()
+    if (-not $name) { return '이름을 입력하세요.' }
+    try {
+        if ($Entry) {
+            $r = Set-WtHolidayDate (Get-WtHolidayData).Store $Entry.DateText $Entry.Kind -Name $name -Note $Entry.Note
+            if (-not $r.Success) { return $r.Reason }
+            return ''
+        }
+        $from = ConvertFrom-WtDateText $Fields.From.Text.Trim(); $to = ConvertFrom-WtDateText $Fields.To.Text.Trim()
+        if (-not $from) { return '시작 날짜를 확인하세요. 예: 2026-12-31' }
+        if (-not $to -or $to -lt $from) { return '끝 날짜를 확인하세요. 시작 날짜와 같거나 뒤여야 합니다.' }
+        if (($to - $from).Days -gt 30) { return '한 번에 31일까지 넣을 수 있습니다.' }
+        $kind = @($script:holidayKinds.Keys)[$Fields.Kind.SelectedIndex]
+        $store = (Get-WtHolidayData).Store
+        for ($d = $from; $d -le $to; $d = $d.AddDays(1)) {
+            $r = Set-WtHolidayDate $store (ConvertTo-WtDateText $d) $kind -Name $name
+            if (-not $r.Success) { return $r.Reason }
+            $store = $r.Store
+        }
+        if ($script:holidayUi) { $script:holidayUi.Year = $from.Year }
+        ''
+    } catch { $_.Exception.Message }
 }
 
 # ---- 업무시간: 첫 설정과 일반 설정이 같은 입력 · 검사를 사용한다. ------------------------------
@@ -9781,6 +10169,8 @@ function Start-WtApp {
     $dataLock = Open-WtDataLock
     try {
     Initialize-WtSettings
+    # 올해 · 내년 공휴일을 채운다. 이미 채운 해는 건너뛰고(파일만 읽음), 설정에서 끌 수 있다. 실패해도 시작은 막지 않는다
+    try { [void](Update-WtAutoHolidays -Years @([datetime]::Today.Year, ([datetime]::Today.Year + 1))) } catch { }
     $script:themeDict = New-WtThemeDictionary
 
     $w = ConvertFrom-WtXaml $script:shellXaml
@@ -18950,6 +19340,8 @@ $script:selected = [datetime]::Today
 $script:form = $null
 $script:homeTimer = $null
 $script:homeTimeline = $null
+$script:focusKey = $null   # 체크한 뒤 다시 그린 목록에서 포커스를 돌려줄 회차 키
+$script:picker = $null
 
 function Format-WtAlarm($Minutes) {
     if ($null -eq $Minutes -or "$Minutes" -eq '') { return $null }
@@ -18972,7 +19364,7 @@ function Get-WtRepeatLabel($Rule) {
     }
 }
 function Get-WtScheduleToolTip($Occ) {
-    $when = if ($Occ.AllDay) { '하루 종일' } else {
+    $when = if ($Occ.LastDay -gt $Occ.Start.Date) { Get-WtEventSpan $Occ } elseif ($Occ.AllDay) { '하루 종일' } else {
         $Occ.Start.ToString('HH:mm', $script:inv) + $(if ($Occ.End -gt $Occ.Start) { '–' + $Occ.End.ToString('HH:mm', $script:inv) })
     }
     @(@($Occ.Title, $when, (Get-WtRepeatLabel $Occ.Entry.Repeat)) + @($Occ.Alarms | ForEach-Object { Format-WtAlarm $_ }) | Where-Object { $_ }) -join [Environment]::NewLine
@@ -18988,14 +19380,17 @@ function New-WtScheduleView {
   <Border Style="{DynamicResource Panel.Surface}">
     <DockPanel>
       <DockPanel DockPanel.Dock="Top" Style="{DynamicResource Schedule.Header}">
-        <TextBlock x:Name="Month" Style="{DynamicResource Schedule.Month}" DockPanel.Dock="Left"/>
-        <StackPanel x:Name="Nav" Orientation="Horizontal" HorizontalAlignment="Left"/>
+        <StackPanel x:Name="Nav" Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center"/>
+        <Button x:Name="MonthButton" Style="{DynamicResource Schedule.MonthButton}" ToolTip="해 · 달 고르기">
+          <StackPanel Orientation="Horizontal"><TextBlock x:Name="Month" Style="{DynamicResource Schedule.Month}"/><TextBlock Text="&#xE70D;" Style="{DynamicResource Schedule.MonthChevron}"/></StackPanel>
+        </Button>
+        <Popup x:Name="MonthPopup" StaysOpen="False" Placement="Bottom" AllowsTransparency="True" VerticalOffset="4" PlacementTarget="{Binding ElementName=MonthButton}"/>
       </DockPanel>
       <DockPanel Style="{DynamicResource Schedule.Body}">
         <UniformGrid x:Name="Week" Columns="7" DockPanel.Dock="Top"/>
         <Border BorderThickness="0,1,0,0" BorderBrush="{DynamicResource B.Border.Muted}">
           <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
-            <UniformGrid x:Name="Days" Columns="7"/>
+            <Grid><UniformGrid x:Name="Days" Columns="7"/><Grid x:Name="Bars"/></Grid>
           </ScrollViewer>
         </Border>
       </DockPanel>
@@ -19007,15 +19402,19 @@ function New-WtScheduleView {
     $root = ConvertFrom-WtXaml $xaml
     $script:view = Get-WtNamedElements $root $xaml
     $script:view.Root = $root; $script:cells = @(); $script:form = $null
-    foreach ($step in -1, 1) {
-        $button = New-WtButton '' -Kind Icon -Icon $(if ($step -lt 0) { 0xE76B } else { 0xE76C }) -ToolTip $(if ($step -lt 0) { '이전 달' } else { '다음 달' })
-        Set-WtStyle $button 'Schedule.MonthMove'
-        [Windows.Automation.AutomationProperties]::SetName($button, [string]$button.ToolTip)
-        $button.Tag = $step
-        $button.Add_Click({ param($s, $e) $script:month = $script:month.AddMonths([int]$s.Tag); Update-WtScheduleView })
-        [void]$script:view.Nav.Children.Add($button)
-    }
-    $today = New-WtButton '오늘'; Set-WtStyle $today 'Schedule.MonthToday'; $today.Add_Click({ Set-WtScheduleDate ([datetime]::Today) }); [void]$script:view.Nav.Children.Add($today)
+    # 머리줄: 「2026년 11월 ⌄」을 누르면 해 · 달 고르기(그 안에 「오늘」). 달력 칸에서는 PageUp · PageDown으로 달을 옮긴다.
+    # ‹ 오늘 ›는 3단계 표 보기에 둔다(2026-11-05 승호). 오른쪽 Nav 자리는 그때 찾기 · 보기 전환이 쓴다
+    $script:picker = New-WtMonthPicker $script:view.MonthPopup { param([datetime]$Month) $script:month = $Month; Update-WtScheduleView } -OnToday { Set-WtScheduleDate ([datetime]::Today) }
+    $script:view.MonthButton.Add_Click({ Open-WtMonthPicker $script:picker $script:month })
+    $script:view.Days.Add_PreviewKeyDown({
+        param($s, $e)
+        $step = Get-WtPageStep $e.Key
+        if (-not $step) { return }
+        $e.Handled = $true
+        $script:month = $script:month.AddMonths($step); Update-WtScheduleView
+        $first = @($script:cells | Where-Object { $_.Button.DataContext -eq $script:month })[0]
+        if ($first) { [void]$first.Button.Focus() }
+    })
     foreach ($name in '일', '월', '화', '수', '목', '금', '토') {
         $text = New-WtText $name 'Schedule.Weekday'
         if ($name -eq '일') { Set-WtResource $text Foreground 'B.Cal.Holiday' }
@@ -19027,8 +19426,9 @@ function New-WtScheduleView {
         $col = New-WtStack; $head = [Windows.Controls.Grid]::new(); Set-WtStyle $head 'Schedule.DayHead'
         $cell.Circle = [Windows.Controls.Border]::new(); Set-WtStyle $cell.Circle 'Schedule.DateCircle'
         $cell.Number = New-WtText '' 'Schedule.Date'; $cell.Circle.Child = $cell.Number
-        [void]$head.Children.Add($cell.Circle); [void]$col.Children.Add($head)
-        $cell.Holiday = New-WtText '' 'Schedule.Holiday'; [void]$col.Children.Add($cell.Holiday)
+        # 휴무일 이름은 날짜 오른쪽(머리 줄 안)에 둔다. 아래에 두면 그 칸만 칩이 내려가 여러 날 막대와 어긋난다
+        $cell.Holiday = New-WtText '' 'Schedule.Holiday'
+        [void]$head.Children.Add($cell.Circle); [void]$head.Children.Add($cell.Holiday); [void]$col.Children.Add($head)
         $cell.Chips = @()
         for ($j = 0; $j -lt 2; $j++) {
             $chip = [Windows.Controls.Border]::new(); Set-WtStyle $chip 'Schedule.Chip'
@@ -19036,6 +19436,8 @@ function New-WtScheduleView {
         }
         $cell.More = New-WtText '' 'Schedule.More'; [void]$col.Children.Add($cell.More)
         $cell.Button.Content = $col; $cell.Button.Add_Click({ param($s, $e) Set-WtScheduleDate $s.DataContext })
+        $cell.Button.ContextMenu = New-WtContextMenu
+        $cell.Button.Add_ContextMenuOpening({ param($s, $e) Update-WtScheduleDayMenu $s })
         [void]$script:view.Days.Children.Add($cell.Button); $script:cells += $cell
     }
     $script:detail = [Windows.Controls.ContentControl]::new()
@@ -19057,19 +19459,72 @@ function New-WtScheduleView {
     $root
 }
 
+# 날짜 칸 우클릭: 새 일정 · 새 루틴 · 휴무일로 지정(회사 · 개인) 또는 휴무일 해제. 휴무일은 코어(core\Calendar.psm1)에 저장한다
+function Update-WtScheduleDayMenu($Button) {
+    $menu = $Button.ContextMenu; $menu.Items.Clear(); $date = [datetime]$Button.DataContext
+    foreach ($name in '새 일정', '새 루틴') {
+        $item = [Windows.Controls.MenuItem]::new(); $item.Header = $name; $item.Tag = @{ Date = $date; Kind = $(if ($name -eq '새 일정') { 'event' } else { 'routine' }) }
+        $item.Add_Click({ param($s, $e) Set-WtScheduleDate $s.Tag.Date; Show-WtScheduleForm -Kind $s.Tag.Kind })
+        [void]$menu.Items.Add($item)
+    }
+    [void]$menu.Items.Add([Windows.Controls.Separator]::new())
+    $holiday = Get-WtHolidayData
+    $dateText = ConvertTo-WtDateText $date
+    $here = @($holiday.Entries | Where-Object { $_.State -eq 'ok' -and $_.DateText -ceq $dateText })
+    if ($here.Count) {
+        $item = [Windows.Controls.MenuItem]::new(); $item.Header = '휴무일 해제'; $item.Tag = @{ Date = $dateText; Kinds = @($here.Kind | Select-Object -Unique); Name = '' }
+        $item.Add_Click({ param($s, $e) Set-WtScheduleHoliday $s.Tag.Date $s.Tag.Kinds $false })
+        [void]$menu.Items.Add($item)
+    } else {
+        $parent = [Windows.Controls.MenuItem]::new(); $parent.Header = '휴무일로 지정'
+        foreach ($kind in @(@('company', '회사 휴무'), @('personal', '개인 휴무'))) {
+            $item = [Windows.Controls.MenuItem]::new(); $item.Header = $kind[1]; $item.Tag = @{ Date = $dateText; Kinds = @($kind[0]); Name = $kind[1] }
+            $item.Add_Click({ param($s, $e) Set-WtScheduleHoliday $s.Tag.Date $s.Tag.Kinds $true $s.Tag.Name })
+            [void]$parent.Items.Add($item)
+        }
+        [void]$menu.Items.Add($parent)
+    }
+    if ($holiday.Error) {
+        foreach ($item in @($menu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] -and [string]$_.Header -like '휴무일*' })) {
+            $item.IsEnabled = $false; $item.ToolTip = $holiday.Error; [Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true)
+        }
+    }
+}
+function Set-WtScheduleHoliday([string]$Date, [string[]]$Kinds, [bool]$Enabled, [string]$Name = '') {
+    try {
+        foreach ($kind in $Kinds) {
+            $result = Set-WtHolidayDate (Get-WtHolidayData).Store $Date $kind -Enabled $Enabled -Name $Name
+            if (-not $result.Success) { throw $result.Reason }
+        }
+    } catch { Show-WtMessage "휴무일을 저장하지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
+    Update-WtScheduleView
+}
+
 function Set-WtScheduleDate([datetime]$Date) {
     $script:selected = $Date.Date; $script:month = [datetime]::new($Date.Year, $Date.Month, 1); $script:form = $null
     Update-WtScheduleView
+}
+# 달력 칩 글자. 끝낸 일정은 앞에 체크 표시(CheckMark E73E)를 붙인다. 색만으로 끝냄을 알리지 않게 한다
+function Set-WtChipText($TextBlock, [string]$Text, [bool]$Done) {
+    if (-not $Done) { $TextBlock.Text = $Text; return }
+    $TextBlock.Inlines.Clear()
+    $mark = [Windows.Documents.Run]::new([string][char]0xE73E); Set-WtStyle $mark 'Schedule.ChipMark'
+    $TextBlock.Inlines.Add($mark); $TextBlock.Inlines.Add([Windows.Documents.Run]::new(' ' + $Text))
 }
 function Update-WtScheduleView {
     if (-not $script:view) { return }
     $data = Get-WtScheduleData
     $script:view.Month.Text = $script:month.ToString('yyyy년 M월', $script:inv)
+    [Windows.Automation.AutomationProperties]::SetName($script:view.MonthButton, "$($script:view.Month.Text), 해 · 달 고르기")
     $start = $script:month.AddDays(-[int]$script:month.DayOfWeek)
     $count = [int]([math]::Ceiling(([int]$script:month.DayOfWeek + [datetime]::DaysInMonth($script:month.Year, $script:month.Month)) / 7.0) * 7)
     if ($count -lt 35) { $count = 35 }
-    $script:view.Days.Rows = $count / 7
+    $rows = $count / 7
+    $script:view.Days.Rows = $rows
     $days = Get-WtScheduleDays $data.Entries $start 42
+    $doneKeys = try { Get-WtEventDone } catch { $null }
+    $occurrences = @(Get-WtScheduleOccurrences $data.Entries $start $start.AddDays($count - 1))
+    $segments = @(Get-WtScheduleLanes $occurrences $start $rows)
     $calendar = Get-WtCalendarItems $start $start.AddDays(41) -Exclude @('schedule')
     for ($i = 0; $i -lt 42; $i++) {
         $cell = $script:cells[$i]; $date = $start.AddDays($i); $items = @($calendar.Days[$i].Items)
@@ -19089,28 +19544,77 @@ function Update-WtScheduleView {
         $cell.Circle.ToolTip = if ($work.Count) { @($work.Text) -join [Environment]::NewLine } elseif ($reasons.Count) { $reasons -join ' · ' } else { Format-WtDate $date 'dddd' }
         $holidays = @($items | Where-Object { $_.Kind -cin @('public', 'company', 'personal') } | ForEach-Object Text) -join ' · '
         $cell.Holiday.Text = $holidays; $cell.Holiday.ToolTip = $holidays; $cell.Holiday.Visibility = if ($holidays) { 'Visible' } else { 'Collapsed' }
-        $occurrences = @($days[$i])
+        # 칩 자리 0 · 1: 여러 날 막대가 쓴 자리는 비워 두고(막대는 위 겹침 층에 그린다), 남은 자리에 근태 기록 → 하루 일정 순
+        $row = [math]::Floor($i / 7); $col = $i % 7
+        $here = @($segments | Where-Object { $_.Row -eq $row -and $_.A -le $col -and $_.B -ge $col })
+        $taken = @($here | ForEach-Object Lane)
         $records = @($items | Where-Object { $_.Kind -cin @('leave', 'overtime') })
+        $singles = @(@($days[$i]) | Where-Object { $null -ne $_ -and $_.LastDay -le $_.Start.Date })
+        $lines = @($records) + @($singles)
         $plain = if ($mark.DayOff -or $date -eq [datetime]::Today) { 'B.Bg.Surface' } else { 'B.Bg.Subtle' }
-        $lines = @($records) + @($occurrences)
+        $used = 0; $last = -1
         for ($j = 0; $j -lt 2; $j++) {
-            $chip = $cell.Chips[$j]; $chip.Visibility = if ($j -lt $lines.Count) { 'Visible' } else { 'Collapsed' }
-            if ($j -ge $lines.Count) { continue }
-            if ($j -lt $records.Count) {
-                $chip.Child.Text = $lines[$j].Text; $chip.ToolTip = $lines[$j].Text
-                Set-WtResource $chip Background "B.$($lines[$j].Style)Bg"; Set-WtResource $chip.Child Foreground "B.$($lines[$j].Style)"
+            $chip = $cell.Chips[$j]
+            if ($taken -contains $j) { $chip.Visibility = 'Hidden'; $last = $j; continue }
+            if ($used -ge $lines.Count) { $chip.Visibility = 'Collapsed'; continue }
+            $line = $lines[$used]; $used++; $last = $j; $chip.Visibility = 'Visible'
+            if ($line.PSObject.Properties['Style']) {
+                Set-WtChipText $chip.Child $line.Text $false; $chip.ToolTip = $line.Text
+                Set-WtResource $chip Background "B.$($line.Style)Bg"; Set-WtResource $chip.Child Foreground "B.$($line.Style)"
             } else {
-                $chip.Child.Text = Get-WtScheduleLine $lines[$j]; $chip.ToolTip = Get-WtScheduleToolTip $lines[$j]
-                Set-WtResource $chip Background $plain; Set-WtResource $chip.Child Foreground 'B.Text.Primary'
+                $done = $null -ne $doneKeys -and $doneKeys.Contains($line.Key)
+                Set-WtChipText $chip.Child (Get-WtScheduleLine $line) $done; $chip.ToolTip = Get-WtScheduleToolTip $line
+                Set-WtResource $chip Background $plain; Set-WtResource $chip.Child Foreground $(if ($done) { 'B.Text.Tertiary' } else { 'B.Text.Primary' })
             }
         }
-        $cell.More.Text = if ($lines.Count -gt 2) { '+' + ($lines.Count - 2) } else { '' }
-        $cell.More.ToolTip = @($lines | Select-Object -Skip 2 | ForEach-Object { if ($_.PSObject.Properties['Style']) { $_.Text } else { Get-WtScheduleLine $_ } }) -join [Environment]::NewLine
-        $cell.More.Visibility = if ($lines.Count -gt 2) { 'Visible' } else { 'Collapsed' }
+        # 막대 앞의 빈 자리는 막대 줄을 맞추려고 남기고(Hidden), 뒤에 아무것도 없는 빈 자리만 접는다
+        for ($j = 0; $j -lt $last; $j++) { if ($cell.Chips[$j].Visibility -eq 'Collapsed') { $cell.Chips[$j].Visibility = 'Hidden' } }
+        $hidden = @(@($lines | Select-Object -Skip $used) + @($here | Where-Object { $_.Lane -ge 2 } | ForEach-Object Occ))
+        $cell.More.Text = if ($hidden.Count) { '+' + $hidden.Count } else { '' }
+        $cell.More.ToolTip = @($hidden | ForEach-Object { if ($_.PSObject.Properties['Style']) { $_.Text } else { Get-WtScheduleLine $_ } }) -join [Environment]::NewLine
+        $cell.More.Visibility = if ($hidden.Count) { 'Visible' } else { 'Collapsed' }
     }
+    Update-WtScheduleBars $segments $rows $start $doneKeys
     $script:side.Title.Text = Format-WtDate $script:selected 'M월 d일 dddd'
     $script:side.Add.IsEnabled = -not [bool]$data.Error; $script:side.Add.ToolTip = if ($data.Error) { $data.Error } else { '새로 만들기' }
     if (-not $script:form) { Show-WtScheduleDay }
+}
+# 여러 날 막대 겹침 층. 주마다 줄(lane) 0 · 1을 7칸 격자로 놓고, 막대는 걸친 칸만큼 이어 그린다.
+# 막대를 누르면 누른 자리의 날짜를 고른다(칸을 누른 것과 같다). 빈 곳은 아래 날짜 칸이 누름을 받는다
+function Update-WtScheduleBars([object[]]$Segments, [int]$Rows, [datetime]$Start, $DoneKeys) {
+    $bars = $script:view.Bars; $bars.Children.Clear(); $bars.RowDefinitions.Clear()
+    for ($r = 0; $r -lt $Rows; $r++) { $bars.RowDefinitions.Add([Windows.Controls.RowDefinition]::new()) }
+    foreach ($week in @($Segments | Where-Object { $_.Lane -lt 2 } | Group-Object Row)) {
+        $row = [int]$week.Name
+        $stack = New-WtStack; Set-WtStyle $stack 'Schedule.BarLanes'; [Windows.Controls.Grid]::SetRow($stack, $row)
+        $maxLane = [int]($week.Group | Measure-Object Lane -Maximum).Maximum
+        $lanes = @(for ($l = 0; $l -le $maxLane; $l++) {
+                $grid = [Windows.Controls.Grid]::new(); Set-WtStyle $grid 'Schedule.BarLane'
+                for ($c = 0; $c -lt 7; $c++) { $grid.ColumnDefinitions.Add([Windows.Controls.ColumnDefinition]::new()) }
+                [void]$stack.Children.Add($grid); $grid
+            })
+        foreach ($seg in $week.Group) {
+            $occ = $seg.Occ
+            $done = $null -ne $DoneKeys -and $DoneKeys.Contains($occ.Key)
+            $bar = [Windows.Controls.Border]::new()
+            Set-WtStyle $bar $(if ($seg.FromPrev -and $seg.ToNext) { 'Schedule.BarMiddle' } elseif ($seg.FromPrev) { 'Schedule.BarFromPrev' } elseif ($seg.ToNext) { 'Schedule.BarToNext' } else { 'Schedule.Bar' })
+            [Windows.Controls.Grid]::SetColumn($bar, $seg.A); [Windows.Controls.Grid]::SetColumnSpan($bar, $seg.B - $seg.A + 1)
+            $text = New-WtText '' 'Schedule.ChipText'
+            $label = if (-not $occ.AllDay -and -not $seg.FromPrev) { $occ.Start.ToString('HH:mm', $script:inv) + ' ' + $occ.Title } else { $occ.Title }
+            Set-WtChipText $text $label $done
+            if ($done) { Set-WtResource $text Foreground 'B.Text.Tertiary' }
+            $bar.Child = $text; $bar.ToolTip = Get-WtScheduleToolTip $occ
+            $bar.Tag = @{ Start = $Start.AddDays($row * 7); Lane = $lanes[$seg.Lane] }
+            $bar.Add_MouseLeftButtonUp({
+                param($s, $e)
+                $lane = $s.Tag.Lane
+                $col = [math]::Max(0, [math]::Min(6, [math]::Floor($e.GetPosition($lane).X / [math]::Max(1, $lane.ActualWidth / 7))))
+                Set-WtScheduleDate $s.Tag.Start.AddDays($col)
+            })
+            [void]$lanes[$seg.Lane].Children.Add($bar)
+        }
+        [void]$bars.Children.Add($stack)
+    }
 }
 
 function New-WtRoutineList([datetime]$Date) {
@@ -19202,19 +19706,78 @@ function Show-WtScheduleDay {
     if ($data.Error) { [void]$col.Children.Add((New-WtText $data.Error 'Schedule.Error')) }
     else {
         $occurrences = @((Get-WtScheduleDays $data.Entries $script:selected 1)[0])
-        foreach ($occurrence in $occurrences) {
-            $button = New-WtButton ''; Set-WtStyle $button 'Schedule.EventRow'; $row = [Windows.Controls.DockPanel]::new()
-            $when = New-WtText $(if ($occurrence.AllDay) { '하루 종일' } else { $occurrence.Start.ToString('HH:mm', $script:inv) }) 'Schedule.EventTime'
-            [Windows.Controls.DockPanel]::SetDock($when, 'Left'); [void]$row.Children.Add($when); [void]$row.Children.Add((New-WtText $occurrence.Title 'Schedule.EventTitle'))
-            $button.Content = $row; $button.Tag = $occurrence; $button.ToolTip = Get-WtScheduleToolTip $occurrence
-            [Windows.Automation.AutomationProperties]::SetName($button, (Get-WtScheduleLine $occurrence))
-            $button.Add_Click({ param($s, $e) Show-WtScheduleForm -Kind event -Occurrence $s.Tag }); [void]$col.Children.Add($button)
-        }
+        $doneKeys = $null; $doneError = ''
+        try { $doneKeys = Get-WtEventDone } catch { $doneError = $_.Exception.Message }
+        if ($doneError -and $occurrences.Count) { [void]$col.Children.Add((New-WtText $doneError 'Schedule.Error')) }
+        foreach ($occurrence in $occurrences) { [void]$col.Children.Add((New-WtEventRow $occurrence $script:selected $doneKeys)) }
         if (-not $occurrences.Count) { [void]$col.Children.Add((New-WtText '일정 없음' 'T.Sub')) }
         $separator = [Windows.Controls.Border]::new(); Set-WtStyle $separator 'Schedule.Separator'; [void]$col.Children.Add($separator)
         try { [void]$col.Children.Add((New-WtRoutineSection '루틴' $script:selected).Root) } catch { [void]$col.Children.Add((New-WtText $_.Exception.Message 'Schedule.Error')) }
     }
     $scroll.Content = $col; [void]$body.Children.Add($scroll); $script:detail.Content = $body
+}
+
+# 시각 칸. 하루 종일 · 여러 날 일정의 사이 날은 「하루 종일」, 시각 있는 일정의 첫날은 시작 시각, 마지막 날은 「~끝 시각」
+function Get-WtEventWhen($Occ, [datetime]$Day) {
+    if ($Occ.AllDay) { return '하루 종일' }
+    if ($Day.Date -le $Occ.Start.Date) { return $Occ.Start.ToString('HH:mm', $script:inv) }
+    if ($Day.Date -ge $Occ.LastDay) { return '~' + $Occ.End.ToString('HH:mm', $script:inv) }
+    '하루 종일'
+}
+# 여러 날 일정의 기간 줄. 하루짜리는 빈 글. 예: 「11월 3일 ~ 6일 · 3일째」, 「11월 5일 22:00 ~ 6일 02:00」
+function Get-WtEventSpan($Occ, $Day) {
+    if ($Occ.LastDay -le $Occ.Start.Date) { return '' }
+    $last = $Occ.LastDay
+    $endDay = if ($last.Year -ne $Occ.Start.Year) { $last.ToString('yyyy년 M월 d일', $script:inv) } elseif ($last.Month -ne $Occ.Start.Month) { $last.ToString('M월 d일', $script:inv) } else { $last.ToString('d일', $script:inv) }
+    if ($Occ.AllDay) {
+        $range = "$($Occ.Start.ToString('M월 d일', $script:inv)) ~ $endDay"
+        if ($null -eq $Day) { return $range }
+        return "$range · $((([datetime]$Day).Date - $Occ.Start.Date).Days + 1)일째"
+    }
+    "$($Occ.Start.ToString('M월 d일 HH:mm', $script:inv)) ~ $endDay $($Occ.End.ToString('HH:mm', $script:inv))"
+}
+
+# 오른쪽 목록의 일정 줄: 체크 상자 + [시각 · 제목](누르면 편집 폼). 체크는 회차마다 event-log.json에 남는다(ScheduleData)
+function New-WtEventRow($Occ, [datetime]$Day, $DoneKeys) {
+    $done = $null -ne $DoneKeys -and $DoneKeys.Contains($Occ.Key)
+    $label = Get-WtScheduleLine $Occ
+    $row = [Windows.Controls.DockPanel]::new()
+    $check = [Windows.Controls.CheckBox]::new(); Set-WtStyle $check 'Schedule.EventCheck'
+    $check.IsChecked = $done; $check.IsEnabled = $null -ne $DoneKeys
+    $check.ToolTip = if ($null -eq $DoneKeys) { '체크 기록을 읽지 못했습니다.' } elseif ($done) { '끝냄 풀기' } else { '끝냄으로 표시' }
+    [Windows.Automation.AutomationProperties]::SetName($check, "$label 끝냄")
+    [Windows.Automation.AutomationProperties]::SetAutomationId($check, "Schedule-Check-$($Occ.Key)")
+    $check.Tag = @{ Occ = $Occ; Updating = $false }
+    $check.Add_Checked({ param($s, $e) Set-WtScheduleCheck $s }); $check.Add_Unchecked({ param($s, $e) Set-WtScheduleCheck $s })
+    if ($script:focusKey -and $script:focusKey -ceq $Occ.Key) { $script:focusKey = $null; $check.Add_Loaded({ param($s, $e) [void]$s.Focus() }) }
+    [Windows.Controls.DockPanel]::SetDock($check, 'Left'); [void]$row.Children.Add($check)
+    $button = New-WtButton ''; Set-WtStyle $button 'Schedule.EventRow'
+    $content = [Windows.Controls.DockPanel]::new(); Set-WtStyle $content 'Schedule.EventBody'
+    $when = New-WtText (Get-WtEventWhen $Occ $Day) 'Schedule.EventTime'; [Windows.Controls.DockPanel]::SetDock($when, 'Left'); [void]$content.Children.Add($when)
+    $text = New-WtStack; $title = New-WtText $Occ.Title 'Schedule.EventTitle'; [void]$text.Children.Add($title)
+    if ($done) { Set-WtResource $title Foreground 'B.Text.Tertiary' }
+    $span = Get-WtEventSpan $Occ $Day
+    if ($span) { [void]$text.Children.Add((New-WtText $span 'Schedule.EventSub')) }
+    [void]$content.Children.Add($text)
+    $button.Content = $content; $button.Tag = $Occ; $button.ToolTip = Get-WtScheduleToolTip $Occ
+    [Windows.Automation.AutomationProperties]::SetName($button, $label)
+    $button.Add_Click({ param($s, $e) Show-WtScheduleForm -Kind event -Occurrence $s.Tag })
+    [void]$row.Children.Add($button)
+    $row
+}
+function Set-WtScheduleCheck($Check) {
+    if ($Check.Tag.Updating) { return }
+    $occ = $Check.Tag.Occ
+    try {
+        $result = Set-WtEventCheck -Event $occ.Entry.Id -Date (ConvertTo-WtDateText $occ.Original) -Done ([bool]$Check.IsChecked)
+        if (-not $result.Success) { throw $result.Reason }
+        $script:focusKey = $occ.Key
+        Update-WtScheduleView
+        if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
+    } catch {
+        $Check.Tag.Updating = $true
+        try { $Check.IsChecked = -not $Check.IsChecked; $Check.ToolTip = $_.Exception.Message } finally { $Check.Tag.Updating = $false }
+    }
 }
 
 function Add-WtScheduleField([string]$Key, [string]$Label, $Control) {
@@ -19224,6 +19787,24 @@ function Add-WtScheduleField([string]$Key, [string]$Label, $Control) {
     [Windows.Automation.AutomationProperties]::SetName($Control, $(if ($Label) { $Label } else { [string]$Control.Content }))
     [Windows.Automation.AutomationProperties]::SetAutomationId($Control, "Schedule-$Key")
     $script:form.Fields[$Key] = $Control; $script:form.Errors[$Key] = $errorText; $script:form.Rows[$Key] = $field; [void]$script:form.Panel.Children.Add($field)
+}
+# 「시작 ~ 끝」 두 칸을 한 줄에 둔다(날짜 · 시각). 칸마다 이름과 자동화 id를 따로 단다. 오류는 같은 줄 아래에 쓴다
+function Add-WtScheduleRange([string]$Key, [string]$EndKey, [string]$Label, [string]$From, [string]$To, [string]$FromName, [string]$ToName) {
+    $grid = [Windows.Controls.Grid]::new()
+    foreach ($width in 'Star', 'Auto', 'Star') {
+        $column = [Windows.Controls.ColumnDefinition]::new()
+        $column.Width = if ($width -eq 'Auto') { [Windows.GridLength]::Auto } else { [Windows.GridLength]::new(1, 'Star') }
+        $grid.ColumnDefinitions.Add($column)
+    }
+    $fromBox = New-WtScheduleInput $From; $toBox = New-WtScheduleInput $To; $dash = New-WtText '~' 'Schedule.RangeDash'
+    [Windows.Controls.Grid]::SetColumn($dash, 1); [Windows.Controls.Grid]::SetColumn($toBox, 2)
+    foreach ($child in $fromBox, $dash, $toBox) { [void]$grid.Children.Add($child) }
+    Add-WtScheduleField $Key $Label $grid
+    [Windows.Automation.AutomationProperties]::SetAutomationId($grid, "Schedule-$Key-range")
+    [Windows.Automation.AutomationProperties]::SetName($fromBox, $FromName); [Windows.Automation.AutomationProperties]::SetAutomationId($fromBox, "Schedule-$Key")
+    [Windows.Automation.AutomationProperties]::SetName($toBox, $ToName); [Windows.Automation.AutomationProperties]::SetAutomationId($toBox, "Schedule-$EndKey")
+    $f = $script:form
+    $f.Fields[$Key] = $fromBox; $f.Fields[$EndKey] = $toBox; $f.Errors[$EndKey] = $f.Errors[$Key]; $f.Rows[$EndKey] = $f.Rows[$Key]
 }
 function New-WtScheduleInput([string]$Value) { $inputBox = [Windows.Controls.TextBox]::new(); Set-WtStyle $inputBox Input; $inputBox.Text = $Value; $inputBox }
 function New-WtScheduleCombo([string[]]$Values, [string]$Selected) {
@@ -19249,10 +19830,11 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
     Add-WtScheduleField title '제목' (New-WtScheduleInput $(if ($Occurrence) { $Occurrence.Title } elseif ($entry) { $entry.title } else { '' }))
     if ($Kind -eq 'event') {
         $date = if ($Occurrence) { $Occurrence.Start.Date } else { $script:selected }
-        Add-WtScheduleField date '날짜' (New-WtScheduleInput (ConvertTo-WtDateText $date))
+        # 끝 날짜: 하루 종일은 마지막 날, 시각 있는 일정은 끝 시각의 날짜(밤을 넘기면 다음 날)
+        $endDate = if (-not $Occurrence) { $date } elseif ($Occurrence.AllDay) { $Occurrence.LastDay } else { $Occurrence.End.Date }
+        Add-WtScheduleRange date endDate '날짜' (ConvertTo-WtDateText $date) (ConvertTo-WtDateText $endDate) '시작 날짜' '끝 날짜'
         Add-WtScheduleField allDay '' (New-WtScheduleCheck '하루 종일' ($Occurrence -and $Occurrence.AllDay))
-        Add-WtScheduleField start '시작' (New-WtScheduleInput $(if ($Occurrence -and -not $Occurrence.AllDay) { $Occurrence.Start.ToString('HH:mm', $script:inv) } else { Get-WtSetting 'work.start' }))
-        Add-WtScheduleField end '끝 시각' (New-WtScheduleInput $(if ($Occurrence -and -not $Occurrence.AllDay -and $Occurrence.End -gt $Occurrence.Start) { $Occurrence.End.ToString('HH:mm', $script:inv) } else { '' }))
+        Add-WtScheduleRange start end '시각' $(if ($Occurrence -and -not $Occurrence.AllDay) { $Occurrence.Start.ToString('HH:mm', $script:inv) } else { Get-WtSetting 'work.start' }) $(if ($Occurrence -and -not $Occurrence.AllDay -and $Occurrence.End -gt $Occurrence.Start) { $Occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) '시작 시각' '끝 시각'
         $repeat = if ($Occurrence) { Get-WtRepeatLabel $Occurrence.Entry.Repeat } else { '없음' }; if (-not $repeat) { $repeat = '없음' }
         $repeatOptions = @('없음', '매일', '매주', '격주', '매월'); if ($repeat -notin $repeatOptions) { $repeatOptions += $repeat }
         Add-WtScheduleField repeat '반복' (New-WtScheduleCombo $repeatOptions $repeat)
@@ -19261,6 +19843,7 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
         $alarmOptions = @('없음', '5분 전', '10분 전', '30분 전', '1시간 전'); if ($alarm -notin $alarmOptions) { $alarmOptions += $alarm }
         Add-WtScheduleField alarm '알람' (New-WtScheduleCombo $alarmOptions $alarm)
         $script:form.Fields.allDay.Add_Click({ Update-WtScheduleFormFields }); $script:form.Fields.repeat.Add_SelectionChanged({ Update-WtScheduleFormFields })
+        foreach ($key in 'date', 'endDate') { $script:form.Fields[$key].Add_TextChanged({ Update-WtScheduleFormFields }) }
     } else {
         $freq = if ($entry) { switch ($entry.routine.freq) { daily { '매일' }; weekly { '요일' }; hourly { '시간마다' } } } else { '매일' }
         Add-WtScheduleField freq '주기' (New-WtScheduleCombo @('매일', '요일', '시간마다') $freq)
@@ -19273,7 +19856,8 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
         Add-WtScheduleField every '간격 시간' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { [string]$entry.routine.every } else { '2' }))
         Add-WtScheduleField start '시작' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { $entry.routine.from } else { Get-WtSetting 'work.start' }))
         Add-WtScheduleField end '끝 시각' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { $entry.routine.to } else { Get-WtSetting 'work.end' }))
-        Add-WtScheduleField workdays '' (New-WtScheduleCheck '쉬는 날 빼기' ($entry -and $entry.routine.workdaysOnly))
+        Add-WtScheduleField workdays '' (New-WtScheduleCheck '근무 요일만' ($entry -and $entry.routine.workdaysOnly))
+        $script:form.Fields.workdays.ToolTip = '체크하면 근무 요일(설정 → 업무시간)이 아닌 날을 뺍니다. 휴무일 · 휴가에는 늘 빠집니다.'
         $script:form.Fields.freq.Add_SelectionChanged({ Update-WtScheduleFormFields })
     }
     $save.Add_Click({ Save-WtScheduleForm }); $cancel.Add_Click({ Show-WtScheduleDay }); $delete.Add_Click({ Remove-WtScheduleForm })
@@ -19284,6 +19868,15 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
 function Update-WtScheduleFormFields {
     if (-not $script:form) { return }; $f = $script:form
     if ($f.Kind -eq 'event') {
+        # 끝 날짜가 시작보다 뒤면 하루 종일로 고정한다. 밤을 넘는 시각 일정은 새로 만들지 않는다(근태 업무외로 적음, 설계 9.x).
+        # 예전에 저장된 밤 넘김 일정은 그대로 열고 고칠 수 있다(시각을 바꾸지 않으면 저장된다)
+        $from = ConvertFrom-WtDateText $f.Fields.date.Text; $to = ConvertFrom-WtDateText $f.Fields.endDate.Text
+        $legacy = $f.Occurrence -and -not $f.Occurrence.AllDay -and $f.Occurrence.End.Date -gt $f.Occurrence.Start.Date
+        if ($from -and $to -and $to -gt $from -and -not $legacy) {
+            $f.Fields.allDay.IsChecked = $true; $f.Fields.allDay.IsEnabled = $false
+            $f.Fields.allDay.ToolTip = '여러 날 일정은 하루 종일로 저장합니다. 밤을 넘는 작업은 근태의 업무외로 적으세요.'
+            [Windows.Controls.ToolTipService]::SetShowOnDisabled($f.Fields.allDay, $true)
+        } else { $f.Fields.allDay.IsEnabled = $true; $f.Fields.allDay.ToolTip = $null }
         foreach ($key in 'start', 'end') { $f.Fields[$key].IsEnabled = -not $f.Fields.allDay.IsChecked }
         $f.Rows.until.Visibility = if ($f.Fields.repeat.SelectedItem -ne '없음') { 'Visible' } else { 'Collapsed' }
     } else {
@@ -19304,9 +19897,11 @@ function Save-WtScheduleForm([string]$Scope) {
         if ($f.Kind -eq 'event') {
             $date = ConvertFrom-WtDateText $fields.date.Text
             if (-not $date) { Set-WtScheduleFormError date '날짜를 확인하세요.'; return }
-            # 예전 기간 일정은 날짜 칸 하나로 편집해도 원래 날짜 간격을 보존한다.
-            $spanDays = if ($f.Occurrence) { ($f.Occurrence.End.Date - $f.Occurrence.Start.Date).Days } else { 0 }
-            $endDateText = ConvertTo-WtDateText $date.AddDays($spanDays)
+            # 끝 날짜를 비우면 시작 날짜와 같다. 끝 날짜가 뒤면 여러 날 일정이다
+            $lastDay = if ($fields.endDate.Text.Trim()) { ConvertFrom-WtDateText $fields.endDate.Text } else { $date }
+            if (-not $lastDay -or $lastDay -lt $date) { Set-WtScheduleFormError endDate '끝 날짜를 확인하세요. 시작 날짜와 같거나 뒤여야 합니다.'; return }
+            $spanDays = ($lastDay - $date).Days
+            $endDateText = ConvertTo-WtDateText $lastDay
             $start = $null; $end = $null
             if (-not $fields.allDay.IsChecked) {
                 $start = ConvertFrom-WtTimeText $fields.start.Text
@@ -19314,7 +19909,7 @@ function Save-WtScheduleForm([string]$Scope) {
                 if ($fields.end.Text) {
                     $end = ConvertFrom-WtTimeText $fields.end.Text
                     if ($null -eq $end -or ($spanDays -eq 0 -and $end -lt $start)) { Set-WtScheduleFormError end '끝 시각을 확인하세요.'; return }
-                }
+                } elseif ($spanDays -gt 0) { Set-WtScheduleFormError end '여러 날 일정은 끝 시각을 넣으세요.'; return }
             }
             $repeat = $null
             if ($fields.repeat.SelectedItem -ne '없음') {
@@ -19382,21 +19977,25 @@ function Remove-WtScheduleForm {
     } catch { Set-WtScheduleFormError title $_.Exception.Message }
 }
 
+# 홈 「오늘 일정」 · 다음 일정 줄. 끝낸 회차는 제목 앞에 ✓를 붙이고(Done), 다음 일정 줄 · 메뉴 개수에서는 뺀다
 function Get-WtScheduleHomeItems {
     $data = Get-WtScheduleData
     $today = [datetime]::Today
+    $doneKeys = try { Get-WtEventDone } catch { $null }
     @(foreach ($occurrence in @(Get-WtScheduleOccurrences $data.Entries $today $today)) {
+        $done = $null -ne $doneKeys -and $doneKeys.Contains($occurrence.Key)
         $when = if ($occurrence.AllDay) { '하루 종일' } else { $occurrence.Start.ToString('HH:mm', $script:inv) + '–' + $(if ($occurrence.End) { $occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) }
         $details = @($occurrence.Title, $when)
         $repeatText = Get-WtRepeatLabel $occurrence.Entry.Repeat
         if ($repeatText) { $details += $repeatText }
         foreach ($alarm in @($occurrence.Alarms)) { $details += Format-WtAlarm $alarm }
-        [pscustomobject]@{ Id = $occurrence.Entry.Id; Title = $occurrence.Title; Start = $occurrence.Start; End = $occurrence.End
-            AllDay = $occurrence.AllDay; Alarm = @($occurrence.Alarms).Count -gt 0; ToolTip = (@($details | Where-Object { $_ }) -join "`n") }
+        if ($done) { $details += '끝냄' }
+        [pscustomobject]@{ Id = $occurrence.Entry.Id; Title = $(if ($done) { '✓ ' + $occurrence.Title } else { $occurrence.Title }); Start = $occurrence.Start; End = $occurrence.End
+            AllDay = $occurrence.AllDay; Alarm = @($occurrence.Alarms).Count -gt 0; ToolTip = (@($details | Where-Object { $_ }) -join "`n"); Done = $done }
     })
 }
 function New-WtNextEventHomeLine {
-    $script:homeNext = New-WtNextEventLine (Get-WtScheduleHomeItems)
+    $script:homeNext = New-WtNextEventLine @(Get-WtScheduleHomeItems | Where-Object { -not $_.Done })
     $script:homeNext
 }
 function New-WtScheduleHomeCards {
@@ -19430,7 +20029,7 @@ function Open-WtScheduleArgs($OpenArgs) {
     } elseif ($date) { Set-WtScheduleDate $date; if ($OpenArgs.RoutineId) { Show-WtScheduleForm -Kind routine -Id $OpenArgs.RoutineId } }
 }
 
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; @(Get-WtScheduleOccurrences $data.Entries ([datetime]::Today) ([datetime]::Today)).Count } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } -Help '달력에서 일정과 반복 일정을 확인합니다.'
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; @(Get-WtScheduleHomeItems | Where-Object { -not $_.Done }).Count } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } -Shortcuts (, @('PageUp / PageDown', '달력 칸에서 이전 달 / 다음 달')) -Help @('달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '날짜를 우클릭해 회사 · 개인 휴무를 지정합니다. 공휴일은 앱이 해마다 채웁니다(설정 → 휴무일).')
 Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\schedule\Schedule.psm1 끝 ----
@@ -19914,6 +20513,31 @@ function Get-WtScheduleDays([object[]]$Entries, [datetime]$From, [int]$Count) {
     , $result.ToArray()
 }
 
+<#
+달력 주마다 여러 날 회차(마지막 날이 시작 날보다 뒤)의 줄(lane)을 정한다. Start는 첫 주의 첫날, Weeks는 주 수.
+조각 하나: Occ · Row(주) · A · B(그 주 안 시작 · 끝 칸 0~6) · Lane · FromPrev(앞 주에서 이어짐) · ToNext(다음 주로 이어짐)
+시작이 이른 것 → 긴 것 → 제목 순으로, 그 주에서 걸친 칸이 모두 비어 있는 가장 낮은 줄을 받는다. 같은 주 안에서는 한 줄로 이어진다
+#>
+function Get-WtScheduleLanes([object[]]$Occurrences, [datetime]$Start, [int]$Weeks) {
+    $first = $Start.Date
+    $multi = @($Occurrences | Where-Object { $null -ne $_ -and $_.LastDay -gt $_.Start.Date } |
+            Sort-Object -Culture 'ko-KR' -Property @{ Expression = { $_.Start } }, @{ Expression = { - ($_.LastDay - $_.Start.Date).Days } }, @{ Expression = { $_.Title } }, @{ Expression = { $_.Key } })
+    $segments = [System.Collections.Generic.List[object]]::new()
+    for ($row = 0; $row -lt $Weeks; $row++) {
+        $weekStart = $first.AddDays($row * 7); $weekEnd = $weekStart.AddDays(6)
+        $taken = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($o in $multi) {
+            if ($o.LastDay -lt $weekStart -or $o.Start.Date -gt $weekEnd) { continue }
+            $a = [Math]::Max(0, ($o.Start.Date - $weekStart).Days); $b = [Math]::Min(6, ($o.LastDay - $weekStart).Days)
+            $lane = 0
+            while (@($a..$b | Where-Object { $taken.Contains("$_|$lane") }).Count) { $lane++ }
+            foreach ($col in $a..$b) { [void]$taken.Add("$col|$lane") }
+            $segments.Add([pscustomobject]@{ Occ = $o; Row = $row; A = $a; B = $b; Lane = $lane; FromPrev = $o.Start.Date -lt $weekStart; ToNext = $o.LastDay -gt $weekEnd })
+        }
+    }
+    $segments.ToArray()   # 조각마다 내보낸다. 부르는 쪽은 @()로 받는다
+}
+
 # ---- 예전 데이터 ------------------------------------------------------------------------------
 
 function New-WtSchRule([string]$Freq, [string[]]$Days) {
@@ -20328,9 +20952,13 @@ function Get-WtRoutineEntries($Store) {
 }
 
 # work.days와 휴무일은 코어에서, 휴가는 코어 달력 출처에서 묻는다. 다른 탭 함수는 부르지 않는다.
-function Test-WtRoutineDayOff([datetime]$Date) {
+# 근무 요일(work.days)이 아닌 날. 「근무 요일만」 루틴이 이날을 뺀다
+function Test-WtRoutineOffWeekday([datetime]$Date) {
     $day = (([int]$Date.DayOfWeek + 6) % 7) + 1
-    if ($day -notin @(Get-WtSetting 'work.days')) { return $true }
+    $day -notin @(Get-WtSetting 'work.days')
+}
+# 휴무일 · 휴가인 날. 어떤 루틴도 이날에는 차례가 없다(2026-11-05 승호: 휴가 · 휴일에는 루틴을 모으지 않는다)
+function Test-WtRoutineDayOff([datetime]$Date) {
     $holiday = Get-WtHolidayData
     if ($holiday.Error) { throw $holiday.Error }
     if ((Get-WtHolidayDates $Date $Date).Contains((ConvertTo-WtDateText $Date))) { return $true }
@@ -20339,12 +20967,15 @@ function Test-WtRoutineDayOff([datetime]$Date) {
     @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' }).Count -gt 0
 }
 
-function Get-WtRoutineSlotKeys($Entry, [datetime]$Date) {
+# 그날의 차례 키. DayOff(휴무일 · 휴가인지)를 넘기면 다시 묻지 않는다(여러 루틴을 한 번에 셀 때)
+function Get-WtRoutineSlotKeys($Entry, [datetime]$Date, $DayOff) {
     if ($Entry.State -ne 'ok' -or $Date -lt $Entry.Start) { return }
     $until = ConvertFrom-WtRoutineDate (Get-WtField (Get-WtField $Entry.Item 'routine') 'until')
     if ($until -and $Date.Date -gt $until) { return }
     if ($Entry.Freq -ceq 'weekly' -and ((([int]$Date.DayOfWeek + 6) % 7) + 1) -notin $Entry.Days) { return }
-    if ($Entry.WorkdaysOnly -and (Test-WtRoutineDayOff $Date)) { return }
+    if ($Entry.WorkdaysOnly -and (Test-WtRoutineOffWeekday $Date)) { return }
+    if ($null -eq $DayOff) { $DayOff = Test-WtRoutineDayOff $Date }
+    if ($DayOff) { return }
     $dateText = ConvertTo-WtDateText $Date
     if ($Entry.Freq -cne 'hourly') { $dateText; return }
     for ($minute = [int]$Entry.From.TotalMinutes; $minute -lt $Entry.To.TotalMinutes; $minute += [int]$Entry.Every * 60) {
@@ -20473,6 +21104,7 @@ function Get-WtRoutineSlots($Date, [string]$Now = (Get-WtStamp)) {
     $log = Open-WtStore -Name 'routine-log' -Schema 1
     if ($log.State -notin 'ok', 'missing') { throw "routine-log.json은 읽지 못했습니다. ($($log.Error))" }
     $nowDate = (ConvertFrom-WtStamp $stamp).DateTime
+    $dayOff = if ($entries.Count) { Test-WtRoutineDayOff $day } else { $false }
     $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $done = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
     foreach ($item in $log.Items) {
@@ -20484,7 +21116,7 @@ function Get-WtRoutineSlots($Date, [string]$Now = (Get-WtStamp)) {
     }
     foreach ($entry in $entries) {
         $nextFound = $false
-        foreach ($slot in @(Get-WtRoutineSlotKeys $entry $day)) {
+        foreach ($slot in @(Get-WtRoutineSlotKeys $entry $day $dayOff)) {
             $key = $entry.Id.Length.ToString($script:inv) + ':' + $entry.Id + $slot
             $record = if ($done.ContainsKey($key)) { $done[$key] } else { $null }
             $isNext = $false
@@ -20530,6 +21162,76 @@ function Set-WtRoutineCheck([string]$Routine, [string]$Slot, [bool]$Done, $Store
     [pscustomobject]@{ Success = $true; Reason = ''; Id = $id; Store = $next }
 }
 
+# ---- 일정 체크 (끝냄) --------------------------------------------------------------------------
+# 일정 회차마다 「끝냄」을 따로 남긴다. 저장소 event-log.json (schema 1, 루틴 체크 routine-log와 같은 모양):
+#   id, event(일정 id), date(회차의 원래 날짜 yyyy-MM-dd), at(체크한 앱 시각), deleted(체크를 풀면 지운 표시), created, updated, rev
+# schedule.json은 건드리지 않는다. 그래서 열어 둔 편집 폼의 저장과 부딪히지 않고, 이 파일을 잃어도 일정은 그대로다.
+# 여러 날 일정도 회차 하나라 체크도 하나다. 키는 회차 키 "<id>@<원래 날짜>"(Get-WtScheduleOccurrences의 Key)와 같다.
+$script:eventDoneCache = $null
+
+function Test-WtEventLogItem($Item) {
+    (Test-WtRecordObject $Item) -and (Get-WtField $Item 'id') -is [string] -and [bool]$Item.id -and
+        (Get-WtField $Item 'event') -is [string] -and [bool]$Item.event -and
+        $null -ne (ConvertFrom-WtDateText ([string](Get-WtField $Item 'date'))) -and
+        $null -ne (ConvertFrom-WtStamp ([string](Get-WtField $Item 'at'))) -and -not (Get-WtRecordProblem $Item)
+}
+
+# 끝낸 회차 키 모음(HashSet, "<id>@<yyyy-MM-dd>"). 파일이 바뀌지 않았으면 다시 읽지 않는다. 못 읽으면 예외(화면이 오류로 보여 준다)
+function Get-WtEventDone {
+    $stamp = Get-WtStoreStamp 'event-log'
+    if ($script:eventDoneCache -and $script:eventDoneCache.Stamp -ceq $stamp) { return , $script:eventDoneCache.Keys }
+    $log = Open-WtStore -Name 'event-log' -Schema 1
+    if ($log.State -notin 'ok', 'missing') { throw "event-log.json은 읽지 못했습니다. ($($log.Error))" }
+    $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($item in $log.Items) {
+        $id = [string](Get-WtField $item 'id')
+        if (-not $id -or -not $seen.Add($id) -or (Test-WtDeleted $item) -or -not (Test-WtEventLogItem $item)) { continue }
+        [void]$keys.Add("$($item.event)@$($item.date)")
+    }
+    $script:eventDoneCache = [pscustomobject]@{ Stamp = $stamp; Keys = $keys }
+    , $keys
+}
+
+# 회차 하나를 끝냄 · 안 끝냄으로 바꾼다. Date는 회차의 원래 날짜(Occurrence.Original). 일정에 없는 회차는 거부한다.
+# Store는 쓰는 event-log 핸들(시험용, 비우면 연다). 돌려주는 값: Success · Reason · Id · Store
+function Set-WtEventCheck([string]$Event, [string]$Date, [bool]$Done, $Store, [string]$At = (Get-WtStamp)) {
+    if ($null -eq $Store) { $Store = Open-WtStore -Name 'event-log' -Schema 1 }
+    $fail = [pscustomobject]@{ Success = $false; Reason = ''; Id = ''; Store = $Store }
+    $day = ConvertFrom-WtDateText $Date
+    if ($Store.Name -cne 'event-log' -or -not (ConvertFrom-WtStamp $At) -or -not $day -or -not $Event) { $fail.Reason = '기록 핸들 · 앱 시각 · 일정 · 날짜를 확인하세요'; return $fail }
+    $entries = @((Get-WtScheduleData).Entries | Where-Object { $_.Id -ceq $Event -and $_.State -eq 'ok' })
+    if ($entries.Count -ne 1) { $fail.Reason = '일정을 찾지 못했습니다'; return $fail }
+    $entry = $entries[0]
+    $real = if (-not $entry.Repeat) { $day -eq $entry.Start.Date } else {
+        $dates = Get-WtRepeatDates $entry.Repeat $entry.Start $day $day   # 목록 하나로 돌려준다. 파이프로 펴서 센다
+        @($dates | Where-Object { $_.Date -eq $day }).Count -gt 0 -and -not $entry.Repeat.Skip.Contains($Date)
+    }
+    if (-not $real) { $fail.Reason = '일정에 없는 회차입니다'; return $fail }
+    $edit = Get-WtRecordEdit $Store ''
+    $matches = @($edit.Items | Where-Object { (Get-WtField $_ 'event') -ceq $Event -and (Get-WtField $_ 'date') -ceq $Date })
+    if ($matches.Count -gt 1) { $fail.Reason = '같은 회차의 체크 기록이 겹칩니다'; return $fail }
+    $id = ''
+    if ($matches.Count) {
+        $item = $matches[0]; $id = [string]$item.id
+        if (-not (Test-WtEventLogItem $item) -or @($edit.Items | Where-Object { (Get-WtField $_ 'id') -ceq $id }).Count -ne 1) { $fail.Reason = '체크 기록의 형식 · id를 확인하세요'; return $fail }
+        if ($Done) {
+            if (Test-WtDeleted $item) {
+                $reason = Set-WtRecordDeleted $item $false $At
+                if ($reason) { $fail.Reason = $reason; return $fail }
+            } else { return [pscustomobject]@{ Success = $true; Reason = ''; Id = $id; Store = $Store } }
+            Set-WtField $item 'at' $At
+        } elseif (-not (Test-WtDeleted $item)) { [void](Set-WtRecordDeleted $item $true $At) }
+        else { return [pscustomobject]@{ Success = $true; Reason = ''; Id = $id; Store = $Store } }
+    } elseif ($Done) {
+        $id = New-WtId
+        $edit.Items += , [pscustomobject][ordered]@{ id = $id; event = $Event; date = $Date; at = $At; deleted = $null; created = $At; updated = $At; rev = 0 }
+    } else { return [pscustomobject]@{ Success = $true; Reason = ''; Id = ''; Store = $Store } }
+    $next = Save-WtStore $Store @(Compress-WtDeletedItems $edit.Items -Now (ConvertFrom-WtStamp $At))
+    $script:eventDoneCache = $null
+    [pscustomobject]@{ Success = $true; Reason = ''; Id = $id; Store = $next }
+}
+
 # slot의 날짜로 양끝 포함. 지운 기록도, 지운 루틴의 기록도 원자료 그대로 돌려준다.
 function Get-WtRoutineHistory($From, $To, [string]$Routine, $Store) {
     $first = ConvertFrom-WtRoutineDate $From; $last = ConvertFrom-WtRoutineDate $To
@@ -20546,7 +21248,8 @@ Export-ModuleMember -Function Open-WtScheduleStore, Save-WtScheduleItems, Get-Wt
     Get-WtRepeatDates, Get-WtScheduleOccurrences, Get-WtScheduleDays, ConvertFrom-WtScheduleRow, Update-WtScheduleSchema,
     Import-WtScheduleLegacy, Get-WtScheduleLastImport, Save-WtScheduleItem, Set-WtScheduleDeleted, Set-WtScheduleOccurrence,
     Open-WtScheduleAlarmStore, Get-WtScheduleAlarms, Save-WtScheduleAlarms,
-    New-WtRoutine, Save-WtRoutine, Set-WtRoutineDeleted, Get-WtRoutineSlots, Set-WtRoutineCheck, Get-WtRoutineHistory
+    New-WtRoutine, Save-WtRoutine, Set-WtRoutineDeleted, Get-WtRoutineSlots, Set-WtRoutineCheck, Get-WtRoutineHistory,
+    Get-WtEventDone, Set-WtEventCheck, Get-WtScheduleLanes
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\schedule\ScheduleData.psm1 끝 ----
 

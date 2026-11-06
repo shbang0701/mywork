@@ -750,6 +750,8 @@ function Start-WtApp {
     $dataLock = Open-WtDataLock
     try {
     Initialize-WtSettings
+    # 올해 · 내년 공휴일을 채운다. 이미 채운 해는 건너뛰고(파일만 읽음), 설정에서 끌 수 있다. 실패해도 시작은 막지 않는다
+    try { [void](Update-WtAutoHolidays -Years @([datetime]::Today.Year, ([datetime]::Today.Year + 1))) } catch { }
     $script:themeDict = New-WtThemeDictionary
 
     $w = ConvertFrom-WtXaml $script:shellXaml

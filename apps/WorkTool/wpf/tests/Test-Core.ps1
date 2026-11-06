@@ -653,6 +653,46 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     } finally { $thread.CurrentCulture = $oldCulture }
     Assert-Wt '휴무일 5개 문화권: 윤일 해석 · 오류 줄 동일' (@($holidaySnapshots | Where-Object { $_ -cne '2028-02-29|2|없는 날짜입니다' }).Count -eq 0)
 
+    # ---- 공휴일 자동 계산 (음력 · 대체공휴일). 기대값은 해마다 정부가 발표한 대체공휴일이다 ----
+    $holidaysBeforeAuto = [IO.File]::ReadAllText((Get-WtStorePath 'holidays'))   # 아래 달력 검사가 쓰는 휴무일. 끝에 되돌린다
+    $substituteExpect = @{
+        2014 = '2014-09-10'; 2015 = '2015-09-29'; 2016 = '2016-02-10'; 2017 = '2017-01-30,2017-10-06'; 2018 = '2018-05-07,2018-09-26'
+        2019 = '2019-05-06'; 2020 = '2020-01-27'; 2021 = '2021-08-16,2021-10-04,2021-10-11'; 2022 = '2022-09-12,2022-10-10'
+        2023 = '2023-01-24,2023-05-29'; 2024 = '2024-02-12,2024-05-06'; 2025 = '2025-03-03,2025-05-06,2025-10-08'
+        2026 = '2026-03-02,2026-05-25,2026-08-17,2026-10-05'; 2027 = '2027-02-09,2027-08-16,2027-10-04,2027-10-11,2027-12-27'
+    }
+    $substituteWrong = @(foreach ($year in @($substituteExpect.Keys | Sort-Object)) {
+            $got = @(Get-WtKoreanHolidays $year | Where-Object { $_.Name -like '대체공휴일*' } | ForEach-Object DateText) -join ','
+            if ($got -cne $substituteExpect[$year]) { "$year=$got" }
+        })
+    Assert-Wt '공휴일 계산: 2014~2027년 대체공휴일이 발표와 같다 (설 · 추석 일요일, 겹친 날 하루, 2021 · 2023 확대)' (-not $substituteWrong.Count) ($substituteWrong -join ' / ')
+    $h2026 = @(Get-WtKoreanHolidays 2026)
+    $hNames = @{}; foreach ($h in $h2026) { $hNames[$h.DateText] = $h.Name }
+    Assert-Wt '공휴일 계산: 음력(설 · 추석 · 부처님오신날)과 윤달 있는 해' ($h2026.Count -eq 19 -and $hNames['2026-02-17'] -ceq '설날' -and $hNames['2026-02-16'] -ceq '설날 연휴' -and
+        $hNames['2026-09-25'] -ceq '추석' -and $hNames['2026-05-24'] -ceq '부처님오신날' -and $hNames['2026-05-25'] -ceq '대체공휴일 (부처님오신날)' -and
+        (ConvertFrom-WtLunarDate 2025 8 15) -eq [datetime]'2025-10-06' -and @(Get-WtKoreanHolidays 2051).Count -eq 0) (($h2026 | ForEach-Object { "$($_.DateText) $($_.Name)" }) -join ', ')
+    & $raw 'holidays' '{"schema":1,"future":"남길 맨 위 칸","items":[{"id":"own","date":"2026-01-01","kind":"public","name":"새해","origin":{"from":"paste","at":"2026-01-01T09:00:00+09:00"}},{"id":"co","date":"2026-03-02","kind":"company","name":"회사 휴무"}]}'
+    $auto = Update-WtAutoHolidays -Years 2026 -At '2026-11-01T09:00:00+09:00'
+    $adoc = [IO.File]::ReadAllText((Get-WtStorePath 'holidays')) | ConvertFrom-Json -Depth 20 -DateKind String
+    $autoItems = @($adoc.items | Where-Object { $_.origin.from -ceq 'auto' })
+    Assert-Wt '공휴일 채우기: 그날 공휴일이 있으면 더하지 않고, 회사 휴무와 다른 종류는 그대로, 채운 해를 적는다' ($auto.Success -and $auto.Added -eq 18 -and $autoItems.Count -eq 18 -and
+        @($adoc.items | Where-Object { $_.date -ceq '2026-01-01' }).Count -eq 1 -and @($adoc.items | Where-Object { $_.date -ceq '2026-03-02' -and $_.kind -ceq 'public' }).Count -eq 1 -and
+        (@($adoc.autoYears) -join ',') -ceq '2026' -and $adoc.future -ceq '남길 맨 위 칸' -and (Get-WtHolidayDates).Contains('2026-09-25')) "$($auto.Reason) / $($auto.Added)"
+    $hr = Set-WtHolidayDate (Get-WtHolidayData).Store '2026-03-02' 'public' -Enabled $false -At '2026-11-01T09:00:00+09:00'
+    $again = Update-WtAutoHolidays -Years 2026 -At '2026-11-01T09:00:00+09:00'
+    $afterAgain = [IO.File]::ReadAllText((Get-WtStorePath 'holidays'))
+    Assert-Wt '공휴일 채우기: 한 번 채운 해는 다시 채우지 않아 지운 날이 되살아나지 않는다' ($hr.Success -and $again.Success -and $again.Added -eq 0 -and
+        -not (@((Get-WtHolidayData).Entries | Where-Object { $_.State -eq 'ok' -and $_.DateText -ceq '2026-03-02' -and $_.Kind -ceq 'public' }).Count)) "$($again.Reason)"
+    $forced = Update-WtAutoHolidays -Years 2026 -Force -At '2026-11-01T09:00:00+09:00'
+    Assert-Wt '공휴일 다시 계산(-Force): 지운 자동 공휴일을 다시 넣는다' ($forced.Success -and $forced.Added -eq 1 -and
+        @((Get-WtHolidayData).Entries | Where-Object { $_.State -eq 'ok' -and $_.DateText -ceq '2026-03-02' -and $_.Kind -ceq 'public' }).Count -eq 1) "$($forced.Reason) / $($forced.Added)"
+    Set-WtSetting 'holidays.auto' $false
+    $off = Update-WtAutoHolidays -Years 2027 -At '2026-11-01T09:00:00+09:00'
+    Set-WtSetting 'holidays.auto' $true
+    Assert-Wt '공휴일 채우기: 설정에서 끄면 새 해도 채우지 않는다' ($off.Success -and $off.Added -eq 0 -and
+        -not (@((Get-WtHolidayData).Entries | Where-Object { $_.State -eq 'ok' -and $_.Date.Year -eq 2027 }).Count)) "$($off.Reason)"
+    & $raw 'holidays' $holidaysBeforeAuto
+
     # 같은 프로세스에서 앱을 다시 시작하면 파일 내용이 같아도 옛 저장 핸들을 재사용하지 않는다.
     $beforeRestartHoliday = Get-WtHolidayData
     $beforeRestartStamp = Get-WtStoreStamp 'holidays'
@@ -1224,8 +1264,18 @@ flowchart LR
         $helpView = New-WtHelpPage
         $settingsTabs = $settingsView.Children[1]
         $helpTabs = $helpView.Children[1]
-        Assert-Wt '설정 하위 탭 넷: 일반 · 업무시간 · 탭 · 데이터' (
-            $settingsTabs -is [System.Windows.Controls.TabControl] -and ($settingsTabs.Items.Header -join ',') -ceq '일반,업무시간,탭,데이터')
+        Assert-Wt 'PageUp · PageDown 판정: 키 값으로 비교(PageDown = Next, PageUp = Prior)' (
+            (Get-WtPageStep ([System.Windows.Input.Key]::PageUp)) -eq -1 -and (Get-WtPageStep ([System.Windows.Input.Key]::Prior)) -eq -1 -and
+            (Get-WtPageStep ([System.Windows.Input.Key]::PageDown)) -eq 1 -and (Get-WtPageStep ([System.Windows.Input.Key]::Next)) -eq 1 -and
+            (Get-WtPageStep ([System.Windows.Input.Key]::Down)) -eq 0)
+        $pickerPopup = [System.Windows.Controls.Primitives.Popup]::new()
+        $pickerTest = New-WtMonthPicker $pickerPopup { param($m) }
+        $pickerTest.Current = [datetime]'2026-11-01'; $pickerTest.Year = 2026; Update-WtMonthPicker $pickerTest
+        $handled = @(foreach ($key in [System.Windows.Input.Key]::PageDown, [System.Windows.Input.Key]::PageDown, [System.Windows.Input.Key]::PageUp, [System.Windows.Input.Key]::Down) { Invoke-WtMonthPickerKey $pickerTest $key })
+        Assert-Wt '해 · 달 고르기: PageDown 두 번 · PageUp 한 번이면 다음 해, 다른 키는 넘김' ($pickerTest.Year -eq 2027 -and $pickerTest.YearText.Text -ceq '2027년' -and
+            ($handled -join ',') -ceq 'True,True,True,False') "$($pickerTest.Year) / $($handled -join ',')"
+        Assert-Wt '설정 하위 탭 다섯: 일반 · 업무시간 · 휴무일 · 탭 · 데이터' (
+            $settingsTabs -is [System.Windows.Controls.TabControl] -and ($settingsTabs.Items.Header -join ',') -ceq '일반,업무시간,휴무일,탭,데이터')
         Assert-Wt '도움말 하위 탭 셋: 단축키 · 탭 · 정보' (
             $helpTabs -is [System.Windows.Controls.TabControl] -and ($helpTabs.Items.Header -join ',') -ceq '단축키,탭,정보')
         $settingsView.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
