@@ -265,9 +265,10 @@ RFC 5545(iCalendar) 반복 규칙의 일부를 JSON 칸으로 씁니다. `FREQ=.
   - `work`: 출근 · 퇴근. `end`가 `null`이면 「퇴근 기록 없음」입니다. 0시간이 아니라 모름으로 봅니다.
   - `overtime`: 업무외시간 근무 · 출동. 시작 · 끝 날짜+시각이고, 날짜를 넘겨도 되고 24시간이 넘어도 됩니다. `end`가 `null`이면 「끝 시각 없음」입니다.
   - `trip`: 출장. 날짜만, `place`에 출장지.
-  - `leave`: 휴가. 날짜만.
+  - `leave`: 휴가. 날짜만. 오전 · 오후 반차만 그날만 다른 시각을 적을 수 있습니다(15.2).
+  - `leave-grant`: 휴가 발생. 4단계부터 대휴(`leave.type = "comp"`)를 압니다(15.3). 다른 종류(연차 발생 등)는 읽기 전용입니다.
   - `other`: 기타. 보이기만 하고 계산하지 않습니다. 예전 CSV의 모르는 종류가 여기로 옵니다.
-  - 2차 후보 `oncall`(대기 · 당번 시간) · `leave-grant`(연차 발생) · `month-close`(월 마감 제출본)는 지금 앱이 모르는 값이라 읽기 전용입니다. 모양은 `addons/attendance/fixtures/v2-future.json`에 있습니다.
+  - 2차 후보 `oncall`(대기 · 당번 시간) · `month-close`(월 마감 제출본)는 지금 앱이 모르는 값이라 읽기 전용입니다. 모양은 `addons/attendance/fixtures/v2-future.json`에 있습니다.
 - `start` · `end`: 1.3. 시작과 끝은 둘 다 시각이 있거나 둘 다 없습니다. 출근 · 업무외 기록 하나는 31일까지입니다(1.4). 「지금 출근 · 퇴근」은 점에 `at`을 더 남길 수 있습니다(1.3).
 - `rev`: 사람이 고친 횟수(1.5).
 - `place` · `note`: 글. `place`는 출장지 · 출동 현장.
@@ -317,7 +318,7 @@ RFC 5545(iCalendar) 반복 규칙의 일부를 JSON 칸으로 씁니다. `FREQ=.
 4. 이동은 그날 시작한 업무외 기록들의 `travel.out + travel.back` 합입니다. 끝 시각 유무와 관계없이 셉니다. 겹친 기록도 이동은 각각 합합니다.
 5. 월 합계는 그달 각 시작 날짜의 합입니다. 초과근무 전체는 `OvertimeSite + OvertimeRemote + OvertimeUnknown`입니다.
 
-이번 한계: 반차(`half`, `half-am`, `half-pm`) 날은 근무일로 보고 정규 구간을 그대로 씁니다. 반차가 아닌 휴가의 날짜 범위는 전체 휴가로 봅니다. 기존 휴가·출장 일수 칸의 근무일 규칙(3.3)은 바꾸지 않습니다.
+이번 한계: 반차(`half`, `half-am`, `half-pm`) 날은 근무일로 보고 정규 구간을 그대로 씁니다(4단계 `att-3`에서 오전 · 오후 반차는 휴가 구간을 정규 구간에서 뺍니다, 15.4). 반차가 아닌 휴가의 날짜 범위는 전체 휴가로 봅니다. 기존 휴가·출장 일수 칸의 근무일 규칙(3.3)은 바꾸지 않습니다.
 
 화면에서 장소 없는 기록은 `—`로 보이며, 요약의 `장소 없음`은 0분이면 숨깁니다. 편집 폼에서 장소를 선택하면 그 기록의 갈래가 바뀝니다. 읽기나 계산으로 기존 장소를 자동으로 채우지 않습니다. 월 보고 복사·Excel은 보류입니다.
 
@@ -752,3 +753,217 @@ Register-WtAddon -Id 'memo' ... -Related @{
 - 일정 탭: `addons/schedule/ScheduleData.psm1`(`links` 읽기 · 붙이기 · 빼기 · 나누기), `addons/schedule/Schedule.psm1`(폼 관련 메모 · 줄 끝 개수), `addons/schedule/Test-Schedule.ps1`
 - 메모 탭: `addons/memo/Memo.psm1`(등록 · 고르기 창 · 새 창 · 새 메모), `addons/memo/Test-Memo.ps1`
 - 문서: 이 문서 · `docs/plans/memo-design.md` · `apps/WorkTool/design/README.md` · `apps/WorkTool/wpf/README.md`
+
+## 14. 일정 3단계 — 찾기 · 표 · 할 일 · 루틴 보기 (2026-11-07)
+
+화면 값은 `apps/WorkTool/design/README.md` 「일정」에 있습니다. 시안은 같은 폴더의 `schedule-plan-views*.png`입니다. 이 절은 데이터 약속만 적습니다. schema는 모두 그대로이고, 새 파일은 없습니다.
+
+2026-11-07 정한 것: 보기는 「할 일」 · 달력 · 표 · 루틴 네 개입니다(「지금 챙길 것」은 승호가 어색하다고 해서 「할 일」로 바꿨습니다). 표에는 오늘 루틴만 넣고, 기한 지남은 지난 7일까지, 찾는 기간은 오늘 앞뒤 1년입니다.
+
+### 14.1 일정 태그 (`tags`)
+
+- 칸은 2.2의 `tags` 그대로입니다. 편집 폼의 「태그」 칸에서 고칩니다.
+- 칸 글은 쉼표나 공백으로 나눕니다. 앞의 `#`은 떼고, 빈 것과 겹친 것(대소문자 무시)은 빼며, 쓴 순서를 지킵니다. 예: `#점검, 작업 점검` → `["점검", "작업"]`.
+- 태그는 계열 전체의 칸입니다. 회차 바꿈(`changes`, 2.3)에는 넣지 않습니다. 그래서 「이 회차만」 저장에서 태그를 바꾸면 저장하지 않고 「이후 모두」를 고르라고 알립니다.
+- 계열을 나누면(2.3) 새 계열은 태그를 그대로 가져갑니다.
+- 루틴에는 태그가 없습니다.
+
+### 14.2 루틴 시각 (`routine.time`)
+
+```json
+"routine": { "freq": "weekly", "days": [1, 2, 3, 4, 5], "time": "09:00" }
+```
+
+- 선택 칸이고 `HH:mm` 글입니다. `daily` · `weekly`에서만 읽고, `hourly`에서는 읽지 않고 그대로 둡니다.
+- 글이 아니거나 `HH:mm`이 아니면 「고칠 항목」입니다(1.8). 옛 앱은 모르는 칸으로 남깁니다(1.2).
+- 계열을 나누는 규칙(11.2)에 넣지 않습니다. 시각만 바꾸면 같은 id이고 체크 기록 · 차례 키(날짜)도 그대로입니다.
+- 빈도를 `hourly`로 바꾸면 이 칸을 뺍니다. `daily` ↔ `weekly`는 그대로 둡니다.
+- 루틴 목록(사이드바 · 홈 · 루틴 보기)은 시각 없는 것 → 시각순 → 제목 순서입니다. `hourly`는 화면에 보이는 차례의 시각으로 줄을 세웁니다.
+
+### 14.3 찾기 식 — 탭이 같이 쓰는 해석기 (`core/Records.psm1`)
+
+- 메모 찾기 해석기를 코어로 옮겼습니다. 문법은 메모와 같습니다([메모 설계](memo-design.md) 「검색 조건과 결과」): 공백은 AND, 우선순위는 괄호 → `-` → AND → OR, 따옴표 안 `\"` · `\\`, `칸:값`, `#태그`. 오류는 `{ Position(0부터, UTF-16), Length, Reason }`입니다.
+- 코어는 글 → 조건 트리와 트리 → 글만 합니다. 어떤 칸을 받는지, 값이 맞는지, 칸을 어떻게 평가하는지는 탭이 정합니다. 트리 모양(`all` · `term` · `not` · `and`/`or`)은 메모 설계와 같습니다.
+- 날짜 값(`yyyy-MM-dd` · `시작..끝` · `<날짜` · `>날짜`, 메모 수정일 · 생성일은 `7d`도)은 코어 함수 하나로 검사합니다.
+- 메모 탭의 `ConvertFrom-WtMemoQuery` · `ConvertTo-WtMemoQuery`는 이름과 결과가 그대로입니다. 메모 칸 목록과 값 검사만 코어에 넘깁니다.
+
+### 14.4 일정 찾기
+
+| 식 | 맞는 것 |
+|---|---|
+| 낱말 · `"구문"` · `text:` | 제목이나 일정 메모(`note`)에 들어 있음(대소문자 무시) |
+| `title:` | 제목에 들어 있음 |
+| `#태그` · `tag:` | 태그가 정확히 같음(대소문자 무시) |
+| `2026-11-05` · `2026-10-01..2026-10-31` · `date:` | 회차가 걸친 날(시작 ~ 마지막 날)과 겹침. 맨 날짜를 써도 됩니다 |
+| `<2026-11-01` · `>2026-11-01` | 시작이 그날보다 앞 · 마지막 날이 그날보다 뒤 |
+| `is:done` · `is:open` · `is:routine` | 끝낸 것 · 안 끝낸 것 · 루틴 차례 |
+
+- 찾는 기간은 오늘 앞뒤 365일입니다. 식에 그 밖의 날짜가 있으면 그 날짜까지 넓힙니다.
+- 일정은 회차마다 한 줄이고, 여러 날 일정도 한 줄입니다. 루틴은 오늘 차례만 넣고, 식에 `is:routine`이 있으면 기간 안의 날마다 차례를 넣습니다.
+- 결과는 날짜 → 하루 종일 → 시각 → 제목 순서입니다. 500줄까지 보이고, 넘으면 넘었다고 알립니다.
+
+### 14.5 표 · 할 일의 줄
+
+- 기한은 기준일과 오늘의 차이입니다. 기준일은 하루 종일 여러 날 일정이면 마지막 날, 그 밖에는 시작 날입니다.
+  - 기준일이 오늘이면 `오늘`, 뒤면 `D-3`, 앞이면 `2일 지남`입니다. 끝낸 회차는 기한을 비웁니다.
+  - 「기한 지남」은 기준일이 어제부터 7일 전 사이이고 끝내지 않은 일정입니다. 그보다 오래된 것은 기한을 비웁니다(체크 기능이 생기기 전 일정이 모두 기한 지남으로 뜨지 않게).
+  - 루틴은 기한 지남이 되지 않습니다. 오늘 차례만 `오늘`입니다.
+- 「할 일」은 세 묶음입니다.
+  1. 기한 지남: 위 규칙의 일정
+  2. 오늘: 오늘에 걸친 일정(끝낸 것도 흐리게) + 오늘 루틴 차례. 시간마다 루틴은 다음 차례 하나와 진행(`2/5`)입니다.
+  3. 마감 임박: 오늘에 걸치지 않고 3일 안에 끝나는 하루 종일 여러 날 일정 중 끝내지 않은 것
+- 할 일 수는 할 일 목록에서 끝내지 않은 일정 수 + 오늘 차례를 다 끝내지 않은 루틴 수입니다. 보기 단추와 메뉴의 일정 개수가 같은 수를 씁니다(1단계의 「오늘 남은 일정 수」를 바꿈).
+- 표 보기(보는 달)는 그 달에 걸친 회차와 오늘 루틴 차례입니다. 여러 날 일정은 시작 날(달 앞에서 시작했으면 그 달 1일) 자리에 한 줄입니다.
+
+### 14.6 보기 기억
+
+- 마지막 보기를 설정 `schedule.view`에 남깁니다. 값은 `due`(할 일) · `calendar` · `table` · `routines`이고, 모르는 값이면 달력입니다. 사용자 데이터가 아니라 화면 상태라 일정 파일에 두지 않습니다.
+
+### 14.7 함수
+
+코어(`core/Records.psm1`):
+
+- `ConvertFrom-WtQuery -Text -Spec` → `{ Success; Root; Globals; Error }`, `ConvertTo-WtQuery Root -Spec` → 글. `Spec`은 `Fields` · `Default` · `Hash` · `Bare`(맨 낱말을 다른 칸으로) · `Check`(값 검사 · 고침, 틀리면 throw) · `Globals`(식 전체 칸) · `Plain`(따옴표 없이 되돌릴 칸)입니다.
+- `ConvertFrom-WtQueryDate Value [-Relative]` → 검사한 날짜 조건 값, `Get-WtQueryDateRange Value [-Today]` → `{ Op('' · '<' · '>'); From; To }`.
+
+일정(`addons/schedule/ScheduleData.psm1`). 줄(row)은 `Kind`(event · routine) · `Key` · `Date`(표에 놓는 날) · `Start` · `LastDay` · `AllDay` · `Multi` · `Time` · `Title` · `Note` · `Tags` · `Done` · `DueDate` · `Occurrence` · `RoutineId` · `Slot` · `Progress` · `RoutineDone` · `Group` · `Links`입니다.
+
+- `ConvertFrom-WtScheduleTagText Text` → 태그 목록(14.1)
+- `ConvertFrom-WtScheduleQuery Text` → 찾기 식(14.4), `Test-WtScheduleRowMatch Node Row` → 맞는지
+- `Get-WtScheduleDue Row Today` → `{ Text; Overdue }`(14.5)
+- `Get-WtScheduleMonthRows Month [-Now]` · `Get-WtScheduleDueRows [-Now]` · `Find-WtScheduleRows Query [-Now] [-Limit]` → `{ Success; Error; Rows; Count; Truncated; From; To; Problems }`. 체크 기록 · 루틴을 읽지 못하면 그 부분만 빼고 이유를 `Problems`에 담습니다. 일정 파일을 읽지 못하면 예외입니다.
+- `Get-WtScheduleDueCount [-Now]` → 할 일 수, `Get-WtScheduleRoutineRows Date [-Now] [-AllSlots]` → 그날 루틴 줄
+- `Get-WtRoutineSlots`의 `Routine`에 `Freq` · `Time`(`HH:mm` 또는 `$null`)을 더했습니다. `ConvertFrom-WtRoutineItem` · `Get-WtRoutineEntries`를 내보냅니다(화면 · 검사용).
+
+### 14.8 바꾼 파일
+
+- 코어: `core/Records.psm1`(찾기 식), `core/Ui.psm1`(머리줄 보기 전환 · 표 줄 · 태그 칩 · 루틴 표 모양), `core/Shell.psm1`(`Update-WtNavBadges`를 내보냄: 탭이 체크한 뒤 메뉴 숫자를 바로 고칠 수 있게. 전에는 1분 타이머까지 늦었음), `tests/Test-Core.ps1`
+- 일정 탭: `addons/schedule/ScheduleData.psm1`(루틴 시각 · 찾기 · 줄 · 할 일), `addons/schedule/Schedule.psm1`(머리줄 · 표 · 할 일 · 루틴 보기 · 폼 태그 · 루틴 시각 · 메뉴 개수), `addons/schedule/Test-Schedule.ps1`
+- 메모 탭: `addons/memo/MemoData.psm1`(해석기를 코어로, 바깥 함수는 그대로). `Test-Memo.ps1`은 고치지 않고 그대로 통과합니다.
+- 문서: 이 문서 · `docs/plans/memo-design.md` · `apps/WorkTool/design/README.md` · `apps/WorkTool/wpf/README.md`, 시안 `apps/WorkTool/design/schedule-plan-views*` · `build-schedule-mockups.ps1`
+
+## 15. 4단계 — 근태 휴가 · 업무시간 기간 (2026-11-07)
+
+화면 값은 `apps/WorkTool/design/README.md` 「근태」 · 「일정」 · 「설정」에 있습니다. 시안은 같은 폴더의 `schedule-plan-leave*.png`입니다. schema는 모두 그대로이고(칸 · 값을 더하기만 함, 1.1), 새 파일은 없습니다.
+
+2026-11-07 승호와 정한 것:
+
+- 반차 시각은 설정에서 고르고, 회사 규칙이 바뀔 수 있으니 적용 시작일을 둡니다. 그래서 반차만이 아니라 업무시간 전체를 기간별 규칙으로 둡니다(15.1).
+- 반반차는 없습니다. 시간 휴가는 보류합니다(나중에 15.2의 시각 칸으로 붙일 수 있습니다).
+- 대휴(대체 휴가)는 생긴 일수를 승호가 넣고, 앱은 남은 일수를 셉니다(15.3). 문구는 「대휴 발생」 · 「대휴」입니다.
+- 일정 할 일의 묶음 · 기한을 색 배지로 나눕니다(15.10).
+
+### 15.1 업무시간 기간 (설정)
+
+- 설정의 `work.*`(요일 · 시작 · 끝 · 점심 시작 · 점심 끝)와 새 `work.halfDay`(반차 나누는 시각, `HH:mm` 또는 빈 글)가 「처음부터」 규칙입니다.
+- 새 `work.periods`는 적용 시작일이 있는 뒤 규칙의 목록입니다.
+
+  ```json
+  "work.periods": [
+    { "from": "2027-03-01", "days": [1, 2, 3, 4, 5], "start": "08:30", "end": "17:30", "lunchStart": "12:00", "lunchEnd": "13:00", "halfDay": "" }
+  ]
+  ```
+
+- 날짜 d의 규칙은 적용 시작일이 d 이하인 마지막 뒤 규칙이고, 없으면 처음부터 규칙입니다. 한 규칙은 그날부터 다음 기간 앞날까지입니다.
+- 날짜를 못 읽거나(1900 ~ 2199 밖 포함) 규칙이 틀리거나 앞 원소와 날짜가 겹치는 원소는 계산에서 뺍니다. 파일에서 지우지는 않습니다. 모르는 칸은 그 기간을 고쳐 저장해도 남습니다(1.2).
+- 옛 앱은 `work.periods`를 모르므로 처음부터 규칙만 씁니다. 계산은 옛 규칙대로 하고 데이터는 그대로 둡니다.
+- 반차 나누는 시각이 비면 정규 시간(점심 뺌)의 절반 지점입니다. 예: 09:00 ~ 18:00 · 점심 12:00 ~ 13:00이면 14:00, 08:30 ~ 17:30이면 13:30, 07:00 ~ 16:00 · 점심 11:00 ~ 12:00이면 11:00. 적으면 시작과 끝 사이여야 합니다.
+- 오전 반차는 시작 ~ 반차 나누는 시각, 오후 반차는 반차 나누는 시각 ~ 끝입니다.
+- 날마다 계산하는 곳(근태 초과근무 · 반차 구간 · 달력의 쉬는 날 · 루틴 「근무 요일만」 · 홈 시간 막대)은 그날 규칙을 씁니다. 폼의 처음 시각처럼 오늘을 기준으로 하는 곳은 오늘 규칙입니다.
+
+### 15.2 반차 (근태 `leave`)
+
+- 오전 반차(`half-am`) · 오후 반차(`half-pm`) 기록에 날짜만 적으면 그날 규칙(15.1)의 반차 구간을 따릅니다. 규칙을 고치거나 새 기간을 더하면 시각 없는 반차도 그 날의 규칙을 따라갑니다.
+- 그날만 다른 반차는 시각을 적습니다. `start` · `end`가 같은 날이고 시작이 끝보다 앞입니다.
+
+  ```json
+  { "kind": "leave", "start": { "date": "2026-11-23", "time": "10:00" }, "end": { "date": "2026-11-23", "time": "15:00" },
+    "leave": { "type": "half-am", "days": null } }
+  ```
+
+- 폼은 그날 규칙의 시각을 채워 보여 줍니다. 같은 시각으로 저장하면 시각 없이 남깁니다.
+- 시각은 오전 · 오후 반차에만 적습니다. 다른 휴가 종류에 적은 시각, 이틀에 걸친 시각, 시작이 끝과 같거나 뒤인 시각은 「고칠 항목」입니다.
+- 오전 · 오후를 모르는 예전 반차(`half`)는 시각이 없고 정규 구간을 빼지 않습니다(3.4의 예전 한계 그대로).
+- 일수는 시각과 상관없이 반차 0.5일입니다(3.3).
+- 옛 앱은 시각 있는 반차를 읽기는 하지만 고치지 못합니다(저장 검사가 휴가의 시각을 거부합니다).
+
+### 15.3 대휴 발생 (`leave-grant`)
+
+```json
+{ "id": "…", "kind": "leave-grant", "start": { "date": "2026-11-01", "time": null }, "end": null,
+  "place": "", "note": "주말 출동", "tags": [], "leave": { "type": "comp", "days": 1 }, "…": "…" }
+```
+
+- 2차 후보였던 `leave-grant`(3.2 · 6.3)를 대휴에 씁니다. 날짜 하나, `leave.type = "comp"`, `leave.days` = 생긴 일수(0.5 단위, 0보다 크고 366까지)입니다.
+- 다른 `leave.type`(예: 연차 발생 `annual`)은 이 앱이 모르는 값이라 읽기 전용입니다(1.2).
+- 일수가 없거나 0.5 단위가 아니거나, 시각 · 끝 날짜가 있으면 「고칠 항목」입니다.
+- 대휴 남은 일수(전체 기간) = 발생 일수 합 − 대휴(`comp`) 휴가가 쓰는 일수 합입니다. 쓰는 일수는 3.3 규칙이고 앞으로 쓰기로 넣어 둔 것도 셉니다. 월 요약의 휴가 일수에는 발생을 넣지 않습니다.
+- 옛 앱은 `leave-grant`를 모르는 kind로 보고 읽기 전용으로 둡니다.
+
+### 15.4 초과근무 규칙 `att-3`
+
+3.4(`att-2`)에서 바뀐 것만 적습니다.
+
+1. 그날의 정규 구간 R · 점심 L · 근무 요일은 그날 적용되는 업무시간 규칙(15.1)입니다.
+2. 근무일에 오전 · 오후 반차가 있으면 R에서 반차 구간(15.2)을 뺍니다. 초과근무 = W − (R − 반차 구간) − L입니다. 반차 구간에 일한 것은 초과근무입니다(하루 휴가 날 일한 것을 초과근무로 세는 규칙과 같습니다). 점심은 근무일이면 늘 뺍니다.
+3. 나머지(쉬는 날 · 장소 · 이동 · 월 합계 · 휴가 · 출장 일수)는 `att-2` 그대로입니다.
+
+계산이 바뀌었으므로 규칙 이름을 `att-3`으로 올렸습니다(1.6). 시험 자료 `v2-travel.json`의 11/23(오전 반차 · 08:00 ~ 19:00 근무)은 작업장 120분에서 360분으로, 11월 합계는 960분에서 1200분으로 바뀌었습니다.
+
+### 15.5 달력 표시 · 쉬는 날
+
+- 근태 달력 항목의 글은 휴가 종류입니다: 연차 · 오전 반차 · 오후 반차 · 반차 · 병가 · 경조사 · 대휴 · 휴가(기타).
+- 반차는 하루의 일부라 `AllDay = $false`이고, `Time`은 휴가 구간의 시작입니다(오전 · 오후를 모르는 반차는 그날 업무 시작).
+- 코어 `Get-WtCalendarMark`의 쉬는 날은 그날 규칙의 근무 요일이 아닌 날 · 휴무일 · 하루 종일 휴가입니다. 반차 날은 숫자 바탕만 휴가 색입니다. 요일 번호 계산도 고쳤습니다(전에는 일요일을 근무 요일로 넣어도 늘 쉬는 날이었습니다).
+- 루틴 「휴가 · 휴무일에는 쉼」(12.4)도 하루 종일 휴가만 셉니다. 반차 날에는 루틴 차례가 그대로 있습니다.
+- 근태 「오늘 안 찍음」 점은 쉬는 날에 띄우지 않습니다.
+- 대휴 발생은 날의 일이 아니라 달력에 보이지 않습니다.
+
+### 15.6 날짜 메뉴 등록 (`core/Addons.psm1`)
+
+- `Register-WtAddon -DateMenu { param([datetime]$Date) }`는 다른 탭(지금은 일정)의 날짜 칸 우클릭에 붙일 항목을 돌려줍니다. 항목은 `@{ Header; Action = { param($Arg) }; Arg; ToolTip; IsEnabled; Items = @(항목 | '-') }`이고, `Items`가 있으면 하위 메뉴입니다.
+- 메뉴를 그리는 탭은 `Get-WtDateMenuItems Date -Exclude 자기 id`로 `@{ Page; Title; Item; Error }`를 받습니다. 한 탭이 실패해도 다른 탭 항목은 그대로이고, 실패한 탭은 끈 항목(「‹탭 이름› 메뉴」, 이유는 툴팁)으로 보입니다. 끈 탭은 빠집니다.
+- 근태가 주는 항목은 둘 중 하나입니다.
+  - 그날 휴가가 있으면 「휴가 보기 · ‹종류›」(근태 탭의 그 기록)
+  - 없으면 「휴가 넣기 ›」: 연차 · 오전 반차 · 오후 반차 · 대휴(누르면 그날 하루 휴가를 바로 넣음, 반차는 시각 없이) · 구분선 · 여러 날 · 다른 종류…(근태 폼)
+- 근태 탭 열기: `Open-WtPage attendance -Args @{ Id }`는 그 기록의 달로 가서 편집 폼을, `@{ NewLeave = 'yyyy-MM-dd' }`는 그날 휴가 새 폼을 엽니다.
+- 일정 날짜 메뉴는 새 일정 · 새 루틴 · 구분선 · (등록 항목) · 회사 휴무로 지정(그날 휴무일이 있으면 휴무일 해제)입니다. 개인 휴무는 설정 → 휴무일에서만 넣습니다(교대 휴무처럼 휴가가 아닌 쉬는 날용).
+
+### 15.7 근태 폼 · 표 · 사이드바
+
+- 종류: 근무 · 휴가 · 출장 · 업무외 · 대휴 발생 · 기타.
+- 휴가: 휴가 종류(연차 · 오전 반차 · 오후 반차 · 대휴 · 병가 · 경조사 · 기타, 예전 `half` 기록을 고칠 때만 반차)를 고릅니다. 반차면 시작 · 끝 시각(15.2), 그 밖은 끝 날짜입니다. 휴가 종류가 바뀌면 사람이 정한 일수(`days`)는 지웁니다.
+- 대휴 발생: 일수(0.5 단위)와 메모(사유).
+- 표: 종류 칸에 휴가 종류 · 대휴 발생을 씁니다(폭 72 → 88). 반차는 시작 · 끝에 휴가 구간, 휴가의 시간 칸은 그 달 몫 일수(`0.5일`), 대휴 발생은 `+1일`입니다.
+- 사이드바 「이번 달」 아래: 대휴가 생겼거나 쓴 적이 있으면 구분선 아래에 대휴 남음 · 발생 · 사용(전체 기간)을 둡니다.
+
+### 15.8 설정 화면
+
+- 업무시간 탭 맨 위 「적용 기간」: 처음부터와 뒤 기간 목록입니다. 끝 날짜는 다음 기간 앞날이고, 오늘 적용되는 기간에 「 · 지금」을 붙입니다. 고른 기간의 규칙을 아래 칸에서 고칩니다.
+- [새 기간]은 적용 시작일을 받아 그날 쓰던 규칙을 복사해 더합니다. [기간 지우기]는 물은 뒤 지웁니다. 처음부터 규칙은 지우지 않습니다.
+- 맨 아래 「반차 나누는 시각」 옆에 계산한 시간대를 씁니다(비우면 「(자동)」).
+- 첫 설정 화면에는 적용 기간 · 반차 칸이 없습니다.
+
+### 15.9 함수
+
+코어 `core/Settings.psm1`:
+
+- `Get-WtWorkHours [-Date d]`(주지 않으면 오늘) · `-From ''|'yyyy-MM-dd'`(그 규칙, 없으면 `$null`) · `-Defaults` → 규칙(`work.*` + 적용 시작일 `work.from`)
+- `Set-WtWorkHours Hours [-From]` · `Add-WtWorkPeriod From` · `Remove-WtWorkPeriod From` · `Get-WtWorkPeriods` · `Get-WtHalfDaySplit Hours`
+
+코어 `core/Addons.psm1`: `Get-WtDateMenuItems Date [-Exclude]`, `Test-WtCalendarPartDay Item`(반차처럼 하루의 일부인 항목).
+
+근태 `addons/attendance/AttendanceData.psm1`: `Get-WtLeaveTypeName Type`, `Get-WtLeaveRange Entry` → `@(시작, 끝)` 또는 `$null`, `Get-WtCompBalance Entries` → `{ Granted; Used; Left }`, `Test-WtAttRestDay Date Entries`.
+
+일정 `addons/schedule/ScheduleData.psm1`: `Get-WtScheduleDue`가 `{ Text; Overdue; Soon }`을 돌려줍니다(14.5에 `Soon`을 더함).
+
+### 15.10 할 일 색 (일정)
+
+- 데이터는 그대로입니다. `Soon`은 3일 안에 끝나는 하루 종일 여러 날 일정(마감 임박과 같은 기준)이고, 화면은 기한 지남 · `Soon`을 색 배지로, 묶음 머리 개수를 묶음 색 배지로 그립니다. 값은 디자인 README 「일정」에 있습니다.
+
+### 15.11 바꾼 파일
+
+- 코어: `core/Settings.psm1`(기간 · 반차 시각), `core/Addons.psm1`(날짜 메뉴 등록 · 달력 표시), `core/Pages.psm1`(설정 → 업무시간), `core/Ui.psm1`(할 일 배지 · 근태 표 종류 칸 · 요약 구분선 · 홈 시간 막대의 그날 규칙), `tests/Test-Core.ps1`
+- 근태 탭: `addons/attendance/AttendanceData.psm1`(att-3 · 반차 · 대휴 발생 · 잔여 · 달력 · 월 보고), `addons/attendance/Attendance.psm1`(폼 · 표 · 사이드바 · 점 · 날짜 메뉴 · 근태 열기), `addons/attendance/Test-Attendance.ps1`(att-3 기대 값 · 4단계 검사)
+- 일정 탭: `addons/schedule/ScheduleData.psm1`(루틴 근무 요일 · 반차 날 · 할 일 수 · `Soon`), `addons/schedule/Schedule.psm1`(날짜 메뉴 · 할 일 배지 · 폼 처음 시각), `addons/schedule/Test-Schedule.ps1`
+- 문서: 이 문서 · `apps/WorkTool/design/README.md` · `apps/WorkTool/wpf/README.md` · 루트 `README.md`, 시안 `apps/WorkTool/design/schedule-plan-leave*` · `build-schedule-mockups.ps1`

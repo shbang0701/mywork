@@ -431,25 +431,119 @@ function Update-WtWorkForm($Form, [switch]$Save) {
             } else { [System.Windows.Controls.Validation]::ClearInvalid($binding) }
         }
     }
+    Update-WtHalfDayHint $Form $hours $errors
     if ($errors.Count) { return $false }
-    if ($Save) { Set-WtWorkHours $hours }
+    if ($Save) { Set-WtWorkHours $hours -From $Form.From }
     $true
+}
+
+# 반차 나누는 시각 옆 안내: 지금 값으로 계산한 오전 · 오후 반차 시간대(비우면 자동). 틀린 칸이 있으면 비운다
+function Update-WtHalfDayHint($Form, [hashtable]$Hours, $Errors) {
+    if (-not $Form.HalfHint) { return }
+    if (@($Errors.Keys | Where-Object { $_ -cne 'work.days' }).Count) { $Form.HalfHint.Text = ''; return }
+    $split = Get-WtHalfDaySplit $Hours
+    $auto = if ($Hours['work.halfDay']) { '' } else { ' (자동)' }
+    $Form.HalfHint.Text = "오전 반차 $($Hours['work.start']) ~ $split · 오후 반차 $split ~ $($Hours['work.end'])$auto"
 }
 
 function Reset-WtWorkForm($Form) {
     $Form.Loading = $true
     try {
-        $hours = Get-WtWorkHours -Defaults:$Form.FirstSetup
+        $hours = if ($Form.FirstSetup) { Get-WtWorkHours -Defaults } else { Get-WtWorkHours -From $Form.From }
+        if ($null -eq $hours) { $Form.From = ''; $hours = Get-WtWorkHours -From '' }
         foreach ($cb in $Form.Days) { $cb.IsChecked = $hours['work.days'] -contains $cb.Tag.Day }
         foreach ($k in $Form.Boxes.Keys) { $Form.Boxes[$k].Text = $hours[$k] }
     } finally { $Form.Loading = $false }
     [void](Update-WtWorkForm $Form)
 }
 
+# ---- 업무시간 기간(설계 15.1): 적용 기간 고르기 · 새 기간 · 기간 지우기 ------------------------------
+
+# 기간 목록 @{ From; Label }. 「처음부터」 다음에 적용 시작일 순. 끝 날짜는 다음 기간 앞날, 오늘 적용되는 기간에 「 · 지금」
+function Get-WtWorkPeriodChoices {
+    $periods = @(Get-WtWorkPeriods)
+    $current = [string](Get-WtWorkHours)['work.from']
+    $froms = @('') + @($periods | ForEach-Object { $_.From })
+    for ($i = 0; $i -lt $froms.Count; $i++) {
+        $label = if ($froms[$i]) { "$($froms[$i])부터" } else { '처음부터' }
+        if ($i + 1 -lt $froms.Count) { $label += ' ~ ' + (ConvertTo-WtDateText (ConvertFrom-WtDateText $froms[$i + 1]).AddDays(-1)) }
+        if ($froms[$i] -ceq $current) { $label += ' · 지금' }
+        [pscustomobject]@{ From = $froms[$i]; Label = $label }
+    }
+}
+
+# 기간 고르기 칸을 다시 채우고 From 기간을 고른다(없으면 오늘 적용되는 기간)
+function Update-WtWorkPeriodPicker($Form, [string]$From) {
+    if (-not $Form.Periods) { return }
+    $choices = @(Get-WtWorkPeriodChoices)
+    if ($From -cnotin @($choices | ForEach-Object { $_.From })) { $From = [string](Get-WtWorkHours)['work.from'] }
+    $Form.Loading = $true
+    try {
+        $Form.Periods.Items.Clear(); $Form.PeriodFroms = @($choices | ForEach-Object { $_.From })
+        foreach ($c in $choices) { [void]$Form.Periods.Items.Add($c.Label) }
+        $Form.Periods.SelectedIndex = [array]::IndexOf($Form.PeriodFroms, $From)
+    } finally { $Form.Loading = $false }
+    $Form.From = $From
+    $Form.RemovePeriod.Visibility = if ($From) { 'Visible' } else { 'Collapsed' }
+    Reset-WtWorkForm $Form
+}
+
+# 새 기간: 적용 시작일을 받아 그날 규칙을 복사해 더하고, 그 기간을 고른다
+function Show-WtWorkPeriodDialog($Form) {
+    $dialog = New-WtModal '새 업무시간 기간'
+    [void](Add-WtChild $dialog.Body (New-WtText '적용 시작일' 'Setting.Label'))
+    $box = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $box 'Input'; $box.Width = 160; $box.HorizontalAlignment = 'Left'
+    $box.Text = ConvertTo-WtDateText ([datetime]::Today); [System.Windows.Automation.AutomationProperties]::SetName($box, '적용 시작일')
+    [void](Add-WtChild $dialog.Body $box)
+    [void](Add-WtChild $dialog.Body (New-WtText '그날부터 새 규칙을 씁니다. 처음 값은 그날 쓰던 규칙을 복사하니 아래에서 고치세요.' 'T.Sub'))
+    $ok = New-WtButton '추가' -Kind Primary; $ok.IsDefault = $true
+    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
+    $dialog.Window.Tag = @{ Box = $box; Error = $dialog.Error; From = '' }
+    $ok.Tag = $dialog.Window
+    $ok.Add_Click({
+        param($s, $e)
+        $w = $s.Tag; $from = $w.Tag.Box.Text.Trim()
+        try { Add-WtWorkPeriod $from; $w.Tag.From = $from; $w.DialogResult = $true }
+        catch { $w.Tag.Error.Text = $_.Exception.Message; $w.Tag.Error.Visibility = 'Visible' }
+    })
+    [void](Add-WtChild $dialog.Buttons $ok); [void](Add-WtChild $dialog.Buttons $cancel)
+    $dialog.Window.Add_ContentRendered({ param($s, $e) [void]$s.Tag.Box.Focus(); $s.Tag.Box.SelectAll() })
+    if ($dialog.Window.ShowDialog() -eq $true) { Update-WtWorkPeriodPicker $Form $dialog.Window.Tag.From }
+}
+
+# 고른 기간을 지운다(묻고 나서). 그 기간의 날은 앞 기간 규칙을 따른다
+function Remove-WtWorkPeriodChoice($Form) {
+    if (-not $Form.From) { return }
+    if (-not (Confirm-WtYesNo "$($Form.From)부터의 업무시간 기간을 지울까요?`n그 기간의 날은 앞 기간의 규칙으로 계산합니다.")) { return }
+    try { Remove-WtWorkPeriod $Form.From } catch { Show-WtMessage "기간을 지우지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
+    Update-WtWorkPeriodPicker $Form ''
+}
+
 function New-WtWorkHoursForm([switch]$FirstSetup) {
     $col = New-WtStack Vertical
     [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
-    $form = @{ Root = $col; Boxes = @{}; Errors = @{}; Days = @(); FirstSetup = [bool]$FirstSetup; Loading = $true; Start = $null }
+    $form = @{ Root = $col; Boxes = @{}; Errors = @{}; Days = @(); FirstSetup = [bool]$FirstSetup; Loading = $true; Start = $null
+        From = ''; Periods = $null; PeriodFroms = @(); RemovePeriod = $null; HalfHint = $null }
+    if (-not $FirstSetup) {
+        # 적용 기간: 고른 기간의 규칙을 아래에서 고친다. 새 기간은 적용 시작일을 받는다(설계 15.1)
+        $periodRow = New-WtStack Horizontal 8
+        $picker = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $picker 'Combo'; $picker.Width = 240; $picker.Tag = $form
+        [System.Windows.Automation.AutomationProperties]::SetName($picker, '적용 기간')
+        [System.Windows.Automation.AutomationProperties]::SetAutomationId($picker, 'Settings-WorkPeriod')
+        $picker.Add_SelectionChanged({
+                param($s, $e)
+                $f = $s.Tag
+                if ($f.Loading -or $s.SelectedIndex -lt 0) { return }
+                $f.From = $f.PeriodFroms[$s.SelectedIndex]
+                $f.RemovePeriod.Visibility = if ($f.From) { 'Visible' } else { 'Collapsed' }
+                Reset-WtWorkForm $f
+            })
+        $add = New-WtButton '새 기간'; $add.Tag = $form; $add.Add_Click({ param($s, $e) Show-WtWorkPeriodDialog $s.Tag })
+        $remove = New-WtButton '기간 지우기' -Kind Danger; $remove.Tag = $form; $remove.Add_Click({ param($s, $e) Remove-WtWorkPeriodChoice $s.Tag })
+        $form.Periods = $picker; $form.RemovePeriod = $remove
+        foreach ($c in $picker, $add, $remove) { [void](Add-WtChild $periodRow $c) }
+        [void](Add-WtChild $col (New-WtSettingRow '적용 기간' $periodRow))
+    }
     $daysCol = New-WtStack Vertical 4
     $daysRow = [System.Windows.Controls.WrapPanel]::new()
     $dayNames = @('월', '화', '수', '목', '금', '토', '일')
@@ -469,7 +563,10 @@ function New-WtWorkHoursForm([switch]$FirstSetup) {
     $form.Errors['work.days'] = $dayError
     [void](Add-WtChild $daysCol $dayError)
     [void](Add-WtChild $col (New-WtSettingRow '일하는 요일' $daysCol))
-    foreach ($field in @(@('work.start', '시작 시각'), @('work.end', '끝 시각'), @('work.lunchStart', '점심 시작 시각'), @('work.lunchEnd', '점심 끝 시각'))) {
+    $timeFields = @(@('work.start', '시작 시각'), @('work.end', '끝 시각'), @('work.lunchStart', '점심 시작 시각'), @('work.lunchEnd', '점심 끝 시각'))
+    # 반차 나누는 시각은 일반 설정에만(첫 설정은 짧게 둔다). 비우면 자동
+    if (-not $FirstSetup) { $timeFields += , @('work.halfDay', '반차 나누는 시각') }
+    foreach ($field in $timeFields) {
         $group = New-WtStack Vertical 4
         $box = [System.Windows.Controls.TextBox]::new()
         Set-WtStyle $box 'Setting.Time'
@@ -486,7 +583,12 @@ function New-WtWorkHoursForm([switch]$FirstSetup) {
             if ($e.Key -eq 'Return' -and -not $s.Tag.FirstSetup) { [void](Update-WtWorkForm $s.Tag -Save); $e.Handled = $true }
         })
         $form.Boxes[$field[0]] = $box
-        [void](Add-WtChild $group $box)
+        if ($field[0] -ceq 'work.halfDay') {
+            # 옆에 지금 값으로 계산한 시간대(F.Caption · B.Text.Tertiary)
+            $line = New-WtStack Horizontal 12
+            $hint = New-WtText '' 'T.CaptionMuted'; $hint.VerticalAlignment = 'Center'; $form.HalfHint = $hint
+            [void](Add-WtChild $line $box); [void](Add-WtChild $line $hint); [void](Add-WtChild $group $line)
+        } else { [void](Add-WtChild $group $box) }
         $errorText = New-WtText '' 'T.Sub'
         Set-WtResource $errorText Foreground 'B.Status.Error.Text'
         [System.Windows.Automation.AutomationProperties]::SetLiveSetting($errorText, 'Polite')
@@ -506,8 +608,9 @@ function New-WtWorkHoursForm([switch]$FirstSetup) {
         [void](Add-WtChild $col $start)
     }
     $col.Tag = $form
-    $col.Add_Loaded({ param($s, $e) Reset-WtWorkForm $s.Tag })
-    Reset-WtWorkForm $form
+    # 다시 보일 때 기간 목록도 새로 읽는다(다른 곳에서 기간이 바뀌었을 수 있다)
+    $col.Add_Loaded({ param($s, $e) if ($s.Tag.Periods) { Update-WtWorkPeriodPicker $s.Tag $s.Tag.From } else { Reset-WtWorkForm $s.Tag } })
+    if ($form.Periods) { Update-WtWorkPeriodPicker $form '' } else { Reset-WtWorkForm $form }
     $form
 }
 

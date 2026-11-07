@@ -14,6 +14,8 @@
 
 ## 검색 조건과 결과
 
+글 → 조건 트리 해석은 일정과 같이 쓰는 코어 해석기(`core/Records.psm1`의 `ConvertFrom-WtQuery` · `ConvertTo-WtQuery`)가 합니다. 메모는 칸 목록 · 값 검사 · `scope`만 넘기고, 아래 함수 이름과 결과는 그대로입니다([일정 · 근태 데이터 설계 14.3](schedule-attendance-design.md#143-찾기-식--탭이-같이-쓰는-해석기-corerecordspsm1)).
+
 `ConvertFrom-WtMemoQuery $text`는 `{ Success, Scope, Root, Error }`를 돌려줍니다. `Scope`는 `active`(기본 보관 제외) · `archived` · `all`이며 검색 전체에 적용됩니다. 서로 다른 `scope:`나 scope 부정은 오류입니다. 오류는 `{ Position, Length, Reason }`이고 위치는 원문 UTF-16의 **0부터** 셉니다.
 
 칩과 검색식이 공유하는 `Root` 노드는 다음과 같습니다. `ConvertTo-WtMemoQuery $tree`로 글을 만든 뒤 해석하면 같은 트리가 됩니다.

@@ -2,9 +2,9 @@
 # 형식과 규칙 전체: docs/plans/schedule-attendance-design.md 「근태 형식」. 공통 틀은 core\Records.psm1, 휴무일은 core\Calendar.psm1
 # 저장소 attendance.json (schema 2). 항목:
 #   id       한 번 정하면 바꾸지 않는다. 예전 CSV의 id는 그대로
-#   kind     work 출근 · 퇴근 / overtime 업무외시간 · 출동 / trip 출장 / leave 휴가 / other 기타(보이기만, 계산에서 뺌)
-#            모르는 값이면 읽기 전용 (2차 후보: oncall 대기 · leave-grant 연차 발생 · month-close 월 마감)
-#   start    { date, time }. time = null이면 날짜만 (출장 · 휴가)
+#   kind     work 출근 · 퇴근 / overtime 업무외시간 · 출동 / trip 출장 / leave 휴가 / leave-grant 휴가 발생(대휴) / other 기타(보이기만, 계산에서 뺌)
+#            모르는 값이면 읽기 전용 (2차 후보: oncall 대기 · month-close 월 마감)
+#   start    { date, time }. time = null이면 날짜만 (출장 · 휴가 · 휴가 발생). 오전 · 오후 반차만 그날만 다른 시각을 적을 수 있다(설계 15.2)
 #   end      { date, time } 또는 null. 끝 날짜는 그날 포함. 밤을 넘기거나 24시간이 넘어도 끝 날짜를 그대로 적는다
 #            work의 end = null이면 「퇴근 기록 없음」(0시간이 아니라 모름). overtime의 end = null이면 「끝 시각 없음」
 #            시작과 끝은 둘 다 시각이 있거나 둘 다 없다
@@ -13,21 +13,26 @@
 #   overtime { how: "remote" 원격 · "onsite" 현장 · null, ref: 관련 번호(작업 · 변경 · 장애 번호, 글) }   kind = overtime일 때
 #   travel   { out, back } 선택 이동 분. 각각 정수 0~1440, 업무외에만 쓰며 없으면 이동 없음.
 #   leave    { type, days }   kind = leave일 때
-#            type annual 연차 · half 반차 · half-am 오전 반차 · half-pm 오후 반차 · sick 병가 · family 경조사 · comp 대체 휴무 · other 기타
+#            type annual 연차 · half 반차 · half-am 오전 반차 · half-pm 오후 반차 · sick 병가 · family 경조사 · comp 대휴(대체 휴가) · other 기타
 #            days null = 규칙대로 센다(아래), 숫자 = 사람이 정한 차감 일수(회사가 정한 사실이라 저장한다)
+#            kind = leave-grant일 때는 { type: comp, days: 생긴 일수(0.5 단위) }. 다른 type은 읽기 전용(설계 15.3)
 #   rev · created · updated · deleted · origin   일정과 같다 (core\Records.psm1, ScheduleData.psm1 맨 위)
 #   범위: 출근 · 업무외 기록 하나는 31일까지, leave.days는 0~366 (밖이면 그 항목만 고칠 항목). 저장은 저장소 핸들로만 한다(Save-WtAttendanceItems)
-# 하루 근무 시간 · 월 합계 같은 계산 값은 저장하지 않는다. 계산 규칙은 이 파일의 Get-WtAttendanceSummary 하나에 모으고 이름(att-2)을 붙인다.
+# 하루 근무 시간 · 월 합계 같은 계산 값은 저장하지 않는다. 계산 규칙은 이 파일의 Get-WtAttendanceSummary 하나에 모으고 이름(att-3)을 붙인다.
 # 읽기 규칙: 모르는 칸 · 맨 위 키는 그대로 둔다. 모르는 kind · leave.type · overtime.how가 든 항목은 읽기 전용(계산에서 뺌),
 #   날짜 · 시각을 못 읽는 항목은 「고칠 항목」. 두 경우 모두 저장할 때 그대로 쓴다.
 
 $ErrorActionPreference = 'Stop'
 
 $script:schema = 2
-$script:rule = 'att-2'
-$script:kinds = @('work', 'overtime', 'trip', 'leave', 'other')
+$script:rule = 'att-3'
+$script:kinds = @('work', 'overtime', 'trip', 'leave', 'leave-grant', 'other')
 $script:leaveTypes = @('annual', 'half', 'half-am', 'half-pm', 'sick', 'family', 'comp', 'other')
 $script:halfTypes = @('half', 'half-am', 'half-pm')
+$script:halfDayTypes = @('half-am', 'half-pm')   # 오전 · 오후를 아는 반차. 휴가 구간을 정규 구간에서 뺀다
+$script:grantTypes = @('comp')                     # 휴가 발생(leave-grant)이 아는 type
+# 휴가 종류의 화면 이름. 근태 표 · 폼과 달력 칩이 같이 쓴다(저장 값은 영문 코드)
+$script:leaveNames = @{ annual = '연차'; half = '반차'; 'half-am' = '오전 반차'; 'half-pm' = '오후 반차'; sick = '병가'; family = '경조사'; comp = '대휴'; other = '휴가' }
 $script:hows = @('remote', 'onsite')
 $script:typeMap = @{ '출근' = 'work'; '업무외시간 근무' = 'overtime'; '출장' = 'trip'; '휴가' = 'leave' }
 $script:leaveMap = @{ '연차' = 'annual'; '오전 반차' = 'half-am'; '오후 반차' = 'half-pm'; '병가' = 'sick'; '경조사' = 'family'; '대체 휴무' = 'comp' }
@@ -158,11 +163,15 @@ function ConvertFrom-WtAttendanceItem($Item) {
             }
         }
     }
-    if ($e.Kind -eq 'leave') {
+    if ($e.Kind -in 'leave', 'leave-grant') {
         $l = $Item.leave
         if (-not (Test-WtAttObject $l) -or $null -eq $l.type) { if (-not $problem) { $problem = '휴가 종류가 없습니다' } }
         else {
-            if ($script:leaveTypes -cnotcontains [string]$l.type) { $e.State = 'readonly'; $e.Problem = "새 버전의 휴가 종류입니다: '$($l.type)'"; return [pscustomobject]$e }
+            $known = if ($e.Kind -eq 'leave') { $script:leaveTypes } else { $script:grantTypes }
+            if ($known -cnotcontains [string]$l.type) {
+                $what = if ($e.Kind -eq 'leave') { '휴가 종류' } else { '휴가 발생 종류' }
+                $e.State = 'readonly'; $e.Problem = "새 버전의 ${what}입니다: '$($l.type)'"; return [pscustomobject]$e
+            }
             $e.LeaveType = [string]$l.type
             $days = Get-WtField $l 'days'
             if ($null -ne $days) {
@@ -170,6 +179,16 @@ function ConvertFrom-WtAttendanceItem($Item) {
                 if ($null -eq $v) { if (-not $problem) { $problem = "휴가 일수를 읽지 못했습니다(0~$($script:maxLeaveDays)): '$days'" } }
                 else { $e.LeaveDays = $v }
             }
+        }
+        # 휴가 발생: 날짜 하나 + 생긴 일수(0.5 단위, 0보다 큼). 설계 15.3
+        if ($e.Kind -eq 'leave-grant' -and -not $problem) {
+            if ($null -eq $e.LeaveDays -or $e.LeaveDays -le 0 -or $e.LeaveDays * 2 -ne [math]::Floor($e.LeaveDays * 2)) { $problem = '생긴 일수는 0.5일 단위로 적으세요' }
+            elseif ($e.HasTime -or $null -ne $Item.end) { $problem = '휴가 발생은 날짜 하나만 적습니다' }
+        }
+        # 시각은 오전 · 오후 반차에만, 같은 날 시작 < 끝(그날만 다른 반차). 설계 15.2
+        if ($e.Kind -eq 'leave' -and $e.HasTime -and -not $problem) {
+            if ($script:halfDayTypes -cnotcontains $e.LeaveType) { $problem = '시각은 오전 · 오후 반차에만 적습니다' }
+            elseif (-not $e.HasEnd -or $e.EndDate -ne $e.StartDate -or $e.End -le $e.Start) { $problem = '반차 시각은 같은 날 시작 ~ 끝으로 적습니다' }
         }
     }
     if (-not $e.Id -and -not $problem) { $problem = 'id가 없습니다' }
@@ -184,6 +203,50 @@ function ConvertFrom-WtAttendanceItem($Item) {
 function Test-WtAttWorkday([datetime]$Day, $DayOff) {
     $Day.DayOfWeek -ne [System.DayOfWeek]::Saturday -and $Day.DayOfWeek -ne [System.DayOfWeek]::Sunday -and
         -not ($DayOff -and $DayOff.Contains((ConvertTo-WtDateText $Day)))
+}
+
+# 휴가 종류의 화면 이름(연차 · 오전 반차 · 대휴 …). 모르는 값은 그대로
+function Get-WtLeaveTypeName([string]$Type) { if ($script:leaveNames.ContainsKey($Type)) { $script:leaveNames[$Type] } else { $Type } }
+
+<#
+반차의 휴가 구간 @([datetime]시작, [datetime]끝). 설계 15.2
+  시각이 적힌 기록은 그 시각(그날만 다른 반차). 없으면 그날 업무시간 규칙(core\Settings.psm1, 설계 15.1):
+  오전 반차 = 시작 ~ 반차 나누는 시각, 오후 반차 = 반차 나누는 시각 ~ 끝. 반차가 아니거나 오전 · 오후를 모르는 반차(half)는 $null
+#>
+function Get-WtLeaveRange($Entry) {
+    if ($Entry.Kind -cne 'leave' -or $script:halfDayTypes -cnotcontains $Entry.LeaveType) { return $null }
+    if ($Entry.HasTime) { return , @($Entry.Start, $Entry.End) }
+    $hours = Get-WtWorkHours -Date $Entry.StartDate
+    $split = $Entry.StartDate + (ConvertFrom-WtTimeText (Get-WtHalfDaySplit $hours))
+    if ($Entry.LeaveType -ceq 'half-am') { return , @(($Entry.StartDate + (ConvertFrom-WtTimeText $hours['work.start'])), $split) }
+    , @($split, ($Entry.StartDate + (ConvertFrom-WtTimeText $hours['work.end'])))
+}
+
+<#
+대휴 남은 일수(전체 기간, 설계 15.3). 상태가 ok인 기록만 센다.
+  Granted = 휴가 발생(leave-grant, comp) 일수 합, Used = 대휴(comp) 휴가가 쓰는 일수 합(앞으로 쓸 것 포함, Get-WtLeaveDays 규칙), Left = Granted − Used
+#>
+function Get-WtCompBalance([object[]]$Entries) {
+    $valid = @($Entries | Where-Object { $_ -and $_.State -ceq 'ok' -and $_.Kind -cin 'leave', 'leave-grant' -and $_.LeaveType -ceq 'comp' })
+    $granted = 0.0; $used = 0.0
+    foreach ($e in @($valid | Where-Object { $_.Kind -ceq 'leave-grant' })) { $granted += $e.LeaveDays }
+    $comp = @($valid | Where-Object { $_.Kind -ceq 'leave' })
+    if ($comp.Count) {
+        $first = @($comp | Sort-Object StartDate)[0].StartDate
+        $last = @($comp | Sort-Object EndDate)[-1].EndDate
+        $dayOff = Get-WtHolidayDates $first $last
+        foreach ($e in $comp) { $used += Get-WtLeaveDays $e $e.StartDate $e.EndDate $dayOff }
+    }
+    [pscustomobject]@{ Granted = $granted; Used = $used; Left = $granted - $used }
+}
+
+# 쉬는 날: 그날 업무시간 규칙의 근무 요일이 아님 · 휴무일 · 하루 종일 휴가(반차 날은 일하는 날). 「오늘 안 찍음」 점이 쓴다
+function Test-WtAttRestDay([datetime]$Date, [object[]]$Entries) {
+    $day = $Date.Date
+    $weekday = (([int]$day.DayOfWeek + 6) % 7) + 1
+    if ($weekday -notin @((Get-WtWorkHours -Date $day)['work.days'])) { return $true }
+    if ((Get-WtHolidayDates $day $day).Contains((ConvertTo-WtDateText $day))) { return $true }
+    @($Entries | Where-Object { $_ -and $_.State -ceq 'ok' -and $_.Kind -ceq 'leave' -and $_.LeaveType -cnotin $script:halfTypes -and $_.StartDate -le $day -and $_.EndDate -ge $day }).Count -gt 0
 }
 
 # 휴가 한 건이 그 달에 쓰는 일수. 사람이 정한 days가 있으면 시작한 달에 그 값을 센다.
@@ -247,15 +310,17 @@ function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, 
         }
     }
     $r.WorkDays = $workDates.Count
-    # 기존 att-2 칸은 그대로 두고, 초과근무만 업무시간 설정을 적용한다.
-    $hours = Get-WtWorkHours
-    $workStart = ConvertFrom-WtTimeText $hours['work.start']; $workEnd = ConvertFrom-WtTimeText $hours['work.end']
-    $lunchStart = ConvertFrom-WtTimeText $hours['work.lunchStart']; $lunchEnd = ConvertFrom-WtTimeText $hours['work.lunchEnd']
+    # 기존 칸은 그대로 두고, 초과근무만 업무시간 설정을 적용한다. att-3: 그날 적용되는 업무시간 규칙(설계 15.1) + 반차 구간 빼기(15.4)
     $valid = @($Entries | Where-Object { $_ -and $_.State -ceq 'ok' })
     $missing = [Collections.Generic.HashSet[datetime]]::new()
     $started = @($valid | Where-Object { $_.Kind -cin @('work', 'overtime') -and $_.StartDate -ge $first -and $_.StartDate -le $last })
     foreach ($dayGroup in @($started | Group-Object { $_.StartDate.Ticks })) {
         $day = $dayGroup.Group[0].StartDate
+        $hours = Get-WtWorkHours -Date $day
+        $workStart = ConvertFrom-WtTimeText $hours['work.start']; $workEnd = ConvertFrom-WtTimeText $hours['work.end']
+        $lunchStart = ConvertFrom-WtTimeText $hours['work.lunchStart']; $lunchEnd = ConvertFrom-WtTimeText $hours['work.lunchEnd']
+        # 반차 구간은 정규 구간에서 뺀다. 그 구간에 일한 것은 초과근무다(하루 휴가 날과 같은 규칙)
+        $leaveRanges = @(foreach ($l in @($valid | Where-Object { $_.Kind -ceq 'leave' -and $_.StartDate -eq $day })) { $lr = Get-WtLeaveRange $l; if ($lr) { , @($lr[0].Ticks, $lr[1].Ticks) } })
         $weekday = if ([int]$day.DayOfWeek -eq 0) { 7 } else { [int]$day.DayOfWeek }
         $fullLeave = @($valid | Where-Object { $_.Kind -ceq 'leave' -and $_.LeaveType -cnotin $script:halfTypes -and $_.StartDate -le $day -and $_.EndDate -ge $day }).Count -gt 0
         $working = $weekday -in $hours['work.days'] -and -not $DayOff.Contains((ConvertTo-WtDateText $day)) -and -not $fullLeave
@@ -273,11 +338,13 @@ function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, 
             $regularA = ($day + $workStart).Ticks; $regularB = ($day + $workEnd).Ticks
             $lunchA = ($day + $lunchStart).Ticks; $lunchB = ($day + $lunchEnd).Ticks
             foreach ($tick in $regularA, $regularB, $lunchA, $lunchB) { [void]$cuts.Add($tick) }
+            foreach ($lr in $leaveRanges) { [void]$cuts.Add($lr[0]); [void]$cuts.Add($lr[1]) }
         }
         $points = @($cuts)
         for ($index = 0; $index -lt $points.Count - 1; $index++) {
             $a = $points[$index]; $b = $points[$index + 1]
-            if ($working -and (($a -ge $regularA -and $a -lt $regularB) -or ($a -ge $lunchA -and $a -lt $lunchB))) { continue }
+            $onLeave = @($leaveRanges | Where-Object { $a -ge $_[0] -and $a -lt $_[1] }).Count -gt 0
+            if ($working -and ((-not $onLeave -and $a -ge $regularA -and $a -lt $regularB) -or ($a -ge $lunchA -and $a -lt $lunchB))) { continue }
             $winner = 3
             foreach ($range in $ranges) { if ($range.A -le $a -and $range.B -ge $b -and $range.Rank -lt $winner) { $winner = $range.Rank } }
             $length = [int](($b - $a) / [timespan]::TicksPerMinute)
@@ -439,7 +506,8 @@ function Save-WtAttendanceItem($Store, $Patch, [string]$Id, [string]$At = (Get-W
     }
     $entry = ConvertFrom-WtAttendanceItem $edit.Item
     if ($entry.State -ne 'ok') { $fail.Reason = $entry.Problem; return $fail }
-    if (($entry.Kind -in 'work', 'overtime' -and -not $entry.HasTime) -or ($entry.Kind -in 'trip', 'leave' -and $entry.HasTime)) {
+    # 휴가의 시각(반차만)은 읽기 규칙이 검사한다(설계 15.2)
+    if (($entry.Kind -in 'work', 'overtime' -and -not $entry.HasTime) -or ($entry.Kind -in 'trip', 'leave-grant' -and $entry.HasTime)) {
         $fail.Reason = '출근 · 업무외는 시각, 출장 · 휴가는 날짜만 적으세요'; return $fail
     }
     foreach ($field in 'place', 'note') { Set-WtField $edit.Item $field ([string](Get-WtField $edit.Item $field)) }
@@ -497,6 +565,8 @@ function Stop-WtAttendanceRecord($Store, [string]$Kind = 'work', [string]$Id, [s
 # ---- 달력 · 월 보고 ---------------------------------------------------------------------------
 
 # 날짜 범위 안의 표시 항목. 출근은 시작한 날, 업무외는 실제 걸친 날(끝 0시는 앞날까지), 휴가 · 출장은 기간의 날마다.
+# 휴가 글은 휴가 종류(연차 · 오전 반차 · 대휴 …). 반차는 하루의 일부라 AllDay = $false, Time = 휴가 구간의 시작(설계 15.5).
+# 휴가 발생(leave-grant)은 날의 일이 아니라 보이지 않는다
 function Get-WtAttendanceCalendarItems([datetime]$From, [datetime]$To, [object[]]$Entries) {
     foreach ($e in @($Entries)) {
         if ($e.State -ne 'ok' -or $e.Kind -cnotin @('work', 'leave', 'trip', 'overtime')) { continue }
@@ -505,9 +575,19 @@ function Get-WtAttendanceCalendarItems([datetime]$From, [datetime]$To, [object[]
         elseif ($e.Kind -eq 'overtime' -and $e.HasEnd -and $e.End -gt $e.Start -and $e.End.TimeOfDay -eq [timespan]::Zero) { $last = $last.AddDays(-1) }
         $a = if ($e.StartDate -lt $From.Date) { $From.Date } else { $e.StartDate }
         $b = if ($last -gt $To.Date) { $To.Date } else { $last }
-        $label = switch ($e.Kind) { work { '근무' }; leave { '휴가' }; trip { '출장' }; overtime { '업무외' } }
+        $label = switch ($e.Kind) { work { '근무' }; leave { Get-WtLeaveTypeName $e.LeaveType }; trip { '출장' }; overtime { '업무외' } }
         $style = switch ($e.Kind) { work { 'Att.Work' }; leave { 'Att.Leave' }; trip { 'Att.Trip' }; overtime { 'Att.Over' } }
+        # 반차의 표시 시각: 휴가 구간의 시작. 오전 · 오후를 모르는 반차(half)는 그날 업무 시작 시각
+        $partTime = $null
+        if ($e.Kind -ceq 'leave' -and $e.LeaveType -cin $script:halfTypes) {
+            $range = Get-WtLeaveRange $e
+            $partTime = if ($range) { $range[0].ToString('HH:mm', $script:inv) } else { [string](Get-WtWorkHours -Date $e.StartDate)['work.start'] }
+        }
         for ($day = $a; $day -le $b; $day = $day.AddDays(1)) {
+            if ($partTime) {
+                [pscustomobject]@{ Date = $day; Kind = $e.Kind; Text = $label; Style = $style; AllDay = $false; Time = $partTime; Id = $e.Id; Page = 'attendance' }
+                continue
+            }
             $time = if ($e.HasTime -and $day -eq $e.StartDate) { $e.Start.ToString('HH:mm', $script:inv) } else { $null }
             $text = if ($time) { "$label $time" } else { $label }
             if ($e.Kind -ceq 'work' -and $time -and $e.HasEnd) { $text += '–' + $e.End.ToString('HH:mm', $script:inv) }
@@ -538,12 +618,12 @@ function Get-WtAttendanceReport([datetime]$Month, [object[]]$Entries, $DayOff, [
             else { $_.StartDate -le $last -and $_.EndDate -ge $first })
     } | Sort-Object Start, Id -Culture 'ko-KR')
     foreach ($e in $rows) {
-        $kindName = switch ($e.Kind) { work { '출근' }; overtime { '업무외' }; trip { '출장' }; leave { '휴가' }; default { '기타' } }
+        $kindName = switch ($e.Kind) { work { '출근' }; overtime { '업무외' }; trip { '출장' }; leave { Get-WtLeaveTypeName $e.LeaveType }; 'leave-grant' { '대휴 발생' }; default { '기타' } }
         $days = ''; $basis = ''; $status = ''
         if ($e.Kind -eq 'leave') {
             $days = (Get-WtLeaveDays $e $first $last $DayOff).ToString('0.##', $script:inv)
             $basis = if ($null -ne $e.LeaveDays) { '확정' } else { '잠정' }
-        }
+        } elseif ($e.Kind -eq 'leave-grant') { $days = $e.LeaveDays.ToString('0.##', $script:inv); $basis = '발생' }
         if ($e.Kind -in 'work', 'overtime' -and -not $e.HasEnd) { $status = if ($e.Kind -eq 'work') { '퇴근 기록 없음' } else { '끝 시각 없음' } }
         $howName = switch ($e.How) { remote { '원격' }; onsite { '현장' }; default { '' } }
         $cells = @($kindName, (ConvertTo-WtDateText $e.StartDate), $(if ($e.HasTime) { $e.Start.ToString('HH:mm', $script:inv) } else { '' }),
@@ -556,4 +636,5 @@ function Get-WtAttendanceReport([datetime]$Month, [object[]]$Entries, $DayOff, [
 
 Export-ModuleMember -Function Open-WtAttendanceStore, Save-WtAttendanceItems, Get-WtAttendanceData, ConvertFrom-WtAttendanceItem,
     Get-WtLeaveDays, Get-WtAttendanceSummary, ConvertFrom-WtAttendanceRow, Update-WtAttendanceSchema, Import-WtAttendanceLegacy, Get-WtAttendanceLastImport,
-    Save-WtAttendanceItem, Set-WtAttendanceDeleted, Start-WtAttendanceRecord, Stop-WtAttendanceRecord, Get-WtAttendanceCalendarItems, Get-WtAttendanceReport
+    Save-WtAttendanceItem, Set-WtAttendanceDeleted, Start-WtAttendanceRecord, Stop-WtAttendanceRecord, Get-WtAttendanceCalendarItems, Get-WtAttendanceReport,
+    Get-WtLeaveTypeName, Get-WtLeaveRange, Get-WtCompBalance, Test-WtAttRestDay

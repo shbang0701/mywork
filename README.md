@@ -21,6 +21,8 @@
   - [design/](apps/WorkTool/design/) — 새 화면 시안 (WPF 전환 기준)
     - [일정 1단계 시안](apps/WorkTool/design/README.md#일정) — 일정 체크 상자 · 여러 날 막대 · 해 · 달 고르기 · 날짜 우클릭 휴무일 · 설정 → 휴무일. 폰용 확대본(`schedule-plan-phone.png`) · 생성 스크립트(`build-schedule-mockups.ps1`) 포함
     - [일정 2단계 시안](apps/WorkTool/design/README.md#일정) — 일정 · 루틴 ↔ 메모 연결(폼 아래 관련 메모 · 새 메모 · 기존 메모 고르기 · 메모 새 창 · 통화 메모 틀). 폰용 확대본(`schedule-plan-memo-phone.png`) 포함, 같은 스크립트의 `-Part memo`
+    - [일정 3단계 시안](apps/WorkTool/design/README.md#일정) — 할 일 · 표 · 찾기 · 깔때기 · 루틴 보기, 일정 태그 · 루틴 시각 칸. 폰용 확대본(`schedule-plan-views-phone.png`) 포함, 같은 스크립트의 `-Part views`
+    - [근태 4단계 시안](apps/WorkTool/design/README.md#근태) — 휴가 종류 · 반차 시각 · 대휴 발생 · 대휴 남은 일수, 설정의 적용 기간 · 반차 나누는 시각, 일정 우클릭 「휴가 넣기」, 할 일 색. 폰용 확대본(`schedule-plan-leave-phone.png`) 포함, 같은 스크립트의 `-Part leave`
     - [활성 작업 목업](apps/WorkTool/design/README.md#활성-작업-목업) — 프로그램별 창·브라우저 탭 표, 선택 닫기. 폰용 확대본·자동 새로 고침 설정·가짜 데이터·목업 생성 스크립트 포함
     - [사용자 구성 업무 목업](docs/plans/workflows-preview.md) — 요청 처리·자료 작성·서버 점검의 구성 → 사용 → 모의 결과. 설정 변경 비교, 가짜 JSON, 내부 API·알람 연동 제안 포함. 앱 기능은 미구현
     - [직접 조작하는 업무 체험 HTML](apps/WorkTool/design/workflows-playground.html) — 파일 하나로 폼·단계·값 연결을 편집하고 모의 실행·취소·알람·이력을 확인합니다. [입력 이미지](apps/WorkTool/design/workflows-playground-use.jpg) · [결과 이미지](apps/WorkTool/design/workflows-playground-result.jpg) 포함. 기존 앱과 연결하지 않습니다

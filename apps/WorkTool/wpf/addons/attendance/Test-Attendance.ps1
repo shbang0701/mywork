@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    근태 탭을 임시 데이터로 검사한다: 형식 · schema 이전 · 모르는 값 보존 · 예전 데이터 가져오기(합치기) · 월 요약 규칙(att-2) · 화면.
+    근태 탭을 임시 데이터로 검사한다: 형식 · schema 이전 · 모르는 값 보존 · 예전 데이터 가져오기(합치기) · 월 요약 규칙(att-3) · 화면.
 
 .DESCRIPTION
     tests\Test-Core.ps1이 찾아서 돌린다. 혼자 돌려도 된다. 실제 데이터 폴더(문서\WorkTool)는 쓰지 않는다.
@@ -11,10 +11,11 @@
       v1.json         1단계 WPF가 쓴 schema 1
       v2.json         schema 2 대표 예 (퇴근 · 밤샘 근무 · 원격 · 현장 출동 · 하루 넘는 업무외 · 휴가 종류 · 사람이 정한 일수 · 달 넘김)
       v2-future.json  더 새 앱이 쓴 schema 2 흉내 (모르는 맨 위 키 · 칸 · kind · leave.type · overtime.how)
-      v2-travel.json  이동 · 겹침 우선순위 · 초과근무 고정 예 (11월 작업장 960 · 원격 390 · 장소 없음 120 · 이동 116분)
+      v2-travel.json  이동 · 겹침 우선순위 · 초과근무 고정 예 (11월 작업장 1200 · 원격 390 · 장소 없음 120 · 이동 116분.
+                      att-3: 11/23 오전 반차 날 08~19 근무는 반차 구간 09~14도 초과라 작업장 360분, att-2에서는 120분이었다)
       v2-edge.json    null 항목 · 31일 넘는 기록 · 범위 밖 휴가 일수(BigInteger · 음수) · 확정 일수 0.5 · 2199년 뒤 날짜 · rev (2026-10-26 검토 반례)
     휴무일은 tests\fixtures\holidays.json(코어 고정 시험 자료)을 쓴다: 10/3 · 10/9 공휴일, 10/8 개인 휴무, 11/20 회사 휴무.
-    월 합계 기대 값은 여기에 못 박아 둔다. 규칙(att-2)을 바꿔 값이 바뀌면 이 파일을 일부러 고쳐야 한다.
+    월 합계 기대 값은 여기에 못 박아 둔다. 규칙(att-3)을 바꿔 값이 바뀌면 이 파일을 일부러 고쳐야 한다.
 
 .EXAMPLE
     pwsh -NoProfile -File apps/WorkTool/wpf/addons/attendance/Test-Attendance.ps1
@@ -67,14 +68,14 @@ try {
         $byId.t13.State -eq 'broken' -and $byId.t13.Item.start.date -eq '2026-13-01')
     $sum = Get-WtAttendanceSummary (& $d '2026-10-01') $data.Entries
     $text = Format-WtTestSummary $sum
-    Assert-WtTest '근태 att-2 10월: 출근 날 수 · 업무외(자정 넘김) · 출장 일수와 건수 · 휴가(주말 · 휴무일 빼기, 반차 0.5) · 뺀 항목' (
-        $text -eq 'work 1/0/2 · over 270/3/1 · trip 2/1 · leave 5.5 · skip 1' -and $sum.Rule -eq 'att-2') $text
+    Assert-WtTest '근태 att-3 10월: 출근 날 수 · 업무외(자정 넘김) · 출장 일수와 건수 · 휴가(주말 · 휴무일 빼기, 반차 0.5) · 뺀 항목' (
+        $text -eq 'work 1/0/2 · over 270/3/1 · trip 2/1 · leave 5.5 · skip 1' -and $sum.Rule -eq 'att-3') $text
     $text = Format-WtTestSummary (Get-WtAttendanceSummary (& $d '2026-10-01') $data.Entries ([System.Collections.Generic.HashSet[string]]::new()))
-    Assert-WtTest '근태 att-2: 휴무일이 없으면 휴가 일수가 예전 앱 규칙(주말 빼기 · 반차 × 0.5)과 같다' ($text -like '* leave 7.5 *') $text
+    Assert-WtTest '근태 att-3: 휴무일이 없으면 휴가 일수가 예전 앱 규칙(주말 빼기 · 반차 × 0.5)과 같다' ($text -like '* leave 7.5 *') $text
     $text = Format-WtTestSummary (Get-WtAttendanceSummary (& $d '2026-10-01') $data.Entries $null 'workdays')
-    Assert-WtTest '근태 att-2: 출장 일수를 근무일만 세는 설정 (지운 휴무는 휴무가 아님)' ($text -like '* trip 1/1 *') $text
+    Assert-WtTest '근태 att-3: 출장 일수를 근무일만 세는 설정 (지운 휴무는 휴무가 아님)' ($text -like '* trip 1/1 *') $text
     $text = Format-WtTestSummary (Get-WtAttendanceSummary (& $d '2026-09-01') $data.Entries)
-    Assert-WtTest '근태 att-2 9월: 달을 넘긴 휴가는 그 달에 걸친 날만' ($text -eq 'work 1/0/1 · over 0/0/0 · trip 0/0 · leave 1 · skip 1') $text
+    Assert-WtTest '근태 att-3 9월: 달을 넘긴 휴가는 그 달에 걸친 날만' ($text -eq 'work 1/0/1 · over 0/0/0 · trip 0/0 · leave 1 · skip 1') $text
 
     Assert-WtTest '장소 없는 예전 CSV: 작업장 0 · 원격 0 · 장소 없음 270분 (원자료 null 그대로)' ($sum.OvertimeSite -eq 0 -and $sum.OvertimeRemote -eq 0 -and $sum.OvertimeUnknown -eq 270 -and $null -eq $byId.t3.Item.overtime.how)
 
@@ -131,9 +132,9 @@ try {
     Assert-WtTest '근태 v2: 밤샘 근무 · 하루 넘는 출동은 끝 날짜까지 센다' ($byId.w2a2b3c4d5e6.Minutes -eq 570 -and $byId.o2a2b3c4d5e6.Minutes -eq 1560 -and
         $byId.o2a2b3c4d5e6.How -eq 'onsite' -and $byId.o2a2b3c4d5e6.Ref -eq 'INC-0002' -and $byId.o1a2b3c4d5e6.How -eq 'remote')
     $text = Format-WtTestSummary (Get-WtAttendanceSummary (& $d '2026-11-01') $data.Entries)
-    Assert-WtTest '근태 att-2 11월: 퇴근 · 밤샘 · 출동 · 출장 · 휴가(회사 휴무 빼기 · 오전 반차 · 사람이 정한 일수 · 달 넘김)' ($text -eq 'work 3/1140/1 · over 1710/2/0 · trip 3/1 · leave 4.5 · skip 0') $text
+    Assert-WtTest '근태 att-3 11월: 퇴근 · 밤샘 · 출동 · 출장 · 휴가(회사 휴무 빼기 · 오전 반차 · 사람이 정한 일수 · 달 넘김)' ($text -eq 'work 3/1140/1 · over 1710/2/0 · trip 3/1 · leave 4.5 · skip 0') $text
     $text = Format-WtTestSummary (Get-WtAttendanceSummary (& $d '2026-12-01') $data.Entries)
-    Assert-WtTest '근태 att-2 12월: 달을 넘긴 병가는 12월 몫만' ($text -eq 'work 0/0/0 · over 0/0/0 · trip 0/0 · leave 1 · skip 0') $text
+    Assert-WtTest '근태 att-3 12월: 달을 넘긴 병가는 12월 몫만' ($text -eq 'work 0/0/0 · over 0/0/0 · trip 0/0 · leave 1 · skip 0') $text
 
     # ---- 더 새 앱이 쓴 파일 (v2-future.json) ----
     $test = New-WtTestData 'attendance-future'; $tests.Add($test)
@@ -165,7 +166,7 @@ try {
     Assert-WtTest '근태 경계 값: null 항목 · 31일 넘는 기록 · 범위 밖 휴가 일수 · 2199년 뒤 날짜는 그 항목만 고칠 항목 (예외 없음)' (
         -not $data.Error -and $states -eq 'ok,broken,broken,broken,broken,ok,broken') $states
     $sum = Get-WtAttendanceSummary (& $d '2026-11-01') $data.Entries ([System.Collections.Generic.HashSet[string]]::new())
-    Assert-WtTest '근태 att-2: 휴가 일수는 확정(days 숫자)과 잠정(규칙으로 셈)을 나눠 돌려준다' ($sum.LeaveDays -eq 0.5 -and $sum.LeaveFixed -eq 0.5 -and $sum.LeaveEstimated -eq 0 -and $sum.Skipped -eq 5)
+    Assert-WtTest '근태 att-3: 휴가 일수는 확정(days 숫자)과 잠정(규칙으로 셈)을 나눠 돌려준다' ($sum.LeaveDays -eq 0.5 -and $sum.LeaveFixed -eq 0.5 -and $sum.LeaveEstimated -eq 0 -and $sum.Skipped -eq 5)
     $items = @($data.Items)
     $items[0].note = '고친 메모'; Set-WtItemEdited $items[0]
     Save-WtAttendanceItems $data.Store $items
@@ -197,11 +198,11 @@ try {
     $travelOff = [Collections.Generic.HashSet[string]]::new([string[]]@('2026-11-20'))
     $november = & $d '2026-11-01'
     $travelSum = Get-WtAttendanceSummary $november $travelEntries $travelOff
-    Assert-WtTest '초과 합계: 작업장 960 · 원격 390 · 장소 없음 120 · 이동 116 · 퇴근 없는 날 1' ($travelSum.OvertimeSite -eq 960 -and $travelSum.OvertimeRemote -eq 390 -and $travelSum.OvertimeUnknown -eq 120 -and $travelSum.Travel -eq 116 -and $travelSum.NoLeaveDays -eq 1) ($travelSum | ConvertTo-Json -Compress)
+    Assert-WtTest '초과 합계: 작업장 1200 · 원격 390 · 장소 없음 120 · 이동 116 · 퇴근 없는 날 1' ($travelSum.OvertimeSite -eq 1200 -and $travelSum.OvertimeRemote -eq 390 -and $travelSum.OvertimeUnknown -eq 120 -and $travelSum.Travel -eq 116 -and $travelSum.NoLeaveDays -eq 1) ($travelSum | ConvertTo-Json -Compress)
     $dayCases = @(
         @('2026-11-02',120,0,0,0,0), @('2026-11-03',0,0,0,0,0), @('2026-11-04',0,0,0,11,1),
         @('2026-11-05',0,150,0,0,0), @('2026-11-07',240,120,120,105,0), @('2026-11-18',180,0,0,0,0),
-        @('2026-11-20',300,0,0,0,0), @('2026-11-23',120,0,0,0,0), @('2026-11-30',0,120,0,0,0))
+        @('2026-11-20',300,0,0,0,0), @('2026-11-23',360,0,0,0,0), @('2026-11-30',0,120,0,0,0))
     foreach ($case in $dayCases) {
         $dayEntries = @($travelEntries | Where-Object { $_.StartDate -eq (& $d $case[0]) })
         $got = Get-WtAttendanceSummary $november $dayEntries $travelOff
@@ -224,7 +225,7 @@ try {
         foreach ($culture in 'ko-KR','en-US','th-TH','ar-SA','de-DE') {
             $thread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($culture)
             $got = Get-WtAttendanceSummary $november $travelEntries $travelOff
-            Assert-WtTest "초과 5개 문화권 $culture : 960 / 390 / 120 / 116 / 1" ($got.OvertimeSite -eq 960 -and $got.OvertimeRemote -eq 390 -and $got.OvertimeUnknown -eq 120 -and $got.Travel -eq 116 -and $got.NoLeaveDays -eq 1)
+            Assert-WtTest "초과 5개 문화권 $culture : 1200 / 390 / 120 / 116 / 1" ($got.OvertimeSite -eq 1200 -and $got.OvertimeRemote -eq 390 -and $got.OvertimeUnknown -eq 120 -and $got.Travel -eq 116 -and $got.NoLeaveDays -eq 1)
         }
     } finally { $thread.CurrentCulture = $oldCulture }
     Assert-WtTest '조회·계산은 travel·how 등 원자료를 바꾸지 않음' ((Get-WtTestJson $travelDoc) -ceq $travelBefore)
@@ -339,9 +340,9 @@ try {
     $reportOff = [Collections.Generic.HashSet[string]]::new([string[]]@('2028-02-28', '2028-02-29'))
     $expectedReport = @(
         "종류`t시작일`t시작시각`t종료일`t종료시각`t분`t휴가일수`t산정`t장소`t방식`t관련번호`t메모`t상태",
-        "휴가`t2028-02-25`t`t2028-02-29`t`t`t0.5`t잠정`t`t`t`t`t",
+        "오전 반차`t2028-02-25`t`t2028-02-29`t`t`t0.5`t잠정`t`t`t`t`t",
         "출장`t2028-02-26`t`t2028-02-29`t`t`t`t`t시험 출장지`t`t`t`t",
-        "휴가`t2028-02-28`t`t`t`t`t1.25`t확정`t`t`t`t`t",
+        "오후 반차`t2028-02-28`t`t`t`t`t1.25`t확정`t`t`t`t`t",
         "출근`t2028-02-29`t08:00`t`t`t`t`t`t`t`t`t미완료`t퇴근 기록 없음",
         "업무외`t2028-02-29`t23:30`t2028-03-01`t01:00`t90`t`t`t`t원격`tINC-0002`t'=1+1 두 줄`t"
     ) -join "`r`n"
@@ -364,6 +365,67 @@ try {
     $calendarResult = Get-WtCalendarItems (& $d '2026-11-30') (& $d '2026-12-01')
     Assert-WtTest '근태 달력 등록: 코어 목록만 조회해도 근태 출처의 두 날짜를 받음' ($calendarResult.Success -and @($calendarResult.Items | Where-Object Page -ceq 'attendance').Count -eq 2) $calendarResult.Reason
 
+    # ---- 4단계(설계 15장): 업무시간 기간 · 반차 구간(att-3) · 대휴 발생 · 대휴 잔여 · 달력 표시 · 쉬는 날 ----
+    $test = New-WtTestData 'attendance-p4'; $tests.Add($test)
+    Copy-WtTestHolidays
+    $noOff = [Collections.Generic.HashSet[string]]::new()
+    $p4 = { param([string]$Json) ConvertFrom-WtAttendanceItem ($Json | ConvertFrom-Json -DateKind String) }
+    $work = { param([string]$Id, [string]$Day, [string]$From, [string]$To) & $p4 "{`"id`":`"$Id`",`"kind`":`"work`",`"start`":{`"date`":`"$Day`",`"time`":`"$From`"},`"end`":{`"date`":`"$Day`",`"time`":`"$To`"}}" }
+    $leaveDay = { param([string]$Id, [string]$Day, [string]$Type) & $p4 "{`"id`":`"$Id`",`"kind`":`"leave`",`"start`":{`"date`":`"$Day`",`"time`":null},`"end`":null,`"leave`":{`"type`":`"$Type`",`"days`":null}}" }
+    $overSite = { param([object[]]$Entries) (Get-WtAttendanceSummary (& $d '2026-11-01') $Entries $noOff).OvertimeSite }
+    Assert-WtTest '4단계 att-3: 시각 없는 오전 반차(그날 규칙 09~14) 뒤 14~19 근무 → 초과 60분, 규칙 이름 att-3' (
+        (& $overSite @((& $work 'w1' '2026-11-23' '14:00' '19:00'), (& $leaveDay 'l1' '2026-11-23' 'half-am'))) -eq 60 -and
+        (Get-WtAttendanceSummary (& $d '2026-11-01') @() $noOff).Rule -ceq 'att-3')
+    Assert-WtTest '4단계 att-3: 오후 반차(14~18) 날 08~14 근무 → 초과 60분(08~09)' ((& $overSite @((& $work 'w1' '2026-11-23' '08:00' '14:00'), (& $leaveDay 'l1' '2026-11-23' 'half-pm'))) -eq 60)
+    $override = & $p4 '{"id":"l2","kind":"leave","start":{"date":"2026-11-23","time":"10:00"},"end":{"date":"2026-11-23","time":"15:00"},"leave":{"type":"half-am","days":null}}'
+    Assert-WtTest '4단계 att-3: 그날만 다른 반차 10~15 → 14~15 · 18~19 초과 120분' ($override.State -ceq 'ok' -and (& $overSite @((& $work 'w1' '2026-11-23' '14:00' '19:00'), $override)) -eq 120) $override.Problem
+    Assert-WtTest '4단계 att-3: 반차 구간(09~14)에 일한 것도 초과, 점심은 늘 뺀다(12~19 근무 → 120분)' ((& $overSite @((& $work 'w1' '2026-11-23' '12:00' '19:00'), (& $leaveDay 'l1' '2026-11-23' 'half-am'))) -eq 120)
+    $savedP4 = Get-WtWorkHours -From ''
+    try {
+        Set-WtWorkHours @{ 'work.halfDay' = '13:00' }
+        Assert-WtTest '4단계 반차 나누는 시각 13:00: 오전 반차 09~13 → 12~19 근무 초과 60분' ((& $overSite @((& $work 'w1' '2026-11-23' '12:00' '19:00'), (& $leaveDay 'l1' '2026-11-23' 'half-am'))) -eq 60)
+        Set-WtWorkHours @{ 'work.halfDay' = '' }
+        Add-WtWorkPeriod '2026-12-01'
+        Set-WtWorkHours @{ 'work.start' = '07:00'; 'work.end' = '16:00'; 'work.lunchStart' = '11:00'; 'work.lunchEnd' = '12:00' } -From '2026-12-01'
+        $decSum = Get-WtAttendanceSummary (& $d '2026-12-01') @((& $work 'w2' '2026-12-01' '08:00' '18:00')) $noOff
+        $novSum = Get-WtAttendanceSummary (& $d '2026-11-01') @((& $work 'w3' '2026-11-30' '08:00' '18:00')) $noOff
+        Assert-WtTest '4단계 업무시간 기간: 12/1부터 07~16 규칙(초과 120분), 그 전날은 처음부터 규칙 09~18(초과 60분)' ($decSum.OvertimeSite -eq 120 -and $novSum.OvertimeSite -eq 60) "$($decSum.OvertimeSite)/$($novSum.OvertimeSite)"
+        $decHalf = Get-WtLeaveRange (& $leaveDay 'l3' '2026-12-02' 'half-am')
+        # 정규 8시간의 절반 4시간이 점심(11:00) 전에 끝나므로 반차 나누는 시각은 11:00
+        Assert-WtTest '4단계 반차 구간도 그날 기간 규칙: 07~16 · 점심 11~12 → 오전 반차 07:00~11:00' ($decHalf[0].ToString('HH:mm') -ceq '07:00' -and $decHalf[1].ToString('HH:mm') -ceq '11:00') "$($decHalf[0]) $($decHalf[1])"
+    } finally { foreach ($p in @(Get-WtWorkPeriods)) { Remove-WtWorkPeriod $p.From }; Set-WtWorkHours $savedP4 }
+    $badLeave = @{
+        annualTime = '{"id":"b1","kind":"leave","start":{"date":"2026-11-23","time":"09:00"},"end":{"date":"2026-11-23","time":"18:00"},"leave":{"type":"annual","days":null}}'
+        halfTwoDays = '{"id":"b2","kind":"leave","start":{"date":"2026-11-23","time":"09:00"},"end":{"date":"2026-11-24","time":"14:00"},"leave":{"type":"half-am","days":null}}'
+        halfBackwards = '{"id":"b3","kind":"leave","start":{"date":"2026-11-23","time":"14:00"},"end":{"date":"2026-11-23","time":"14:00"},"leave":{"type":"half-pm","days":null}}'
+        grantStep = '{"id":"b4","kind":"leave-grant","start":{"date":"2026-11-01","time":null},"end":null,"leave":{"type":"comp","days":0.3}}'
+        grantNoDays = '{"id":"b5","kind":"leave-grant","start":{"date":"2026-11-01","time":null},"end":null,"leave":{"type":"comp","days":null}}'
+        grantEnd = '{"id":"b6","kind":"leave-grant","start":{"date":"2026-11-01","time":null},"end":{"date":"2026-11-02","time":null},"leave":{"type":"comp","days":1}}'
+    }
+    $wrongP4 = @(foreach ($k in $badLeave.Keys) { $e = & $p4 $badLeave[$k]; if ($e.State -ne 'broken') { "$k=$($e.State)" } })
+    $grantAnnual = & $p4 '{"id":"g2","kind":"leave-grant","start":{"date":"2026-11-01","time":null},"end":null,"leave":{"type":"annual","days":1}}'
+    Assert-WtTest '4단계 형식: 연차 · 이틀 · 거꾸로인 반차 시각, 0.5일 단위가 아닌 · 일수 없는 · 끝 날짜 있는 대휴 발생은 고칠 항목, 모르는 발생 종류는 읽기 전용' (
+        -not $wrongP4.Count -and $grantAnnual.State -ceq 'readonly') ($wrongP4 -join ', ')
+    $grants = @(
+        (& $p4 '{"id":"g1","kind":"leave-grant","start":{"date":"2026-11-01","time":null},"end":null,"leave":{"type":"comp","days":2}}')
+        (& $p4 '{"id":"g3","kind":"leave-grant","start":{"date":"2026-10-10","time":null},"end":null,"leave":{"type":"comp","days":0.5}}')
+    )
+    $compUsed = @((& $leaveDay 'c1' '2026-11-13' 'comp'), (& $leaveDay 'c2' '2026-11-20' 'comp'))   # 11/20은 회사 휴무(0일)
+    $balance = Get-WtCompBalance (@($grants) + @($compUsed) + @(& $leaveDay 'a1' '2026-11-19' 'annual'))
+    Assert-WtTest '4단계 대휴 잔여: 발생 2.5 · 사용 1(휴무일은 0) · 남음 1.5, 연차는 셈에 없음' ($balance.Granted -eq 2.5 -and $balance.Used -eq 1 -and $balance.Left -eq 1.5) "$($balance.Granted)/$($balance.Used)/$($balance.Left)"
+    $novWithGrant = Get-WtAttendanceSummary (& $d '2026-11-01') (@($grants) + @($compUsed)) (Get-WtHolidayDates)
+    Assert-WtTest '4단계 월 요약: 대휴 발생은 휴가 일수에 들지 않고, 쓴 대휴만 센다' ($novWithGrant.LeaveDays -eq 1 -and $novWithGrant.Skipped -eq 0) "$($novWithGrant.LeaveDays) $($novWithGrant.Skipped)"
+    $calP4 = @(Get-WtAttendanceCalendarItems (& $d '2026-11-01') (& $d '2026-11-30') (@($grants) + @($compUsed) + @((& $leaveDay 'h1' '2026-11-23' 'half-am'), (& $leaveDay 'h2' '2026-11-24' 'half-pm'), (& $leaveDay 'h3' '2026-11-25' 'half'))))
+    $calText = (@($calP4 | Sort-Object Date | ForEach-Object { "$($_.Date.Day):$($_.Text):$($_.AllDay):$($_.Time)" }) -join ',')
+    Assert-WtTest '4단계 달력: 휴가 종류 이름, 반차는 하루의 일부(AllDay false · 휴가 구간 시작), 오전 · 오후 모르는 반차는 업무 시작, 대휴 발생은 안 보임' (
+        $calText -ceq '13:대휴:True:,20:대휴:True:,23:오전 반차:False:09:00,24:오후 반차:False:14:00,25:반차:False:09:00') $calText
+    $restEntries = @((& $leaveDay 'r1' '2026-11-13' 'comp'), (& $leaveDay 'r2' '2026-11-23' 'half-am'))
+    Assert-WtTest '4단계 쉬는 날: 토요일 · 휴무일 · 하루 종일 휴가는 쉬는 날, 반차 날과 평일은 아님' (
+        (Test-WtAttRestDay (& $d '2026-11-21') $restEntries) -and (Test-WtAttRestDay (& $d '2026-11-20') $restEntries) -and (Test-WtAttRestDay (& $d '2026-11-13') $restEntries) -and
+        -not (Test-WtAttRestDay (& $d '2026-11-23') $restEntries) -and -not (Test-WtAttRestDay (& $d '2026-11-24') $restEntries))
+    $grantReport = Get-WtAttendanceReport (& $d '2026-11-01') @($grants[0]) $noOff
+    Assert-WtTest '4단계 월 보고: 대휴 발생 줄(종류 · 일수 · 산정 「발생」)' (($grantReport.Text -split "`r`n")[1] -ceq "대휴 발생`t2026-11-01`t`t`t`t`t2`t발생`t`t`t`t`t") ($grantReport.Text -split "`r`n")[1]
+
     if (Test-WtTestWpf) {
         $test = New-WtTestData 'attendance-view'; $tests.Add($test)
         Copy-WtTestFixture 'v2-travel.json'; Copy-WtTestHolidays
@@ -378,7 +440,7 @@ try {
         Assert-WtTest '근태 화면: 같은 월과 데이터는 표 재사용' (& $module { [object]::ReferenceEquals($script:testFirst, $script:table.ItemsSource) })
         Assert-WtTest '근태 표: 날짜순 8열·U14 폭·행 32·— 장소' (& $module {
             ($script:table.Columns | ForEach-Object Header) -join ',' -ceq '날짜,종류,시작,끝,장소,이동,시간,메모' -and
-            ($script:table.Columns | Select-Object -First 7 | ForEach-Object { $_.Width.Value }) -join ',' -ceq '100,72,64,64,72,56,64' -and
+            ($script:table.Columns | Select-Object -First 7 | ForEach-Object { $_.Width.Value }) -join ',' -ceq '100,88,64,64,72,56,64' -and
             $script:table.RowHeight -eq 32 -and @($script:table.ItemsSource | Where-Object { $_.Entry.Id -ceq 'weekend-unknown' -and $_.Place -ceq '—' }).Count -eq 1
         })
         Assert-WtTest '근태 요약: 장소 없음·퇴근 기록 없음 표시, 기존 홈 카드 등록 없음' ((Get-WtTestTexts $view) -contains '장소 없음' -and (Get-WtTestTexts $view) -contains '퇴근 기록 없음' -and -not (Get-WtAddon -Id attendance).HomeCard)
@@ -416,6 +478,68 @@ try {
         [IO.File]::WriteAllText((Get-WtStorePath 'attendance'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))
         & $module { $script:viewKey = $null; Update-WtAttendanceView }
         Assert-WtTest '못 읽는 파일: 쓰기 버튼 비활성·이유 툴팁, 빈 화면 유지' (& $module { -not $script:view.new.IsEnabled -and $script:table.ToolTip -like '*더 새 버전*' })
+    }
+
+    # ---- 4단계 화면: 휴가 종류 · 반차 시각 · 대휴 발생 폼, 표 · 사이드바 대휴, 다른 탭 날짜 메뉴 · 근태 열기 ----
+    if (Test-WtTestWpf) {
+        $test = New-WtTestData 'attendance-p4-view'; $tests.Add($test)
+        Copy-WtTestHolidays
+        $module = Get-Module Attendance
+        & $module { $script:month = [datetime]::new(2026,11,1); $script:form = $null; $script:viewKey = $null }
+        $view = New-WtTestView 'attendance'
+        $view.Measure([Windows.Size]::new(1080,616)); $view.Arrange([Windows.Rect]::new(0,0,1080,616)); $view.UpdateLayout()
+        & $module { $script:viewKey = $null; Update-WtAttendanceView }
+        & $module {
+            Show-WtAttForm; $f = $script:form.Fields
+            $f.date.Text = '2026-11-23'; $f.kind.SelectedItem = '휴가'; $f.leaveType.SelectedItem = '오전 반차'
+            $script:testHalf = @($f.start.Text, $f.end.Text, $script:form.Rows.end.Children[0].Text, [string]$script:form.Rows.start.Visibility, [string]$script:form.Rows.next.Visibility) -join '|'
+            Save-WtAttForm
+        }
+        $half = @((Get-WtAttendanceData).Items | Where-Object { $_.kind -ceq 'leave' -and $_.leave.type -ceq 'half-am' })
+        Assert-WtTest '4단계 폼: 오전 반차를 고르면 그날 규칙 09:00 ~ 14:00으로 채우고(다음 날 숨김), 같은 시각이면 시각 없이 저장' (
+            (& $module { $script:testHalf }) -ceq '09:00|14:00|끝|Visible|Collapsed' -and $half.Count -eq 1 -and $null -eq $half[0].start.time -and $null -eq $half[0].end) (& $module { $script:testHalf })
+        & $module {
+            Show-WtAttForm; $f = $script:form.Fields
+            $f.date.Text = '2026-11-24'; $f.kind.SelectedItem = '휴가'; $f.leaveType.SelectedItem = '오후 반차'; $f.start.Text = '15:00'
+            Save-WtAttForm
+        }
+        $pm = @((Get-WtAttendanceData).Items | Where-Object { $_.kind -ceq 'leave' -and $_.leave.type -ceq 'half-pm' })
+        Assert-WtTest '4단계 폼: 그날만 다른 반차(15:00 ~ 18:00)는 시각을 기록에 남긴다' ($pm.Count -eq 1 -and $pm[0].start.time -ceq '15:00' -and $pm[0].end.time -ceq '18:00' -and $pm[0].end.date -ceq '2026-11-24')
+        & $module {
+            Show-WtAttForm; $f = $script:form.Fields
+            $f.kind.SelectedItem = '휴가'; $f.leaveType.SelectedItem = '연차'
+            $script:testAnnual = @([string]$script:form.Rows.start.Visibility, $script:form.Rows.end.Children[0].Text, [string]$script:form.Rows.leaveType.Visibility) -join '|'
+            $f.kind.SelectedItem = '대휴 발생'
+            $script:testGrantRows = @([string]$script:form.Rows.days.Visibility, [string]$script:form.Rows.end.Visibility, [string]$script:form.Rows.leaveType.Visibility) -join '|'
+            $f.date.Text = '2026-11-01'; $f.days.Text = '0.3'; Save-WtAttForm
+            $script:testGrantError = [string]$script:form.Errors.days.Text
+            $f.days.Text = '1.5'; $f.note.Text = '주말 출동'; Save-WtAttForm
+        }
+        $grantItems = @((Get-WtAttendanceData).Items | Where-Object { $_.kind -ceq 'leave-grant' })
+        Assert-WtTest '4단계 폼: 연차는 끝 날짜만, 대휴 발생은 일수만 보이고 0.5일 단위가 아니면 오류 · 1.5일은 저장' (
+            (& $module { $script:testAnnual }) -ceq 'Collapsed|끝 날짜|Visible' -and (& $module { $script:testGrantRows }) -ceq 'Visible|Collapsed|Collapsed' -and
+            (& $module { $script:testGrantError }) -ceq '일수는 0.5일 단위로 적으세요.' -and $grantItems.Count -eq 1 -and $grantItems[0].leave.type -ceq 'comp' -and
+            $grantItems[0].leave.days -eq 1.5 -and $null -eq $grantItems[0].start.time -and $grantItems[0].note -ceq '주말 출동') "$(& $module { $script:testAnnual }) / $(& $module { $script:testGrantRows }) / $(& $module { $script:testGrantError })"
+        & $module { $script:viewKey = $null; $script:form = $null; Update-WtAttendanceView }
+        $rows = & $module { @($script:table.ItemsSource | ForEach-Object { "$($_.Kind)|$($_.Start)|$($_.End)|$($_.Duration)" }) -join ',' }
+        Assert-WtTest '4단계 표: 종류 칸에 휴가 종류 · 대휴 발생, 반차는 휴가 구간, 시간 칸은 일수' ($rows -ceq '대휴 발생|||+1.5일,오전 반차|09:00|14:00|0.5일,오후 반차|15:00|18:00|0.5일') $rows
+        $p4Texts = Get-WtTestTexts $view
+        Assert-WtTest '4단계 사이드바: 대휴 남음 · 발생 · 사용' ($p4Texts -contains '대휴 남음' -and $p4Texts -contains '발생' -and $p4Texts -contains '사용' -and $p4Texts -contains '1.5일')
+        $menu = & (Get-WtAddon -Id attendance).DateMenu ([datetime]::new(2026,11,26))
+        $menuText = "$($menu.Header):" + (@($menu.Items | ForEach-Object { if ($_ -is [string]) { $_ } else { $_.Header } }) -join ',')
+        Assert-WtTest '4단계 날짜 메뉴: 휴가 없는 날은 「휴가 넣기 ›」 연차 · 오전 반차 · 오후 반차 · 대휴 · 여러 날' ($menuText -ceq '휴가 넣기:연차,오전 반차,오후 반차,대휴,-,여러 날 · 다른 종류…') $menuText
+        $quick = @($menu.Items | Where-Object { $_ -isnot [string] -and $_.Header -ceq '대휴' })[0]
+        & $quick.Action $quick.Arg
+        $again = & (Get-WtAddon -Id attendance).DateMenu ([datetime]::new(2026,11,26))
+        $quickSaved = @((Get-WtAttendanceData).Entries | Where-Object { $_.Kind -ceq 'leave' -and $_.StartDate -eq [datetime]::new(2026,11,26) })
+        Assert-WtTest '4단계 날짜 메뉴: 바로 넣은 대휴가 저장되고, 그날 메뉴는 「휴가 보기 · 대휴」' ($quickSaved.Count -eq 1 -and $quickSaved[0].LeaveType -ceq 'comp' -and $again.Header -ceq '휴가 보기 · 대휴' -and $again.Arg.Id -ceq $quickSaved[0].Id) $again.Header
+        & $module { param($a) Open-WtAttArgs $a } @{ NewLeave = '2026-12-03' }
+        $opened = & $module { "$($script:month.ToString('yyyy-MM'))|$($script:form.Fields.date.Text)|$($script:form.Fields.kind.SelectedItem)|$($script:form.Fields.leaveType.SelectedItem)" }
+        & $module { param($a) Open-WtAttArgs $a } @{ Id = $quickSaved[0].Id }
+        $openedId = & $module { "$($script:month.ToString('yyyy-MM'))|$($script:form.Entry.Id)" }
+        Assert-WtTest '4단계 근태 열기: NewLeave는 그 달 · 그날 휴가 새 폼, Id는 그 기록 편집 폼' ($opened -ceq '2026-12|2026-12-03|휴가|연차' -and $openedId -ceq "2026-11|$($quickSaved[0].Id)") "$opened / $openedId"
+        $dateItems = @(Get-WtDateMenuItems ([datetime]::new(2026,11,27)) -Exclude 'schedule' | Where-Object Page -CEQ 'attendance')
+        Assert-WtTest '4단계 코어 날짜 메뉴: 근태가 등록한 항목이 다른 탭 메뉴에 나온다' ($dateItems.Count -eq 1 -and $dateItems[0].Item.Header -ceq '휴가 넣기' -and -not $dateItems[0].Error)
     }
 } finally {
     foreach ($t in $tests) { Remove-WtTestData $t }

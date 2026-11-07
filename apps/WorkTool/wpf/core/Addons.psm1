@@ -42,6 +42,9 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
                   New = { param($Seed) } → 새 key. Seed = @{ Template; Title; Subject }
                   Window = { param($Key) } → 새 창으로 보기 }
                연결하는 탭은 Get-WtRelatedSource로 받는다. 탭끼리 서로 부르지 않는다
+  DateMenu     { param([datetime]$Date) } → 다른 탭(일정 등)의 날짜 칸 우클릭에 붙일 항목들 (선택). 설계 15.6
+               항목 = @{ Header = '글'; Action = { param($Arg) }; Arg = 넘길 값; ToolTip; IsEnabled = $false(끔); Items = @(항목 | '-') }
+               Items가 있으면 하위 메뉴다. 메뉴를 그리는 탭은 Get-WtDateMenuItems로 받는다. 탭끼리 서로 부르지 않는다
 #>
 function Register-WtAddon {
     param(
@@ -71,7 +74,8 @@ function Register-WtAddon {
         [object[]]$Shortcuts = @(),
         [scriptblock]$HelpCard,
         [object[]]$HomeCards = @(),
-        [hashtable]$Related
+        [hashtable]$Related,
+        [scriptblock]$DateMenu
     )
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
@@ -114,7 +118,7 @@ function Register-WtAddon {
             Description = $Description
             SavePending = $SavePending; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
-            Related = $relatedEntry
+            Related = $relatedEntry; DateMenu = $DateMenu
         })
     # 같은 탭을 다시 등록하면서 표시 함수를 뺐으면 옛 등록도 없앤다.
     Register-WtCalendarSource -Id "addon:$Id" -Page $Id -CalendarItems $CalendarItems
@@ -144,16 +148,38 @@ function Get-WtRelatedSource([string]$Page) {
     }
 }
 
+# 날짜 칸 우클릭에 붙일 다른 탭의 항목(설계 15.6). Exclude = 메뉴를 그리는 탭 자신.
+# @{ Page; Title; Item = 탭이 준 항목; Error = 만들지 못한 이유 } 목록. 한 탭이 실패해도 다른 탭 항목은 그대로 준다
+function Get-WtDateMenuItems([datetime]$Date, [string]$Exclude = '') {
+    foreach ($addon in @(Get-WtAddon)) {
+        if (-not $addon.DateMenu -or $addon.Id -ceq $Exclude) { continue }
+        try {
+            foreach ($item in @(& $addon.DateMenu $Date.Date)) {
+                if ($null -ne $item) { [pscustomobject]@{ Page = $addon.Id; Title = $addon.Title; Item = $item; Error = '' } }
+            }
+        } catch { [pscustomobject]@{ Page = $addon.Id; Title = $addon.Title; Item = $null; Error = $_.Exception.Message } }
+    }
+}
+
+# 반차처럼 하루의 일부만인 달력 항목(AllDay = $false). 칸이 없으면 하루 종일로 본다
+function Test-WtCalendarPartDay($Item) {
+    $value = if ($Item -is [System.Collections.IDictionary]) { $Item['AllDay'] } else { $p = $Item.PSObject.Properties['AllDay']; if ($p) { $p.Value } else { $null } }
+    $value -is [bool] -and -not $value
+}
+
 # 달력 출처의 의미(탭 이름 아님)와 업무시간으로 표시만 계산한다. 근무 기록은 쉬는 날보다 우선한다.
 # 달력 표시. 평소 근무일 · 주말은 Kind가 비고, 업무외 → 휴가 → 휴무일 순서로 하나만 고른다.
+# 쉬는 날 = 그날 업무시간 규칙(설계 15.1)의 근무 요일이 아님 · 휴무일 · 하루 종일 휴가. 반차(AllDay = $false인 휴가)는 숫자 바탕만 휴가 색이다
 function Get-WtCalendarMark([datetime]$Date, [object[]]$Items) {
     $dayItems = @($Items | Where-Object { $_.Date.Date -eq $Date.Date })
     $holiday = @($dayItems | Where-Object { $_.Kind -cin @('public', 'company', 'personal') }).Count -gt 0
-    $leave = @($dayItems | Where-Object { $_.Kind -ceq 'leave' }).Count -gt 0
-    $off = [int]$Date.DayOfWeek -notin @(Get-WtSetting 'work.days') -or $holiday -or $leave
+    $leaveItems = @($dayItems | Where-Object { $_.Kind -ceq 'leave' })
+    $leave = @($leaveItems | Where-Object { -not (Test-WtCalendarPartDay $_) }).Count -gt 0
+    $weekday = (([int]$Date.DayOfWeek + 6) % 7) + 1
+    $off = $weekday -notin @((Get-WtWorkHours -Date $Date)['work.days']) -or $holiday -or $leave
     $work = @($dayItems | Where-Object { $_.Kind -cin @('work', 'trip') }).Count -gt 0
     $over = @($dayItems | Where-Object { $_.Kind -ceq 'overtime' }).Count -gt 0
-    $kind = if ($over -or ($work -and $off)) { 'over' } elseif ($leave) { 'leave' } elseif ($holiday) { 'off' } else { '' }
+    $kind = if ($over -or ($work -and $off)) { 'over' } elseif ($leaveItems.Count) { 'leave' } elseif ($holiday) { 'off' } else { '' }
     $look = switch ($kind) {
         'over' { @('B.Cal.Overtime.Bg', 'B.Cal.Overtime.Text') }
         'leave' { @('B.Cal.Leave.Bg', 'B.Cal.Leave.Text') }
@@ -226,4 +252,5 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
         Items = $sorted; Days = $days.ToArray(); Errors = $errors.ToArray() }
 }
 
-Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource
+Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource,
+    Get-WtDateMenuItems, Test-WtCalendarPartDay
