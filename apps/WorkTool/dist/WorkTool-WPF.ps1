@@ -2448,7 +2448,7 @@ New-Module -Name 'WorkTool.Calendar' -ScriptBlock {
 #   - 모르는 kind가 든 항목은 읽기 전용이고 계산에서 뺀다. 저장할 때는 그대로 둔다
 #   - 날짜를 못 읽는 항목은 「고칠 항목」으로 두고 계산에서 뺀다. 나머지 항목은 그대로 쓴다
 # 공휴일은 앱이 해마다 계산해 채운다(Update-WtAutoHolidays, 설정 holidays.auto). 외부에서 받아오지 않는다.
-# 임시공휴일 · 선거일 · 회사 · 개인 휴무는 사람이 넣는다(설정 → 휴무일, 일정 달력 우클릭). 붙여 넣기도 그대로 쓸 수 있다.
+# 임시공휴일 · 선거일 · 회사 · 개인 휴무는 사람이 넣는다(설정 → 휴무일, 회사 휴무는 일정 달력 우클릭으로도). 붙여 넣기도 그대로 쓸 수 있다.
 
 $ErrorActionPreference = 'Stop'
 
@@ -9651,7 +9651,7 @@ function New-WtSettingsPage {
 }
 
 # ---- 휴무일: 공휴일 자동 채우기 · 해마다 목록 · 더하기 · 이름 바꾸기 · 지우기 (저장은 core\Calendar.psm1) ----
-# 일정 · 근태 탭을 꺼도 휴무일은 계산에 쓰이므로 설정 화면(코어)에 둔다. 일정 달력 우클릭으로도 회사 · 개인 휴무를 넣는다.
+# 일정 · 근태 탭을 꺼도 휴무일은 계산에 쓰이므로 설정 화면(코어)에 둔다. 일정 달력 우클릭으로는 회사 휴무만 넣는다(개인 휴무는 여기서).
 $script:holidayUi = $null
 $script:holidayKinds = [ordered]@{ public = '공휴일'; company = '회사 휴무'; personal = '개인 휴무' }
 
@@ -21776,7 +21776,7 @@ function Open-WtScheduleArgs($OpenArgs) {
 }
 
 # 메뉴 개수 = 할 일 수(기한 지남 + 오늘 남은 일정 · 루틴 + 마감 임박, 설계 14.5). 보기 단추의 숫자와 같다
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } -Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 · 개인 휴무를 지정합니다. 공휴일은 앱이 해마다 채웁니다(설정 → 휴무일).')
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } -Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
 Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\schedule\Schedule.psm1 끝 ----

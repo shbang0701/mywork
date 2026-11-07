@@ -235,7 +235,7 @@ function New-WtSettingsPage {
 }
 
 # ---- 휴무일: 공휴일 자동 채우기 · 해마다 목록 · 더하기 · 이름 바꾸기 · 지우기 (저장은 core\Calendar.psm1) ----
-# 일정 · 근태 탭을 꺼도 휴무일은 계산에 쓰이므로 설정 화면(코어)에 둔다. 일정 달력 우클릭으로도 회사 · 개인 휴무를 넣는다.
+# 일정 · 근태 탭을 꺼도 휴무일은 계산에 쓰이므로 설정 화면(코어)에 둔다. 일정 달력 우클릭으로는 회사 휴무만 넣는다(개인 휴무는 여기서).
 $script:holidayUi = $null
 $script:holidayKinds = [ordered]@{ public = '공휴일'; company = '회사 휴무'; personal = '개인 휴무' }
 
