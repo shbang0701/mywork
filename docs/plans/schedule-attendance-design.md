@@ -752,3 +752,91 @@ Register-WtAddon -Id 'memo' ... -Related @{
 - 일정 탭: `addons/schedule/ScheduleData.psm1`(`links` 읽기 · 붙이기 · 빼기 · 나누기), `addons/schedule/Schedule.psm1`(폼 관련 메모 · 줄 끝 개수), `addons/schedule/Test-Schedule.ps1`
 - 메모 탭: `addons/memo/Memo.psm1`(등록 · 고르기 창 · 새 창 · 새 메모), `addons/memo/Test-Memo.ps1`
 - 문서: 이 문서 · `docs/plans/memo-design.md` · `apps/WorkTool/design/README.md` · `apps/WorkTool/wpf/README.md`
+
+## 14. 일정 3단계 — 찾기 · 표 · 할 일 · 루틴 보기 (2026-11-07)
+
+화면 값은 `apps/WorkTool/design/README.md` 「일정」에 있습니다. 시안은 같은 폴더의 `schedule-plan-views*.png`입니다. 이 절은 데이터 약속만 적습니다. schema는 모두 그대로이고, 새 파일은 없습니다.
+
+2026-11-07 정한 것: 보기는 「할 일」 · 달력 · 표 · 루틴 네 개입니다(「지금 챙길 것」은 승호가 어색하다고 해서 「할 일」로 바꿨습니다). 표에는 오늘 루틴만 넣고, 기한 지남은 지난 7일까지, 찾는 기간은 오늘 앞뒤 1년입니다.
+
+### 14.1 일정 태그 (`tags`)
+
+- 칸은 2.2의 `tags` 그대로입니다. 편집 폼의 「태그」 칸에서 고칩니다.
+- 칸 글은 쉼표나 공백으로 나눕니다. 앞의 `#`은 떼고, 빈 것과 겹친 것(대소문자 무시)은 빼며, 쓴 순서를 지킵니다. 예: `#점검, 작업 점검` → `["점검", "작업"]`.
+- 태그는 계열 전체의 칸입니다. 회차 바꿈(`changes`, 2.3)에는 넣지 않습니다. 그래서 「이 회차만」 저장에서 태그를 바꾸면 저장하지 않고 「이후 모두」를 고르라고 알립니다.
+- 계열을 나누면(2.3) 새 계열은 태그를 그대로 가져갑니다.
+- 루틴에는 태그가 없습니다.
+
+### 14.2 루틴 시각 (`routine.time`)
+
+```json
+"routine": { "freq": "weekly", "days": [1, 2, 3, 4, 5], "time": "09:00" }
+```
+
+- 선택 칸이고 `HH:mm` 글입니다. `daily` · `weekly`에서만 읽고, `hourly`에서는 읽지 않고 그대로 둡니다.
+- 글이 아니거나 `HH:mm`이 아니면 「고칠 항목」입니다(1.8). 옛 앱은 모르는 칸으로 남깁니다(1.2).
+- 계열을 나누는 규칙(11.2)에 넣지 않습니다. 시각만 바꾸면 같은 id이고 체크 기록 · 차례 키(날짜)도 그대로입니다.
+- 빈도를 `hourly`로 바꾸면 이 칸을 뺍니다. `daily` ↔ `weekly`는 그대로 둡니다.
+- 루틴 목록(사이드바 · 홈 · 루틴 보기)은 시각 없는 것 → 시각순 → 제목 순서입니다. `hourly`는 화면에 보이는 차례의 시각으로 줄을 세웁니다.
+
+### 14.3 찾기 식 — 탭이 같이 쓰는 해석기 (`core/Records.psm1`)
+
+- 메모 찾기 해석기를 코어로 옮겼습니다. 문법은 메모와 같습니다([메모 설계](memo-design.md) 「검색 조건과 결과」): 공백은 AND, 우선순위는 괄호 → `-` → AND → OR, 따옴표 안 `\"` · `\\`, `칸:값`, `#태그`. 오류는 `{ Position(0부터, UTF-16), Length, Reason }`입니다.
+- 코어는 글 → 조건 트리와 트리 → 글만 합니다. 어떤 칸을 받는지, 값이 맞는지, 칸을 어떻게 평가하는지는 탭이 정합니다. 트리 모양(`all` · `term` · `not` · `and`/`or`)은 메모 설계와 같습니다.
+- 날짜 값(`yyyy-MM-dd` · `시작..끝` · `<날짜` · `>날짜`, 메모 수정일 · 생성일은 `7d`도)은 코어 함수 하나로 검사합니다.
+- 메모 탭의 `ConvertFrom-WtMemoQuery` · `ConvertTo-WtMemoQuery`는 이름과 결과가 그대로입니다. 메모 칸 목록과 값 검사만 코어에 넘깁니다.
+
+### 14.4 일정 찾기
+
+| 식 | 맞는 것 |
+|---|---|
+| 낱말 · `"구문"` · `text:` | 제목이나 일정 메모(`note`)에 들어 있음(대소문자 무시) |
+| `title:` | 제목에 들어 있음 |
+| `#태그` · `tag:` | 태그가 정확히 같음(대소문자 무시) |
+| `2026-11-05` · `2026-10-01..2026-10-31` · `date:` | 회차가 걸친 날(시작 ~ 마지막 날)과 겹침. 맨 날짜를 써도 됩니다 |
+| `<2026-11-01` · `>2026-11-01` | 시작이 그날보다 앞 · 마지막 날이 그날보다 뒤 |
+| `is:done` · `is:open` · `is:routine` | 끝낸 것 · 안 끝낸 것 · 루틴 차례 |
+
+- 찾는 기간은 오늘 앞뒤 365일입니다. 식에 그 밖의 날짜가 있으면 그 날짜까지 넓힙니다.
+- 일정은 회차마다 한 줄이고, 여러 날 일정도 한 줄입니다. 루틴은 오늘 차례만 넣고, 식에 `is:routine`이 있으면 기간 안의 날마다 차례를 넣습니다.
+- 결과는 날짜 → 하루 종일 → 시각 → 제목 순서입니다. 500줄까지 보이고, 넘으면 넘었다고 알립니다.
+
+### 14.5 표 · 할 일의 줄
+
+- 기한은 기준일과 오늘의 차이입니다. 기준일은 하루 종일 여러 날 일정이면 마지막 날, 그 밖에는 시작 날입니다.
+  - 기준일이 오늘이면 `오늘`, 뒤면 `D-3`, 앞이면 `2일 지남`입니다. 끝낸 회차는 기한을 비웁니다.
+  - 「기한 지남」은 기준일이 어제부터 7일 전 사이이고 끝내지 않은 일정입니다. 그보다 오래된 것은 기한을 비웁니다(체크 기능이 생기기 전 일정이 모두 기한 지남으로 뜨지 않게).
+  - 루틴은 기한 지남이 되지 않습니다. 오늘 차례만 `오늘`입니다.
+- 「할 일」은 세 묶음입니다.
+  1. 기한 지남: 위 규칙의 일정
+  2. 오늘: 오늘에 걸친 일정(끝낸 것도 흐리게) + 오늘 루틴 차례. 시간마다 루틴은 다음 차례 하나와 진행(`2/5`)입니다.
+  3. 마감 임박: 오늘에 걸치지 않고 3일 안에 끝나는 하루 종일 여러 날 일정 중 끝내지 않은 것
+- 할 일 수는 할 일 목록에서 끝내지 않은 일정 수 + 오늘 차례를 다 끝내지 않은 루틴 수입니다. 보기 단추와 메뉴의 일정 개수가 같은 수를 씁니다(1단계의 「오늘 남은 일정 수」를 바꿈).
+- 표 보기(보는 달)는 그 달에 걸친 회차와 오늘 루틴 차례입니다. 여러 날 일정은 시작 날(달 앞에서 시작했으면 그 달 1일) 자리에 한 줄입니다.
+
+### 14.6 보기 기억
+
+- 마지막 보기를 설정 `schedule.view`에 남깁니다. 값은 `due`(할 일) · `calendar` · `table` · `routines`이고, 모르는 값이면 달력입니다. 사용자 데이터가 아니라 화면 상태라 일정 파일에 두지 않습니다.
+
+### 14.7 함수
+
+코어(`core/Records.psm1`):
+
+- `ConvertFrom-WtQuery -Text -Spec` → `{ Success; Root; Globals; Error }`, `ConvertTo-WtQuery Root -Spec` → 글. `Spec`은 `Fields` · `Default` · `Hash` · `Bare`(맨 낱말을 다른 칸으로) · `Check`(값 검사 · 고침, 틀리면 throw) · `Globals`(식 전체 칸) · `Plain`(따옴표 없이 되돌릴 칸)입니다.
+- `ConvertFrom-WtQueryDate Value [-Relative]` → 검사한 날짜 조건 값, `Get-WtQueryDateRange Value [-Today]` → `{ Op('' · '<' · '>'); From; To }`.
+
+일정(`addons/schedule/ScheduleData.psm1`). 줄(row)은 `Kind`(event · routine) · `Key` · `Date`(표에 놓는 날) · `Start` · `LastDay` · `AllDay` · `Multi` · `Time` · `Title` · `Note` · `Tags` · `Done` · `DueDate` · `Occurrence` · `RoutineId` · `Slot` · `Progress` · `RoutineDone` · `Group` · `Links`입니다.
+
+- `ConvertFrom-WtScheduleTagText Text` → 태그 목록(14.1)
+- `ConvertFrom-WtScheduleQuery Text` → 찾기 식(14.4), `Test-WtScheduleRowMatch Node Row` → 맞는지
+- `Get-WtScheduleDue Row Today` → `{ Text; Overdue }`(14.5)
+- `Get-WtScheduleMonthRows Month [-Now]` · `Get-WtScheduleDueRows [-Now]` · `Find-WtScheduleRows Query [-Now] [-Limit]` → `{ Success; Error; Rows; Count; Truncated; From; To; Problems }`. 체크 기록 · 루틴을 읽지 못하면 그 부분만 빼고 이유를 `Problems`에 담습니다. 일정 파일을 읽지 못하면 예외입니다.
+- `Get-WtScheduleDueCount [-Now]` → 할 일 수, `Get-WtScheduleRoutineRows Date [-Now] [-AllSlots]` → 그날 루틴 줄
+- `Get-WtRoutineSlots`의 `Routine`에 `Freq` · `Time`(`HH:mm` 또는 `$null`)을 더했습니다. `ConvertFrom-WtRoutineItem` · `Get-WtRoutineEntries`를 내보냅니다(화면 · 검사용).
+
+### 14.8 바꾼 파일
+
+- 코어: `core/Records.psm1`(찾기 식), `core/Ui.psm1`(머리줄 보기 전환 · 표 줄 · 태그 칩 · 루틴 표 모양), `core/Shell.psm1`(`Update-WtNavBadges`를 내보냄: 탭이 체크한 뒤 메뉴 숫자를 바로 고칠 수 있게. 전에는 1분 타이머까지 늦었음), `tests/Test-Core.ps1`
+- 일정 탭: `addons/schedule/ScheduleData.psm1`(루틴 시각 · 찾기 · 줄 · 할 일), `addons/schedule/Schedule.psm1`(머리줄 · 표 · 할 일 · 루틴 보기 · 폼 태그 · 루틴 시각 · 메뉴 개수), `addons/schedule/Test-Schedule.ps1`
+- 메모 탭: `addons/memo/MemoData.psm1`(해석기를 코어로, 바깥 함수는 그대로). `Test-Memo.ps1`은 고치지 않고 그대로 통과합니다.
+- 문서: 이 문서 · `docs/plans/memo-design.md` · `apps/WorkTool/design/README.md` · `apps/WorkTool/wpf/README.md`, 시안 `apps/WorkTool/design/schedule-plan-views*` · `build-schedule-mockups.ps1`

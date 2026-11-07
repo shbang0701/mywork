@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    일정 탭 단계별 시안(1단계: 체크 · 여러 날 막대 · 휴무일, 2단계: 일정 ↔ 메모 연결 · 메모 새 창) SVG와 PNG를 만든다.
+    일정 탭 단계별 시안(1단계: 체크 · 여러 날 막대 · 휴무일, 2단계: 일정 ↔ 메모 연결 · 메모 새 창, 3단계: 찾기 · 표 · 루틴 보기) SVG와 PNG를 만든다.
 .DESCRIPTION
     PowerShell 7과 Windows 기본 WPF 어셈블리만 쓴다. 데이터 폴더를 읽지 않고, 아래 가짜 일정으로 그림만 그린다.
     색 · 글자 · 치수는 디자인 README 3판(하늘)의 값이다. 앱은 Theme · Ui 리소스를 쓰므로 이 파일의 값은 그림용이다.
 .PARAMETER Part
-    만들 시안 묶음. all(기본) · phase1(schedule-plan-list 등 1단계) · memo(schedule-plan-memo* 2단계)
+    만들 시안 묶음. all(기본) · phase1(schedule-plan-list 등 1단계) · memo(schedule-plan-memo* 2단계) · views(schedule-plan-views* 3단계)
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/design/build-schedule-mockups.ps1
 .EXAMPLE
@@ -14,7 +14,7 @@
 #Requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('all', 'phase1', 'memo')][string]$Part = 'all'
+    [ValidateSet('all', 'phase1', 'memo', 'views')][string]$Part = 'all'
 )
 
 # ===== 설정 (목업 생성용, 앱 설정이 아님) =====
@@ -695,6 +695,308 @@ Add-ReadWindow 232 120 640 440 '11-05 SRV-01 펌웨어 업데이트' @(
     @{ K = 'p'; T = '들은 것:' }, @{ K = 'p'; T = '다음 할 일:' }
 )
 
+# ---- 3단계: 찾기 · 표 · 루틴 보기 ---------------------------------------------------------------
+
+# 머리줄 오른쪽(카드 안 오른쪽 끝 960): 찾기 칸(높이 28, 폭 200) · 간격 4 · 깔때기(28) · 간격 8 · 보기 전환.
+# 보기 전환 [할 일 n | 달력 | 표 | 루틴]은 메모 탭 모양: 높이 28 · 모서리 4 · 사이 4, 고른 것 = B.Fill.Hover.Surface + 아래 2 B.Accent(좌우 8을 뺀 폭).
+# 아이콘 칸은 28 × 28(툴팁 「달력 보기」 · 「표 보기」 · 「루틴 보기」), 숫자는 안 끝낸 「할 일」 수(F.Caption · B.Text.Tertiary)
+function Add-ViewSwitch([string]$View, [string]$Query = '', [switch]$FilterOpen) {
+    $y = 46
+    $items = @(
+        @{ Id = 'due'; Text = '할 일'; Count = '9' }
+        @{ Id = 'calendar'; Icon = 0xE787 }
+        @{ Id = 'table'; Icon = 0xE8FD }
+        @{ Id = 'routines'; Icon = 0xE8EE }
+    )
+    foreach ($it in $items) { $it.W = if ($it['Icon']) { 28 } else { 12 + (Measure-Text $it.Text 14) + 6 + (Measure-Text $it.Count 12) + 12 } }
+    $total = (@($items | ForEach-Object { $_.W }) | Measure-Object -Sum).Sum + 4 * ($items.Count - 1)
+    $x = 960 - $total; $left = $x
+    foreach ($it in $items) {
+        $on = $it.Id -eq $View
+        if ($on) { Add-Box $x $y $it.W 28 $Ink.Hover '' 4; Add-Box ($x + 8) ($y + 26) ($it.W - 16) 2 $Ink.Accent }
+        $fg = if ($on) { $Ink.Text } else { $Ink.Text2 }
+        if ($it['Icon']) { Add-Glyph $x $y 28 28 $it.Icon 16 $fg }
+        else {
+            $tw = Add-Line ($x + 12) $y 28 $it.Text 14 $fg
+            [void](Add-Line ($x + 12 + $tw + 6) $y 28 $it.Count 12 $Ink.Text3)
+        }
+        $x += $it.W + 4
+    }
+    $fx = $left - 8 - 28
+    if ($FilterOpen) { Add-Box $fx $y 28 28 $Ink.Hover '' 4 }
+    Add-Glyph $fx $y 28 28 0xE71C 16 $Ink.Text2
+    $sw = 200; $sx = $fx - 4 - $sw
+    if ($Query) { Add-Box ($sx + 1) ($y + 1) ($sw - 2) 26 $Ink.Surface $Ink.Accent 4 2 } else { Add-Frame $sx $y $sw 28 $Ink.Surface $Ink.Control 4 }
+    Add-Glyph ($sx + 10) $y 14 28 0xE721 14 $Ink.Text3
+    if ($Query) { [void](Add-Line ($sx + 32) $y 28 $Query 14 $Ink.Text -Max ($sw - 42)) } else { [void](Add-Line ($sx + 32) $y 28 '찾기' 14 $Ink.Text3) }
+    $fx
+}
+# 머리줄 왼쪽. -Month: 「2026년 11월 ⌄」(달력 · 표), -Nav: 그 뒤 간격 12에 ‹ 오늘 ›(표 보기에만, 아이콘 28 · 오늘 Btn 높이 28 · 사이 4).
+# 그 밖의 보기는 제목 F.Title + 간격 8 + 개수(같은 크기, B.Text.Tertiary)
+function Add-ViewTitle([string]$Title, [string]$Count = '', [switch]$Month, [switch]$Nav) {
+    if ($Month) {
+        Add-MonthHeader
+        if ($Nav) {
+            $x = 224 + (Measure-Text '2026년 11월' 20) + 28 + 12
+            Add-Glyph $x 46 28 28 0xE76B 16 $Ink.Text2
+            $bw = (Measure-Text '오늘' 14) + 24
+            Add-Frame ($x + 32) 46 $bw 28 $Ink.Surface $Ink.Strong 4
+            [void](Add-Line ($x + 44) 46 28 '오늘' 14 $Ink.Text)
+            Add-Glyph ($x + 36 + $bw) 46 28 28 0xE76C 16 $Ink.Text2
+        }
+        return
+    }
+    $tw = Add-Line 224 32 56 $Title 20 $Ink.Text
+    if ($Count) { [void](Add-Line (224 + $tw + 8) 32 56 $Count 20 $Ink.Text3) }
+}
+function Add-ViewWindow {
+    Add-Box 0 0 1280 800 $Ink.Canvas
+    Add-TitleBar 0 0 1280 'WorkTool'
+    Add-Nav
+    Add-Box 200 32 776 760 $Ink.Surface '' 8
+    Add-SideCard
+}
+# 3단계 사이드바: 고른 날 일정 + 루틴. 루틴은 시각이 생겨 「09:00 메일 확인」처럼 쓰고 시각순으로 놓는다(시간마다 루틴은 다음 차례)
+function Add-DayListV3 {
+    $y = 88
+    $y = Add-EventRow $y '하루 종일' '서버 이전 작업' $false 3 '11월 3일 ~ 6일 · 3일째'
+    $y = Add-EventRow $y '10:00' '주간 점검' $true 2
+    $y = Add-EventRow $y '14:00' 'SRV-01 펌웨어 업데이트' $false 1
+    $y = Add-EventRow $y '16:00' '월간 보고 준비' $false
+    $y = Add-EventRow $y '22:00' '야간 패치' $false 0 '~ 11월 6일 02:00'
+    $y += 16
+    $tw = Add-Line 1000 $y 32 '루틴' 14 $Ink.Text $true
+    [void](Add-Line (1000 + $tw + 8) $y 32 '1/3' 14 $Ink.Text3)
+    $y += 32
+    foreach ($r in @(@('09:00 메일 확인', $true, ''), @('15:00 장비실 온도 확인', $false, '2/5'), @('17:30 일일 점검표', $false, ''))) {
+        Add-Check 1000 ($y + 6) $r[1]
+        [void](Add-Line 1026 $y 28 $r[0] 14 $(if ($r[1]) { $Ink.Text3 } else { $Ink.Text }))
+        if ($r[2]) { [void](Add-Line 1256 $y 28 $r[2] 12 $Ink.Text3 -Right) }
+        $y += 28
+    }
+}
+
+# 표(README 7절): 카드 안쪽 좌우 16, 머리 32(F.Caption · B.Text.Tertiary, 아래 1 B.Border.Default), 행 32(아래 1 B.Border.Muted), 셀 좌우 12.
+# 일정 표 열: 체크 40 · 날짜 120 · 시각 80 · 제목(나머지) · 태그 140 · 기한 88
+$tableX = 216; $tableW = 744
+$scheduleCols = @{ Date = 40; Time = 160; Title = 240; Tag = 516; Due = 656 }
+function Add-TableHead([double]$Y, [object[]]$Heads) {
+    foreach ($h in $Heads) { [void](Add-Line ($tableX + $h[0] + 12) $Y 32 $h[1] 12 $Ink.Text3) }
+    Add-Box $tableX ($Y + 31) $tableW 1 $Ink.Border
+    $Y + 32
+}
+function Add-ScheduleHead([double]$Y) {
+    Add-TableHead $Y @(@($scheduleCols.Date, '날짜'), @($scheduleCols.Time, '시각'), @($scheduleCols.Title, '제목'), @($scheduleCols.Tag, '태그'), @($scheduleCols.Due, '기한'))
+}
+# 일정 · 루틴 행. R = @{ Date; Time; Title; Tags; Due; Over; Done; Routine; Memo; Count; Sel }
+#   날짜 · 시각은 F.Caption · B.Text.Secondary. 루틴은 제목 앞 RepeatAll E8EE 12. 끝낸 것은 제목만 B.Text.Tertiary(체크리스트와 같음)
+#   태그는 C 메모 태그 칩(높이 20 · 좌우 8 · 모서리 4 · B.Bg.Selected · B.Accent.Text), 기한은 F.Caption, 기한이 지난 것은 앞에 Warning E814 12(B.Status.Warning.Icon)
+function Add-ScheduleRow([double]$Y, $R) {
+    if ($R['Sel']) { Add-Box $tableX $Y $tableW 32 $Ink.Selected; Add-Box $tableX ($Y + 8) 3 16 $Ink.Accent '' 1.5 }
+    Add-Check ($tableX + 12) ($Y + 8) ([bool]$R['Done'])
+    if ($R['Date']) { [void](Add-Line ($tableX + $scheduleCols.Date + 12) $Y 32 $R.Date 12 $Ink.Text2 -Max 96) }
+    if ($R['Time']) { [void](Add-Line ($tableX + $scheduleCols.Time + 12) $Y 32 $R.Time 12 $Ink.Text2) }
+    $tx = $tableX + $scheduleCols.Title + 12; $right = $tableX + $scheduleCols.Tag - 12
+    if ($R['Routine']) { Add-Glyph $tx $Y 12 32 0xE8EE 12 $Ink.Text3; $tx += 18 }
+    if ($R['Count']) { $right -= (Add-Line $right $Y 32 $R.Count 12 $Ink.Text3 -Right) + 8 }
+    if ($R['Memo']) {
+        $nw = Add-Line $right $Y 32 ([string]$R.Memo) 12 $Ink.Text3 -Right
+        Add-Glyph ($right - $nw - 16) $Y 12 32 0xE70B 12 $Ink.Text3
+        $right -= $nw + 24
+    }
+    [void](Add-Line $tx $Y 32 $R.Title 14 $(if ($R['Done']) { $Ink.Text3 } else { $Ink.Text }) -Max ($right - $tx))
+    $gx = $tableX + $scheduleCols.Tag + 12
+    foreach ($tag in @($R['Tags'])) {
+        if (-not $tag) { continue }
+        $w = (Measure-Text $tag 12) + 16
+        Add-Box $gx ($Y + 6) $w 20 $Ink.Selected '' 4
+        [void](Add-Line ($gx + 8) ($Y + 6) 20 $tag 12 $Ink.Accent)
+        $gx += $w + 4
+    }
+    if ($R['Due']) {
+        $dx = $tableX + $scheduleCols.Due + 12
+        if ($R['Over']) { Add-Glyph $dx $Y 12 32 0xE814 12 $Ink.Warn; $dx += 16 }
+        [void](Add-Line $dx $Y 32 $R.Due 12 $(if ($R['Over'] -or $R.Due -eq '오늘') { $Ink.Text } else { $Ink.Text2 }))
+    }
+    Add-Box $tableX ($Y + 31) $tableW 1 $Ink.Muted
+    $Y + 32
+}
+# 묶음 머리(README 7절 표): 높이 32, 펼침 단추 28(ChevronDown E70D 10), 이름 F.BodyStrong, 개수 F.Caption · B.Text.Tertiary, 아래 1 B.Border.Muted
+function Add-GroupHead([double]$Y, [string]$Name, [string]$Count) {
+    Add-Glyph ($tableX + 6) ($Y + 2) 28 28 0xE70D 10 $Ink.Text2
+    $nw = Add-Line ($tableX + 40) $Y 32 $Name 14 $Ink.Text $true
+    [void](Add-Line ($tableX + 40 + $nw + 8) $Y 32 $Count 12 $Ink.Text3)
+    Add-Box $tableX ($Y + 31) $tableW 1 $Ink.Muted
+    $Y + 32
+}
+# 깔때기 메뉴: 묶음 이름(F.Caption · B.Text.Tertiary, 높이 28) + 항목 32. 고른 조건은 앞에 체크(CheckMark E73E 12)
+function Add-FilterMenu([double]$X, [double]$Y, [double]$W, [object[]]$Items) {
+    $h = 8 + (@($Items | ForEach-Object { if ($_['Cap']) { 28 } else { 32 } }) | Measure-Object -Sum).Sum
+    Add-Raised $X $Y $W $h
+    $iy = $Y + 4
+    foreach ($it in $Items) {
+        if ($it['Cap']) { [void](Add-Line ($X + 12) $iy 28 $it.Cap 12 $Ink.Text3); $iy += 28; continue }
+        if ($it['Hover']) { Add-Box ($X + 4) $iy ($W - 8) 32 $Ink.Hover '' 4 }
+        if ($it['On']) { Add-Glyph ($X + 12) $iy 16 32 0xE73E 12 $Ink.Text }
+        [void](Add-Line ($X + 36) $iy 32 $it.T 14 $Ink.Text)
+        $iy += 32
+    }
+    $h
+}
+
+# 보는 달(11월)의 일정 + 오늘 루틴. 같은 날 둘째 줄부터 날짜를 비우고, 여러 날 일정은 기간을 쓴다
+$monthRows = @(
+    @{ Date = '11월 2일 월'; Time = '09:30'; Title = '정기 회의'; Tags = @('#회의'); Done = $true }
+    @{ Date = '11월 3일 ~ 6일'; Time = '하루 종일'; Title = '서버 이전 작업'; Tags = @('#작업'); Due = 'D-1'; Memo = 3 }
+    @{ Date = '11월 3일 화'; Time = '15:00'; Title = '방화벽 정책 정리'; Tags = @('#작업'); Due = '2일 지남'; Over = $true }
+    @{ Date = '11월 4일 수'; Time = '15:00'; Title = '백업 점검'; Tags = @('#점검'); Done = $true }
+    @{ Date = '11월 5일 목'; Time = '09:00'; Title = '메일 확인'; Routine = $true; Done = $true }
+    @{ Time = '10:00'; Title = '주간 점검'; Tags = @('#점검'); Done = $true; Memo = 2 }
+    @{ Time = '14:00'; Title = 'SRV-01 펌웨어 업데이트'; Tags = @('#작업'); Due = '오늘'; Memo = 1; Sel = $true }
+    @{ Time = '15:00'; Title = '장비실 온도 확인'; Routine = $true; Count = '2/5'; Due = '오늘' }
+    @{ Time = '16:00'; Title = '월간 보고 준비'; Tags = @('#보고'); Due = '오늘' }
+    @{ Time = '17:30'; Title = '일일 점검표'; Routine = $true; Due = '오늘' }
+    @{ Time = '22:00'; Title = '야간 패치'; Tags = @('#작업'); Due = '오늘' }
+    @{ Date = '11월 6일 ~ 8일'; Time = '하루 종일'; Title = '인증서 갱신'; Tags = @('#작업'); Due = 'D-3' }
+    @{ Date = '11월 10일 화'; Time = '14:00'; Title = '스토리지 교체'; Tags = @('#작업'); Due = 'D-5' }
+    @{ Date = '11월 12일 목'; Time = '10:00'; Title = '주간 점검'; Tags = @('#점검'); Due = 'D-7' }
+    @{ Date = '11월 13일 ~ 17일'; Time = '하루 종일'; Title = 'DR 훈련'; Tags = @('#훈련'); Due = 'D-12' }
+    @{ Date = '11월 19일 목'; Time = '10:00'; Title = '주간 점검'; Tags = @('#점검'); Due = 'D-14' }
+    @{ Date = '11월 20일 금'; Time = '10:00'; Title = '보안 교육'; Tags = @('#교육'); Due = 'D-15' }
+    @{ Date = '11월 24일 화'; Time = '16:00'; Title = '장애 보고서'; Tags = @('#보고'); Due = 'D-19' }
+    @{ Date = '11월 26일 목'; Time = '10:00'; Title = '주간 점검'; Tags = @('#점검'); Due = 'D-21' }
+)
+$tableView = Use-Scene
+Add-ViewWindow
+Add-ViewTitle -Month -Nav
+[void](Add-ViewSwitch 'table')
+$ty = Add-ScheduleHead 88
+foreach ($r in $monthRows) { $ty = Add-ScheduleRow $ty $r }
+Add-DayListV3
+
+# 할 일: 기한 지남(지난 7일 안, 안 끝낸 것) → 오늘 → 마감 임박(3일 안에 끝나는 하루 종일 여러 날). 묶음 머리 개수는 줄 수
+$dueView = Use-Scene
+Add-ViewWindow
+Add-ViewTitle '할 일' '9'
+[void](Add-ViewSwitch 'due')
+$ty = Add-ScheduleHead 88
+$ty = Add-GroupHead $ty '기한 지남' '2'
+$ty = Add-ScheduleRow $ty @{ Date = '10월 30일 금'; Time = '하루 종일'; Title = '케이블 라벨 정리'; Tags = @('#작업'); Due = '6일 지남'; Over = $true }
+$ty = Add-ScheduleRow $ty @{ Date = '11월 3일 화'; Time = '15:00'; Title = '방화벽 정책 정리'; Tags = @('#작업'); Due = '2일 지남'; Over = $true }
+$ty = Add-GroupHead $ty '오늘' '8'
+$ty = Add-ScheduleRow $ty @{ Date = '11월 3일 ~ 6일'; Time = '하루 종일'; Title = '서버 이전 작업'; Tags = @('#작업'); Due = 'D-1'; Memo = 3 }
+$ty = Add-ScheduleRow $ty @{ Time = '09:00'; Title = '메일 확인'; Routine = $true; Done = $true }
+$ty = Add-ScheduleRow $ty @{ Time = '10:00'; Title = '주간 점검'; Tags = @('#점검'); Done = $true; Memo = 2 }
+$ty = Add-ScheduleRow $ty @{ Time = '14:00'; Title = 'SRV-01 펌웨어 업데이트'; Tags = @('#작업'); Due = '오늘'; Memo = 1; Sel = $true }
+$ty = Add-ScheduleRow $ty @{ Time = '15:00'; Title = '장비실 온도 확인'; Routine = $true; Count = '2/5'; Due = '오늘' }
+$ty = Add-ScheduleRow $ty @{ Time = '16:00'; Title = '월간 보고 준비'; Tags = @('#보고'); Due = '오늘' }
+$ty = Add-ScheduleRow $ty @{ Time = '17:30'; Title = '일일 점검표'; Routine = $true; Due = '오늘' }
+$ty = Add-ScheduleRow $ty @{ Time = '22:00'; Title = '야간 패치'; Tags = @('#작업'); Due = '오늘' }
+$ty = Add-GroupHead $ty '마감 임박' '1'
+$ty = Add-ScheduleRow $ty @{ Date = '11월 6일 ~ 8일'; Time = '하루 종일'; Title = '인증서 갱신'; Tags = @('#작업'); Due = 'D-3' }
+Add-DayListV3
+
+# 찾기: 찾기 칸에 쓰면 표 보기로 바뀌고 앞뒤 1년에서 찾는다. 깔때기 = 상태 · 종류 · 태그(자주 쓴 순), 고르면 찾기 칸에 글로 들어간다
+$findView = Use-Scene
+Add-ViewWindow
+Add-ViewTitle '찾기 결과' '7'
+$filterX = Add-ViewSwitch 'table' '#작업 is:open' -FilterOpen
+$ty = Add-ScheduleHead 88
+foreach ($r in @(
+        @{ Date = '10월 30일 금'; Time = '하루 종일'; Title = '케이블 라벨 정리'; Tags = @('#작업'); Due = '6일 지남'; Over = $true }
+        @{ Date = '11월 3일 ~ 6일'; Time = '하루 종일'; Title = '서버 이전 작업'; Tags = @('#작업'); Due = 'D-1'; Memo = 3 }
+        @{ Date = '11월 3일 화'; Time = '15:00'; Title = '방화벽 정책 정리'; Tags = @('#작업'); Due = '2일 지남'; Over = $true }
+        @{ Date = '11월 5일 목'; Time = '14:00'; Title = 'SRV-01 펌웨어 업데이트'; Tags = @('#작업'); Due = '오늘'; Memo = 1 }
+        @{ Time = '22:00'; Title = '야간 패치'; Tags = @('#작업'); Due = '오늘' }
+        @{ Date = '11월 6일 ~ 8일'; Time = '하루 종일'; Title = '인증서 갱신'; Tags = @('#작업'); Due = 'D-3' }
+        @{ Date = '11월 10일 화'; Time = '14:00'; Title = '스토리지 교체'; Tags = @('#작업'); Due = 'D-5' }
+    )) { $ty = Add-ScheduleRow $ty $r }
+Add-DayListV3
+[void](Add-FilterMenu ($filterX + 28 - 200) 78 200 @(
+        @{ Cap = '상태' }, @{ T = '안 끝낸 것'; On = $true }, @{ T = '끝낸 것' }
+        @{ Cap = '종류' }, @{ T = '일정만' }, @{ T = '루틴만' }
+        @{ Cap = '태그' }, @{ T = '#작업'; On = $true }, @{ T = '#점검'; Hover = $true }, @{ T = '#보고' }, @{ T = '#회의' }, @{ T = '#교육' }, @{ T = '#훈련' }
+    ))
+
+# 루틴 보기: 전체 루틴, 시각순(시각 없는 것 먼저). 열: 이름(나머지) · 규칙 220 · 시각 72 · 오늘 72 · 메모 60. 줄을 누르면 오른쪽에 편집 폼
+$routineCols = @{ Rule = 320; Time = 540; Today = 612; Memo = 684 }
+function Add-RoutineRow([double]$Y, $R) {
+    if ($R['Sel']) { Add-Box $tableX $Y $tableW 32 $Ink.Selected; Add-Box $tableX ($Y + 8) 3 16 $Ink.Accent '' 1.5 }
+    Add-Glyph ($tableX + 12) $Y 12 32 0xE8EE 12 $Ink.Text3
+    [void](Add-Line ($tableX + 30) $Y 32 $R.Title 14 $Ink.Text -Max ($routineCols.Rule - 42))
+    [void](Add-Line ($tableX + $routineCols.Rule + 12) $Y 32 $R.Rule 12 $Ink.Text2 -Max 196)
+    [void](Add-Line ($tableX + $routineCols.Time + 12) $Y 32 $R.Time 12 $Ink.Text2)
+    [void](Add-Line ($tableX + $routineCols.Today + 12) $Y 32 $R.Today 12 $(if ($R.Today -like '*/*') { $Ink.Text } else { $Ink.Text3 }))
+    if ($R['Memo']) {
+        Add-Glyph ($tableX + $routineCols.Memo + 12) $Y 12 32 0xE70B 12 $Ink.Text3
+        [void](Add-Line ($tableX + $routineCols.Memo + 28) $Y 32 ([string]$R.Memo) 12 $Ink.Text3)
+    }
+    Add-Box $tableX ($Y + 31) $tableW 1 $Ink.Muted
+    $Y + 32
+}
+# 루틴 편집 폼(매일) + 새 칸 「시각」(선택, 비우면 시각 없음). 시간마다 루틴은 지금처럼 간격 · 시작 · 끝
+function Add-RoutineTimeForm {
+    $y = 88
+    $y = Add-FormField $y '제목' '메일 확인'
+    $y = Add-FormField $y '주기' '매일' -Combo
+    $y = Add-FormField $y '시각' '09:00'
+    Add-Check 1000 ($y + 2) $true
+    [void](Add-Line 1026 $y 20 '근무 요일만' 14 $Ink.Text)
+    $y += 32
+    $lw = Add-Line 1000 $y 20 '관련 메모' 14 $Ink.Text2
+    [void](Add-Line (1000 + $lw + 8) $y 20 '0' 14 $Ink.Text3)
+    $y += 28
+    $nw = Add-DropBtn 1000 $y '새 메모'
+    [void](Add-Btn (1000 + $nw + 8) $y '기존 메모 고르기')
+    [void](Add-Btn 1000 744 '삭제')
+    $cancelW = Add-Btn 1256 744 '취소' -Right
+    [void](Add-Btn (1256 - $cancelW - 8) 744 '저장' 'primary' -Right)
+}
+$routineView = Use-Scene
+Add-ViewWindow
+Add-ViewTitle '루틴' '5'
+[void](Add-ViewSwitch 'routines')
+$ty = Add-TableHead 88 @(@(18, '이름'), @($routineCols.Rule, '규칙'), @($routineCols.Time, '시각'), @($routineCols.Today, '오늘'), @($routineCols.Memo, '메모'))
+foreach ($r in @(
+        @{ Title = '서버실 출입 기록 확인'; Rule = '월 · 수 · 금'; Time = '—'; Today = '오늘 없음' }
+        @{ Title = '메일 확인'; Rule = '매일 · 근무 요일만'; Time = '09:00'; Today = '1/1'; Sel = $true }
+        @{ Title = '장비실 온도 확인'; Rule = '2시간마다 · 09:00 ~ 17:00'; Time = '—'; Today = '2/5'; Memo = 1 }
+        @{ Title = '주간 보고 작성'; Rule = '금'; Time = '16:00'; Today = '오늘 없음' }
+        @{ Title = '일일 점검표'; Rule = '평일'; Time = '17:30'; Today = '0/1' }
+    )) { $ty = Add-RoutineRow $ty $r }
+Add-RoutineTimeForm
+
+# 일정 편집 폼 + 새 칸 「태그」(알람 다음, 쉼표로 나눔, # 없이 써도 됨). 태그는 계열 전체라 「이 회차만」 저장에서는 바꾸지 않는다
+function Add-EventTagForm {
+    $y = 88
+    $y = Add-FormField $y '제목' 'SRV-01 펌웨어 업데이트'
+    $y = Add-FormRange $y '날짜' '2026-11-05' '2026-11-05'
+    Add-Check 1000 ($y + 2) $false
+    [void](Add-Line 1026 $y 20 '하루 종일' 14 $Ink.Text)
+    $y += 32
+    $y = Add-FormRange $y '시각' '14:00' '15:00'
+    $y = Add-FormField $y '반복' '없음' -Combo
+    $y = Add-FormField $y '알람' '30분 전' -Combo
+    $y = Add-FormField $y '태그' '작업, 펌웨어'
+    $lw = Add-Line 1000 $y 20 '관련 메모' 14 $Ink.Text2
+    [void](Add-Line (1000 + $lw + 8) $y 20 '1' 14 $Ink.Text3)
+    $y += 28
+    Add-MemoLinkRow $y '11-05 SRV-01 펌웨어 업데이트' ''; $y += 32
+    $y += 8
+    $nw = Add-DropBtn 1000 $y '새 메모'
+    [void](Add-Btn (1000 + $nw + 8) $y '기존 메모 고르기')
+    [void](Add-Btn 1000 744 '삭제')
+    $cancelW = Add-Btn 1256 744 '취소' -Right
+    [void](Add-Btn (1256 - $cancelW - 8) 744 '저장' 'primary' -Right)
+}
+$tagForm = Use-Scene
+Add-ViewWindow
+Add-ViewTitle -Month -Nav
+[void](Add-ViewSwitch 'table')
+$ty = Add-ScheduleHead 88
+foreach ($r in $monthRows) { $ty = Add-ScheduleRow $ty $r }
+Add-EventTagForm
+
 # 폰에서 읽는 확대본: 바뀌는 곳만 잘라 키운다
 $phoneH = 6000   # 넉넉히 칠하고, 내보낼 때 실제 높이로 자른다
 # 폰 폭(720)에서 읽히게 설명은 18, 넘치면 낱말 단위로 줄을 바꾼다
@@ -718,6 +1020,21 @@ function Add-Section([string]$Title, [string[]]$Notes, [object[]]$Crops) {
         $script:y += $h + 12
     }
     $script:y += 4
+    foreach ($n in $Notes) { Add-Wrapped 24 $n 18 $Ink.Text2 672 28 }
+    $script:y += 40
+}
+# 자르기 두 개를 나란히(각 폭 330, 사이 12). 좁은 사이드바 폼 둘을 너무 키우지 않고 같이 보여 줄 때 쓴다
+function Add-SectionPair([string]$Title, [string[]]$Notes, [object[]]$Left, [object[]]$Right) {
+    [void](Add-Text 24 $script:y $Title 22 $Ink.Text $true)
+    $script:y += 44
+    $tallest = 0; $x = 24
+    foreach ($crop in $Left, $Right) {
+        $h = 330 * $crop[3] / $crop[2]
+        Add-Crop $x $script:y 330 $h $crop[0] $crop[1] $crop[2] $crop[3] $crop[4]
+        Add-Frame $x $script:y 330 $h '' $Ink.Border 0
+        $tallest = [math]::Max($tallest, $h); $x += 342
+    }
+    $script:y += $tallest + 16
     foreach ($n in $Notes) { Add-Wrapped 24 $n 18 $Ink.Text2 672 28 }
     $script:y += 40
 }
@@ -749,6 +1066,15 @@ Add-Section '⑥ 메모 새 창 = 읽기 보기' @('고칠 수는 없고 할 일
 Add-Section '⑦ 통화 메모 틀' @('전화하기 전에 할 말을 적어 두고, 통화하면서 체크합니다. 「<상대>」만 바꿔 씁니다.') @(, @(224, 112, 656, 456, $memoCall))
 Add-Section '⑧ 루틴도 같은 자리' @('루틴 편집 폼 맨 아래에도 「관련 메모」가 있습니다. 루틴은 날마다 같은 일이라 새 메모 · 고른 메모 모두 모든 날에 붙고, 범위 글자는 쓰지 않습니다.', '규칙을 바꿔 루틴이 새 계열로 나뉘어도 연결은 따라갑니다.') @(, @(984, 460, 288, 332, $memoRoutine))
 $memoPhoneEnd = $y
+
+$viewsPhone = New-PhoneScene '일정 탭 3단계 — 찾기 · 표 · 루틴 보기 시안'
+Add-Section '① 머리줄 오른쪽 = 찾기 · 깔때기 · 보기 4개' @('보기는 「할 일」 · 달력 · 표 · 루틴입니다. 아이콘에는 이름 툴팁이 붙습니다.', '「할 일」 옆 숫자는 아직 안 끝낸 것의 수라서, 달력을 보고 있어도 늘 보입니다.', '찾기 칸에 쓰거나 깔때기에서 고르면 표 보기로 바뀌어 결과를 보여 줍니다.') @(, @(496, 36, 480, 48, $tableView))
+Add-Section '② 할 일' @('기한 지남(지난 7일 안에 지났는데 체크 안 한 것) → 오늘 → 마감 임박(3일 안에 끝나는 여러 날 일정) 순서입니다.', '기한 지남은 경고 아이콘과 「2일 지남」 글자로 알립니다(색만으로 알리지 않음).', '오늘 줄은 시각순이고 루틴(↻)도 섞여 있습니다. 끝낸 것은 체크하면 흐려집니다.') @(, @(200, 32, 776, 520, $dueView))
+Add-Section '③ 표 보기 = 보는 달' @('열은 체크 · 날짜 · 시각 · 제목 · 태그 · 기한입니다. 같은 날 둘째 줄부터는 날짜를 비웁니다.', '‹ 오늘 ›은 표에만 있습니다. 달력처럼 PageUp · PageDown으로도 달을 옮깁니다.', '루틴은 오늘 것만 넣었습니다(정할 것 ①). 줄을 누르면 오른쪽에 편집 폼이 열립니다.') @(, @(200, 32, 776, 680, $tableView))
+Add-Section '④ 찾기 + 깔때기' @('메모와 같은 문법입니다: #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · 빼기 - · OR · ( ) · is:done · is:open · is:routine', '깔때기에서 고르면 찾기 칸에 글로 들어가고, 다시 고르면 빠집니다. 태그는 많이 쓴 순입니다.', '찾는 기간은 오늘 앞뒤 1년이고, 날짜를 쓰면 그 기간까지 넓힙니다(정할 것 ③).') @(, @(200, 32, 776, 500, $findView))
+Add-Section '⑤ 루틴 보기' @('루틴 전체를 시각순으로 봅니다. 규칙 · 시각 · 오늘 진행(끝낸 수/전체) · 관련 메모 수가 한눈에 보입니다.', '줄을 누르면 오른쪽에서 고치고, 우클릭으로 편집 · 삭제합니다.') @(, @(200, 32, 776, 300, $routineView))
+Add-SectionPair '⑥ 루틴 시각 · 일정 태그' @('왼쪽: 매일 · 요일 루틴에 「시각」 칸이 생깁니다(선택). 넣으면 「09:00 메일 확인」처럼 보이고 시각순으로 놓입니다.', '오른쪽: 일정 폼 알람 아래에 「태그」 칸이 생깁니다. 쉼표로 나눠 쓰고 #은 없어도 됩니다. 표 · 찾기 · 깔때기에서 씁니다.') @(984, 32, 288, 380, $routineView) @(984, 400, 288, 260, $tagForm)
+$viewsPhoneEnd = $y
 
 # ---- 내보내기 --------------------------------------------------------------------------------
 
@@ -846,4 +1172,13 @@ if ($Part -in 'all', 'memo') {
     Export-Scene "$($Config.Name)-memo-pick" 1280 800 $memoPick 'WorkTool 일정 2단계 — 기존 메모 고르기 시안' $desc
     Export-Scene "$($Config.Name)-memo-window" 1280 800 $memoWindow 'WorkTool 일정 2단계 — 메모 새 창 시안' $desc
     Export-Scene "$($Config.Name)-memo-phone" 720 ([int][math]::Ceiling($memoPhoneEnd + 8)) $memoPhone 'WorkTool 일정 2단계 — 폰 열람용 확대본' $desc
+}
+if ($Part -in 'all', 'views') {
+    $desc = '가짜 데이터 시안. 2026년 11월, 오늘 11월 5일. 머리줄 오른쪽 찾기 · 깔때기 · 보기 전환, 할 일, 표 보기, 찾기 결과와 깔때기 메뉴, 루틴 보기, 루틴 시각 · 일정 태그 칸.'
+    Export-Scene "$($Config.Name)-views" 1280 800 $tableView 'WorkTool 일정 3단계 — 표 보기 시안' $desc
+    Export-Scene "$($Config.Name)-views-due" 1280 800 $dueView 'WorkTool 일정 3단계 — 할 일 시안' $desc
+    Export-Scene "$($Config.Name)-views-find" 1280 800 $findView 'WorkTool 일정 3단계 — 찾기와 깔때기 시안' $desc
+    Export-Scene "$($Config.Name)-views-routines" 1280 800 $routineView 'WorkTool 일정 3단계 — 루틴 보기 시안' $desc
+    Export-Scene "$($Config.Name)-views-form" 1280 800 $tagForm 'WorkTool 일정 3단계 — 일정 태그 칸 시안' $desc
+    Export-Scene "$($Config.Name)-views-phone" 720 ([int][math]::Ceiling($viewsPhoneEnd + 8)) $viewsPhone 'WorkTool 일정 3단계 — 폰 열람용 확대본' $desc
 }

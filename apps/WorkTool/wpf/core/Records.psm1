@@ -11,6 +11,7 @@
 # - 가져온 기록은 origin = { from, at, rev, row }에 원본 줄을 통째로 남기고, 다시 가져올 때는 덮어쓰지 않고 합친다 (Merge-WtLegacyItems)
 # - 사람이 고친 횟수는 rev(0부터, 고칠 때마다 +1, Set-WtItemEdited)로 센다. 「이 앱에서 고쳤는지」는 시각이 아니라 rev로 정한다
 # - id는 글 그대로 비교한다(대소문자를 가린다, StringComparer.Ordinal). s1과 S1은 다른 항목이다
+# - 찾기 식(낱말 · 칸:값 · #태그 · - · ( ) · OR)을 조건 트리로 읽는다. 칸과 값 검사는 탭이 정한다 (ConvertFrom-WtQuery, 맨 아래)
 
 $ErrorActionPreference = 'Stop'
 
@@ -389,8 +390,222 @@ function Set-WtRecordDeleted($Item, [bool]$Deleted, [string]$At) {
     ''
 }
 
+# ---- 찾기 식 (여러 탭이 같이 쓰는 해석기, 일정 설계 14.3) -------------------------------------------
+# 글 → 조건 트리. 낱말 · "따옴표" · 칸:값 · #태그 · 빼기 - · ( ) · AND/OR(공백은 AND)를 읽는다. 우선순위는 괄호 → - → AND → OR.
+# 어떤 칸을 받는지 · 값이 맞는지 · 칸을 어떻게 평가하는지는 탭이 정한다(Spec). 코어는 글과 트리만 다룬다.
+# 노드: { Kind='all' } / { Kind='term'; Field; Value } / { Kind='not'; Child } / { Kind='and'|'or'; Children }. 저장하는 트리에는 위치를 넣지 않는다.
+# 성공: { Success; Root; Globals(칸 → 값); Error=$null }. 실패: Error = { Position(0부터, UTF-16), Length, Reason }
+# Spec(해시 테이블)
+#   Fields   받는 칸 이름(소문자) 목록            Default  접두사 없는 낱말의 칸(예: text)
+#   Hash     #낱말의 칸(예: tag). 없으면 #은 낱말의 글자다
+#   Bare     { param([string]$Value) } → 따옴표 없는 맨 낱말을 다른 칸으로 읽을 때 그 칸 이름(예: 날짜 → date), 아니면 $null
+#   Check    { param([string]$Field, [string]$Value) } → 고친 값. 틀리면 이유를 throw하고, 그 낱말 자리의 오류가 된다
+#   Globals  식 전체에 하나만 정하는 칸(예: 메모 scope). 트리에서 빼고 결과 Globals에 담는다. 부정하거나 다른 값을 또 쓰면 오류
+#   Plain    글로 되돌릴 때 따옴표 없이 쓰는 칸(예: updated · is)
+$script:queryDays = [regex]::new('^([1-9][0-9]*)[dD]$', 'Compiled, CultureInvariant')
+$script:queryRange = [regex]::new('\.\.', 'Compiled, CultureInvariant')
+
+function Stop-WtQuery($Reader, [int]$Position, [int]$Length, [string]$Reason) {
+    $Reader.Error = [pscustomobject]@{ Position = $Position; Length = $Length; Reason = $Reason }
+    throw [FormatException]::new($Reason)
+}
+
+function Read-WtQueryTokens([string]$Text, $Reader) {
+    $tokens = [Collections.Generic.List[object]]::new()
+    $i = 0
+    while ($i -lt $Text.Length) {
+        if ([char]::IsWhiteSpace($Text[$i])) { $i++; continue }
+        $start = $i; $c = $Text[$i]
+        if ($c -in '(', ')', '-') {
+            $tokens.Add(@{ Type = [string]$c; Position = $i; Length = 1 }); $i++; continue
+        }
+        $buf = [Text.StringBuilder]::new(); $quoted = $false; $prefix = ''
+        while ($i -lt $Text.Length -and -not [char]::IsWhiteSpace($Text[$i]) -and $Text[$i] -notin '(', ')') {
+            if ($Text[$i] -eq '"') {
+                $quoted = $true; $quoteAt = $i; $i++; $closed = $false
+                while ($i -lt $Text.Length) {
+                    if ($Text[$i] -eq '"') { $i++; $closed = $true; break }
+                    if ($Text[$i] -eq '\' -and $i + 1 -lt $Text.Length -and $Text[$i + 1] -in '"', '\') { $i++ }
+                    [void]$buf.Append($Text[$i]); $i++
+                }
+                if (-not $closed) { Stop-WtQuery $Reader $quoteAt ($Text.Length - $quoteAt) '닫는 따옴표가 없습니다.' }
+            } else {
+                if ($Text[$i] -eq ':' -and -not $quoted -and -not $prefix) { $prefix = $buf.ToString().ToLowerInvariant() }
+                [void]$buf.Append($Text[$i]); $i++
+            }
+        }
+        $value = $buf.ToString(); $type = 'atom'
+        if (-not $quoted -and $value.ToUpperInvariant() -in 'AND', 'OR') { $type = $value.ToLowerInvariant() }
+        $tokens.Add(@{ Type = $type; Text = $value; Prefix = $prefix; Quoted = $quoted; Position = $start; Length = $i - $start })
+    }
+    $tokens.Add(@{ Type = 'end'; Position = $Text.Length; Length = 0 })
+    $tokens.ToArray()
+}
+
+function New-WtQueryGroup([string]$Kind, [object[]]$Children) {
+    $flat = [Collections.Generic.List[object]]::new()
+    foreach ($child in $Children) { if ($null -ne $child) { $flat.Add($child) } }
+    if ($flat.Count -eq 0) { return $null }
+    if ($flat.Count -eq 1) { return $flat[0] }
+    [pscustomobject]@{ Kind = $Kind; Children = $flat.ToArray() }
+}
+
+function Read-WtQueryTerm($Reader) {
+    $spec = $Reader.Spec
+    $token = $Reader.Tokens[$Reader.At]; $Reader.At++
+    $field = [string]$spec['Default']; $value = [string]$token.Text
+    if ($token.Prefix) { $field = $token.Prefix; $value = $value.Substring($field.Length + 1) }
+    elseif (-not $token.Quoted -and $spec['Hash'] -and $value.StartsWith('#')) { $field = [string]$spec['Hash']; $value = $value.Substring(1) }
+    elseif (-not $token.Quoted -and $spec['Bare']) {
+        $bare = & $spec['Bare'] $value
+        if ($bare) { $field = [string]$bare }
+    }
+    if (-not $value) { Stop-WtQuery $Reader $token.Position $token.Length '조건 값이 비었습니다.' }
+    if ($field -notin @($spec['Fields'])) { Stop-WtQuery $Reader $token.Position $token.Length "모르는 조건입니다: $field" }
+    if ($spec['Check']) {
+        $checked = $null; $reason = ''
+        try { $checked = & $spec['Check'] $field $value } catch { $reason = $_.Exception.Message }
+        if ($reason) { Stop-WtQuery $Reader $token.Position $token.Length $reason }
+        if ($null -ne $checked) { $value = [string]$checked }
+    }
+    if ($field -in @($spec['Globals'])) {
+        if ($Reader.Globals.Contains($field) -and $Reader.Globals[$field] -ne $value) { Stop-WtQuery $Reader $token.Position $token.Length '검색 전체 범위는 하나만 정합니다.' }
+        $Reader.Globals[$field] = $value
+        return [pscustomobject]@{ Kind = 'global'; Field = $field }
+    }
+    [pscustomobject]@{ Kind = 'term'; Field = $field; Value = $value }
+}
+
+# 노드 안에 식 전체 칸(Globals)이 있으면 그 칸 이름
+function Find-WtQueryGlobal($Node) {
+    if ($Node.Kind -eq 'global') { return [string]$Node.Field }
+    if ($Node.Kind -in 'and', 'or') {
+        foreach ($child in @($Node.Children)) { if ($null -ne $child) { $found = Find-WtQueryGlobal $child; if ($found) { return $found } } }
+    }
+    ''
+}
+
+function Read-WtQueryUnary($Reader) {
+    $token = $Reader.Tokens[$Reader.At]
+    if ($token.Type -eq '-') {
+        $Reader.At++; $child = Read-WtQueryUnary $Reader
+        $global = Find-WtQueryGlobal $child
+        if ($global) { Stop-WtQuery $Reader $token.Position 1 "${global}:는 검색 전체 범위라 부정할 수 없습니다." }
+        return [pscustomobject]@{ Kind = 'not'; Child = $child }
+    }
+    if ($token.Type -eq '(') {
+        $Reader.At++; $child = Read-WtQueryOr $Reader
+        $next = $Reader.Tokens[$Reader.At]
+        if ($next.Type -ne ')') { Stop-WtQuery $Reader $next.Position $next.Length '닫는 괄호가 필요합니다.' }
+        $Reader.At++; return $child
+    }
+    if ($token.Type -ne 'atom') { Stop-WtQuery $Reader $token.Position $token.Length '검색 조건이 필요합니다.' }
+    Read-WtQueryTerm $Reader
+}
+
+function Read-WtQueryAnd($Reader) {
+    $children = [Collections.Generic.List[object]]::new(); $children.Add((Read-WtQueryUnary $Reader))
+    while ($true) {
+        $next = $Reader.Tokens[$Reader.At]
+        if ($next.Type -in 'end', ')', 'or') { break }
+        if ($next.Type -eq 'and') { $Reader.At++ }
+        $children.Add((Read-WtQueryUnary $Reader))
+    }
+    New-WtQueryGroup 'and' $children.ToArray()
+}
+
+function Read-WtQueryOr($Reader) {
+    $children = [Collections.Generic.List[object]]::new(); $children.Add((Read-WtQueryAnd $Reader))
+    while ($Reader.Tokens[$Reader.At].Type -eq 'or') { $Reader.At++; $children.Add((Read-WtQueryAnd $Reader)) }
+    New-WtQueryGroup 'or' $children.ToArray()
+}
+
+function Remove-WtQueryGlobals($Node) {
+    if ($Node.Kind -eq 'global') { return $null }
+    if ($Node.Kind -in 'and', 'or') {
+        $children = @(foreach ($child in $Node.Children) { Remove-WtQueryGlobals $child })
+        return New-WtQueryGroup $Node.Kind $children
+    }
+    $Node
+}
+
+function ConvertFrom-WtQuery {
+    param([Parameter(Position = 0)][AllowEmptyString()][string]$Text = '', [Parameter(Mandatory)][hashtable]$Spec)
+    $reader = @{ At = 0; Tokens = @(); Spec = $Spec; Globals = [ordered]@{}; Error = $null }
+    try {
+        $reader.Tokens = @(Read-WtQueryTokens $Text $reader)
+        $root = $null
+        if ($reader.Tokens[0].Type -ne 'end') {
+            $root = Read-WtQueryOr $reader
+            $next = $reader.Tokens[$reader.At]
+            if ($next.Type -ne 'end') { Stop-WtQuery $reader $next.Position $next.Length '괄호 또는 연산자 위치가 잘못됐습니다.' }
+            $root = Remove-WtQueryGlobals $root
+        }
+        if ($null -eq $root) { $root = [pscustomobject]@{ Kind = 'all' } }
+        [pscustomobject]@{ Success = $true; Root = $root; Globals = $reader.Globals; Error = $null }
+    } catch [FormatException] {
+        [pscustomobject]@{ Success = $false; Root = $null; Globals = $reader.Globals; Error = $reader.Error }
+    }
+}
+
+function ConvertTo-WtQueryNode($Node, [hashtable]$Spec) {
+    switch ($Node.Kind) {
+        'all' { return '' }
+        'term' {
+            $value = ([string]$Node.Value).Replace('\', '\\').Replace('"', '\"')
+            if ($Node.Field -in @($Spec['Plain'])) { return "$($Node.Field):$value" }
+            $prefix = if ($Node.Field -eq $Spec['Default']) { '' } else { "$($Node.Field):" }
+            return $prefix + '"' + $value + '"'
+        }
+        'not' { return '-(' + (ConvertTo-WtQueryNode $Node.Child $Spec) + ')' }
+        { $_ -in 'and', 'or' } {
+            $parts = @(foreach ($child in $Node.Children) { '(' + (ConvertTo-WtQueryNode $child $Spec) + ')' })
+            return $parts -join $(if ($Node.Kind -eq 'and') { ' AND ' } else { ' OR ' })
+        }
+        default { throw '모르는 검색 노드입니다.' }
+    }
+}
+
+# 트리 → 글. 다시 해석하면 같은 트리가 된다(식 전체 칸은 부르는 탭이 앞에 붙인다)
+function ConvertTo-WtQuery {
+    param([Parameter(Mandatory, Position = 0)]$Root, [Parameter(Mandatory)][hashtable]$Spec)
+    ConvertTo-WtQueryNode $Root $Spec
+}
+
+# 날짜 조건 값: yyyy-MM-dd · 시작..끝 · <날짜 · >날짜(-Relative면 오늘 포함 최근 N일 Nd도). 고친 값을 돌려주고, 틀리면 이유를 throw한다
+function ConvertFrom-WtQueryDate([string]$Value, [switch]$Relative) {
+    if ($Relative) {
+        $recent = $script:queryDays.Match($Value)
+        if ($recent.Success) {
+            $days = 0
+            if (-not [int]::TryParse($recent.Groups[1].Value, [Globalization.NumberStyles]::None, $script:inv, [ref]$days) -or $days -gt 109573) { throw '최근 날짜 수가 너무 큽니다.' }
+            return $days.ToString($script:inv) + 'd'
+        }
+    }
+    $parts = $script:queryRange.Split($Value.TrimStart('<', '>'))
+    if ($parts.Count -gt 2 -or ($Value.StartsWith('<') -or $Value.StartsWith('>')) -and $parts.Count -ne 1) { throw '날짜 조건은 날짜, 시작..끝, <날짜, >날짜로 씁니다.' }
+    foreach ($dateText in $parts) { if ($null -eq (ConvertFrom-WtDateText $dateText)) { throw '날짜는 1900~2199년의 yyyy-MM-dd로 씁니다.' } }
+    if ($parts.Count -eq 2 -and [string]::CompareOrdinal($parts[0], $parts[1]) -gt 0) { throw '시작 날짜가 끝 날짜보다 늦습니다.' }
+    $Value
+}
+
+# 검사한 날짜 조건 값 → { Op: ''(기간) · '<' · '>'; From; To }. 최근 N일(Nd)은 Today 기준으로 바꾼다
+function Get-WtQueryDateRange([string]$Value, [datetime]$Today = [datetime]::Today) {
+    $recent = $script:queryDays.Match($Value)
+    if ($recent.Success) { return [pscustomobject]@{ Op = ''; From = $Today.Date.AddDays(1 - [int]$recent.Groups[1].Value); To = $Today.Date } }
+    if ($Value.StartsWith('<') -or $Value.StartsWith('>')) {
+        $day = ConvertFrom-WtDateText $Value.TrimStart('<', '>')
+        return [pscustomobject]@{ Op = $Value.Substring(0, 1); From = $day; To = $day }
+    }
+    $parts = $script:queryRange.Split($Value)
+    $from = ConvertFrom-WtDateText $parts[0]
+    $to = if ($parts.Count -eq 2) { ConvertFrom-WtDateText $parts[1] } else { $from }
+    [pscustomobject]@{ Op = ''; From = $from; To = $to }
+}
+
 Export-ModuleMember -Function Get-WtStamp, ConvertFrom-WtStamp, ConvertFrom-WtDateText, ConvertTo-WtDateText, ConvertFrom-WtTimeText,
     ConvertFrom-WtWhole, ConvertFrom-WtNumber, ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, ConvertFrom-WtLegacyStamp,
     Test-WtRecordObject, Get-WtField, Set-WtField, Copy-WtItem, Test-WtDeleted, Get-WtItemRevision, Set-WtItemEdited, Get-WtRecordProblem,
     Compress-WtDeletedItems, Get-WtRowKey, Get-WtChangedColumns, Copy-WtPathValue, Merge-WtLegacyItems,
-    Get-WtRecordEdit, Merge-WtRecordPatch, Set-WtRecordDeleted
+    Get-WtRecordEdit, Merge-WtRecordPatch, Set-WtRecordDeleted,
+    ConvertFrom-WtQuery, ConvertTo-WtQuery, ConvertFrom-WtQueryDate, Get-WtQueryDateRange

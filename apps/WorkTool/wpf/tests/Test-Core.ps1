@@ -245,6 +245,51 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     try { [void](Read-WtStore -Name 'mig' -Schema 1) } catch { $threw = $true }
     Assert-Wt '더 새 형식 파일은 읽지 않고 멈춘다' $threw
 
+    # 찾기 식 (core\Records.psm1, 일정 설계 14.3): 가짜 칸으로 문법만 본다. 메모 · 일정 칸은 각 탭 검사가 본다
+    $querySpec = @{
+        Default = 'text'; Hash = 'tag'; Fields = @('text', 'title', 'tag', 'when', 'kind', 'range'); Globals = @('range'); Plain = @('when', 'kind')
+        Bare = { param([string]$Value) if ($Value -cmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { 'when' } }
+        Check = {
+            param([string]$Field, [string]$Value)
+            if ($Field -eq 'kind') { if ($Value -notin 'a', 'b') { throw 'kind에는 a · b를 씁니다.' }; return $Value.ToLowerInvariant() }
+            if ($Field -eq 'when') { return ConvertFrom-WtQueryDate $Value }
+            $Value
+        }
+    }
+    $queryShape = { param($Node) @($Node.Children | ForEach-Object { if ($_.Kind -eq 'term') { "$($_.Field)=$($_.Value)" } else { $_.Kind } }) -join ',' }
+    $parsedQuery = ConvertFrom-WtQuery 'x "y z" -title:w #t (a OR b) kind:A 2026-11-05' -Spec $querySpec
+    $roundQuery = ConvertFrom-WtQuery (ConvertTo-WtQuery $parsedQuery.Root -Spec $querySpec) -Spec $querySpec
+    Assert-Wt '찾기 식: 낱말 · 따옴표 · 빼기 · #태그 · 괄호 OR · 칸 값 고침 · 맨 날짜를 다른 칸으로, 글로 되돌려도 같은 트리' (
+        $parsedQuery.Success -and $parsedQuery.Root.Kind -eq 'and' -and (& $queryShape $parsedQuery.Root) -ceq 'text=x,text=y z,not,tag=t,or,kind=a,when=2026-11-05' -and
+        ($parsedQuery.Root | ConvertTo-Json -Depth 10 -Compress) -ceq ($roundQuery.Root | ConvertTo-Json -Depth 10 -Compress)) (& $queryShape $parsedQuery.Root)
+    $precedence = ConvertFrom-WtQuery 'a b OR c' -Spec $querySpec
+    $quotedQuery = ConvertFrom-WtQuery '"#표시" "2026-11-05"' -Spec $querySpec
+    $globalQuery = ConvertFrom-WtQuery 'range:all x' -Spec $querySpec
+    $emptyQuery = ConvertFrom-WtQuery '' -Spec $querySpec
+    Assert-Wt '찾기 식: AND가 OR보다 먼저, 따옴표 안 # · 날짜는 낱말, 식 전체 칸은 트리에서 빼서 따로, 빈 글은 전체' (
+        $precedence.Root.Kind -eq 'or' -and $precedence.Root.Children[0].Kind -eq 'and' -and (& $queryShape $quotedQuery.Root) -ceq 'text=#표시,text=2026-11-05' -and
+        $globalQuery.Globals['range'] -ceq 'all' -and $globalQuery.Root.Kind -eq 'term' -and $globalQuery.Root.Value -ceq 'x' -and $emptyQuery.Success -and $emptyQuery.Root.Kind -eq 'all')
+    $queryErrors = @(foreach ($case in @(@('"닫지 않음', 0, '닫는 따옴표'), @('x:1', 0, '모르는 조건'), @('kind:c', 0, 'kind에는'), @('a OR', 4, '검색 조건'), @('(a', 2, '닫는 괄호'), @('a)', 1, '괄호 또는'),
+                @('when:2026-02-30', 0, '날짜는'), @('-range:all', 0, 'range:는 검색 전체 범위라'), @('range:a range:b', 8, '하나만'), @('title:', 0, '값이 비었')) ) {
+            $r = ConvertFrom-WtQuery $case[0] -Spec $querySpec
+            if ($r.Success -or $r.Error.Position -ne $case[1] -or $r.Error.Reason -notlike "*$($case[2])*") { "$($case[0]) → $($r.Error.Position) $($r.Error.Reason)" }
+        })
+    Assert-Wt '찾기 식: 틀린 식은 위치(0부터)와 이유를 돌려준다(따옴표 · 모르는 칸 · 값 검사 · 괄호 · 날짜 · 식 전체 칸 부정 · 겹침 · 빈 값)' (-not $queryErrors.Count) ($queryErrors -join ' | ')
+    $dateValues = @(foreach ($case in @(@('7d', $true, '7d'), @('2026-11-01', $false, '2026-11-01'), @('2026-10-01..2026-10-31', $false, '2026-10-01..2026-10-31'), @('<2026-11-01', $false, '<2026-11-01'))) {
+            $v = try { ConvertFrom-WtQueryDate $case[0] -Relative:$case[1] } catch { "오류 $($_.Exception.Message)" }
+            if ($v -cne $case[2]) { "$($case[0]) → $v" }
+        })
+    $dateRejects = @(foreach ($case in @(@('7d', $false), @('2026-11-01..2026-10-01', $false), @('<2026-01-01..2026-02-01', $false), @('0d', $true))) {
+            $bad = try { [void](ConvertFrom-WtQueryDate $case[0] -Relative:$case[1]); $false } catch { $true }
+            if (-not $bad) { $case[0] }
+        })
+    $recentRange = Get-WtQueryDateRange '7d' -Today ([datetime]'2026-11-07')
+    $beforeRange = Get-WtQueryDateRange '<2026-11-01'
+    $spanRange = Get-WtQueryDateRange '2026-10-01..2026-10-31'
+    Assert-Wt '찾기 식 날짜: 날짜 · 기간 · < · >(최근 N일은 -Relative일 때만)를 받고, 거꾸로 된 기간은 거부, 범위로 바꾸기' (
+        -not $dateValues.Count -and -not $dateRejects.Count -and $recentRange.From -eq [datetime]'2026-11-01' -and $recentRange.To -eq [datetime]'2026-11-07' -and
+        $beforeRange.Op -ceq '<' -and $beforeRange.From -eq [datetime]'2026-11-01' -and $spanRange.Op -ceq '' -and $spanRange.To -eq [datetime]'2026-10-31') (($dateValues + $dateRejects) -join ' | ')
+
     # 형식 규칙 (core\Records.psm1 · 저장 모듈): 가짜 저장소로 본다. 칸의 뜻은 탭이 정하고, 여기서는 모양만 본다
     $raw = { param($name, $json) [System.IO.File]::WriteAllText((Get-WtStorePath $name), $json, [System.Text.UTF8Encoding]::new($false)) }
     & $raw 'kind-text' '{ "schema": 1, "saved": "2026-10-25T21:54:29", "future": { "a": 1 }, "items": [ { "id": "k1", "at": "2026-10-25T21:54:29", "when": "2026-10-25T21:54:29+09:00", "n": 3 } ] }'

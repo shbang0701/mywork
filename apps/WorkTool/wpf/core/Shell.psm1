@@ -874,6 +874,6 @@ function Start-WtApp {
     }
 }
 
-Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Switch-WtCollapsed, Register-WtKeyOwner, Test-WtKeyOwned,
+Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Update-WtNavBadges, Switch-WtCollapsed, Register-WtKeyOwner, Test-WtKeyOwned,
     New-WtSidePanel, Switch-WtPanelCycle, Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp

@@ -1,198 +1,49 @@
 # 메모 데이터 · 검색. 화면과 파일 I/O 없이 core/Storage.psm1의 핸들만 쓴다.
 $ErrorActionPreference = 'Stop'
 $script:memoInv = [Globalization.CultureInfo]::InvariantCulture
-$script:memoQueryDays = [regex]::new('^([1-9][0-9]*)[dD]$', 'Compiled, CultureInvariant')
 $script:memoRelativeDays = [regex]::new('^([0-9]+)d$', 'Compiled, CultureInvariant')
 $script:memoDateRange = [regex]::new('\.\.', 'Compiled, CultureInvariant')
 
 # ---- 검색식: Scope(검색 전체) + Root(칩과 공유하는 조건 트리) ---------------------------------
+# 글 → 트리 해석은 일정과 같이 쓰는 코어 해석기(core\Records.psm1 ConvertFrom-WtQuery)가 한다. 여기서는 메모 칸 · 값 검사 · scope만 정한다.
 # 노드: all / term(Field, Value) / not(Child) / and|or(Children).
 # 성공: { Success, Scope(active|archived|all), Root, Error=$null }
 # 실패: Error = { Position(0부터, UTF-16), Length, Reason }. 저장하는 트리에는 위치를 넣지 않는다.
-function Stop-WtMemoQuery($Reader, [int]$Position, [int]$Length, [string]$Reason) {
-    $Reader.Error = [pscustomobject]@{ Position = $Position; Length = $Length; Reason = $Reason }
-    throw [FormatException]::new($Reason)
-}
-
-function Read-WtMemoQueryTokens([string]$Text, $Reader) {
-    $tokens = [Collections.Generic.List[object]]::new()
-    $i = 0
-    while ($i -lt $Text.Length) {
-        if ([char]::IsWhiteSpace($Text[$i])) { $i++; continue }
-        $start = $i; $c = $Text[$i]
-        if ($c -in '(', ')', '-') {
-            $tokens.Add(@{ Type = [string]$c; Position = $i; Length = 1 }); $i++; continue
-        }
-        $buf = [Text.StringBuilder]::new(); $quoted = $false; $prefix = ''
-        while ($i -lt $Text.Length -and -not [char]::IsWhiteSpace($Text[$i]) -and $Text[$i] -notin '(', ')') {
-            if ($Text[$i] -eq '"') {
-                $quoted = $true; $quoteAt = $i; $i++; $closed = $false
-                while ($i -lt $Text.Length) {
-                    if ($Text[$i] -eq '"') { $i++; $closed = $true; break }
-                    if ($Text[$i] -eq '\' -and $i + 1 -lt $Text.Length -and $Text[$i + 1] -in '"', '\') { $i++ }
-                    [void]$buf.Append($Text[$i]); $i++
-                }
-                if (-not $closed) { Stop-WtMemoQuery $Reader $quoteAt ($Text.Length - $quoteAt) '닫는 따옴표가 없습니다.' }
-            } else {
-                if ($Text[$i] -eq ':' -and -not $quoted -and -not $prefix) { $prefix = $buf.ToString().ToLowerInvariant() }
-                [void]$buf.Append($Text[$i]); $i++
+$script:memoQuerySpec = @{
+    Default = 'text'; Hash = 'tag'
+    Fields = @('text', 'title', 'body', 'tag', 'folder', 'is', 'scope', 'updated', 'created', 'has', 'no', 'linksto')
+    Globals = @('scope')
+    Plain = @('updated', 'created', 'is', 'has', 'no')
+    Check = {
+        param([string]$Field, [string]$Value)
+        switch ($Field) {
+            'is' { if ($Value -ine 'pinned') { throw 'is:에는 pinned를 씁니다.' }; return 'pinned' }
+            'has' { if ($Value.ToLowerInvariant() -notin 'link', 'backlink') { throw 'has:에는 link 또는 backlink를 씁니다.' }; return $Value.ToLowerInvariant() }
+            'no' { if ($Value -ine 'tag') { throw 'no:에는 tag를 씁니다.' }; return 'tag' }
+            'scope' {
+                $scope = $Value.ToLowerInvariant()
+                if ($scope -notin 'archived', 'all') { throw 'scope:에는 archived 또는 all을 씁니다.' }
+                return $scope
             }
+            { $_ -in 'updated', 'created' } { return ConvertFrom-WtQueryDate $Value -Relative }
         }
-        $value = $buf.ToString(); $type = 'atom'
-        if (-not $quoted -and $value.ToUpperInvariant() -in 'AND', 'OR') { $type = $value.ToLowerInvariant() }
-        $tokens.Add(@{ Type = $type; Text = $value; Prefix = $prefix; Quoted = $quoted; Position = $start; Length = $i - $start })
+        $Value
     }
-    $tokens.Add(@{ Type = 'end'; Position = $Text.Length; Length = 0 })
-    $tokens.ToArray()
-}
-
-function New-WtMemoQueryGroup([string]$Kind, [object[]]$Children) {
-    $flat = [Collections.Generic.List[object]]::new()
-    foreach ($child in $Children) {
-        if ($null -eq $child) { continue }
-        $flat.Add($child)
-    }
-    if ($flat.Count -eq 0) { return $null }
-    if ($flat.Count -eq 1) { return $flat[0] }
-    [pscustomobject]@{ Kind = $Kind; Children = $flat.ToArray() }
-}
-
-function Read-WtMemoQueryTerm($Reader) {
-    $token = $Reader.Tokens[$Reader.At]; $Reader.At++
-    $field = 'text'; $value = [string]$token.Text
-    if ($token.Prefix) { $field = $token.Prefix; $value = $value.Substring($field.Length + 1) }
-    elseif (-not $token.Quoted -and $value.StartsWith('#')) { $field = 'tag'; $value = $value.Substring(1) }
-    if (-not $value) { Stop-WtMemoQuery $Reader $token.Position $token.Length '조건 값이 비었습니다.' }
-    if ($field -notin 'text', 'title', 'body', 'tag', 'folder', 'is', 'scope', 'updated', 'created', 'has', 'no', 'linksto') {
-        Stop-WtMemoQuery $Reader $token.Position $token.Length "모르는 조건입니다: $field"
-    }
-    switch ($field) {
-        'is' { if ($value -ine 'pinned') { Stop-WtMemoQuery $Reader $token.Position $token.Length 'is:에는 pinned를 씁니다.' }; $value = 'pinned' }
-        'has' { if ($value.ToLowerInvariant() -notin 'link', 'backlink') { Stop-WtMemoQuery $Reader $token.Position $token.Length 'has:에는 link 또는 backlink를 씁니다.' }; $value = $value.ToLowerInvariant() }
-        'no' { if ($value -ine 'tag') { Stop-WtMemoQuery $Reader $token.Position $token.Length 'no:에는 tag를 씁니다.' }; $value = 'tag' }
-        'scope' {
-            $value = $value.ToLowerInvariant()
-            if ($value -notin 'archived', 'all') { Stop-WtMemoQuery $Reader $token.Position $token.Length 'scope:에는 archived 또는 all을 씁니다.' }
-            if ($Reader.Scope -and $Reader.Scope -ne $value) { Stop-WtMemoQuery $Reader $token.Position $token.Length '검색 전체 범위는 하나만 정합니다.' }
-            $Reader.Scope = $value
-            return [pscustomobject]@{ Kind = 'scope'; Position = $token.Position; Length = $token.Length }
-        }
-        { $_ -in 'updated', 'created' } {
-            $relative = $script:memoQueryDays.Match($value)
-            if ($relative.Success) {
-                $days = 0
-                if (-not [int]::TryParse($relative.Groups[1].Value, [Globalization.NumberStyles]::None, $script:memoInv, [ref]$days) -or $days -gt 109573) {
-                    Stop-WtMemoQuery $Reader $token.Position $token.Length '최근 날짜 수가 너무 큽니다.'
-                }
-                $value = $days.ToString($script:memoInv) + 'd'
-            } else {
-                $parts = $script:memoDateRange.Split($value.TrimStart('<', '>'))
-                if ($parts.Count -gt 2 -or ($value.StartsWith('<') -or $value.StartsWith('>')) -and $parts.Count -ne 1) {
-                    Stop-WtMemoQuery $Reader $token.Position $token.Length '날짜 조건은 날짜, 시작..끝, <날짜, >날짜로 씁니다.'
-                }
-                foreach ($dateText in $parts) {
-                    if ($null -eq (ConvertFrom-WtDateText $dateText)) { Stop-WtMemoQuery $Reader $token.Position $token.Length '날짜는 1900~2199년의 yyyy-MM-dd로 씁니다.' }
-                }
-                if ($parts.Count -eq 2 -and [string]::CompareOrdinal($parts[0], $parts[1]) -gt 0) {
-                    Stop-WtMemoQuery $Reader $token.Position $token.Length '시작 날짜가 끝 날짜보다 늦습니다.'
-                }
-            }
-        }
-    }
-    [pscustomobject]@{ Kind = 'term'; Field = $field; Value = $value }
-}
-
-function Read-WtMemoQueryUnary($Reader) {
-    $token = $Reader.Tokens[$Reader.At]
-    if ($token.Type -eq '-') {
-        $Reader.At++; $child = Read-WtMemoQueryUnary $Reader
-        if (Test-WtMemoQueryScopeNode $child) { Stop-WtMemoQuery $Reader $token.Position 1 'scope:는 검색 전체 범위라 부정할 수 없습니다.' }
-        return [pscustomobject]@{ Kind = 'not'; Child = $child }
-    }
-    if ($token.Type -eq '(') {
-        $Reader.At++; $child = Read-WtMemoQueryOr $Reader
-        $next = $Reader.Tokens[$Reader.At]
-        if ($next.Type -ne ')') { Stop-WtMemoQuery $Reader $next.Position $next.Length '닫는 괄호가 필요합니다.' }
-        $Reader.At++; return $child
-    }
-    if ($token.Type -ne 'atom') { Stop-WtMemoQuery $Reader $token.Position $token.Length '검색 조건이 필요합니다.' }
-    Read-WtMemoQueryTerm $Reader
-}
-
-function Test-WtMemoQueryScopeNode($Node) {
-    if ($Node.Kind -eq 'scope') { return $true }
-    foreach ($child in @($Node.Children)) { if ($null -ne $child -and (Test-WtMemoQueryScopeNode $child)) { return $true } }
-    $false
-}
-
-function Read-WtMemoQueryAnd($Reader) {
-    $children = [Collections.Generic.List[object]]::new(); $children.Add((Read-WtMemoQueryUnary $Reader))
-    while ($true) {
-        $next = $Reader.Tokens[$Reader.At]
-        if ($next.Type -in 'end', ')', 'or') { break }
-        if ($next.Type -eq 'and') { $Reader.At++ }
-        $children.Add((Read-WtMemoQueryUnary $Reader))
-    }
-    New-WtMemoQueryGroup 'and' $children.ToArray()
-}
-
-function Read-WtMemoQueryOr($Reader) {
-    $children = [Collections.Generic.List[object]]::new(); $children.Add((Read-WtMemoQueryAnd $Reader))
-    while ($Reader.Tokens[$Reader.At].Type -eq 'or') { $Reader.At++; $children.Add((Read-WtMemoQueryAnd $Reader)) }
-    New-WtMemoQueryGroup 'or' $children.ToArray()
-}
-
-function Remove-WtMemoScopeNode($Node) {
-    if ($Node.Kind -eq 'scope') { return $null }
-    if ($Node.Kind -in 'and', 'or') {
-        $children = @(foreach ($child in $Node.Children) { Remove-WtMemoScopeNode $child })
-        return New-WtMemoQueryGroup $Node.Kind $children
-    }
-    $Node
 }
 
 function ConvertFrom-WtMemoQuery {
     param([Parameter(Position = 0)][AllowEmptyString()][string]$Text = '')
-    $reader = @{ At = 0; Tokens = @(); Scope = ''; Error = $null }
-    try {
-        $reader.Tokens = @(Read-WtMemoQueryTokens $Text $reader)
-        $root = $null
-        if ($reader.Tokens[0].Type -ne 'end') {
-            $root = Read-WtMemoQueryOr $reader
-            $next = $reader.Tokens[$reader.At]
-            if ($next.Type -ne 'end') { Stop-WtMemoQuery $reader $next.Position $next.Length '괄호 또는 연산자 위치가 잘못됐습니다.' }
-            $root = Remove-WtMemoScopeNode $root
-        }
-        if ($null -eq $root) { $root = [pscustomobject]@{ Kind = 'all' } }
-        [pscustomobject]@{ Success = $true; Scope = $(if ($reader.Scope) { $reader.Scope } else { 'active' }); Root = $root; Error = $null }
-    } catch [FormatException] {
-        [pscustomobject]@{ Success = $false; Scope = 'active'; Root = $null; Error = $reader.Error }
-    }
-}
-
-function ConvertTo-WtMemoQueryNode($Node) {
-    switch ($Node.Kind) {
-        'all' { return '' }
-        'term' {
-            $value = ([string]$Node.Value).Replace('\', '\\').Replace('"', '\"')
-            if ($Node.Field -in 'updated', 'created', 'is', 'has', 'no') { return "$($Node.Field):$value" }
-            $prefix = if ($Node.Field -eq 'text') { '' } else { "$($Node.Field):" }
-            return $prefix + '"' + $value + '"'
-        }
-        'not' { return '-(' + (ConvertTo-WtMemoQueryNode $Node.Child) + ')' }
-        { $_ -in 'and', 'or' } {
-            $parts = @(foreach ($child in $Node.Children) { '(' + (ConvertTo-WtMemoQueryNode $child) + ')' })
-            return $parts -join $(if ($Node.Kind -eq 'and') { ' AND ' } else { ' OR ' })
-        }
-        default { throw '모르는 메모 검색 노드입니다.' }
-    }
+    $parsed = ConvertFrom-WtQuery -Text $Text -Spec $script:memoQuerySpec
+    if (-not $parsed.Success) { return [pscustomobject]@{ Success = $false; Scope = 'active'; Root = $null; Error = $parsed.Error } }
+    $scope = if ($parsed.Globals.Contains('scope')) { [string]$parsed.Globals['scope'] } else { 'active' }
+    [pscustomobject]@{ Success = $true; Scope = $scope; Root = $parsed.Root; Error = $null }
 }
 
 function ConvertTo-WtMemoQuery {
     param([Parameter(Mandatory, Position = 0)]$Query)
     if ($Query.Success -eq $false) { throw '오류가 있는 검색식은 글로 만들 수 없습니다.' }
     if ($Query.Scope -notin 'active', 'all', 'archived') { throw '모르는 검색 범위입니다.' }
-    $text = ConvertTo-WtMemoQueryNode $Query.Root
+    $text = ConvertTo-WtQuery $Query.Root -Spec $script:memoQuerySpec
     if ($Query.Scope -ne 'active') { $text = ("scope:$($Query.Scope) " + $text).TrimEnd() }
     $check = ConvertFrom-WtMemoQuery $text
     if (-not $check.Success) { throw $check.Error.Reason }

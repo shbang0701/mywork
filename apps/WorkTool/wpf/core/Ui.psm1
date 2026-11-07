@@ -1928,6 +1928,95 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.BarToNext" TargetType="Border" BasedOn="{StaticResource Schedule.Bar}"><Setter Property="Margin" Value="4,0,0,0"/><Setter Property="BorderThickness" Value="1,1,0,1"/><Setter Property="CornerRadius" Value="2,0,0,2"/></Style>
   <Style x:Key="Schedule.BarMiddle" TargetType="Border" BasedOn="{StaticResource Schedule.Bar}"><Setter Property="Margin" Value="0"/><Setter Property="Padding" Value="4,0,0,0"/><Setter Property="BorderThickness" Value="0,1,0,1"/><Setter Property="CornerRadius" Value="0"/></Style>
   <Style x:Key="Schedule.RoutineCount" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <!-- 일정 3단계(디자인 README 「일정」): 머리줄 제목 · ‹ 오늘 › · 찾기 · 깔때기 · 보기 전환(메모 탭 모양), 표 · 할 일 줄, 루틴 보기 -->
+  <Style x:Key="Schedule.ViewTitle" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Schedule.TableNav" TargetType="StackPanel"><Setter Property="Orientation" Value="Horizontal"/><Setter Property="Margin" Value="12,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.TodayButton" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Height" Value="{DynamicResource F.Height.Compact}"/><Setter Property="MinHeight" Value="0"/><Setter Property="Margin" Value="4,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.Search" TargetType="Grid"><Setter Property="Width" Value="200"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.Filter" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="4,0,8,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.ViewTab" TargetType="RadioButton">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Background" Value="Transparent"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/><Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
+    <Setter Property="Height" Value="{DynamicResource F.Height.Compact}"/><Setter Property="MinWidth" Value="28"/><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="4,0,0,0"/>
+    <Setter Property="Cursor" Value="Hand"/><Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/><Setter Property="VerticalAlignment" Value="Center"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
+      <Grid>
+        <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+        <Border x:Name="Line" Height="2" Margin="8,0" VerticalAlignment="Bottom" Background="{DynamicResource B.Accent}" Visibility="Collapsed"/>
+      </Grid>
+      <ControlTemplate.Triggers><Trigger Property="IsChecked" Value="True"><Setter TargetName="Line" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
+      <Trigger Property="IsChecked" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/></Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Schedule.ViewTabText" TargetType="RadioButton" BasedOn="{StaticResource Schedule.ViewTab}"><Setter Property="Padding" Value="12,0"/><Setter Property="Margin" Value="0"/></Style>
+  <Style x:Key="Schedule.ViewTabIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="Width" Value="28"/><Setter Property="TextAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.TableHead" TargetType="Border" BasedOn="{StaticResource Table.Head}"><Setter Property="Padding" Value="0,0,12,0"/></Style>
+  <Style x:Key="Schedule.TableCheck" TargetType="CheckBox" BasedOn="{StaticResource Check}"><Setter Property="Margin" Value="12,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Background" Value="Transparent"/></Style>
+  <Style x:Key="Schedule.TableRoutineIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="0,0,6,0"/></Style>
+  <Style x:Key="Schedule.TableMemoIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="8,0,4,0"/></Style>
+  <Style x:Key="Schedule.TableMeta" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0,0,0"/></Style>
+  <Style x:Key="Schedule.TableWarn" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Status.Warning.Icon}"/><Setter Property="Margin" Value="0,0,4,0"/></Style>
+  <Style x:Key="Schedule.TagChip" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/></Style>
+  <Style x:Key="Schedule.TagChipText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Accent.Text}"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
+  <Style x:Key="Schedule.TableRow" TargetType="ListBoxItem" BasedOn="{StaticResource Row}"><Setter Property="Padding" Value="0"/></Style>
+  <!-- 표 · 할 일 줄: 체크 40 · 날짜 120 · 시각 80 · 제목(나머지) · 태그 140 · 기한 88. IsHead면 할 일 묶음 머리(펼침 단추 · 이름 · 개수) -->
+  <DataTemplate x:Key="Schedule.TableItem">
+    <Grid MinHeight="32">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="40"/><ColumnDefinition Width="120"/><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/><ColumnDefinition Width="140"/><ColumnDefinition Width="88"/></Grid.ColumnDefinitions>
+      <DockPanel x:Name="Head" Grid.ColumnSpan="6" Visibility="Collapsed">
+        <TextBlock Text="{Binding HeadGlyph}" Style="{DynamicResource Schedule.ViewTabIcon}" FontSize="10" Margin="6,0" Foreground="{DynamicResource B.Text.Secondary}"/>
+        <TextBlock VerticalAlignment="Center" Style="{DynamicResource T.Body}"><Run Text="{Binding HeadName, Mode=OneWay}" FontWeight="{DynamicResource F.BodyStrong.Weight}"/><Run Text="  "/><Run Text="{Binding HeadCount, Mode=OneWay}" FontSize="{DynamicResource F.Caption}" Foreground="{DynamicResource B.Text.Tertiary}"/></TextBlock>
+      </DockPanel>
+      <CheckBox x:Name="Check" Grid.Column="0" Style="{DynamicResource Schedule.TableCheck}" IsChecked="{Binding Done, Mode=OneWay}" IsEnabled="{Binding CanCheck}" ToolTip="{Binding CheckTip}" AutomationProperties.Name="{Binding CheckName}" ToolTipService.ShowOnDisabled="True"/>
+      <TextBlock x:Name="DateCell" Grid.Column="1" Text="{Binding DateText}" Style="{DynamicResource Table.CellSub}"/>
+      <TextBlock x:Name="TimeCell" Grid.Column="2" Text="{Binding TimeText}" Style="{DynamicResource Table.CellSub}"/>
+      <DockPanel x:Name="TitleCell" Grid.Column="3" Margin="12,0">
+        <TextBlock DockPanel.Dock="Left" Text="&#xE8EE;" Visibility="{Binding RoutineShown}" Style="{DynamicResource Schedule.TableRoutineIcon}"/>
+        <TextBlock DockPanel.Dock="Right" Text="{Binding MemoCount}" Visibility="{Binding MemoShown}" Style="{DynamicResource Schedule.TableMeta}" Margin="0"/>
+        <TextBlock DockPanel.Dock="Right" Text="&#xE70B;" Visibility="{Binding MemoShown}" Style="{DynamicResource Schedule.TableMemoIcon}"/>
+        <TextBlock DockPanel.Dock="Right" Text="{Binding Progress}" Visibility="{Binding ProgressShown}" Style="{DynamicResource Schedule.TableMeta}"/>
+        <TextBlock x:Name="TitleText" Text="{Binding Title}" Style="{DynamicResource Table.Cell}" Margin="0"/>
+      </DockPanel>
+      <ItemsControl x:Name="TagCell" Grid.Column="4" ItemsSource="{Binding Tags}" Margin="12,0" VerticalAlignment="Center" Focusable="False">
+        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate><DataTemplate><Border Style="{DynamicResource Schedule.TagChip}"><TextBlock Text="{Binding}" Style="{DynamicResource Schedule.TagChipText}"/></Border></DataTemplate></ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <StackPanel x:Name="DueCell" Grid.Column="5" Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
+        <TextBlock Text="&#xE814;" Visibility="{Binding DueWarn}" Style="{DynamicResource Schedule.TableWarn}"/>
+        <TextBlock x:Name="DueText" Text="{Binding DueText}" Style="{DynamicResource Table.CellSub}" Margin="0"/>
+      </StackPanel>
+    </Grid>
+    <DataTemplate.Triggers>
+      <DataTrigger Binding="{Binding IsHead}" Value="True">
+        <Setter TargetName="Head" Property="Visibility" Value="Visible"/>
+        <Setter TargetName="Check" Property="Visibility" Value="Collapsed"/><Setter TargetName="DateCell" Property="Visibility" Value="Collapsed"/><Setter TargetName="TimeCell" Property="Visibility" Value="Collapsed"/>
+        <Setter TargetName="TitleCell" Property="Visibility" Value="Collapsed"/><Setter TargetName="TagCell" Property="Visibility" Value="Collapsed"/><Setter TargetName="DueCell" Property="Visibility" Value="Collapsed"/>
+      </DataTrigger>
+      <DataTrigger Binding="{Binding Done}" Value="True"><Setter TargetName="TitleText" Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></DataTrigger>
+      <DataTrigger Binding="{Binding DueStrong}" Value="True"><Setter TargetName="DueText" Property="Foreground" Value="{DynamicResource B.Text.Primary}"/></DataTrigger>
+    </DataTemplate.Triggers>
+  </DataTemplate>
+  <Style x:Key="Schedule.TableList" TargetType="ListBox" BasedOn="{StaticResource List}"><Setter Property="ItemContainerStyle" Value="{StaticResource Schedule.TableRow}"/><Setter Property="ItemTemplate" Value="{StaticResource Schedule.TableItem}"/></Style>
+  <!-- 루틴 보기 줄: 이름(나머지) · 규칙 220 · 시각 72 · 오늘 72 · 메모 60 -->
+  <DataTemplate x:Key="Schedule.RoutineItem">
+    <Grid MinHeight="32">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="220"/><ColumnDefinition Width="72"/><ColumnDefinition Width="72"/><ColumnDefinition Width="60"/></Grid.ColumnDefinitions>
+      <DockPanel Margin="12,0"><TextBlock Text="&#xE8EE;" Style="{DynamicResource Schedule.TableRoutineIcon}"/><TextBlock x:Name="RoutineName" Text="{Binding Title}" Style="{DynamicResource Table.Cell}" Margin="0"/></DockPanel>
+      <TextBlock Grid.Column="1" Text="{Binding RuleText}" Style="{DynamicResource Table.CellSub}"/>
+      <TextBlock Grid.Column="2" Text="{Binding TimeText}" Style="{DynamicResource Table.CellSub}"/>
+      <TextBlock x:Name="RoutineToday" Grid.Column="3" Text="{Binding TodayText}" Style="{DynamicResource Table.CellSub}"/>
+      <StackPanel Grid.Column="4" Orientation="Horizontal" Margin="12,0" Visibility="{Binding MemoShown}"><TextBlock Text="&#xE70B;" Style="{DynamicResource Schedule.TableMemoIcon}" Margin="0,0,4,0"/><TextBlock Text="{Binding MemoCount}" Style="{DynamicResource Schedule.TableMeta}" Margin="0"/></StackPanel>
+    </Grid>
+    <DataTemplate.Triggers>
+      <DataTrigger Binding="{Binding Problem}" Value="True"><Setter TargetName="RoutineName" Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></DataTrigger>
+      <DataTrigger Binding="{Binding TodayStrong}" Value="True"><Setter TargetName="RoutineToday" Property="Foreground" Value="{DynamicResource B.Text.Primary}"/></DataTrigger>
+    </DataTemplate.Triggers>
+  </DataTemplate>
+  <Style x:Key="Schedule.RoutineList" TargetType="ListBox" BasedOn="{StaticResource List}"><Setter Property="ItemContainerStyle" Value="{StaticResource Schedule.TableRow}"/><Setter Property="ItemTemplate" Value="{StaticResource Schedule.RoutineItem}"/></Style>
   <PopupAnimation x:Key="{x:Static SystemParameters.MenuPopupAnimationKey}">None</PopupAnimation>
   <PopupAnimation x:Key="{x:Static SystemParameters.ToolTipPopupAnimationKey}">None</PopupAnimation>
   <Style x:Key="ToolTip" TargetType="ToolTip">
