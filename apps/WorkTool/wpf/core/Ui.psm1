@@ -1711,10 +1711,19 @@ $script:stylesXaml = @'
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
     </Style.Triggers>
   </Style>
+  <!-- 항목 모양은 ItemContainerStyle 대신 이 메뉴 안의 기본 모양으로 준다. ItemContainerStyle은 구분선(Separator)에도 씌우려다
+       「MenuItem 모양을 Separator에 쓸 수 없음」 오류로 메뉴가 안 열린다(2026-11-07 관련 메모 줄 우클릭에서 찾음) -->
   <Style x:Key="Home.PinMenu" TargetType="ContextMenu">
+    <Style.Resources>
+      <Style TargetType="MenuItem" BasedOn="{StaticResource Home.PinMenuItem}"/>
+      <!-- 메뉴 안의 구분선은 WPF가 MenuItem.SeparatorStyleKey 이름으로 모양을 찾는다(기본 모양은 테마 색이 아님) -->
+      <Style x:Key="{x:Static MenuItem.SeparatorStyleKey}" TargetType="Separator">
+        <Setter Property="Margin" Value="8,4"/><Setter Property="Focusable" Value="False"/>
+        <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Separator"><Border Height="1" Background="{DynamicResource B.Border.Muted}"/></ControlTemplate></Setter.Value></Setter>
+      </Style>
+    </Style.Resources>
     <Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
     <Setter Property="BorderThickness" Value="1"/><Setter Property="Padding" Value="4"/>
-    <Setter Property="ItemContainerStyle" Value="{StaticResource Home.PinMenuItem}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ContextMenu">
       <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}" CornerRadius="8"><ItemsPresenter/></Border>
     </ControlTemplate></Setter.Value></Setter>

@@ -274,6 +274,12 @@ C의 본문·본문 강조·코드 13은 모두 14로 올립니다. C의 `Text.R
 - `ToolTip`: `B.Bg.Raised`, 선 1 `B.Border.Default`, 글자 `F.Caption`·`B.Text.Primary`, 그림자·애니메이션 없음입니다. 비활성 이유와 잘린 글자 전체도 이 부품을 씁니다.
 - 툴팁 글자 12/16, 여백 가로 8·세로 6, 모서리 4, 최대 폭 320, 나타나기 400ms, 툴팁 사이 이동 100ms입니다.
 
+### 메뉴
+
+- 우클릭 · 펼침 메뉴(`New-WtHomePinContextMenu`)는 `B.Bg.Raised`, 선 1 `B.Border.Default`, 모서리 8, 안쪽 4입니다.
+- 항목은 높이 32, 좌우 12, 모서리 4, `F.Body`·`B.Text.Primary`입니다. 단축키는 오른쪽에 `F.Caption`(왼쪽 간격 12)입니다. 올림은 `B.Fill.Hover.Surface`, 비활성 글자는 `B.Text.Disabled`입니다.
+- 구분선은 선 1 `B.Border.Muted`, 위아래 4 · 좌우 8입니다.
+
 ### 체크리스트 줄
 
 - `Checklist.Row`: C 체크리스트의 높이 28, 체크 상자 16×16, 모서리 2, 상자↔글자 10입니다. 한 줄 텍스트는 `F.Body`; 메모 안에서는 `F.Memo.Body`입니다.

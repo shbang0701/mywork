@@ -1863,6 +1863,20 @@ pie
         Assert-Wt 'WPF 공통 모양: 스크롤 막대는 화살표 · 모서리 칸 없이 그리고, 막대를 누르면 한 화면씩 움직인다' (
             $bars.Count -eq 2 -and $bars[0].ActualWidth -eq 12 -and $bars[1].ActualHeight -eq 12 -and ($pages -join ',') -eq 'PageUp,PageDown,PageLeft,PageRight' -and
             -not @($parts | Where-Object { $_ -is [System.Windows.Shapes.Rectangle] }).Count -and $sv.VerticalOffset -gt 0) "(막대 $($bars.Count) · 버튼 $($pages -join ',') · 위치 $($sv.VerticalOffset))"
+
+        # 공통 메뉴(New-WtHomePinContextMenu)에 구분선을 넣어도 열린다. 예전에는 항목 모양(ItemContainerStyle)을 구분선에도 씌우려다
+        # 「MenuItem 모양을 Separator에 쓸 수 없음」 오류가 났다(2026-11-07, 일정 폼 관련 메모 줄 우클릭). 열 때와 같이 그리기만 해도 재현된다
+        $menu = New-WtHomePinContextMenu
+        $menu.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $menu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+        $menuItem = [System.Windows.Controls.MenuItem]::new(); $menuItem.Header = '새 창으로 보기'; [void]$menu.Items.Add($menuItem)
+        $menuSeparator = [System.Windows.Controls.Separator]::new(); [void]$menu.Items.Add($menuSeparator)
+        $menuLast = [System.Windows.Controls.MenuItem]::new(); $menuLast.Header = '연결 빼기'; [void]$menu.Items.Add($menuLast)
+        $menuError = ''
+        try { [void]$menu.ApplyTemplate(); $menu.Measure([System.Windows.Size]::new(300, 300)); $menu.Arrange([System.Windows.Rect]::new(0, 0, 300, 300)); $menu.UpdateLayout() }
+        catch { $menuError = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message } }
+        Assert-Wt '공통 메뉴: 구분선이 있어도 그려지고, 항목은 높이 32 · 구분선은 선 1 · 위아래 4 · 좌우 8' (
+            -not $menuError -and $menuItem.ActualHeight -eq 32 -and $menuLast.ActualHeight -eq 32 -and $menuSeparator.ActualHeight -eq 1 -and
+            $menuSeparator.Margin -eq [System.Windows.Thickness]::new(8, 4, 8, 4)) "(오류 $menuError · 항목 $($menuItem.ActualHeight) · 구분선 $($menuSeparator.ActualHeight) $($menuSeparator.Margin))"
     } else {
         Write-Host 'SKIP WPF로 그리기 (Windows STA에서만)'
     }
