@@ -1759,6 +1759,8 @@ $script:stylesXaml = @'
   <Style x:Key="Attendance.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="0,4,0,0"/></Style>
   <Style x:Key="Attendance.SummaryRow" TargetType="DockPanel"><Setter Property="MinHeight" Value="32"/></Style>
   <Style x:Key="Attendance.SummaryChild" TargetType="DockPanel" BasedOn="{StaticResource Attendance.SummaryRow}"><Setter Property="Margin" Value="12,0,0,0"/></Style>
+  <!-- 이번 달 요약과 아래 대휴(전체 기간) 사이: 위아래 8 + 선 1 -->
+  <Style x:Key="Attendance.SummaryDivider" TargetType="Border"><Setter Property="Height" Value="1"/><Setter Property="Margin" Value="0,8"/><Setter Property="Background" Value="{DynamicResource B.Border.Muted}"/></Style>
   <Style x:Key="Attendance.Note" TargetType="TextBox" BasedOn="{StaticResource Input}"><Setter Property="AcceptsReturn" Value="True"/><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="VerticalScrollBarVisibility" Value="Auto"/></Style>
   <Style x:Key="Attendance.CellText" TargetType="TextBlock" BasedOn="{StaticResource Task.Text}"/>
   <Style x:Key="Attendance.Number" TargetType="TextBlock" BasedOn="{StaticResource Attendance.CellText}"><Setter Property="TextAlignment" Value="Right"/></Style>
@@ -1788,7 +1790,7 @@ $script:stylesXaml = @'
     <DataGrid Style="{DynamicResource Attendance.Table}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" CanUserReorderColumns="False" CanUserResizeRows="False" CanUserSortColumns="False" SelectionMode="Single" SelectionUnit="FullRow" AutomationProperties.Name="근태 기록">
       <DataGrid.Columns>
         <DataGridTextColumn Header="날짜" Binding="{Binding Date}" Width="100" ElementStyle="{StaticResource Attendance.CellText}"/>
-        <DataGridTextColumn Header="종류" Binding="{Binding Kind}" Width="72" ElementStyle="{StaticResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="종류" Binding="{Binding Kind}" Width="88" ElementStyle="{StaticResource Attendance.CellText}"/>
         <DataGridTextColumn Header="시작" Binding="{Binding Start}" Width="64" ElementStyle="{StaticResource Attendance.CellText}"/>
         <DataGridTextColumn Header="끝" Binding="{Binding End}" Width="64" ElementStyle="{StaticResource Attendance.CellText}"/>
         <DataGridTextColumn Header="장소" Binding="{Binding Place}" Width="72" ElementStyle="{StaticResource Attendance.CellText}"/>
@@ -1959,18 +1961,23 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.TableRoutineIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="0,0,6,0"/></Style>
   <Style x:Key="Schedule.TableMemoIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="8,0,4,0"/></Style>
   <Style x:Key="Schedule.TableMeta" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0,0,0"/></Style>
-  <Style x:Key="Schedule.TableWarn" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Status.Warning.Icon}"/><Setter Property="Margin" Value="0,0,4,0"/></Style>
+  <Style x:Key="Schedule.TableWarn" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Icon}"/><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <!-- 할 일 색(디자인 README 「일정」): 배지 = 높이 20 · 모서리 4 · F.Caption, 연한 상태 바탕 + 상태 글자. 기한 지남 = 오류 · 오늘 = 정보 · 마감 임박 = 경고 -->
+  <Style x:Key="Schedule.CountBadge" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Background" Value="{DynamicResource B.Status.Info.Bg}"/></Style>
+  <Style x:Key="Schedule.CountBadgeText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Info.Text}"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.DueBadge" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Background" Value="Transparent"/></Style>
   <Style x:Key="Schedule.TagChip" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/></Style>
   <Style x:Key="Schedule.TagChipText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Accent.Text}"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
   <Style x:Key="Schedule.TableRow" TargetType="ListBoxItem" BasedOn="{StaticResource Row}"><Setter Property="Padding" Value="0"/></Style>
-  <!-- 표 · 할 일 줄: 체크 40 · 날짜 120 · 시각 80 · 제목(나머지) · 태그 140 · 기한 88. IsHead면 할 일 묶음 머리(펼침 단추 · 이름 · 개수) -->
+  <!-- 표 · 할 일 줄: 체크 40 · 날짜 120 · 시각 80 · 제목(나머지) · 태그 140 · 기한 88. IsHead면 할 일 묶음 머리(펼침 단추 · 이름 · 개수 배지) -->
   <DataTemplate x:Key="Schedule.TableItem">
     <Grid MinHeight="32">
       <Grid.ColumnDefinitions><ColumnDefinition Width="40"/><ColumnDefinition Width="120"/><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/><ColumnDefinition Width="140"/><ColumnDefinition Width="88"/></Grid.ColumnDefinitions>
-      <DockPanel x:Name="Head" Grid.ColumnSpan="6" Visibility="Collapsed">
+      <StackPanel x:Name="Head" Grid.ColumnSpan="6" Orientation="Horizontal" Visibility="Collapsed">
         <TextBlock Text="{Binding HeadGlyph}" Style="{DynamicResource Schedule.ViewTabIcon}" FontSize="10" Margin="6,0" Foreground="{DynamicResource B.Text.Secondary}"/>
-        <TextBlock VerticalAlignment="Center" Style="{DynamicResource T.Body}"><Run Text="{Binding HeadName, Mode=OneWay}" FontWeight="{DynamicResource F.BodyStrong.Weight}"/><Run Text="  "/><Run Text="{Binding HeadCount, Mode=OneWay}" FontSize="{DynamicResource F.Caption}" Foreground="{DynamicResource B.Text.Tertiary}"/></TextBlock>
-      </DockPanel>
+        <TextBlock Text="{Binding HeadName}" VerticalAlignment="Center" Style="{DynamicResource T.Body}" FontWeight="{DynamicResource F.BodyStrong.Weight}"/>
+        <Border x:Name="HeadBadge" Style="{DynamicResource Schedule.CountBadge}"><TextBlock x:Name="HeadCount" Text="{Binding HeadCount}" Style="{DynamicResource Schedule.CountBadgeText}"/></Border>
+      </StackPanel>
       <CheckBox x:Name="Check" Grid.Column="0" Style="{DynamicResource Schedule.TableCheck}" IsChecked="{Binding Done, Mode=OneWay}" IsEnabled="{Binding CanCheck}" ToolTip="{Binding CheckTip}" AutomationProperties.Name="{Binding CheckName}" ToolTipService.ShowOnDisabled="True"/>
       <TextBlock x:Name="DateCell" Grid.Column="1" Text="{Binding DateText}" Style="{DynamicResource Table.CellSub}"/>
       <TextBlock x:Name="TimeCell" Grid.Column="2" Text="{Binding TimeText}" Style="{DynamicResource Table.CellSub}"/>
@@ -1985,10 +1992,12 @@ $script:stylesXaml = @'
         <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
         <ItemsControl.ItemTemplate><DataTemplate><Border Style="{DynamicResource Schedule.TagChip}"><TextBlock Text="{Binding}" Style="{DynamicResource Schedule.TagChipText}"/></Border></DataTemplate></ItemsControl.ItemTemplate>
       </ItemsControl>
-      <StackPanel x:Name="DueCell" Grid.Column="5" Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
-        <TextBlock Text="&#xE814;" Visibility="{Binding DueWarn}" Style="{DynamicResource Schedule.TableWarn}"/>
-        <TextBlock x:Name="DueText" Text="{Binding DueText}" Style="{DynamicResource Table.CellSub}" Margin="0"/>
-      </StackPanel>
+      <Border x:Name="DueCell" Grid.Column="5" Margin="12,0,0,0" Style="{DynamicResource Schedule.DueBadge}">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="&#xE814;" Visibility="{Binding DueWarn}" Style="{DynamicResource Schedule.TableWarn}"/>
+          <TextBlock x:Name="DueText" Text="{Binding DueText}" Style="{DynamicResource Table.CellSub}" Margin="0"/>
+        </StackPanel>
+      </Border>
     </Grid>
     <DataTemplate.Triggers>
       <DataTrigger Binding="{Binding IsHead}" Value="True">
@@ -1996,8 +2005,12 @@ $script:stylesXaml = @'
         <Setter TargetName="Check" Property="Visibility" Value="Collapsed"/><Setter TargetName="DateCell" Property="Visibility" Value="Collapsed"/><Setter TargetName="TimeCell" Property="Visibility" Value="Collapsed"/>
         <Setter TargetName="TitleCell" Property="Visibility" Value="Collapsed"/><Setter TargetName="TagCell" Property="Visibility" Value="Collapsed"/><Setter TargetName="DueCell" Property="Visibility" Value="Collapsed"/>
       </DataTrigger>
+      <DataTrigger Binding="{Binding Group}" Value="overdue"><Setter TargetName="HeadBadge" Property="Background" Value="{DynamicResource B.Status.Error.Bg}"/><Setter TargetName="HeadCount" Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></DataTrigger>
+      <DataTrigger Binding="{Binding Group}" Value="soon"><Setter TargetName="HeadBadge" Property="Background" Value="{DynamicResource B.Status.Warning.Bg}"/><Setter TargetName="HeadCount" Property="Foreground" Value="{DynamicResource B.Status.Warning.Text}"/></DataTrigger>
       <DataTrigger Binding="{Binding Done}" Value="True"><Setter TargetName="TitleText" Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></DataTrigger>
       <DataTrigger Binding="{Binding DueStrong}" Value="True"><Setter TargetName="DueText" Property="Foreground" Value="{DynamicResource B.Text.Primary}"/></DataTrigger>
+      <DataTrigger Binding="{Binding DueKind}" Value="over"><Setter TargetName="DueCell" Property="Background" Value="{DynamicResource B.Status.Error.Bg}"/><Setter TargetName="DueCell" Property="Padding" Value="6,0"/><Setter TargetName="DueText" Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></DataTrigger>
+      <DataTrigger Binding="{Binding DueKind}" Value="soon"><Setter TargetName="DueCell" Property="Background" Value="{DynamicResource B.Status.Warning.Bg}"/><Setter TargetName="DueCell" Property="Padding" Value="6,0"/><Setter TargetName="DueText" Property="Foreground" Value="{DynamicResource B.Status.Warning.Text}"/></DataTrigger>
     </DataTemplate.Triggers>
   </DataTemplate>
   <Style x:Key="Schedule.TableList" TargetType="ListBox" BasedOn="{StaticResource List}"><Setter Property="ItemContainerStyle" Value="{StaticResource Schedule.TableRow}"/><Setter Property="ItemTemplate" Value="{StaticResource Schedule.TableItem}"/></Style>
@@ -2847,8 +2860,10 @@ function New-WtTimeline([object[]]$Items, [datetime]$Date, [string]$Page, [strin
         [void](Add-WtChild $col $row)
     }
     $canvas = [System.Windows.Controls.Canvas]::new(); $canvas.Height = 116; $canvas.Margin = [System.Windows.Thickness]::new(0, 8, 0, 0)
-    $workStart = (ConvertFrom-WtTimeText (Get-WtSetting 'work.start')).TotalMinutes
-    $workEnd = (ConvertFrom-WtTimeText (Get-WtSetting 'work.end')).TotalMinutes
+    # 그날 적용되는 업무시간 규칙(설계 15.1)
+    $workHours = Get-WtWorkHours -Date $Date
+    $workStart = (ConvertFrom-WtTimeText $workHours['work.start']).TotalMinutes
+    $workEnd = (ConvertFrom-WtTimeText $workHours['work.end']).TotalMinutes
     $rangeStart = $workStart - 60; $rangeEnd = $workEnd + 120
     $rail = [System.Windows.Controls.Border]::new(); $rail.Height = 20; $rail.CornerRadius = 2
     Set-WtResource $rail Background 'B.Bg.Subtle'

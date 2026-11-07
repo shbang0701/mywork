@@ -820,9 +820,9 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Set-WtWorkHours $defaultHours
     Initialize-WtSettings
     $savedHours = Read-WtJsonFile (Get-WtSettingsPath)
-    Assert-Wt '첫 설정: 기본값으로 저장해도 work.start가 남고 다시 묻지 않는다' (
+    Assert-Wt '첫 설정: 기본값으로 저장해도 work.start가 남고 다시 묻지 않는다(규칙 키 여섯: 요일 · 시작 · 끝 · 점심 둘 · 반차 시각)' (
         -not (Test-WtWorkSetupRequired) -and $savedHours.values.'work.start' -ceq '09:00' -and
-        @($savedHours.values.PSObject.Properties.Name | Where-Object { $_ -like 'work.*' }).Count -eq 5)
+        @($savedHours.values.PSObject.Properties.Name | Where-Object { $_ -like 'work.*' }).Count -eq 6)
     $shiftHours = @{ 'work.days' = @(6, 7); 'work.start' = '06:00'; 'work.end' = '14:00'; 'work.lunchStart' = '10:00'; 'work.lunchEnd' = '11:00' }
     Set-WtWorkHours $shiftHours
     Initialize-WtSettings
@@ -834,6 +834,39 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     $oneDay = Get-WtWorkHours
     Assert-Wt '업무시간: 요일 하나도 배열로 다시 읽고 다른 시각을 변경한다' (
         $oneDay['work.days'] -is [array] -and $oneDay['work.days'].Count -eq 1 -and $oneDay['work.days'][0] -eq 7 -and $oneDay['work.end'] -ceq '15:00')
+
+    # ---- 업무시간 기간 · 반차 나누는 시각 (설계 15.1) ----
+    Set-WtWorkHours @{ 'work.days' = @(1, 2, 3, 4, 5); 'work.start' = '09:00'; 'work.end' = '18:00'; 'work.lunchStart' = '12:00'; 'work.lunchEnd' = '13:00'; 'work.halfDay' = '' }
+    Assert-Wt '반차 나누는 시각: 비우면 정규 시간의 절반(09~18 · 점심 12~13 → 14:00, 08:30~17:30 → 13:30, 점심 전에 끝나면 그 시각), 적으면 그 값' (
+        (Get-WtHalfDaySplit (Get-WtWorkHours)) -ceq '14:00' -and
+        (Get-WtHalfDaySplit @{ 'work.start' = '08:30'; 'work.end' = '17:30'; 'work.lunchStart' = '12:00'; 'work.lunchEnd' = '13:00'; 'work.halfDay' = '' }) -ceq '13:30' -and
+        (Get-WtHalfDaySplit @{ 'work.start' = '07:00'; 'work.end' = '16:00'; 'work.lunchStart' = '11:00'; 'work.lunchEnd' = '12:00'; 'work.halfDay' = '' }) -ceq '11:00' -and
+        (Get-WtHalfDaySplit @{ 'work.start' = '09:00'; 'work.end' = '18:00'; 'work.lunchStart' = '12:00'; 'work.lunchEnd' = '13:00'; 'work.halfDay' = '13:00' }) -ceq '13:00')
+    $halfErrors = @(foreach ($v in '08:00', '18:00', '25:00', '9:00') { $c = Get-WtWorkHours -From ''; $c['work.halfDay'] = $v; (Get-WtWorkHoursErrors $c).Contains('work.halfDay') })
+    Assert-Wt '반차 나누는 시각: 시작 · 끝 밖이거나 형식이 틀리면 오류, 비우면 괜찮다' ($halfErrors -notcontains $false -and -not (Get-WtWorkHoursErrors (Get-WtWorkHours -From '')).Contains('work.halfDay')) ($halfErrors -join ',')
+    Add-WtWorkPeriod '2027-03-01'
+    Set-WtWorkHours @{ 'work.start' = '08:30'; 'work.end' = '17:30'; 'work.days' = @(2, 3, 4, 5, 6) } -From '2027-03-01'
+    $periodDoc = Read-WtJsonFile (Get-WtSettingsPath)
+    Initialize-WtSettings
+    Assert-Wt '업무시간 기간: 적용 시작일부터 새 규칙, 앞날은 처음부터 규칙(처음부터 키는 그대로), 다시 읽어도 같다' (
+        (Get-WtWorkHours -Date '2027-03-01')['work.start'] -ceq '08:30' -and (Get-WtWorkHours -Date ([datetime]::new(2027, 2, 28)))['work.start'] -ceq '09:00' -and
+        (Get-WtWorkHours -Date '2027-03-02')['work.from'] -ceq '2027-03-01' -and (Get-WtWorkHours -Date '2027-02-28')['work.from'] -ceq '' -and (Get-WtSetting 'work.start') -ceq '09:00' -and
+        @($periodDoc.values.'work.periods').Count -eq 1 -and ((Get-WtWorkHours -From '2027-03-01')['work.days'] -join ',') -ceq '2,3,4,5,6' -and $null -eq (Get-WtWorkHours -From '2030-01-01'))
+    $periodErrors = @(foreach ($try in @({ Add-WtWorkPeriod '2027-03-01' }, { Add-WtWorkPeriod '2027-3-1' }, { Set-WtWorkHours @{ 'work.end' = '08:00' } -From '2027-03-01' }, { Set-WtWorkHours @{ 'work.start' = '10:00' } -From '2030-01-01' }, { Remove-WtWorkPeriod '' })) {
+            try { & $try; 'ok' } catch [System.ArgumentException] { 'refused' }
+        })
+    Assert-Wt '업무시간 기간: 같은 날 · 틀린 날짜 · 틀린 규칙 · 없는 기간 · 처음부터 지우기는 거부' (($periodErrors -join ',') -ceq 'refused,refused,refused,refused,refused' -and (Get-WtWorkHours -From '2027-03-01')['work.end'] -ceq '17:30') ($periodErrors -join ',')
+    # 더 새 앱이 쓴 원소의 모르는 칸은 고쳐도 남고, 날짜를 못 읽거나 규칙이 틀린 원소는 계산에서만 빠진다(파일에는 남음)
+    $rawPeriods = @(@(Get-WtSetting 'work.periods') | ForEach-Object { $p = [ordered]@{}; foreach ($n in $_.PSObject.Properties.Name) { $p[$n] = $_.$n }; $p['memo'] = '새 앱 칸'; $p }) +
+        @([ordered]@{ from = 'nope'; days = @(1); start = '09:00'; end = '18:00'; lunchStart = '12:00'; lunchEnd = '13:00'; halfDay = '' },
+            [ordered]@{ from = '2028-01-01'; days = @(1); start = '19:00'; end = '18:00'; lunchStart = '12:00'; lunchEnd = '13:00'; halfDay = '' })
+    Set-WtSetting 'work.periods' $rawPeriods
+    Set-WtWorkHours @{ 'work.halfDay' = '13:00' } -From '2027-03-01'
+    Initialize-WtSettings
+    $kept = @(Get-WtSetting 'work.periods' | Where-Object { $_.from -ceq '2027-03-01' })[0]
+    Assert-Wt '업무시간 기간: 모르는 칸은 남고, 틀린 원소는 계산에서 빠진다' (@(Get-WtWorkPeriods).Count -eq 1 -and @(Get-WtSetting 'work.periods').Count -eq 3 -and $kept.memo -ceq '새 앱 칸' -and $kept.halfDay -ceq '13:00')
+    Remove-WtWorkPeriod '2027-03-01'
+    Assert-Wt '업무시간 기간: 지우면 그 기간의 날은 앞 규칙' ((Get-WtWorkHours -Date '2027-03-05')['work.start'] -ceq '09:00' -and @(Get-WtWorkPeriods).Count -eq 0)
     Write-WtJsonFile (Get-WtSettingsPath) $settingsBeforeHours
     Initialize-WtSettings
 
@@ -960,7 +993,34 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
         $marks[3].Kind -ceq 'off' -and $marks[3].Back -ceq 'B.Status.Error.Bg' -and $marks[3].DayOff -and
         $marks[4].Kind -ceq 'over' -and $marks[4].DayOff -and $marks[5].Kind -ceq '' -and $marks[5].DayOff -and $marks[5].Back -ceq '')
     Register-WtCalendarSource -Id 'test-marks' -CalendarItems $null
+    # 4단계(설계 15.5): 반차(AllDay = $false인 휴가)는 숫자 바탕만 휴가 색이고 쉬는 날이 아니다. 일요일 근무 요일(7)도 그날 규칙대로
+    $halfDay = [pscustomobject]@{ Date = [datetime]::new(2026, 11, 4); Kind = 'leave'; AllDay = $false; Time = '09:00'; Text = '오전 반차' }
+    $halfMark = Get-WtCalendarMark ([datetime]::new(2026, 11, 4)) @($halfDay)
+    Set-WtWorkHours @{ 'work.days' = @(1, 2, 3, 4, 5, 6, 7) }
+    $sundayWork = Get-WtCalendarMark ([datetime]::new(2026, 11, 8)) @()
+    Add-WtWorkPeriod '2026-11-09'
+    Set-WtWorkHours @{ 'work.days' = @(1, 2) } -From '2026-11-09'
+    # 11/8 일요일(처음부터 규칙: 일 근무) · 11/11 수요일(11/9부터 규칙: 월 · 화만 근무)
+    $periodMarks = @(8, 11 | ForEach-Object { (Get-WtCalendarMark ([datetime]::new(2026, 11, $_)) @()).DayOff })
+    Remove-WtWorkPeriod '2026-11-09'
+    Assert-Wt '달력 표시: 반차는 휴가 색이지만 쉬는 날 아님, 일요일 근무 요일 · 기간마다 다른 근무 요일을 그날 규칙으로' (
+        $halfMark.Kind -ceq 'leave' -and -not $halfMark.DayOff -and -not $sundayWork.DayOff -and ($periodMarks -join ',') -ceq 'False,True' -and
+        (Test-WtCalendarPartDay $halfDay) -and -not (Test-WtCalendarPartDay @{ Kind = 'leave' })) "$($halfMark.Kind) $($halfMark.DayOff) $($sundayWork.DayOff) $($periodMarks -join ',')"
     Set-WtWorkHours $scHours
+
+    # ---- 날짜 메뉴 등록 목록 DateMenu (가짜 탭, 설계 15.6) ----
+    Register-WtAddon -Id 'test-datemenu-a' -Title '가짜 가' -NewView { } -DateMenu { param([datetime]$Date) @{ Header = "가 $($Date.Day)"; Action = { param($Arg) $Arg }; Arg = 1 } }
+    Register-WtAddon -Id 'test-datemenu-b' -Title '가짜 나' -NewView { } -DateMenu { param([datetime]$Date) throw '나 실패' }
+    Register-WtAddon -Id 'test-datemenu-c' -Title '가짜 다' -NewView { } -DateMenu { param([datetime]$Date) @{ Header = '다 하나' }; '-'; @{ Header = '다 둘' } }
+    $dateMenu = @(Get-WtDateMenuItems ([datetime]::new(2026, 11, 5, 15, 30, 0)) -Exclude 'test-datemenu-c' | Where-Object Page -like 'test-datemenu*')
+    $dateMenuAll = @(Get-WtDateMenuItems ([datetime]::new(2026, 11, 5)) | Where-Object Page -like 'test-datemenu*')
+    Set-WtSetting 'addons.disabled' @('test-datemenu-a')
+    $dateMenuOff = @(Get-WtDateMenuItems ([datetime]::new(2026, 11, 5)) | Where-Object Page -like 'test-datemenu*' | ForEach-Object Page | Select-Object -Unique) -join ','
+    Set-WtSetting 'addons.disabled' @()
+    Assert-Wt '날짜 메뉴 등록: 탭마다 항목 · 실패는 Error로(다른 탭은 계속) · Exclude · 끈 탭은 빠짐 · 날짜는 0시로' (
+        $dateMenu.Count -eq 2 -and $dateMenu[0].Item.Header -ceq '가 5' -and $dateMenu[0].Title -ceq '가짜 가' -and $dateMenu[1].Error -ceq '나 실패' -and $null -eq $dateMenu[1].Item -and
+        $dateMenuAll.Count -eq 5 -and $dateMenuAll[3].Item -ceq '-' -and $dateMenuOff -ceq 'test-datemenu-b,test-datemenu-c') "$($dateMenu.Count) $($dateMenuAll.Count) $dateMenuOff"
+    foreach ($id in 'test-datemenu-a', 'test-datemenu-b', 'test-datemenu-c') { Register-WtAddon -Id $id -Title '검사 끝' -NewView { } }
 
     # ---- 도움말 단축키 (가짜 탭) ----
     Register-WtAddon -Id 'test-x' -Title '엑스' -Order 30 -NewView { } -Shortcuts @(@('F5', '새로 고침'), @('Enter', '열기'))
@@ -1346,6 +1406,30 @@ flowchart LR
         $settingsView.Arrange([System.Windows.Rect]::new(0, 0, 1048, 600))
         Assert-Wt '설정 하위 탭: 공통 Tab 스타일 · 높이 36 · 선택 위 선 2' (
             $settingsTabs.Items[0].MinHeight -eq 36 -and $settingsTabs.Items[0].Template -eq (Get-WtStyleDictionary)['Tab'].Setters.Where({ $_.Property.Name -eq 'Template' })[0].Value)
+        # 설정 → 업무시간(설계 15.1): 맨 위 적용 기간, 맨 아래 반차 나누는 시각 + 계산한 시간대. 첫 설정에는 둘 다 없다
+        $workHoursBefore = Read-WtJsonFile (Get-WtSettingsPath)
+        Set-WtWorkHours @{ 'work.days' = @(1, 2, 3, 4, 5); 'work.start' = '09:00'; 'work.end' = '18:00'; 'work.lunchStart' = '12:00'; 'work.lunchEnd' = '13:00'; 'work.halfDay' = '' }
+        # 업무시간 폼 함수는 설정 모듈 안의 것이라 모듈 안에서 부른다
+        $workCheck = & (Get-Module Pages) {
+            $workForm = New-WtWorkHoursForm
+            $firstForm = New-WtWorkHoursForm -FirstSetup
+            $state = "$(@($workForm.Periods.Items) -join ';')|$($workForm.RemovePeriod.Visibility)|$($workForm.HalfHint.Text)"
+            $workForm.Boxes['work.halfDay'].Text = '13:00'; [void](Update-WtWorkForm $workForm -Save)
+            $hint = $workForm.HalfHint.Text
+            Add-WtWorkPeriod '2099-03-01'
+            Update-WtWorkPeriodPicker $workForm '2099-03-01'
+            $workForm.Boxes['work.start'].Text = '08:30'; [void](Update-WtWorkForm $workForm -Save)
+            $period = "$(@($workForm.Periods.Items) -join ';')|$($workForm.RemovePeriod.Visibility)|$((Get-WtWorkHours -From '2099-03-01')['work.start'])|$((Get-WtWorkHours -From '')['work.start'])"
+            Remove-WtWorkPeriod '2099-03-01'
+            @{ State = $state; Hint = $hint; Period = $period; FirstPeriods = $null -eq $firstForm.Periods; FirstHalf = $firstForm.Boxes.ContainsKey('work.halfDay') }
+        }
+        $workState = $workCheck.State; $hintAfter = $workCheck.Hint; $periodState = $workCheck.Period
+        Write-WtJsonFile (Get-WtSettingsPath) $workHoursBefore; Initialize-WtSettings
+        Assert-Wt '설정 업무시간: 적용 기간 「처음부터 · 지금」 · 반차 시간대 안내(자동) · 고른 기간만 저장 · 첫 설정에는 기간 · 반차 칸 없음' (
+            $workState -ceq '처음부터 · 지금|Collapsed|오전 반차 09:00 ~ 14:00 · 오후 반차 14:00 ~ 18:00 (자동)' -and
+            $hintAfter -ceq '오전 반차 09:00 ~ 13:00 · 오후 반차 13:00 ~ 18:00' -and
+            $periodState -ceq '처음부터 ~ 2099-02-28 · 지금;2099-03-01부터|Visible|08:30|09:00' -and
+            $workCheck.FirstPeriods -and -not $workCheck.FirstHalf) "$workState / $hintAfter / $periodState"
         $helpTexts = @(Get-WtTestTexts $helpView)
         Assert-Wt '도움말: 키 · 하는 일 두 열 · Ctrl+Shift+B · 데이터 폴더' (
             $helpTexts -contains '키' -and $helpTexts -contains '하는 일' -and $helpTexts -contains 'Ctrl + Shift + B' -and

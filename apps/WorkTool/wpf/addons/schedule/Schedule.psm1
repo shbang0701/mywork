@@ -377,7 +377,7 @@ function ConvertTo-WtScheduleTableItems([object[]]$Rows, [switch]$Due) {
             $closed = $script:collapsed.Contains($group)
             [pscustomobject]@{ IsHead = $true; Group = $group; HeadName = $names[$group]; HeadCount = [string]@($Rows | Where-Object Group -CEQ $group).Count
                 HeadGlyph = [string][char]$(if ($closed) { 0xE76C } else { 0xE70D }); Key = "head:$group"; Done = $false; CanCheck = $false; Row = $null
-                DateText = ''; TimeText = ''; Title = $names[$group]; Tags = @(); DueText = ''; DueWarn = 'Collapsed'; DueStrong = $false
+                DateText = ''; TimeText = ''; Title = $names[$group]; Tags = @(); DueText = ''; DueWarn = 'Collapsed'; DueStrong = $false; DueKind = ''
                 RoutineShown = 'Collapsed'; MemoShown = 'Collapsed'; MemoCount = ''; Progress = ''; ProgressShown = 'Collapsed'; CheckTip = ''; CheckName = '' }
         }
         if ($Due -and $script:collapsed.Contains($row.Group)) { continue }
@@ -390,6 +390,7 @@ function ConvertTo-WtScheduleTableItems([object[]]$Rows, [switch]$Due) {
         [pscustomobject]@{ IsHead = $false; Group = $row.Group; Key = $row.Key; Row = $row; Done = [bool]$row.Done; CanCheck = $true
             DateText = $dateText; TimeText = $timeText; Title = $row.Title; Tags = @($row.Tags | ForEach-Object { "#$_" }); DueText = $dueInfo.Text
             DueWarn = $(if ($dueInfo.Overdue) { 'Visible' } else { 'Collapsed' }); DueStrong = $dueInfo.Overdue -or $dueInfo.Text -ceq '오늘'
+            DueKind = $(if ($dueInfo.Overdue) { 'over' } elseif ($dueInfo.Soon) { 'soon' } else { '' })
             RoutineShown = $(if ($row.Kind -ceq 'routine') { 'Visible' } else { 'Collapsed' }); MemoShown = $(if ($memo) { 'Visible' } else { 'Collapsed' }); MemoCount = [string]$memo
             Progress = [string]$row.Progress; ProgressShown = $(if ($row.Progress) { 'Visible' } else { 'Collapsed' })
             CheckTip = $(if ($row.Done) { '끝냄 풀기' } else { '끝냄으로 표시' }); CheckName = "$label 끝냄"; HeadName = ''; HeadCount = ''; HeadGlyph = '' }
@@ -573,7 +574,8 @@ function Switch-WtScheduleQueryTerm([string]$Term) {
     $script:searchTimer.Stop(); Invoke-WtScheduleSearch
 }
 
-# 날짜 칸 우클릭: 새 일정 · 새 루틴 · 휴무일로 지정(회사 · 개인) 또는 휴무일 해제. 휴무일은 코어(core\Calendar.psm1)에 저장한다
+# 날짜 칸 우클릭: 새 일정 · 새 루틴 · 구분선 · 다른 탭이 코어에 등록한 항목(근태의 「휴가 넣기 ›」 등, 설계 15.6) ·
+# 회사 휴무로 지정 또는 휴무일 해제. 휴무일은 코어(core\Calendar.psm1)에 저장한다. 개인 휴무는 설정 → 휴무일에서만 넣는다
 function Update-WtScheduleDayMenu($Button) {
     $menu = $Button.ContextMenu; $menu.Items.Clear(); $date = [datetime]$Button.DataContext
     foreach ($name in '새 일정', '새 루틴') {
@@ -582,27 +584,46 @@ function Update-WtScheduleDayMenu($Button) {
         [void]$menu.Items.Add($item)
     }
     [void]$menu.Items.Add([Windows.Controls.Separator]::new())
+    foreach ($entry in @(Get-WtDateMenuItems $date -Exclude 'schedule')) {
+        if ($entry.Error) {
+            $item = [Windows.Controls.MenuItem]::new(); $item.Header = "$($entry.Title) 메뉴"; $item.IsEnabled = $false; $item.ToolTip = $entry.Error
+            [Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true); [void]$menu.Items.Add($item)
+        } else { [void]$menu.Items.Add((New-WtScheduleDateMenuItem $entry.Item)) }
+    }
     $holiday = Get-WtHolidayData
     $dateText = ConvertTo-WtDateText $date
     $here = @($holiday.Entries | Where-Object { $_.State -eq 'ok' -and $_.DateText -ceq $dateText })
+    $item = [Windows.Controls.MenuItem]::new()
     if ($here.Count) {
-        $item = [Windows.Controls.MenuItem]::new(); $item.Header = '휴무일 해제'; $item.Tag = @{ Date = $dateText; Kinds = @($here.Kind | Select-Object -Unique); Name = '' }
+        $item.Header = '휴무일 해제'; $item.Tag = @{ Date = $dateText; Kinds = @($here.Kind | Select-Object -Unique); Name = '' }
         $item.Add_Click({ param($s, $e) Set-WtScheduleHoliday $s.Tag.Date $s.Tag.Kinds $false })
-        [void]$menu.Items.Add($item)
     } else {
-        $parent = [Windows.Controls.MenuItem]::new(); $parent.Header = '휴무일로 지정'
-        foreach ($kind in @(@('company', '회사 휴무'), @('personal', '개인 휴무'))) {
-            $item = [Windows.Controls.MenuItem]::new(); $item.Header = $kind[1]; $item.Tag = @{ Date = $dateText; Kinds = @($kind[0]); Name = $kind[1] }
-            $item.Add_Click({ param($s, $e) Set-WtScheduleHoliday $s.Tag.Date $s.Tag.Kinds $true $s.Tag.Name })
-            [void]$parent.Items.Add($item)
-        }
-        [void]$menu.Items.Add($parent)
+        $item.Header = '회사 휴무로 지정'; $item.Tag = @{ Date = $dateText; Kinds = @('company'); Name = '회사 휴무' }
+        $item.Add_Click({ param($s, $e) Set-WtScheduleHoliday $s.Tag.Date $s.Tag.Kinds $true $s.Tag.Name })
     }
-    if ($holiday.Error) {
-        foreach ($item in @($menu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] -and [string]$_.Header -like '휴무일*' })) {
-            $item.IsEnabled = $false; $item.ToolTip = $holiday.Error; [Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true)
-        }
-    }
+    if ($holiday.Error) { $item.IsEnabled = $false; $item.ToolTip = $holiday.Error; [Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true) }
+    [void]$menu.Items.Add($item)
+}
+# 다른 탭이 준 날짜 메뉴 항목 하나 → 메뉴 항목. '-'는 구분선, Items가 있으면 하위 메뉴, 아니면 누를 때 Action(Arg)
+function New-WtScheduleDateMenuItem($Spec) {
+    if ($Spec -is [string]) { return [Windows.Controls.Separator]::new() }
+    $item = [Windows.Controls.MenuItem]::new(); $item.Header = [string](Get-WtField $Spec 'Header')
+    $tip = [string](Get-WtField $Spec 'ToolTip')
+    if ($tip) { $item.ToolTip = $tip; [Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true) }
+    if ((Get-WtField $Spec 'IsEnabled') -eq $false) { $item.IsEnabled = $false }
+    # Get-WtField는 목록을 한 덩어리로 돌려주므로 변수에 받은 뒤 펼친다
+    $raw = Get-WtField $Spec 'Items'
+    $children = @($raw | Where-Object { $null -ne $_ })
+    if ($children.Count) { foreach ($child in $children) { [void]$item.Items.Add((New-WtScheduleDateMenuItem $child)) } }
+    elseif ((Get-WtField $Spec 'Action') -is [scriptblock]) { $item.Tag = $Spec; $item.Add_Click({ param($s, $e) Invoke-WtScheduleDateAction $s.Tag }) }
+    $item
+}
+# 다른 탭의 날짜 메뉴 동작을 부르고, 달력 · 메뉴 숫자를 다시 그린다(그 탭의 기록이 달력에 보이므로)
+function Invoke-WtScheduleDateAction($Spec) {
+    try { & (Get-WtField $Spec 'Action') (Get-WtField $Spec 'Arg') }
+    catch { Show-WtMessage "$(Get-WtField $Spec 'Header')을(를) 하지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
+    Update-WtScheduleView
+    if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
 }
 function Set-WtScheduleHoliday([string]$Date, [string[]]$Kinds, [bool]$Enabled, [string]$Name = '') {
     try {
@@ -1135,7 +1156,7 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
         $endDate = if (-not $Occurrence) { $date } elseif ($Occurrence.AllDay) { $Occurrence.LastDay } else { $Occurrence.End.Date }
         Add-WtScheduleRange date endDate '날짜' (ConvertTo-WtDateText $date) (ConvertTo-WtDateText $endDate) '시작 날짜' '끝 날짜'
         Add-WtScheduleField allDay '' (New-WtScheduleCheck '하루 종일' ($Occurrence -and $Occurrence.AllDay))
-        Add-WtScheduleRange start end '시각' $(if ($Occurrence -and -not $Occurrence.AllDay) { $Occurrence.Start.ToString('HH:mm', $script:inv) } else { Get-WtSetting 'work.start' }) $(if ($Occurrence -and -not $Occurrence.AllDay -and $Occurrence.End -gt $Occurrence.Start) { $Occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) '시작 시각' '끝 시각'
+        Add-WtScheduleRange start end '시각' $(if ($Occurrence -and -not $Occurrence.AllDay) { $Occurrence.Start.ToString('HH:mm', $script:inv) } else { (Get-WtWorkHours)['work.start'] }) $(if ($Occurrence -and -not $Occurrence.AllDay -and $Occurrence.End -gt $Occurrence.Start) { $Occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) '시작 시각' '끝 시각'
         $repeat = if ($Occurrence) { Get-WtRepeatLabel $Occurrence.Entry.Repeat } else { '없음' }; if (-not $repeat) { $repeat = '없음' }
         $repeatOptions = @('없음', '매일', '매주', '격주', '매월'); if ($repeat -notin $repeatOptions) { $repeatOptions += $repeat }
         Add-WtScheduleField repeat '반복' (New-WtScheduleCombo $repeatOptions $repeat)
@@ -1161,8 +1182,8 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
         Add-WtScheduleField time '시각' (New-WtScheduleInput $(if ($entry -and [string]$entry.routine.freq -cne 'hourly' -and $entry.routine.time) { [string]$entry.routine.time } else { '' }))
         $script:form.Fields.time.ToolTip = '비워 두면 시각 없이 그날의 루틴입니다. 예: 09:00'
         Add-WtScheduleField every '간격 시간' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { [string]$entry.routine.every } else { '2' }))
-        Add-WtScheduleField start '시작' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { $entry.routine.from } else { Get-WtSetting 'work.start' }))
-        Add-WtScheduleField end '끝 시각' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { $entry.routine.to } else { Get-WtSetting 'work.end' }))
+        Add-WtScheduleField start '시작' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { $entry.routine.from } else { (Get-WtWorkHours)['work.start'] }))
+        Add-WtScheduleField end '끝 시각' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { $entry.routine.to } else { (Get-WtWorkHours)['work.end'] }))
         Add-WtScheduleField workdays '' (New-WtScheduleCheck '근무 요일만' ($entry -and $entry.routine.workdaysOnly))
         $script:form.Fields.workdays.ToolTip = '체크하면 근무 요일(설정 → 업무시간)이 아닌 날을 뺍니다. 휴무일 · 휴가에는 늘 빠집니다.'
         $script:form.Fields.freq.Add_SelectionChanged({ Update-WtScheduleFormFields })

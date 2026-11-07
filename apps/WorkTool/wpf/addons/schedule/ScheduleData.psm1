@@ -1024,7 +1024,7 @@ function Read-WtRoutineEntries($Store) {
 # 근무 요일(work.days)이 아닌 날. 「근무 요일만」 루틴이 이날을 뺀다
 function Test-WtRoutineOffWeekday([datetime]$Date) {
     $day = (([int]$Date.DayOfWeek + 6) % 7) + 1
-    $day -notin @(Get-WtSetting 'work.days')
+    $day -notin @((Get-WtWorkHours -Date $Date)['work.days'])
 }
 # 휴무일 · 휴가인 날. 어떤 루틴도 이날에는 차례가 없다(2026-11-05 승호: 휴가 · 휴일에는 루틴을 모으지 않는다)
 function Test-WtRoutineDayOff([datetime]$Date) {
@@ -1033,7 +1033,8 @@ function Test-WtRoutineDayOff([datetime]$Date) {
     if ((Get-WtHolidayDates $Date $Date).Contains((ConvertTo-WtDateText $Date))) { return $true }
     $calendar = Get-WtCalendarItems $Date $Date -Exclude @('schedule')
     if (-not $calendar.Success) { throw ($calendar.Errors.Reason -join '; ') }
-    @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' }).Count -gt 0
+    # 반차(하루의 일부인 휴가)는 일하는 날이라 루틴을 쉬지 않는다(설계 15.5)
+    @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' -and -not (Test-WtCalendarPartDay $_) }).Count -gt 0
 }
 
 # 그날의 차례 키. DayOff(휴무일 · 휴가인지)를 넘기면 다시 묻지 않는다(여러 루틴을 한 번에 셀 때)
@@ -1070,8 +1071,8 @@ function New-WtRoutine {
     if ($Freq -ceq 'weekly') { $rule.days = @($Days) }
     if ($Freq -ceq 'hourly') {
         $rule.every = $Every
-        $rule.from = if ($PSBoundParameters.ContainsKey('From')) { $From } else { [string](Get-WtSetting 'work.start') }
-        $rule.to = if ($PSBoundParameters.ContainsKey('To')) { $To } else { [string](Get-WtSetting 'work.end') }
+        $rule.from = if ($PSBoundParameters.ContainsKey('From')) { $From } else { [string](Get-WtWorkHours)['work.start'] }
+        $rule.to = if ($PSBoundParameters.ContainsKey('To')) { $To } else { [string](Get-WtWorkHours)['work.end'] }
     }
     if ($WorkdaysOnly) { $rule.workdaysOnly = $true }
     if (($PSBoundParameters.ContainsKey('Days') -and $Freq -cne 'weekly') -or
@@ -1441,7 +1442,7 @@ function Get-WtScheduleRoutineRangeRows([datetime]$From, [datetime]$To, [string]
     $calendar = Get-WtCalendarItems $From $To -Exclude @('schedule')
     if (-not $calendar.Success) { throw ($calendar.Errors.Reason -join '; ') }
     $leave = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($item in @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' })) { [void]$leave.Add((ConvertTo-WtDateText $item.Date)) }
+    foreach ($item in @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' -and -not (Test-WtCalendarPartDay $_) })) { [void]$leave.Add((ConvertTo-WtDateText $item.Date)) }
     $log = Open-WtStore -Name 'routine-log' -Schema 1
     if ($log.State -notin 'ok', 'missing') { throw "routine-log.json은 읽지 못했습니다. ($($log.Error))" }
     $done = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -1466,15 +1467,16 @@ function Sort-WtScheduleRows([object[]]$Rows) {
         @{ Expression = { if ($_.AllDay -or $_.Start.Date -lt $_.Date) { [timespan]::Zero } else { $_.Start.TimeOfDay } } }, @{ Expression = { $_.Title } }, @{ Expression = { $_.Key } })
 }
 
-# 기한 글(설계 14.5). { Text; Overdue }. 끝낸 것 · 오래 지난 것은 빈 글, 루틴은 오늘 차례만 「오늘」
+# 기한 글(설계 14.5). { Text; Overdue; Soon }. 끝낸 것 · 오래 지난 것은 빈 글, 루틴은 오늘 차례만 「오늘」.
+# Soon = 3일 안에 끝나는 하루 종일 여러 날 일정(마감 임박과 같은 기준). 화면은 Overdue · Soon을 색 배지로 그린다(설계 15.10)
 function Get-WtScheduleDue($Row, [datetime]$Today) {
-    if ($Row.Done) { return [pscustomobject]@{ Text = ''; Overdue = $false } }
-    if ($Row.Kind -ceq 'routine') { return [pscustomobject]@{ Text = $(if ($Row.Date -eq $Today.Date) { '오늘' } else { '' }); Overdue = $false } }
+    if ($Row.Done) { return [pscustomobject]@{ Text = ''; Overdue = $false; Soon = $false } }
+    if ($Row.Kind -ceq 'routine') { return [pscustomobject]@{ Text = $(if ($Row.Date -eq $Today.Date) { '오늘' } else { '' }); Overdue = $false; Soon = $false } }
     $diff = ($Row.DueDate - $Today.Date).Days
-    if ($diff -eq 0) { return [pscustomobject]@{ Text = '오늘'; Overdue = $false } }
-    if ($diff -gt 0) { return [pscustomobject]@{ Text = "D-$diff"; Overdue = $false } }
-    if (-$diff -le $script:dueOverdueDays) { return [pscustomobject]@{ Text = "$(-$diff)일 지남"; Overdue = $true } }
-    [pscustomobject]@{ Text = ''; Overdue = $false }
+    if ($diff -eq 0) { return [pscustomobject]@{ Text = '오늘'; Overdue = $false; Soon = $false } }
+    if ($diff -gt 0) { return [pscustomobject]@{ Text = "D-$diff"; Overdue = $false; Soon = $diff -le $script:dueSoonDays -and $Row.AllDay -and $Row.Multi } }
+    if (-$diff -le $script:dueOverdueDays) { return [pscustomobject]@{ Text = "$(-$diff)일 지남"; Overdue = $true; Soon = $false } }
+    [pscustomobject]@{ Text = ''; Overdue = $false; Soon = $false }
 }
 
 # 결과 묶음: { Success; Error(찾기 식 오류); Rows; Count; Truncated; From; To; Problems(읽지 못한 것의 이유) }
@@ -1534,7 +1536,7 @@ $script:dueCountCache = $null
 function Get-WtScheduleDueCount([string]$Now = (Get-WtStamp)) {
     $stamp = ConvertFrom-WtStamp $Now
     $key = @((ConvertTo-WtDateText $stamp.Date), (Get-WtStoreStamp 'schedule'), (Get-WtStoreStamp 'event-log'), (Get-WtStoreStamp 'routine-log'),
-        (Get-WtStoreStamp 'holidays'), (@(Get-WtSetting 'work.days') -join ',')) -join '#'
+        (Get-WtStoreStamp 'holidays'), (ConvertTo-Json -Compress -Depth 5 -InputObject @((Get-WtSetting 'work.days'), (Get-WtSetting 'work.periods')))) -join '#'
     $cache = $script:dueCountCache
     if ($cache -and $cache.Key -ceq $key -and [math]::Abs(($stamp - $cache.At).TotalSeconds) -lt 60) { return $cache.Count }
     $rows = @((Get-WtScheduleDueRows -Now $Now).Rows)

@@ -537,6 +537,16 @@ try {
         $leaveCheck = Set-WtRoutineCheck -Routine 'routine-work' -Slot '2026-10-29' -Done $true -At $at
         Assert-WtTest '루틴 휴가: 코어 달력 등록 목록으로 모든 루틴 제외 · 그 차례 체크 거부' ($leaveSlots.Count -eq 0 -and -not $leaveCheck.Success -and $leaveCheck.Reason)
     } finally { Register-WtCalendarSource 'routine-test-leave' $null }
+    # 4단계(설계 15.5): 반차(하루의 일부인 휴가, AllDay = $false)는 일하는 날이라 루틴을 쉬지 않는다
+    Register-WtCalendarSource 'routine-test-half' {
+        param([datetime]$From, [datetime]$To)
+        [pscustomobject]@{ Date = ConvertFrom-WtDateText '2026-10-29'; Kind = 'leave'; Style = 'Att.Leave'; Text = '오전 반차'; AllDay = $false; Time = '09:00'; Id = 'fake-half' }
+    }
+    try {
+        $halfSlots = @(Get-WtRoutineSlots -Date '2026-10-29' -Now $at)
+        $halfMark = Get-WtCalendarMark ([datetime]::new(2026, 10, 29)) @((Get-WtCalendarItems ([datetime]::new(2026, 10, 29)) ([datetime]::new(2026, 10, 29))).Items)
+        Assert-WtTest '루틴 반차 날: 쉬지 않고 평소 차례가 있다, 달력 표시는 휴가 색이지만 쉬는 날은 아님' ($halfSlots.Count -gt 0 -and $halfMark.Kind -ceq 'leave' -and -not $halfMark.DayOff) "$($halfSlots.Slot -join ',') / $($halfMark.Kind) $($halfMark.DayOff)"
+    } finally { Register-WtCalendarSource 'routine-test-half' $null }
     $thread = [Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture; $oldUiCulture = $thread.CurrentUICulture
     $snapshots = @()
     try {
@@ -1001,8 +1011,20 @@ try {
         $menuAfter = & $module { param($b) Update-WtScheduleDayMenu $b; @($b.ContextMenu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] } | ForEach-Object Header) -join ',' } $cells[26].Button
         & $module { Set-WtScheduleHoliday '2026-11-27' @('company') $false }
         Assert-WtTest '날짜 우클릭 휴무일: 지정하면 칸 머리에 이름, 다시 열면 해제, 해제하면 계산에서 빠짐' (
-            $menuHeaders -ceq '새 일정,새 루틴,휴무일로 지정' -and $afterSet -ceq '회사 휴무|True' -and $menuAfter -ceq '새 일정,새 루틴,휴무일 해제' -and
+            $menuHeaders -ceq '새 일정,새 루틴,회사 휴무로 지정' -and $afterSet -ceq '회사 휴무|True' -and $menuAfter -ceq '새 일정,새 루틴,휴무일 해제' -and
             -not (Get-WtHolidayDates).Contains('2026-11-27')) "$menuHeaders / $afterSet / $menuAfter"
+        # 4단계(설계 15.6): 다른 탭이 코어에 등록한 날짜 메뉴 항목이 구분선과 휴무일 사이에 붙고, 누르면 그 탭의 동작을 부른 뒤 달력을 다시 그린다
+        $global:wtTestDateMenuArg = $null
+        Register-WtAddon -Id 'test-datemenu' -Title '가짜 근태' -NewView { [Windows.Controls.Border]::new() } -DateMenu {
+            param([datetime]$Date)
+            @{ Header = '가짜 넣기'; Items = @(@{ Header = '하나'; Action = { param($Arg) $global:wtTestDateMenuArg = $Arg }; Arg = @{ Day = $Date.ToString('yyyy-MM-dd') } }, '-', @{ Header = '꺼짐'; IsEnabled = $false; ToolTip = '이유' }) }
+        }
+        try {
+            $menuWith = & $module { param($b) Update-WtScheduleDayMenu $b; $m = $b.ContextMenu.Items; "$(@($m | ForEach-Object { if ($_ -is [Windows.Controls.Separator]) { '-' } else { $_.Header } }) -join ',')|$(@($m[3].Items | ForEach-Object { if ($_ -is [Windows.Controls.Separator]) { '-' } else { "$($_.Header):$($_.IsEnabled)" } }) -join ',')" } $cells[26].Button
+            & $module { param($b) $b.ContextMenu.Items[3].Items[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent)) } $cells[26].Button
+            Assert-WtTest '날짜 우클릭: 다른 탭이 등록한 항목(하위 메뉴 · 구분선 · 끈 항목)이 붙고, 누르면 그 탭의 동작에 날짜 인자를 넘긴다' (
+                $menuWith -ceq '새 일정,새 루틴,-,가짜 넣기,회사 휴무로 지정|하나:True,-,꺼짐:False' -and $global:wtTestDateMenuArg.Day -ceq '2026-11-27') "$menuWith / $($global:wtTestDateMenuArg.Day)"
+        } finally { & (Get-Module Addons) { param($i) for ($n = $script:addons.Count - 1; $n -ge 0; $n--) { if ($script:addons[$n].Id -ceq $i) { $script:addons.RemoveAt($n) } } } 'test-datemenu' }
         # ---- 2단계: 폼의 관련 항목 (코어 등록 목록에 가짜 출처를 등록, 메모 탭에 기대지 않음) ----
         $fakeTitles = @{ 'f-pick' = '고른 가짜' }
         Register-WtAddon -Id 'fake-related' -Title '가짜' -Icon 0xE70B -Order 900 -NewView { [Windows.Controls.Grid]::new() } -Related @{
@@ -1089,6 +1111,10 @@ try {
         Assert-WtTest '할 일 보기: 묶음 머리(기한 지남 · 오늘 · 마감 임박) + 줄, 제목과 보기 단추에 할 일 수' (
             $dueShape3 -ceq '[기한 지남 1],늦은 일,[오늘 5],가 루틴,다 루틴,나 루틴,매주 회의,오늘 점검,[마감 임박 1],곧 끝남' -and
             $dueHeader -ceq '할 일 7|7' -and (Get-WtScheduleDueCount) -eq 7) "$dueShape3 / $dueHeader"
+        # 할 일 색(설계 15.10): 기한 지남 = over, 3일 안에 끝나는 여러 날 = soon 배지. 묶음 머리 배지 색은 Group(overdue · today · soon)으로 그린다
+        $dueKinds = (@($dueItems | Where-Object { -not $_.IsHead -and $_.DueKind } | ForEach-Object { "$($_.Title):$($_.DueKind)" }) -join ',')
+        $headGroups = (@($dueItems | Where-Object IsHead | ForEach-Object Group) -join ',')
+        Assert-WtTest '할 일 색: 늦은 일 = 빨강 배지(over), 곧 끝남 = 주황 배지(soon), 묶음 머리는 overdue · today · soon' ($dueKinds -ceq '늦은 일:over,곧 끝남:soon' -and $headGroups -ceq 'overdue,today,soon') "$dueKinds / $headGroups"
         # 사이드바에서 루틴을 체크해도 보기 단추 숫자 · 할 일 줄이 바로 맞춰진다
         $sideBox = @(Get-WtTestLogical (& $module { $script:detail }) | Where-Object { $_ -is [Windows.Controls.CheckBox] -and [Windows.Automation.AutomationProperties]::GetName($_) -ceq '가 루틴' })[0]
         $sideBox.IsChecked = $true

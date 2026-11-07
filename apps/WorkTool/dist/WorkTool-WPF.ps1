@@ -2149,6 +2149,8 @@ Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open
 New-Module -Name 'WorkTool.Settings' -ScriptBlock {
 # 설정 담당. 기본값은 코드에 두고, 사용자 설정은 데이터 폴더의 settings.json에 저장한다.
 # 업무시간은 첫 설정 완료를 구분하도록 기본값도 저장한다. 나머지는 기본값과 같아지면 파일에서 빠진다.
+# 업무시간은 기간별 규칙이다(설계 15.1): work.* 키 = 「처음부터」 규칙, work.periods = 적용 시작일(from)이 있는 뒤 규칙들.
+# 날짜마다 계산하는 곳(근태 초과근무 · 달력 쉬는 날 · 루틴 근무 요일만)은 Get-WtWorkHours -Date로 그날 규칙을 받는다.
 
 $ErrorActionPreference = 'Stop'
 
@@ -2165,14 +2167,21 @@ $script:defaults = @{
     'work.end'        = '18:00'
     'work.lunchStart' = '12:00'
     'work.lunchEnd'   = '13:00'
+    'work.halfDay'    = ''       # 반차 나누는 시각 HH:mm. 비면 정규 시간(점심 뺌)의 절반 지점
+    'work.periods'    = @()      # 뒤 규칙들 @{ from = 'yyyy-MM-dd'; days; start; end; lunchStart; lunchEnd; halfDay }
 }
+# 규칙 하나를 이루는 키. 기간 원소의 칸 이름은 앞의 'work.'을 뗀 것이다
+$script:workKeys = @('work.days', 'work.start', 'work.end', 'work.lunchStart', 'work.lunchEnd', 'work.halfDay')
 $script:values = $null
+$script:periodCache = $null
 $script:handlers = [System.Collections.Generic.List[scriptblock]]::new()
+$script:inv = [System.Globalization.CultureInfo]::InvariantCulture
 
 function Get-WtSettingsPath { Join-Path (Get-WtDataRoot) 'settings.json' }
 
 function Initialize-WtSettings {
     $script:values = @{}
+    $script:periodCache = $null
     $doc = Read-WtJsonFile (Get-WtSettingsPath)
     if ($doc -and $doc.values) {
         foreach ($p in $doc.values.PSObject.Properties) { $script:values[$p.Name] = $p.Value }
@@ -2192,13 +2201,97 @@ function Test-WtSameValue($A, $B) {
     (ConvertTo-Json -InputObject $A -Compress -Depth 5) -ceq (ConvertTo-Json -InputObject $B -Compress -Depth 5)
 }
 
-function Get-WtWorkHours([switch]$Defaults) {
+# 기간 원소의 칸을 읽는다. 앱이 만든 해시 테이블과 settings.json에서 읽은 객체를 같게 다룬다
+function Get-WtSettingsField($Object, [string]$Name) {
+    if ($Object -is [System.Collections.IDictionary]) { if ($Object.Contains($Name)) { return $Object[$Name] }; return $null }
+    $p = $Object.PSObject.Properties[$Name]
+    if ($p) { $p.Value } else { $null }
+}
+function Test-WtSettingsObject($Value) { $null -ne $Value -and $Value -isnot [string] -and $Value -isnot [ValueType] -and $Value -isnot [array] }
+
+# 규칙 하나 = work.* 키의 해시 테이블. 요일은 늘 배열, 반차 시각은 비면 ''. -Period면 기간 원소(칸 이름에 'work.' 없음)에서 읽는다
+function ConvertTo-WtWorkRule($Source, [switch]$Period) {
     $hours = @{}
-    foreach ($k in 'work.days', 'work.start', 'work.end', 'work.lunchStart', 'work.lunchEnd') {
-        $hours[$k] = if ($Defaults) { $script:defaults[$k] } else { Get-WtSetting $k }
-    }
+    foreach ($k in $script:workKeys) { $hours[$k] = if ($Period) { Get-WtSettingsField $Source $k.Substring(5) } else { $Source[$k] } }
+    if ($null -eq $hours['work.halfDay']) { $hours['work.halfDay'] = '' }
     $hours['work.days'] = @($hours['work.days'])
     $hours
+}
+
+# 뒤 규칙 원소(저장 모양). 옛 원소의 모르는 칸(더 새 앱이 더한 것)은 남긴다
+function ConvertTo-WtWorkPeriodItem($Old, [string]$From, [hashtable]$Rule) {
+    $item = [ordered]@{}
+    if (Test-WtSettingsObject $Old) {
+        $names = if ($Old -is [System.Collections.IDictionary]) { @($Old.Keys) } else { @($Old.PSObject.Properties.Name) }
+        foreach ($n in $names) { $item[$n] = Get-WtSettingsField $Old $n }
+    }
+    $item['from'] = $From
+    foreach ($k in $script:workKeys) { $item[$k.Substring(5)] = $Rule[$k] }
+    $item['days'] = @($Rule['work.days'])
+    $item
+}
+
+<#
+뒤 규칙들: 올바른 것만 적용 시작일 순으로 @{ From = 'yyyy-MM-dd'; Hours = 규칙 }.
+날짜를 못 읽거나 규칙이 틀렸거나 앞 원소와 날짜가 겹치는 원소는 계산에서 뺀다(파일에서는 지우지 않는다).
+#>
+function Get-WtWorkPeriods {
+    if ($null -eq $script:values) { Initialize-WtSettings }
+    if ($null -ne $script:periodCache) { return $script:periodCache }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $list = @(foreach ($p in @(Get-WtSetting 'work.periods')) {
+            if (-not (Test-WtSettingsObject $p)) { continue }
+            $from = [string](Get-WtSettingsField $p 'from')
+            $day = [datetime]::MinValue
+            if (-not [datetime]::TryParseExact($from, 'yyyy-MM-dd', $script:inv, [System.Globalization.DateTimeStyles]::None, [ref]$day) -or $day.Year -lt 1900 -or $day.Year -gt 2199) { continue }
+            $hours = ConvertTo-WtWorkRule $p -Period
+            if ((Get-WtWorkHoursErrors $hours).Count -or -not $seen.Add($from)) { continue }
+            [pscustomobject]@{ From = $from; Hours = $hours }
+        })
+    $script:periodCache = @($list | Sort-Object { $_.From })
+    $script:periodCache
+}
+
+<#
+업무시간 규칙(work.* 키의 해시 테이블 + 'work.from' = 규칙의 적용 시작일, 처음부터는 '').
+  -Defaults    코드 기본값(첫 설정 화면)
+  -From ''     「처음부터」 규칙. -From 'yyyy-MM-dd'는 그날 시작하는 뒤 규칙(설정 화면이 고치는 대상), 없으면 $null
+  -Date d      d(날짜 또는 yyyy-MM-dd)에 적용되는 규칙. 아무것도 주지 않으면 오늘. 적용 시작일이 d 이하인 마지막 뒤 규칙, 없으면 처음부터 규칙
+#>
+function Get-WtWorkHours([switch]$Defaults, [string]$From, $Date) {
+    if ($Defaults) { $hours = ConvertTo-WtWorkRule $script:defaults; $hours['work.from'] = ''; return $hours }
+    if ($From) {
+        $period = @(Get-WtWorkPeriods) | Where-Object { $_.From -ceq $From } | Select-Object -First 1
+        if (-not $period) { return $null }
+        $hours = $period.Hours.Clone(); $hours['work.days'] = @($period.Hours['work.days']); $hours['work.from'] = $From
+        return $hours
+    }
+    $base = @{}
+    foreach ($k in $script:workKeys) { $base[$k] = Get-WtSetting $k }
+    $hours = ConvertTo-WtWorkRule $base
+    $hours['work.from'] = ''
+    if ($PSBoundParameters.ContainsKey('From')) { return $hours }
+    $dayText = if ($null -eq $Date) { [datetime]::Today.ToString('yyyy-MM-dd', $script:inv) } elseif ($Date -is [datetime]) { $Date.ToString('yyyy-MM-dd', $script:inv) } else { [string]$Date }
+    foreach ($period in @(Get-WtWorkPeriods)) {
+        if ([string]::CompareOrdinal($period.From, $dayText) -gt 0) { break }
+        $hours = $period.Hours.Clone(); $hours['work.days'] = @($period.Hours['work.days']); $hours['work.from'] = $period.From
+    }
+    $hours
+}
+
+# 반차 나누는 시각 HH:mm. 규칙에 값이 있으면 그 값, 비면 정규 시간(점심 뺌)의 절반 지점(09:00~18:00 · 점심 12:00~13:00 → 14:00).
+# 오전 반차 = 시작 ~ 이 시각, 오후 반차 = 이 시각 ~ 끝(설계 15.1)
+function Get-WtHalfDaySplit([hashtable]$Hours) {
+    if ($Hours['work.halfDay']) { return [string]$Hours['work.halfDay'] }
+    $start = [timespan]::ParseExact([string]$Hours['work.start'], 'hh\:mm', $script:inv).TotalMinutes
+    $end = [timespan]::ParseExact([string]$Hours['work.end'], 'hh\:mm', $script:inv).TotalMinutes
+    $lunchStart = [timespan]::ParseExact([string]$Hours['work.lunchStart'], 'hh\:mm', $script:inv).TotalMinutes
+    $lunchEnd = [timespan]::ParseExact([string]$Hours['work.lunchEnd'], 'hh\:mm', $script:inv).TotalMinutes
+    $lunch = [math]::Max(0, [math]::Min($lunchEnd, $end) - [math]::Max($lunchStart, $start))
+    $half = ($end - $start - $lunch) / 2
+    $before = [math]::Max(0, $lunchStart - $start)
+    $minutes = if ($lunch -gt 0 -and $half -gt $before) { $lunchEnd + $half - $before } else { $start + $half }
+    [timespan]::FromMinutes([math]::Floor($minutes)).ToString('hh\:mm', $script:inv)
 }
 
 function Test-WtWorkSetupRequired {
@@ -2230,28 +2323,79 @@ function Get-WtWorkHoursErrors([hashtable]$Hours) {
     if (-not $errors.Contains('work.end') -and -not $errors.Contains('work.lunchEnd') -and $Hours['work.lunchEnd'] -gt $Hours['work.end']) {
         $errors['work.lunchEnd'] = '점심 끝 시각은 업무시간 안이어야 합니다.'
     }
+    # 반차 나누는 시각은 비울 수 있다(자동). 적으면 시작과 끝 사이
+    $half = $Hours['work.halfDay']
+    if ($null -ne $half -and '' -cne $half) {
+        if ($half -isnot [string] -or $half -cnotmatch '^([01][0-9]|2[0-3]):[0-5][0-9]$') { $errors['work.halfDay'] = '시각은 HH:mm 형식으로 입력하세요.' }
+        elseif (-not $errors.Contains('work.start') -and -not $errors.Contains('work.end') -and ($half -le $Hours['work.start'] -or $half -ge $Hours['work.end'])) {
+            $errors['work.halfDay'] = '반차 나누는 시각은 시작 시각과 끝 시각 사이여야 합니다.'
+        }
+    }
     $errors
 }
 
-# 다섯 값을 한 번에 검사하고 저장해, 업무시간을 옮길 때 중간 값이 저장되지 않게 한다.
-function Set-WtWorkHours([hashtable]$Hours) {
-    $errors = Get-WtWorkHoursErrors $Hours
-    if ($errors.Count) { throw [System.ArgumentException]::new(($errors.Values -join ' ')) }
+# 규칙 하나를 한 번에 검사하고 저장해, 업무시간을 옮길 때 중간 값이 저장되지 않게 한다.
+# From = ''(처음부터) 또는 뒤 규칙의 적용 시작일. Hours에 없는 키(예: 첫 설정 화면의 반차 시각)는 그 규칙의 값을 그대로 둔다
+function Set-WtWorkHours([hashtable]$Hours, [string]$From = '') {
     if ($null -eq $script:values) { Initialize-WtSettings }
+    $current = Get-WtWorkHours -From $From
+    if ($null -eq $current) { throw [System.ArgumentException]::new("없는 업무시간 기간입니다: $From") }
+    $rule = @{}
+    # if 식으로 넣으면 원소 하나인 요일 목록(@(7))이 숫자로 풀린다. 문장으로 넣어 받은 값 그대로 검사한다
+    foreach ($k in $script:workKeys) {
+        $rule[$k] = $current[$k]
+        if ($Hours.ContainsKey($k)) { $rule[$k] = $Hours[$k] }
+    }
+    if ($null -eq $rule['work.halfDay']) { $rule['work.halfDay'] = '' }
+    $errors = Get-WtWorkHoursErrors $rule
+    if ($errors.Count) { throw [System.ArgumentException]::new(($errors.Values -join ' ')) }
     $next = $script:values.Clone()
     $changes = @{}
-    foreach ($k in 'work.days', 'work.start', 'work.end', 'work.lunchStart', 'work.lunchEnd') {
-        $changes[$k] = $Hours[$k]
-        $next[$k] = $Hours[$k]
+    if (-not $From) {
+        foreach ($k in $script:workKeys) {
+            $changes[$k] = $rule[$k]
+            $next[$k] = $rule[$k]
+        }
+    } else {
+        $list = @(foreach ($p in @(Get-WtSetting 'work.periods')) {
+                if ((Test-WtSettingsObject $p) -and [string](Get-WtSettingsField $p 'from') -ceq $From) { ConvertTo-WtWorkPeriodItem $p $From $rule } else { $p }
+            })
+        $next['work.periods'] = $list; $changes['work.periods'] = $list
     }
     Save-WtSettings $next $changes
+}
+
+# 적용 시작일 From부터의 뒤 규칙을 더한다. 값은 그날 적용되던 규칙을 복사한다(설정 화면에서 고친다)
+function Add-WtWorkPeriod([string]$From) {
+    $day = [datetime]::MinValue
+    if (-not [datetime]::TryParseExact($From, 'yyyy-MM-dd', $script:inv, [System.Globalization.DateTimeStyles]::None, [ref]$day) -or $day.Year -lt 1900 -or $day.Year -gt 2199) {
+        throw [System.ArgumentException]::new('적용 시작일은 yyyy-MM-dd 형식으로 입력하세요.')
+    }
+    if (@(Get-WtWorkPeriods | Where-Object { $_.From -ceq $From }).Count) { throw [System.ArgumentException]::new('같은 적용 시작일의 기간이 이미 있습니다.') }
+    $rule = Get-WtWorkHours -Date $From
+    $next = $script:values.Clone()
+    $list = @(@(Get-WtSetting 'work.periods') | Where-Object { $null -ne $_ }) + @(ConvertTo-WtWorkPeriodItem $null $From $rule)
+    $next['work.periods'] = $list
+    Save-WtSettings $next @{ 'work.periods' = $list }
+}
+
+# 뒤 규칙을 지운다. 그 기간의 날은 앞 규칙을 따른다. 처음부터 규칙은 지우지 않는다
+function Remove-WtWorkPeriod([string]$From) {
+    if (-not $From) { throw [System.ArgumentException]::new('처음부터 규칙은 지울 수 없습니다.') }
+    if ($null -eq $script:values) { Initialize-WtSettings }
+    $raw = @(Get-WtSetting 'work.periods')
+    $list = @($raw | Where-Object { -not ((Test-WtSettingsObject $_) -and [string](Get-WtSettingsField $_ 'from') -ceq $From) })
+    if ($list.Count -eq $raw.Count) { throw [System.ArgumentException]::new("없는 업무시간 기간입니다: $From") }
+    $next = $script:values.Clone()
+    $next['work.periods'] = $list
+    Save-WtSettings $next @{ 'work.periods' = $list }
 }
 
 # 값을 바꾸고 저장한 뒤, 등록된 처리기에 알린다
 function Set-WtSetting([string]$Key, $Value) {
     if ($null -eq $script:values) { Initialize-WtSettings }
-    if ($Key -in 'work.days', 'work.start', 'work.end', 'work.lunchStart', 'work.lunchEnd') {
-        $hours = Get-WtWorkHours
+    if ($Key -in $script:workKeys) {
+        $hours = Get-WtWorkHours -From ''
         $hours[$Key] = $Value
         Set-WtWorkHours $hours
         return
@@ -2271,6 +2415,7 @@ function Save-WtSettings([hashtable]$Next, [hashtable]$Changes) {
     # 저장 통로가 이 내용을 맡는다. 쓰지 못해도 버리지 않고 가지고 있다가(다시 읽어도 나온다) 끝내기 전에 셸이 묻는다
     Write-WtJsonFile (Get-WtSettingsPath) ([ordered]@{ schema = 1; values = $sorted })
     $script:values = $Next
+    $script:periodCache = $null
     $firstError = $null
     foreach ($k in $Changes.Keys) {
         foreach ($h in @($script:handlers)) {
@@ -2286,7 +2431,8 @@ function Save-WtSettings([hashtable]$Next, [hashtable]$Changes) {
 function Register-WtSettingHandler([scriptblock]$Handler) { $script:handlers.Add($Handler) }
 
 Export-ModuleMember -Function Get-WtSettingsPath, Initialize-WtSettings, Register-WtSettingDefault, Get-WtSetting,
-    Set-WtSetting, Register-WtSettingHandler, Get-WtWorkHours, Get-WtWorkHoursErrors, Set-WtWorkHours, Test-WtWorkSetupRequired
+    Set-WtSetting, Register-WtSettingHandler, Get-WtWorkHours, Get-WtWorkHoursErrors, Set-WtWorkHours, Test-WtWorkSetupRequired,
+    Get-WtWorkPeriods, Add-WtWorkPeriod, Remove-WtWorkPeriod, Get-WtHalfDaySplit
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Settings.psm1 끝 ----
 
@@ -4577,6 +4723,8 @@ $script:stylesXaml = @'
   <Style x:Key="Attendance.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="0,4,0,0"/></Style>
   <Style x:Key="Attendance.SummaryRow" TargetType="DockPanel"><Setter Property="MinHeight" Value="32"/></Style>
   <Style x:Key="Attendance.SummaryChild" TargetType="DockPanel" BasedOn="{StaticResource Attendance.SummaryRow}"><Setter Property="Margin" Value="12,0,0,0"/></Style>
+  <!-- 이번 달 요약과 아래 대휴(전체 기간) 사이: 위아래 8 + 선 1 -->
+  <Style x:Key="Attendance.SummaryDivider" TargetType="Border"><Setter Property="Height" Value="1"/><Setter Property="Margin" Value="0,8"/><Setter Property="Background" Value="{DynamicResource B.Border.Muted}"/></Style>
   <Style x:Key="Attendance.Note" TargetType="TextBox" BasedOn="{StaticResource Input}"><Setter Property="AcceptsReturn" Value="True"/><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="VerticalScrollBarVisibility" Value="Auto"/></Style>
   <Style x:Key="Attendance.CellText" TargetType="TextBlock" BasedOn="{StaticResource Task.Text}"/>
   <Style x:Key="Attendance.Number" TargetType="TextBlock" BasedOn="{StaticResource Attendance.CellText}"><Setter Property="TextAlignment" Value="Right"/></Style>
@@ -4606,7 +4754,7 @@ $script:stylesXaml = @'
     <DataGrid Style="{DynamicResource Attendance.Table}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" CanUserReorderColumns="False" CanUserResizeRows="False" CanUserSortColumns="False" SelectionMode="Single" SelectionUnit="FullRow" AutomationProperties.Name="근태 기록">
       <DataGrid.Columns>
         <DataGridTextColumn Header="날짜" Binding="{Binding Date}" Width="100" ElementStyle="{StaticResource Attendance.CellText}"/>
-        <DataGridTextColumn Header="종류" Binding="{Binding Kind}" Width="72" ElementStyle="{StaticResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="종류" Binding="{Binding Kind}" Width="88" ElementStyle="{StaticResource Attendance.CellText}"/>
         <DataGridTextColumn Header="시작" Binding="{Binding Start}" Width="64" ElementStyle="{StaticResource Attendance.CellText}"/>
         <DataGridTextColumn Header="끝" Binding="{Binding End}" Width="64" ElementStyle="{StaticResource Attendance.CellText}"/>
         <DataGridTextColumn Header="장소" Binding="{Binding Place}" Width="72" ElementStyle="{StaticResource Attendance.CellText}"/>
@@ -4777,18 +4925,23 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.TableRoutineIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="0,0,6,0"/></Style>
   <Style x:Key="Schedule.TableMemoIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="8,0,4,0"/></Style>
   <Style x:Key="Schedule.TableMeta" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0,0,0"/></Style>
-  <Style x:Key="Schedule.TableWarn" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Status.Warning.Icon}"/><Setter Property="Margin" Value="0,0,4,0"/></Style>
+  <Style x:Key="Schedule.TableWarn" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Icon}"/><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <!-- 할 일 색(디자인 README 「일정」): 배지 = 높이 20 · 모서리 4 · F.Caption, 연한 상태 바탕 + 상태 글자. 기한 지남 = 오류 · 오늘 = 정보 · 마감 임박 = 경고 -->
+  <Style x:Key="Schedule.CountBadge" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Background" Value="{DynamicResource B.Status.Info.Bg}"/></Style>
+  <Style x:Key="Schedule.CountBadgeText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Info.Text}"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Schedule.DueBadge" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Background" Value="Transparent"/></Style>
   <Style x:Key="Schedule.TagChip" TargetType="Border"><Setter Property="Height" Value="20"/><Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/><Setter Property="Padding" Value="8,0"/><Setter Property="Margin" Value="0,0,4,0"/><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/></Style>
   <Style x:Key="Schedule.TagChipText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Accent.Text}"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
   <Style x:Key="Schedule.TableRow" TargetType="ListBoxItem" BasedOn="{StaticResource Row}"><Setter Property="Padding" Value="0"/></Style>
-  <!-- 표 · 할 일 줄: 체크 40 · 날짜 120 · 시각 80 · 제목(나머지) · 태그 140 · 기한 88. IsHead면 할 일 묶음 머리(펼침 단추 · 이름 · 개수) -->
+  <!-- 표 · 할 일 줄: 체크 40 · 날짜 120 · 시각 80 · 제목(나머지) · 태그 140 · 기한 88. IsHead면 할 일 묶음 머리(펼침 단추 · 이름 · 개수 배지) -->
   <DataTemplate x:Key="Schedule.TableItem">
     <Grid MinHeight="32">
       <Grid.ColumnDefinitions><ColumnDefinition Width="40"/><ColumnDefinition Width="120"/><ColumnDefinition Width="80"/><ColumnDefinition Width="*"/><ColumnDefinition Width="140"/><ColumnDefinition Width="88"/></Grid.ColumnDefinitions>
-      <DockPanel x:Name="Head" Grid.ColumnSpan="6" Visibility="Collapsed">
+      <StackPanel x:Name="Head" Grid.ColumnSpan="6" Orientation="Horizontal" Visibility="Collapsed">
         <TextBlock Text="{Binding HeadGlyph}" Style="{DynamicResource Schedule.ViewTabIcon}" FontSize="10" Margin="6,0" Foreground="{DynamicResource B.Text.Secondary}"/>
-        <TextBlock VerticalAlignment="Center" Style="{DynamicResource T.Body}"><Run Text="{Binding HeadName, Mode=OneWay}" FontWeight="{DynamicResource F.BodyStrong.Weight}"/><Run Text="  "/><Run Text="{Binding HeadCount, Mode=OneWay}" FontSize="{DynamicResource F.Caption}" Foreground="{DynamicResource B.Text.Tertiary}"/></TextBlock>
-      </DockPanel>
+        <TextBlock Text="{Binding HeadName}" VerticalAlignment="Center" Style="{DynamicResource T.Body}" FontWeight="{DynamicResource F.BodyStrong.Weight}"/>
+        <Border x:Name="HeadBadge" Style="{DynamicResource Schedule.CountBadge}"><TextBlock x:Name="HeadCount" Text="{Binding HeadCount}" Style="{DynamicResource Schedule.CountBadgeText}"/></Border>
+      </StackPanel>
       <CheckBox x:Name="Check" Grid.Column="0" Style="{DynamicResource Schedule.TableCheck}" IsChecked="{Binding Done, Mode=OneWay}" IsEnabled="{Binding CanCheck}" ToolTip="{Binding CheckTip}" AutomationProperties.Name="{Binding CheckName}" ToolTipService.ShowOnDisabled="True"/>
       <TextBlock x:Name="DateCell" Grid.Column="1" Text="{Binding DateText}" Style="{DynamicResource Table.CellSub}"/>
       <TextBlock x:Name="TimeCell" Grid.Column="2" Text="{Binding TimeText}" Style="{DynamicResource Table.CellSub}"/>
@@ -4803,10 +4956,12 @@ $script:stylesXaml = @'
         <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
         <ItemsControl.ItemTemplate><DataTemplate><Border Style="{DynamicResource Schedule.TagChip}"><TextBlock Text="{Binding}" Style="{DynamicResource Schedule.TagChipText}"/></Border></DataTemplate></ItemsControl.ItemTemplate>
       </ItemsControl>
-      <StackPanel x:Name="DueCell" Grid.Column="5" Orientation="Horizontal" Margin="12,0" VerticalAlignment="Center">
-        <TextBlock Text="&#xE814;" Visibility="{Binding DueWarn}" Style="{DynamicResource Schedule.TableWarn}"/>
-        <TextBlock x:Name="DueText" Text="{Binding DueText}" Style="{DynamicResource Table.CellSub}" Margin="0"/>
-      </StackPanel>
+      <Border x:Name="DueCell" Grid.Column="5" Margin="12,0,0,0" Style="{DynamicResource Schedule.DueBadge}">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="&#xE814;" Visibility="{Binding DueWarn}" Style="{DynamicResource Schedule.TableWarn}"/>
+          <TextBlock x:Name="DueText" Text="{Binding DueText}" Style="{DynamicResource Table.CellSub}" Margin="0"/>
+        </StackPanel>
+      </Border>
     </Grid>
     <DataTemplate.Triggers>
       <DataTrigger Binding="{Binding IsHead}" Value="True">
@@ -4814,8 +4969,12 @@ $script:stylesXaml = @'
         <Setter TargetName="Check" Property="Visibility" Value="Collapsed"/><Setter TargetName="DateCell" Property="Visibility" Value="Collapsed"/><Setter TargetName="TimeCell" Property="Visibility" Value="Collapsed"/>
         <Setter TargetName="TitleCell" Property="Visibility" Value="Collapsed"/><Setter TargetName="TagCell" Property="Visibility" Value="Collapsed"/><Setter TargetName="DueCell" Property="Visibility" Value="Collapsed"/>
       </DataTrigger>
+      <DataTrigger Binding="{Binding Group}" Value="overdue"><Setter TargetName="HeadBadge" Property="Background" Value="{DynamicResource B.Status.Error.Bg}"/><Setter TargetName="HeadCount" Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></DataTrigger>
+      <DataTrigger Binding="{Binding Group}" Value="soon"><Setter TargetName="HeadBadge" Property="Background" Value="{DynamicResource B.Status.Warning.Bg}"/><Setter TargetName="HeadCount" Property="Foreground" Value="{DynamicResource B.Status.Warning.Text}"/></DataTrigger>
       <DataTrigger Binding="{Binding Done}" Value="True"><Setter TargetName="TitleText" Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></DataTrigger>
       <DataTrigger Binding="{Binding DueStrong}" Value="True"><Setter TargetName="DueText" Property="Foreground" Value="{DynamicResource B.Text.Primary}"/></DataTrigger>
+      <DataTrigger Binding="{Binding DueKind}" Value="over"><Setter TargetName="DueCell" Property="Background" Value="{DynamicResource B.Status.Error.Bg}"/><Setter TargetName="DueCell" Property="Padding" Value="6,0"/><Setter TargetName="DueText" Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></DataTrigger>
+      <DataTrigger Binding="{Binding DueKind}" Value="soon"><Setter TargetName="DueCell" Property="Background" Value="{DynamicResource B.Status.Warning.Bg}"/><Setter TargetName="DueCell" Property="Padding" Value="6,0"/><Setter TargetName="DueText" Property="Foreground" Value="{DynamicResource B.Status.Warning.Text}"/></DataTrigger>
     </DataTemplate.Triggers>
   </DataTemplate>
   <Style x:Key="Schedule.TableList" TargetType="ListBox" BasedOn="{StaticResource List}"><Setter Property="ItemContainerStyle" Value="{StaticResource Schedule.TableRow}"/><Setter Property="ItemTemplate" Value="{StaticResource Schedule.TableItem}"/></Style>
@@ -5665,8 +5824,10 @@ function New-WtTimeline([object[]]$Items, [datetime]$Date, [string]$Page, [strin
         [void](Add-WtChild $col $row)
     }
     $canvas = [System.Windows.Controls.Canvas]::new(); $canvas.Height = 116; $canvas.Margin = [System.Windows.Thickness]::new(0, 8, 0, 0)
-    $workStart = (ConvertFrom-WtTimeText (Get-WtSetting 'work.start')).TotalMinutes
-    $workEnd = (ConvertFrom-WtTimeText (Get-WtSetting 'work.end')).TotalMinutes
+    # 그날 적용되는 업무시간 규칙(설계 15.1)
+    $workHours = Get-WtWorkHours -Date $Date
+    $workStart = (ConvertFrom-WtTimeText $workHours['work.start']).TotalMinutes
+    $workEnd = (ConvertFrom-WtTimeText $workHours['work.end']).TotalMinutes
     $rangeStart = $workStart - 60; $rangeEnd = $workEnd + 120
     $rail = [System.Windows.Controls.Border]::new(); $rail.Height = 20; $rail.CornerRadius = 2
     Set-WtResource $rail Background 'B.Bg.Subtle'
@@ -8932,6 +9093,9 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
                   New = { param($Seed) } → 새 key. Seed = @{ Template; Title; Subject }
                   Window = { param($Key) } → 새 창으로 보기 }
                연결하는 탭은 Get-WtRelatedSource로 받는다. 탭끼리 서로 부르지 않는다
+  DateMenu     { param([datetime]$Date) } → 다른 탭(일정 등)의 날짜 칸 우클릭에 붙일 항목들 (선택). 설계 15.6
+               항목 = @{ Header = '글'; Action = { param($Arg) }; Arg = 넘길 값; ToolTip; IsEnabled = $false(끔); Items = @(항목 | '-') }
+               Items가 있으면 하위 메뉴다. 메뉴를 그리는 탭은 Get-WtDateMenuItems로 받는다. 탭끼리 서로 부르지 않는다
 #>
 function Register-WtAddon {
     param(
@@ -8961,7 +9125,8 @@ function Register-WtAddon {
         [object[]]$Shortcuts = @(),
         [scriptblock]$HelpCard,
         [object[]]$HomeCards = @(),
-        [hashtable]$Related
+        [hashtable]$Related,
+        [scriptblock]$DateMenu
     )
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
@@ -9004,7 +9169,7 @@ function Register-WtAddon {
             Description = $Description
             SavePending = $SavePending; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
-            Related = $relatedEntry
+            Related = $relatedEntry; DateMenu = $DateMenu
         })
     # 같은 탭을 다시 등록하면서 표시 함수를 뺐으면 옛 등록도 없앤다.
     Register-WtCalendarSource -Id "addon:$Id" -Page $Id -CalendarItems $CalendarItems
@@ -9034,16 +9199,38 @@ function Get-WtRelatedSource([string]$Page) {
     }
 }
 
+# 날짜 칸 우클릭에 붙일 다른 탭의 항목(설계 15.6). Exclude = 메뉴를 그리는 탭 자신.
+# @{ Page; Title; Item = 탭이 준 항목; Error = 만들지 못한 이유 } 목록. 한 탭이 실패해도 다른 탭 항목은 그대로 준다
+function Get-WtDateMenuItems([datetime]$Date, [string]$Exclude = '') {
+    foreach ($addon in @(Get-WtAddon)) {
+        if (-not $addon.DateMenu -or $addon.Id -ceq $Exclude) { continue }
+        try {
+            foreach ($item in @(& $addon.DateMenu $Date.Date)) {
+                if ($null -ne $item) { [pscustomobject]@{ Page = $addon.Id; Title = $addon.Title; Item = $item; Error = '' } }
+            }
+        } catch { [pscustomobject]@{ Page = $addon.Id; Title = $addon.Title; Item = $null; Error = $_.Exception.Message } }
+    }
+}
+
+# 반차처럼 하루의 일부만인 달력 항목(AllDay = $false). 칸이 없으면 하루 종일로 본다
+function Test-WtCalendarPartDay($Item) {
+    $value = if ($Item -is [System.Collections.IDictionary]) { $Item['AllDay'] } else { $p = $Item.PSObject.Properties['AllDay']; if ($p) { $p.Value } else { $null } }
+    $value -is [bool] -and -not $value
+}
+
 # 달력 출처의 의미(탭 이름 아님)와 업무시간으로 표시만 계산한다. 근무 기록은 쉬는 날보다 우선한다.
 # 달력 표시. 평소 근무일 · 주말은 Kind가 비고, 업무외 → 휴가 → 휴무일 순서로 하나만 고른다.
+# 쉬는 날 = 그날 업무시간 규칙(설계 15.1)의 근무 요일이 아님 · 휴무일 · 하루 종일 휴가. 반차(AllDay = $false인 휴가)는 숫자 바탕만 휴가 색이다
 function Get-WtCalendarMark([datetime]$Date, [object[]]$Items) {
     $dayItems = @($Items | Where-Object { $_.Date.Date -eq $Date.Date })
     $holiday = @($dayItems | Where-Object { $_.Kind -cin @('public', 'company', 'personal') }).Count -gt 0
-    $leave = @($dayItems | Where-Object { $_.Kind -ceq 'leave' }).Count -gt 0
-    $off = [int]$Date.DayOfWeek -notin @(Get-WtSetting 'work.days') -or $holiday -or $leave
+    $leaveItems = @($dayItems | Where-Object { $_.Kind -ceq 'leave' })
+    $leave = @($leaveItems | Where-Object { -not (Test-WtCalendarPartDay $_) }).Count -gt 0
+    $weekday = (([int]$Date.DayOfWeek + 6) % 7) + 1
+    $off = $weekday -notin @((Get-WtWorkHours -Date $Date)['work.days']) -or $holiday -or $leave
     $work = @($dayItems | Where-Object { $_.Kind -cin @('work', 'trip') }).Count -gt 0
     $over = @($dayItems | Where-Object { $_.Kind -ceq 'overtime' }).Count -gt 0
-    $kind = if ($over -or ($work -and $off)) { 'over' } elseif ($leave) { 'leave' } elseif ($holiday) { 'off' } else { '' }
+    $kind = if ($over -or ($work -and $off)) { 'over' } elseif ($leaveItems.Count) { 'leave' } elseif ($holiday) { 'off' } else { '' }
     $look = switch ($kind) {
         'over' { @('B.Cal.Overtime.Bg', 'B.Cal.Overtime.Text') }
         'leave' { @('B.Cal.Leave.Bg', 'B.Cal.Leave.Text') }
@@ -9116,7 +9303,8 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
         Items = $sorted; Days = $days.ToArray(); Errors = $errors.ToArray() }
 }
 
-Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource
+Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource,
+    Get-WtDateMenuItems, Test-WtCalendarPartDay
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Addons.psm1 끝 ----
 
@@ -9659,25 +9847,119 @@ function Update-WtWorkForm($Form, [switch]$Save) {
             } else { [System.Windows.Controls.Validation]::ClearInvalid($binding) }
         }
     }
+    Update-WtHalfDayHint $Form $hours $errors
     if ($errors.Count) { return $false }
-    if ($Save) { Set-WtWorkHours $hours }
+    if ($Save) { Set-WtWorkHours $hours -From $Form.From }
     $true
+}
+
+# 반차 나누는 시각 옆 안내: 지금 값으로 계산한 오전 · 오후 반차 시간대(비우면 자동). 틀린 칸이 있으면 비운다
+function Update-WtHalfDayHint($Form, [hashtable]$Hours, $Errors) {
+    if (-not $Form.HalfHint) { return }
+    if (@($Errors.Keys | Where-Object { $_ -cne 'work.days' }).Count) { $Form.HalfHint.Text = ''; return }
+    $split = Get-WtHalfDaySplit $Hours
+    $auto = if ($Hours['work.halfDay']) { '' } else { ' (자동)' }
+    $Form.HalfHint.Text = "오전 반차 $($Hours['work.start']) ~ $split · 오후 반차 $split ~ $($Hours['work.end'])$auto"
 }
 
 function Reset-WtWorkForm($Form) {
     $Form.Loading = $true
     try {
-        $hours = Get-WtWorkHours -Defaults:$Form.FirstSetup
+        $hours = if ($Form.FirstSetup) { Get-WtWorkHours -Defaults } else { Get-WtWorkHours -From $Form.From }
+        if ($null -eq $hours) { $Form.From = ''; $hours = Get-WtWorkHours -From '' }
         foreach ($cb in $Form.Days) { $cb.IsChecked = $hours['work.days'] -contains $cb.Tag.Day }
         foreach ($k in $Form.Boxes.Keys) { $Form.Boxes[$k].Text = $hours[$k] }
     } finally { $Form.Loading = $false }
     [void](Update-WtWorkForm $Form)
 }
 
+# ---- 업무시간 기간(설계 15.1): 적용 기간 고르기 · 새 기간 · 기간 지우기 ------------------------------
+
+# 기간 목록 @{ From; Label }. 「처음부터」 다음에 적용 시작일 순. 끝 날짜는 다음 기간 앞날, 오늘 적용되는 기간에 「 · 지금」
+function Get-WtWorkPeriodChoices {
+    $periods = @(Get-WtWorkPeriods)
+    $current = [string](Get-WtWorkHours)['work.from']
+    $froms = @('') + @($periods | ForEach-Object { $_.From })
+    for ($i = 0; $i -lt $froms.Count; $i++) {
+        $label = if ($froms[$i]) { "$($froms[$i])부터" } else { '처음부터' }
+        if ($i + 1 -lt $froms.Count) { $label += ' ~ ' + (ConvertTo-WtDateText (ConvertFrom-WtDateText $froms[$i + 1]).AddDays(-1)) }
+        if ($froms[$i] -ceq $current) { $label += ' · 지금' }
+        [pscustomobject]@{ From = $froms[$i]; Label = $label }
+    }
+}
+
+# 기간 고르기 칸을 다시 채우고 From 기간을 고른다(없으면 오늘 적용되는 기간)
+function Update-WtWorkPeriodPicker($Form, [string]$From) {
+    if (-not $Form.Periods) { return }
+    $choices = @(Get-WtWorkPeriodChoices)
+    if ($From -cnotin @($choices | ForEach-Object { $_.From })) { $From = [string](Get-WtWorkHours)['work.from'] }
+    $Form.Loading = $true
+    try {
+        $Form.Periods.Items.Clear(); $Form.PeriodFroms = @($choices | ForEach-Object { $_.From })
+        foreach ($c in $choices) { [void]$Form.Periods.Items.Add($c.Label) }
+        $Form.Periods.SelectedIndex = [array]::IndexOf($Form.PeriodFroms, $From)
+    } finally { $Form.Loading = $false }
+    $Form.From = $From
+    $Form.RemovePeriod.Visibility = if ($From) { 'Visible' } else { 'Collapsed' }
+    Reset-WtWorkForm $Form
+}
+
+# 새 기간: 적용 시작일을 받아 그날 규칙을 복사해 더하고, 그 기간을 고른다
+function Show-WtWorkPeriodDialog($Form) {
+    $dialog = New-WtModal '새 업무시간 기간'
+    [void](Add-WtChild $dialog.Body (New-WtText '적용 시작일' 'Setting.Label'))
+    $box = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $box 'Input'; $box.Width = 160; $box.HorizontalAlignment = 'Left'
+    $box.Text = ConvertTo-WtDateText ([datetime]::Today); [System.Windows.Automation.AutomationProperties]::SetName($box, '적용 시작일')
+    [void](Add-WtChild $dialog.Body $box)
+    [void](Add-WtChild $dialog.Body (New-WtText '그날부터 새 규칙을 씁니다. 처음 값은 그날 쓰던 규칙을 복사하니 아래에서 고치세요.' 'T.Sub'))
+    $ok = New-WtButton '추가' -Kind Primary; $ok.IsDefault = $true
+    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
+    $dialog.Window.Tag = @{ Box = $box; Error = $dialog.Error; From = '' }
+    $ok.Tag = $dialog.Window
+    $ok.Add_Click({
+        param($s, $e)
+        $w = $s.Tag; $from = $w.Tag.Box.Text.Trim()
+        try { Add-WtWorkPeriod $from; $w.Tag.From = $from; $w.DialogResult = $true }
+        catch { $w.Tag.Error.Text = $_.Exception.Message; $w.Tag.Error.Visibility = 'Visible' }
+    })
+    [void](Add-WtChild $dialog.Buttons $ok); [void](Add-WtChild $dialog.Buttons $cancel)
+    $dialog.Window.Add_ContentRendered({ param($s, $e) [void]$s.Tag.Box.Focus(); $s.Tag.Box.SelectAll() })
+    if ($dialog.Window.ShowDialog() -eq $true) { Update-WtWorkPeriodPicker $Form $dialog.Window.Tag.From }
+}
+
+# 고른 기간을 지운다(묻고 나서). 그 기간의 날은 앞 기간 규칙을 따른다
+function Remove-WtWorkPeriodChoice($Form) {
+    if (-not $Form.From) { return }
+    if (-not (Confirm-WtYesNo "$($Form.From)부터의 업무시간 기간을 지울까요?`n그 기간의 날은 앞 기간의 규칙으로 계산합니다.")) { return }
+    try { Remove-WtWorkPeriod $Form.From } catch { Show-WtMessage "기간을 지우지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
+    Update-WtWorkPeriodPicker $Form ''
+}
+
 function New-WtWorkHoursForm([switch]$FirstSetup) {
     $col = New-WtStack Vertical
     [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
-    $form = @{ Root = $col; Boxes = @{}; Errors = @{}; Days = @(); FirstSetup = [bool]$FirstSetup; Loading = $true; Start = $null }
+    $form = @{ Root = $col; Boxes = @{}; Errors = @{}; Days = @(); FirstSetup = [bool]$FirstSetup; Loading = $true; Start = $null
+        From = ''; Periods = $null; PeriodFroms = @(); RemovePeriod = $null; HalfHint = $null }
+    if (-not $FirstSetup) {
+        # 적용 기간: 고른 기간의 규칙을 아래에서 고친다. 새 기간은 적용 시작일을 받는다(설계 15.1)
+        $periodRow = New-WtStack Horizontal 8
+        $picker = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $picker 'Combo'; $picker.Width = 240; $picker.Tag = $form
+        [System.Windows.Automation.AutomationProperties]::SetName($picker, '적용 기간')
+        [System.Windows.Automation.AutomationProperties]::SetAutomationId($picker, 'Settings-WorkPeriod')
+        $picker.Add_SelectionChanged({
+                param($s, $e)
+                $f = $s.Tag
+                if ($f.Loading -or $s.SelectedIndex -lt 0) { return }
+                $f.From = $f.PeriodFroms[$s.SelectedIndex]
+                $f.RemovePeriod.Visibility = if ($f.From) { 'Visible' } else { 'Collapsed' }
+                Reset-WtWorkForm $f
+            })
+        $add = New-WtButton '새 기간'; $add.Tag = $form; $add.Add_Click({ param($s, $e) Show-WtWorkPeriodDialog $s.Tag })
+        $remove = New-WtButton '기간 지우기' -Kind Danger; $remove.Tag = $form; $remove.Add_Click({ param($s, $e) Remove-WtWorkPeriodChoice $s.Tag })
+        $form.Periods = $picker; $form.RemovePeriod = $remove
+        foreach ($c in $picker, $add, $remove) { [void](Add-WtChild $periodRow $c) }
+        [void](Add-WtChild $col (New-WtSettingRow '적용 기간' $periodRow))
+    }
     $daysCol = New-WtStack Vertical 4
     $daysRow = [System.Windows.Controls.WrapPanel]::new()
     $dayNames = @('월', '화', '수', '목', '금', '토', '일')
@@ -9697,7 +9979,10 @@ function New-WtWorkHoursForm([switch]$FirstSetup) {
     $form.Errors['work.days'] = $dayError
     [void](Add-WtChild $daysCol $dayError)
     [void](Add-WtChild $col (New-WtSettingRow '일하는 요일' $daysCol))
-    foreach ($field in @(@('work.start', '시작 시각'), @('work.end', '끝 시각'), @('work.lunchStart', '점심 시작 시각'), @('work.lunchEnd', '점심 끝 시각'))) {
+    $timeFields = @(@('work.start', '시작 시각'), @('work.end', '끝 시각'), @('work.lunchStart', '점심 시작 시각'), @('work.lunchEnd', '점심 끝 시각'))
+    # 반차 나누는 시각은 일반 설정에만(첫 설정은 짧게 둔다). 비우면 자동
+    if (-not $FirstSetup) { $timeFields += , @('work.halfDay', '반차 나누는 시각') }
+    foreach ($field in $timeFields) {
         $group = New-WtStack Vertical 4
         $box = [System.Windows.Controls.TextBox]::new()
         Set-WtStyle $box 'Setting.Time'
@@ -9714,7 +9999,12 @@ function New-WtWorkHoursForm([switch]$FirstSetup) {
             if ($e.Key -eq 'Return' -and -not $s.Tag.FirstSetup) { [void](Update-WtWorkForm $s.Tag -Save); $e.Handled = $true }
         })
         $form.Boxes[$field[0]] = $box
-        [void](Add-WtChild $group $box)
+        if ($field[0] -ceq 'work.halfDay') {
+            # 옆에 지금 값으로 계산한 시간대(F.Caption · B.Text.Tertiary)
+            $line = New-WtStack Horizontal 12
+            $hint = New-WtText '' 'T.CaptionMuted'; $hint.VerticalAlignment = 'Center'; $form.HalfHint = $hint
+            [void](Add-WtChild $line $box); [void](Add-WtChild $line $hint); [void](Add-WtChild $group $line)
+        } else { [void](Add-WtChild $group $box) }
         $errorText = New-WtText '' 'T.Sub'
         Set-WtResource $errorText Foreground 'B.Status.Error.Text'
         [System.Windows.Automation.AutomationProperties]::SetLiveSetting($errorText, 'Polite')
@@ -9734,8 +10024,9 @@ function New-WtWorkHoursForm([switch]$FirstSetup) {
         [void](Add-WtChild $col $start)
     }
     $col.Tag = $form
-    $col.Add_Loaded({ param($s, $e) Reset-WtWorkForm $s.Tag })
-    Reset-WtWorkForm $form
+    # 다시 보일 때 기간 목록도 새로 읽는다(다른 곳에서 기간이 바뀌었을 수 있다)
+    $col.Add_Loaded({ param($s, $e) if ($s.Tag.Periods) { Update-WtWorkPeriodPicker $s.Tag $s.Tag.From } else { Reset-WtWorkForm $s.Tag } })
+    if ($form.Periods) { Update-WtWorkPeriodPicker $form '' } else { Reset-WtWorkForm $form }
     $form
 }
 
@@ -11418,7 +11709,12 @@ $script:inv = [Globalization.CultureInfo]::InvariantCulture
 $script:month = [datetime]::new([datetime]::Today.Year, [datetime]::Today.Month, 1)
 $script:view = $null
 $script:form = $null
-$script:kindNames = @{ work = '근무'; leave = '휴가'; trip = '출장'; overtime = '업무외'; other = '기타' }
+$script:kindNames = @{ work = '근무'; leave = '휴가'; trip = '출장'; overtime = '업무외'; 'leave-grant' = '대휴 발생'; other = '기타' }
+# 폼의 휴가 종류(이 순서). 오전 · 오후를 모르는 예전 반차(half)는 그 기록을 고칠 때만 더한다. 이름은 AttendanceData의 표(Get-WtLeaveTypeName)
+$script:leaveChoices = @('annual', 'half-am', 'half-pm', 'comp', 'sick', 'family', 'other')
+# 다른 탭(일정)의 날짜 메뉴가 부르는 동작(설계 15.6). 이 모듈 안에서 만든 스크립트 블록이라 이 모듈의 함수를 부를 수 있다
+$script:quickLeaveAction = { param($Arg) Add-WtAttQuickLeave $Arg }
+$script:openAction = { param($Arg) Open-WtPage -Id 'attendance' -Args $Arg }
 
 function Format-WtHours([int]$Minutes) { [math]::Floor($Minutes / 60).ToString('0', $script:inv) + ':' + ($Minutes % 60).ToString('00', $script:inv) }
 function Format-WtDays([double]$Days) { $Days.ToString('0.#', $script:inv) }
@@ -11430,16 +11726,21 @@ function Get-WtAttKindName($Entry) {
         $origin = Get-WtField $Entry.Item 'origin'; $row = Get-WtField $origin 'row'; $original = [string](Get-WtField $row 'Type')
         if ($original) { return $original }
     }
+    if ($Entry.Kind -ceq 'leave' -and $Entry.LeaveType) { return Get-WtLeaveTypeName $Entry.LeaveType }
     if ($script:kindNames.ContainsKey($Entry.Kind)) { $script:kindNames[$Entry.Kind] } else { $Entry.Kind }
 }
-function New-WtAttTableRow($Entry) {
+# 표 한 줄. 반차는 시작 · 끝에 휴가 구간(그날 규칙 또는 그날만 다른 시각), 휴가의 시간 칸은 그 달 몫 일수, 대휴 발생은 +일수
+function New-WtAttTableRow($Entry, [datetime]$Month, $DayOff) {
+    $range = Get-WtLeaveRange $Entry
+    $last = $Month.AddMonths(1).AddDays(-1)
     [pscustomobject]@{
         Date = Format-WtDate $Entry.StartDate 'M/d (ddd)'; Kind = Get-WtAttKindName $Entry
-        Start = $(if ($Entry.HasTime) { $Entry.Start.ToString('HH:mm', $script:inv) } else { '' })
-        End = $(if ($Entry.HasTime -and $Entry.HasEnd) { $Entry.End.ToString('HH:mm', $script:inv) } else { '' })
+        Start = $(if ($range) { $range[0].ToString('HH:mm', $script:inv) } elseif ($Entry.HasTime) { $Entry.Start.ToString('HH:mm', $script:inv) } else { '' })
+        End = $(if ($range) { $range[1].ToString('HH:mm', $script:inv) } elseif ($Entry.HasTime -and $Entry.HasEnd) { $Entry.End.ToString('HH:mm', $script:inv) } else { '' })
         Place = $(if ($Entry.Kind -ceq 'work' -or ($Entry.Kind -ceq 'overtime' -and $Entry.How -ceq 'onsite')) { '작업장' } elseif ($Entry.Kind -ceq 'overtime' -and $Entry.How -ceq 'remote') { '원격' } else { '—' })
         Travel = $(if ($Entry.Kind -ceq 'overtime' -and $Entry.Travel -gt 0) { $Entry.Travel.ToString($script:inv) } else { '' })
-        Duration = $(if ($null -ne $Entry.Minutes) { Format-WtHours $Entry.Minutes } else { '' })
+        Duration = $(if ($Entry.Kind -ceq 'leave') { "$(Format-WtDays (Get-WtLeaveDays $Entry $Month $last $DayOff))일" } elseif ($Entry.Kind -ceq 'leave-grant') { "+$(Format-WtDays $Entry.LeaveDays)일" }
+            elseif ($null -ne $Entry.Minutes) { Format-WtHours $Entry.Minutes } else { '' })
         Note = $Entry.Note; Problem = $(if ($Entry.Problem) { $Entry.Problem } elseif ($Entry.Kind -ceq 'work' -and -not $Entry.HasEnd) { '퇴근 기록 없음' } else { '' }); Entry = $Entry
     }
 }
@@ -11503,7 +11804,16 @@ function Show-WtAttSummary {
     if ($summary.OvertimeUnknown -gt 0) { $rows += ,@('장소 없음', (Format-WtHours $summary.OvertimeUnknown), $true) }
     $rows += ,@('이동', (Format-WtHours $summary.Travel), $false)
     if ($summary.NoLeaveDays -gt 0) { $rows += ,@('퇴근 기록 없음', "$($summary.NoLeaveDays)일", $false) }
+    # 대휴(전체 기간, 설계 15.3): 생긴 것이나 쓴 것이 있을 때만 구분선 아래에 남음 · 발생 · 사용(앞으로 쓸 것 포함)
+    $comp = Get-WtCompBalance $script:data.Entries
+    if ($comp.Granted -or $comp.Used) {
+        $rows += ,'-'
+        $rows += ,@('대휴 남음', "$(Format-WtDays $comp.Left)일", $false)
+        $rows += ,@('발생', "$(Format-WtDays $comp.Granted)일", $true)
+        $rows += ,@('사용', "$(Format-WtDays $comp.Used)일", $true)
+    }
     foreach ($row in $rows) {
+        if ($row -is [string]) { $divider = [Windows.Controls.Border]::new(); Set-WtStyle $divider 'Attendance.SummaryDivider'; [void]$col.Children.Add($divider); continue }
         $line = [Windows.Controls.DockPanel]::new(); Set-WtStyle $line $(if ($row[2]) { 'Attendance.SummaryChild' } else { 'Attendance.SummaryRow' })
         $value = New-WtText $row[1] 'Attendance.Number'; [Windows.Controls.DockPanel]::SetDock($value, 'Right'); [void]$line.Children.Add($value)
         [Windows.Automation.AutomationProperties]::SetName($value, "$($row[0]) $($row[1])")
@@ -11515,13 +11825,15 @@ function Show-WtAttSummary {
 function Update-WtAttendanceView {
     if (-not $script:view) { return }
     $script:data = Get-WtAttendanceData; $holidays = Get-WtHolidayData
+    # 업무시간은 기간별 규칙이라(설계 15.1) 처음부터 규칙과 뒤 규칙 목록을 같이 본다
     $key = @($script:data.Stamp, $holidays.Stamp, $script:month.Ticks, [datetime]::Today.Ticks, (Get-WtSetting 'attendance.tripDays'),
-        (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'), ((Get-WtWorkHours | ConvertTo-Json -Compress))) -join '|'
+        (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'), (ConvertTo-Json -Compress -Depth 6 -InputObject @((Get-WtWorkHours -From ''), (Get-WtSetting 'work.periods')))) -join '|'
     if ($script:viewKey -ceq $key) { return }
     $script:refreshing = $true
     try {
         $script:monthLabel.Text = Format-WtDate $script:month 'yyyy년 M월'
-        $rows = @(foreach ($entry in @($script:data.Entries | Where-Object { Test-WtAttInMonth $_ $script:month } | Sort-Object Start, Id)) { New-WtAttTableRow $entry })
+        $dayOff = Get-WtHolidayDates $script:month $script:month.AddMonths(1).AddDays(-1)
+        $rows = @(foreach ($entry in @($script:data.Entries | Where-Object { Test-WtAttInMonth $_ $script:month } | Sort-Object Start, Id)) { New-WtAttTableRow $entry $script:month $dayOff })
         $script:table.ItemsSource = $rows
         $script:view.Empty.Visibility = if ($rows.Count) { 'Collapsed' } else { 'Visible' }
         $script:table.ToolTip = @($script:data.Error, $holidays.Error, @($script:data.Entries | Where-Object { $_.State -cin 'broken','readonly' } | ForEach-Object Problem)) | Where-Object { $_ } | Join-String -Separator "`n"
@@ -11575,20 +11887,46 @@ function New-WtAttCombo([string[]]$Values, [string]$Selected) {
     $combo = [Windows.Controls.ComboBox]::new(); Set-WtStyle $combo Combo
     foreach ($value in $Values) { [void]$combo.Items.Add($value) }; $combo.SelectedItem = $Selected; $combo
 }
+# 폼에서 고른 휴가 종류의 코드(annual · half-am …). 휴가가 아니거나 모르면 ''
+function Get-WtAttLeaveCode {
+    $name = [string]$script:form.Fields.leaveType.SelectedItem
+    if ($script:form.LeaveCodes.ContainsKey($name)) { $script:form.LeaveCodes[$name] } else { '' }
+}
+# 그날 업무시간 규칙의 반차 시각 @('HH:mm', 'HH:mm'). 날짜를 못 읽으면 오늘 규칙
+function Get-WtAttHalfTimes([string]$Code, [string]$DateText) {
+    $day = ConvertFrom-WtDateText $DateText
+    if (-not $day) { $day = [datetime]::Today }
+    $hours = Get-WtWorkHours -Date $day
+    $split = Get-WtHalfDaySplit $hours
+    if ($Code -ceq 'half-am') { @([string]$hours['work.start'], $split) } else { @($split, [string]$hours['work.end']) }
+}
+# 종류에 맞춰 칸을 보이고 숨긴다(설계 15.7). 근무 · 업무외: 시작 · 끝 시각(+다음 날), 휴가: 휴가 종류 + 반차면 시작 · 끝 시각, 아니면 끝 날짜,
+# 출장: 끝 날짜, 대휴 발생: 일수, 기타: 예전 기록 그대로. 종류 · 휴가 종류를 바꾸면(처음 열 때 말고) 시각 · 날짜 칸을 비우고, 반차면 그날 규칙의 시각으로 채운다
 function Set-WtAttFormKind {
-    $timed = $script:form.Fields.kind.SelectedItem -cin @('근무','업무외')
-    $over = $script:form.Fields.kind.SelectedItem -ceq '업무외'
-    foreach ($key in 'place','out','back') { $script:form.Rows[$key].Visibility = if ($over) { 'Visible' } else { 'Collapsed' } }
-    $script:form.Rows.next.Visibility = if ($timed) { 'Visible' } else { 'Collapsed' }
+    $f = $script:form.Fields
+    $kindText = [string]$f.kind.SelectedItem
+    $code = if ($kindText -ceq '휴가') { Get-WtAttLeaveCode } else { '' }
+    $half = $code -cin @('half-am', 'half-pm')
+    $clock = $kindText -cin @('근무', '업무외')
+    $old = $script:form.Entry
+    $timed = $clock -or $half -or ($kindText -ceq '기타' -and $old -and $old.Kind -ceq 'other' -and $old.HasTime)
+    $show = @{ place = $kindText -ceq '업무외'; out = $kindText -ceq '업무외'; back = $kindText -ceq '업무외'; next = $clock
+        leaveType = $kindText -ceq '휴가'; days = $kindText -ceq '대휴 발생'; start = $timed; end = $kindText -cne '대휴 발생' }
+    foreach ($key in @($show.Keys)) { $script:form.Rows[$key].Visibility = if ($show[$key]) { 'Visible' } else { 'Collapsed' } }
+    $endLabel = if ($timed) { '끝' } else { '끝 날짜' }
+    $script:form.Rows.end.Children[0].Text = $endLabel
+    [Windows.Automation.AutomationProperties]::SetName($f.end, $endLabel)
     if (-not $script:form.ChangingKind) {
         $script:form.ChangingKind = $true
         try {
-            $script:form.Fields.start.Text = ''
-            $script:form.Fields.end.Text = ''; $script:form.Fields.next.IsChecked = $false
+            $f.start.Text = ''
+            $f.end.Text = ''; $f.next.IsChecked = $false
+            if ($half) { $times = @(Get-WtAttHalfTimes $code $f.date.Text); $f.start.Text = $times[0]; $f.end.Text = $times[1] }
         } finally { $script:form.ChangingKind = $false }
     }
 }
-function Show-WtAttForm($Entry) {
+# Entry = 고칠 기록. 새 기록이면 Date(yyyy-MM-dd) · Kind(work · leave …)로 처음 값을 정할 수 있다(일정 우클릭 「여러 날 · 다른 종류…」)
+function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     $body = [Windows.Controls.DockPanel]::new(); Set-WtStyle $body 'Attendance.Body'
     $buttons = [Windows.Controls.DockPanel]::new(); [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
     $delete = New-WtButton '삭제'; $delete.Visibility = if ($Entry -and $Entry.State -ceq 'ok') { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
@@ -11597,14 +11935,23 @@ function Show-WtAttForm($Entry) {
     [void](Add-WtChild $actions $save); [void](Add-WtChild $actions $cancel); [void]$buttons.Children.Add($actions); [void]$body.Children.Add($buttons)
     $scroll = [Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'
     $col = New-WtStack
-    $script:form = @{ Entry = $Entry; Store = $script:data.Store; Fields = @{}; Errors = @{}; Rows = @{}; Panel = $col; ChangingKind = $true }
-    $date = if ($Entry) { $Entry.StartDate } elseif ($script:month.Year -eq [datetime]::Today.Year -and $script:month.Month -eq [datetime]::Today.Month) { [datetime]::Today } else { $script:month }
-    Add-WtAttField date '날짜' (New-WtAttInput (ConvertTo-WtDateText $date))
-    $kind = if ($Entry) { $Entry.Kind } else { 'work' }
-    $kindLabel = if ($script:kindNames.ContainsKey($kind)) { $script:kindNames[$kind] } else { $kind }
-    Add-WtAttField kind '종류' (New-WtAttCombo @('근무','휴가','출장','업무외','기타', $kindLabel | Select-Object -Unique) $kindLabel)
-    Add-WtAttField start '시작' (New-WtAttInput $(if ($Entry -and $Entry.HasTime) { $Entry.Start.ToString('HH:mm', $script:inv) } else { '' }))
-    Add-WtAttField end '끝' (New-WtAttInput $(if ($Entry -and $Entry.HasEnd) { if ($Entry.HasTime) { $Entry.End.ToString('HH:mm', $script:inv) } else { ConvertTo-WtDateText $Entry.EndDate } } else { '' }))
+    $script:form = @{ Entry = $Entry; Store = $script:data.Store; Fields = @{}; Errors = @{}; Rows = @{}; Panel = $col; ChangingKind = $true; LeaveCodes = @{} }
+    $day = if ($Entry) { $Entry.StartDate } elseif ($Date) { ConvertFrom-WtDateText $Date } else { $null }
+    if (-not $day) { $day = if ($script:month.Year -eq [datetime]::Today.Year -and $script:month.Month -eq [datetime]::Today.Month) { [datetime]::Today } else { $script:month } }
+    Add-WtAttField date '날짜' (New-WtAttInput (ConvertTo-WtDateText $day))
+    $kindCode = if ($Entry) { $Entry.Kind } elseif ($Kind) { $Kind } else { 'work' }
+    $kindLabel = if ($script:kindNames.ContainsKey($kindCode)) { $script:kindNames[$kindCode] } else { $kindCode }
+    Add-WtAttField kind '종류' (New-WtAttCombo @('근무','휴가','출장','업무외','대휴 발생','기타', $kindLabel | Select-Object -Unique) $kindLabel)
+    $codes = @($script:leaveChoices)
+    if ($Entry -and $Entry.LeaveType -ceq 'half') { $codes += 'half' }
+    foreach ($c in $codes) { $script:form.LeaveCodes[(Get-WtLeaveTypeName $c)] = $c }
+    $leaveName = Get-WtLeaveTypeName $(if ($Entry -and $Entry.Kind -ceq 'leave' -and $Entry.LeaveType) { $Entry.LeaveType } else { 'annual' })
+    Add-WtAttField leaveType '휴가 종류' (New-WtAttCombo @($codes | ForEach-Object { Get-WtLeaveTypeName $_ }) $leaveName)
+    Add-WtAttField days '일수' (New-WtAttInput $(if ($Entry -and $Entry.Kind -ceq 'leave-grant' -and $null -ne $Entry.LeaveDays) { Format-WtDays $Entry.LeaveDays } else { '1' }))
+    # 반차는 시각 없는 기록도 그날 규칙의 휴가 구간을 보여 준다(같은 시각으로 저장하면 시각 없이 남는다)
+    $range = if ($Entry) { Get-WtLeaveRange $Entry } else { $null }
+    Add-WtAttField start '시작' (New-WtAttInput $(if ($range) { $range[0].ToString('HH:mm', $script:inv) } elseif ($Entry -and $Entry.HasTime) { $Entry.Start.ToString('HH:mm', $script:inv) } else { '' }))
+    Add-WtAttField end '끝' (New-WtAttInput $(if ($range) { $range[1].ToString('HH:mm', $script:inv) } elseif ($Entry -and $Entry.HasEnd) { if ($Entry.HasTime) { $Entry.End.ToString('HH:mm', $script:inv) } else { ConvertTo-WtDateText $Entry.EndDate } } else { '' }))
     $next = [Windows.Controls.CheckBox]::new(); Set-WtStyle $next Check; $next.Content = '다음 날'; $next.IsChecked = $Entry -and $Entry.EndDate -gt $Entry.StartDate
     Add-WtAttField next '' $next
     Add-WtAttField place '장소' (New-WtAttCombo @('—','작업장','원격') $(if ($Entry -and $Entry.How -ceq 'onsite') { '작업장' } elseif ($Entry -and $Entry.How -ceq 'remote') { '원격' } else { '—' }))
@@ -11613,6 +11960,7 @@ function Show-WtAttForm($Entry) {
     $note = New-WtAttInput $(if ($Entry) { $Entry.Note } else { '' }); Set-WtStyle $note 'Attendance.Note'; Add-WtAttField note '메모' $note
     Set-WtAttFormKind; $script:form.ChangingKind = $false
     $script:form.Fields.kind.Add_SelectionChanged({ Set-WtAttFormKind })
+    $script:form.Fields.leaveType.Add_SelectionChanged({ Set-WtAttFormKind })
     $cancel.Add_Click({ Show-WtAttSummary })
     $save.Add_Click({ Save-WtAttForm })
     $delete.Add_Click({
@@ -11641,10 +11989,24 @@ function Save-WtAttForm {
     }
     $date = ConvertFrom-WtDateText $fields.date.Text
     if (-not $date) { Set-WtAttFormError date '날짜는 yyyy-MM-dd 형식으로 입력하세요.' }
-    $kind = switch ([string]$fields.kind.SelectedItem) { '근무' { 'work' }; '휴가' { 'leave' }; '출장' { 'trip' }; '업무외' { 'overtime' }; '기타' { 'other' }; default { if ($old) { $old.Kind } else { 'other' } } }
-    $timed = $kind -cin @('work','overtime') -or ($kind -ceq 'other' -and $old -and $old.HasTime)
-    $startTime = $null; $endTime = $null; $end = $null
-    if ($timed) {
+    $kind = switch ([string]$fields.kind.SelectedItem) { '근무' { 'work' }; '휴가' { 'leave' }; '출장' { 'trip' }; '업무외' { 'overtime' }; '대휴 발생' { 'leave-grant' }; '기타' { 'other' }; default { if ($old) { $old.Kind } else { 'other' } } }
+    $leaveCode = if ($kind -ceq 'leave') { Get-WtAttLeaveCode } else { '' }
+    $half = $leaveCode -cin @('half-am', 'half-pm')
+    $timed = $kind -cin @('work','overtime') -or $half -or ($kind -ceq 'other' -and $old -and $old.HasTime)
+    $startTime = $null; $endTime = $null; $end = $null; $grantDays = $null
+    if ($kind -ceq 'leave-grant') {
+        # 대휴 발생: 날짜 하나 + 생긴 일수(0.5 단위). 설계 15.3
+        $number = 0.0
+        $ok = [double]::TryParse($fields.days.Text.Trim(), [Globalization.NumberStyles]::Float, $script:inv, [ref]$number)
+        if (-not $ok -or $number -le 0 -or $number -gt 366 -or $number * 2 -ne [math]::Floor($number * 2)) { Set-WtAttFormError days '일수는 0.5일 단위로 적으세요.' } else { $grantDays = $number }
+    } elseif ($half) {
+        # 반차: 같은 날 시작 ~ 끝 시각. 그날 규칙과 같으면 시각 없이 저장해 규칙을 따른다(설계 15.2)
+        $startTime = ConvertFrom-WtTimeText $fields.start.Text; $endTime = ConvertFrom-WtTimeText $fields.end.Text
+        if ($null -eq $startTime) { Set-WtAttFormError start '시각은 HH:mm 형식으로 입력하세요.' }
+        if ($null -eq $endTime) { Set-WtAttFormError end '시각은 HH:mm 형식으로 입력하세요.' }
+        elseif ($null -ne $startTime -and $endTime -le $startTime) { Set-WtAttFormError end '끝이 시작보다 늦어야 합니다.' }
+        elseif ($date) { $end = @{ date = ConvertTo-WtDateText $date; time = $fields.end.Text } }
+    } elseif ($timed) {
         $startTime = ConvertFrom-WtTimeText $fields.start.Text
         if ($null -eq $startTime) { Set-WtAttFormError start '시각은 HH:mm 형식으로 입력하세요.' }
         if ($fields.end.Text) {
@@ -11682,18 +12044,72 @@ function Save-WtAttForm {
         # 없는 선택 칸은 메모만 고쳐도 자동으로 채우지 않는다.
         if ($fields.out.Text -or $fields.back.Text -or ($old -and $null -ne (Get-WtField $old.Item 'travel'))) { $patch.travel = $travel }
     }
-    if ($kind -ceq 'leave' -and (-not $old -or $old.Kind -cne 'leave')) { $patch.leave = @{ type = 'annual'; days = $null } }
+    if ($kind -ceq 'leave') {
+        # 종류가 바뀌면 사람이 정한 일수는 지운다(같은 종류면 그대로 둔다)
+        $patch.leave = @{ type = $leaveCode }
+        if (-not $old -or $old.Kind -cne 'leave' -or $old.LeaveType -cne $leaveCode) { $patch.leave.days = $null }
+        if ($half -and $date) {
+            $rule = @(Get-WtAttHalfTimes $leaveCode $fields.date.Text)
+            if ($fields.start.Text -ceq $rule[0] -and $fields.end.Text -ceq $rule[1]) { $patch.start.time = $null; $patch.end = $null }
+        }
+    }
+    if ($kind -ceq 'leave-grant') { $patch.start.time = $null; $patch.end = $null; $patch.leave = @{ type = 'comp'; days = $grantDays } }
     try {
         $result = Save-WtAttendanceItem $script:form.Store $patch -Id $(if ($old) { $old.Id } else { '' })
         if (-not $result.Success) { Set-WtAttFormError end $result.Reason; return }
         $script:form = $null; $script:viewKey = $null; Update-WtAttendanceView
     } catch { Set-WtAttFormError note $_.Exception.Message }
 }
+# 다른 탭(일정)의 날짜 칸 우클릭 항목(설계 15.6). 그날 휴가가 있으면 「휴가 보기 · 종류」(근태 탭의 그 기록), 없으면 「휴가 넣기 ›」
+function Get-WtAttDateMenu([datetime]$Date) {
+    $data = Get-WtAttendanceData
+    if ($data.Error) { return @{ Header = '휴가 넣기'; IsEnabled = $false; ToolTip = $data.Error } }
+    $here = @($data.Entries | Where-Object { $_.State -ceq 'ok' -and $_.Kind -ceq 'leave' -and $_.StartDate -le $Date -and $_.EndDate -ge $Date } | Sort-Object Start, Id)
+    if ($here.Count) { return @{ Header = "휴가 보기 · $(Get-WtLeaveTypeName $here[0].LeaveType)"; Action = $script:openAction; Arg = @{ Id = $here[0].Id } } }
+    $dateText = ConvertTo-WtDateText $Date
+    $items = @(foreach ($code in 'annual', 'half-am', 'half-pm', 'comp') { @{ Header = Get-WtLeaveTypeName $code; Action = $script:quickLeaveAction; Arg = @{ Date = $dateText; Type = $code } } })
+    $items += '-'
+    $items += @{ Header = '여러 날 · 다른 종류…'; Action = $script:openAction; Arg = @{ NewLeave = $dateText } }
+    @{ Header = '휴가 넣기'; Items = $items }
+}
+# 우클릭 「휴가 넣기 › 연차」 등: 그날 하루 휴가를 바로 넣는다. 반차는 그날 규칙의 시각을 따르므로 시각 없이 저장한다
+function Add-WtAttQuickLeave($Arg) {
+    $data = Get-WtAttendanceData
+    if ($data.Error) { throw $data.Error }
+    $result = Save-WtAttendanceItem $data.Store @{ kind = 'leave'; start = @{ date = [string]$Arg.Date; time = $null }; end = $null; leave = @{ type = [string]$Arg.Type; days = $null }; note = '' }
+    if (-not $result.Success) { throw $result.Reason }
+    $script:viewKey = $null
+}
+# 다른 탭에서 연 근태: Id면 그 기록의 달로 가서 편집 폼, NewLeave(yyyy-MM-dd)면 그날 휴가 새 폼
+function Open-WtAttArgs($OpenArgs) {
+    if (-not $script:view -or $null -eq $OpenArgs) { return }
+    $entry = $null; $newDate = $null
+    if ($OpenArgs.Id) {
+        $entry = @((Get-WtAttendanceData).Entries | Where-Object { $_.Id -ceq [string]$OpenArgs.Id -and $_.State -ne 'deleted' }) | Select-Object -First 1
+        if (-not $entry) { return }
+        $target = $entry.StartDate
+    } elseif ($OpenArgs.NewLeave) {
+        $newDate = ConvertFrom-WtDateText ([string]$OpenArgs.NewLeave)
+        if (-not $newDate) { return }
+        $target = $newDate
+    } else { return }
+    $script:month = [datetime]::new($target.Year, $target.Month, 1); $script:form = $null; $script:viewKey = $null
+    Update-WtAttendanceView
+    if ($entry) { Show-WtAttForm $entry } else { Show-WtAttForm $null -Date (ConvertTo-WtDateText $newDate) -Kind 'leave' }
+}
 Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -Order 30 -WarmUp Full `
-    -Badge { $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }; if (-not @($data.Entries | Where-Object { $_.State -ceq 'ok' -and $_.Kind -ceq 'work' -and $_.HasTime -and $_.StartDate -eq [datetime]::Today }).Count) { 'dot' } } `
+    -Badge {
+        $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }
+        # 쉬는 날(근무 요일 아님 · 휴무일 · 하루 종일 휴가)에는 찍을 일이 없어 점을 띄우지 않는다
+        if (Test-WtAttRestDay ([datetime]::Today) $data.Entries) { return $null }
+        if (-not @($data.Entries | Where-Object { $_.State -ceq 'ok' -and $_.Kind -ceq 'work' -and $_.HasTime -and $_.StartDate -eq [datetime]::Today }).Count) { 'dot' }
+    } `
     -BadgeToolTip '오늘 안 찍음' -NewView { New-WtAttendanceView } -Refresh { param($view) Update-WtAttendanceView } `
+    -OnOpen { param($OpenArgs) Open-WtAttArgs $OpenArgs } `
+    -DateMenu { param([datetime]$Date) Get-WtAttDateMenu $Date } `
     -CalendarItems { param([datetime]$From, [datetime]$To) $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }; Get-WtAttendanceCalendarItems $From $To $data.Entries } `
-    -ImportLegacy { param($folder) Import-WtAttendanceLegacy $folder } -Help '월별 출퇴근 기록과 초과근무를 확인합니다.'
+    -ImportLegacy { param($folder) Import-WtAttendanceLegacy $folder } `
+    -Help @('월별 출퇴근 기록과 초과근무를 확인합니다.', '휴가는 종류(연차 · 오전 반차 · 오후 반차 · 대휴 등)를 고릅니다. 반차는 설정 → 업무시간의 반차 나누는 시각을 따르고, 그날만 다르면 폼에서 시각을 고칩니다.', '대휴는 「대휴 발생」 기록으로 생긴 일수를 넣으면 사이드바에 남은 일수가 보입니다. 일정 달력 날짜를 우클릭해 휴가를 바로 넣을 수도 있습니다.')
 Export-ModuleMember -Function Format-WtHours, Format-WtDays, Test-WtAttInMonth
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\attendance\Attendance.psm1 끝 ----
@@ -11704,9 +12120,9 @@ New-Module -Name 'WorkTool.addon.attendance.AttendanceData' -ScriptBlock {
 # 형식과 규칙 전체: docs/plans/schedule-attendance-design.md 「근태 형식」. 공통 틀은 core\Records.psm1, 휴무일은 core\Calendar.psm1
 # 저장소 attendance.json (schema 2). 항목:
 #   id       한 번 정하면 바꾸지 않는다. 예전 CSV의 id는 그대로
-#   kind     work 출근 · 퇴근 / overtime 업무외시간 · 출동 / trip 출장 / leave 휴가 / other 기타(보이기만, 계산에서 뺌)
-#            모르는 값이면 읽기 전용 (2차 후보: oncall 대기 · leave-grant 연차 발생 · month-close 월 마감)
-#   start    { date, time }. time = null이면 날짜만 (출장 · 휴가)
+#   kind     work 출근 · 퇴근 / overtime 업무외시간 · 출동 / trip 출장 / leave 휴가 / leave-grant 휴가 발생(대휴) / other 기타(보이기만, 계산에서 뺌)
+#            모르는 값이면 읽기 전용 (2차 후보: oncall 대기 · month-close 월 마감)
+#   start    { date, time }. time = null이면 날짜만 (출장 · 휴가 · 휴가 발생). 오전 · 오후 반차만 그날만 다른 시각을 적을 수 있다(설계 15.2)
 #   end      { date, time } 또는 null. 끝 날짜는 그날 포함. 밤을 넘기거나 24시간이 넘어도 끝 날짜를 그대로 적는다
 #            work의 end = null이면 「퇴근 기록 없음」(0시간이 아니라 모름). overtime의 end = null이면 「끝 시각 없음」
 #            시작과 끝은 둘 다 시각이 있거나 둘 다 없다
@@ -11715,21 +12131,26 @@ New-Module -Name 'WorkTool.addon.attendance.AttendanceData' -ScriptBlock {
 #   overtime { how: "remote" 원격 · "onsite" 현장 · null, ref: 관련 번호(작업 · 변경 · 장애 번호, 글) }   kind = overtime일 때
 #   travel   { out, back } 선택 이동 분. 각각 정수 0~1440, 업무외에만 쓰며 없으면 이동 없음.
 #   leave    { type, days }   kind = leave일 때
-#            type annual 연차 · half 반차 · half-am 오전 반차 · half-pm 오후 반차 · sick 병가 · family 경조사 · comp 대체 휴무 · other 기타
+#            type annual 연차 · half 반차 · half-am 오전 반차 · half-pm 오후 반차 · sick 병가 · family 경조사 · comp 대휴(대체 휴가) · other 기타
 #            days null = 규칙대로 센다(아래), 숫자 = 사람이 정한 차감 일수(회사가 정한 사실이라 저장한다)
+#            kind = leave-grant일 때는 { type: comp, days: 생긴 일수(0.5 단위) }. 다른 type은 읽기 전용(설계 15.3)
 #   rev · created · updated · deleted · origin   일정과 같다 (core\Records.psm1, ScheduleData.psm1 맨 위)
 #   범위: 출근 · 업무외 기록 하나는 31일까지, leave.days는 0~366 (밖이면 그 항목만 고칠 항목). 저장은 저장소 핸들로만 한다(Save-WtAttendanceItems)
-# 하루 근무 시간 · 월 합계 같은 계산 값은 저장하지 않는다. 계산 규칙은 이 파일의 Get-WtAttendanceSummary 하나에 모으고 이름(att-2)을 붙인다.
+# 하루 근무 시간 · 월 합계 같은 계산 값은 저장하지 않는다. 계산 규칙은 이 파일의 Get-WtAttendanceSummary 하나에 모으고 이름(att-3)을 붙인다.
 # 읽기 규칙: 모르는 칸 · 맨 위 키는 그대로 둔다. 모르는 kind · leave.type · overtime.how가 든 항목은 읽기 전용(계산에서 뺌),
 #   날짜 · 시각을 못 읽는 항목은 「고칠 항목」. 두 경우 모두 저장할 때 그대로 쓴다.
 
 $ErrorActionPreference = 'Stop'
 
 $script:schema = 2
-$script:rule = 'att-2'
-$script:kinds = @('work', 'overtime', 'trip', 'leave', 'other')
+$script:rule = 'att-3'
+$script:kinds = @('work', 'overtime', 'trip', 'leave', 'leave-grant', 'other')
 $script:leaveTypes = @('annual', 'half', 'half-am', 'half-pm', 'sick', 'family', 'comp', 'other')
 $script:halfTypes = @('half', 'half-am', 'half-pm')
+$script:halfDayTypes = @('half-am', 'half-pm')   # 오전 · 오후를 아는 반차. 휴가 구간을 정규 구간에서 뺀다
+$script:grantTypes = @('comp')                     # 휴가 발생(leave-grant)이 아는 type
+# 휴가 종류의 화면 이름. 근태 표 · 폼과 달력 칩이 같이 쓴다(저장 값은 영문 코드)
+$script:leaveNames = @{ annual = '연차'; half = '반차'; 'half-am' = '오전 반차'; 'half-pm' = '오후 반차'; sick = '병가'; family = '경조사'; comp = '대휴'; other = '휴가' }
 $script:hows = @('remote', 'onsite')
 $script:typeMap = @{ '출근' = 'work'; '업무외시간 근무' = 'overtime'; '출장' = 'trip'; '휴가' = 'leave' }
 $script:leaveMap = @{ '연차' = 'annual'; '오전 반차' = 'half-am'; '오후 반차' = 'half-pm'; '병가' = 'sick'; '경조사' = 'family'; '대체 휴무' = 'comp' }
@@ -11860,11 +12281,15 @@ function ConvertFrom-WtAttendanceItem($Item) {
             }
         }
     }
-    if ($e.Kind -eq 'leave') {
+    if ($e.Kind -in 'leave', 'leave-grant') {
         $l = $Item.leave
         if (-not (Test-WtAttObject $l) -or $null -eq $l.type) { if (-not $problem) { $problem = '휴가 종류가 없습니다' } }
         else {
-            if ($script:leaveTypes -cnotcontains [string]$l.type) { $e.State = 'readonly'; $e.Problem = "새 버전의 휴가 종류입니다: '$($l.type)'"; return [pscustomobject]$e }
+            $known = if ($e.Kind -eq 'leave') { $script:leaveTypes } else { $script:grantTypes }
+            if ($known -cnotcontains [string]$l.type) {
+                $what = if ($e.Kind -eq 'leave') { '휴가 종류' } else { '휴가 발생 종류' }
+                $e.State = 'readonly'; $e.Problem = "새 버전의 ${what}입니다: '$($l.type)'"; return [pscustomobject]$e
+            }
             $e.LeaveType = [string]$l.type
             $days = Get-WtField $l 'days'
             if ($null -ne $days) {
@@ -11872,6 +12297,16 @@ function ConvertFrom-WtAttendanceItem($Item) {
                 if ($null -eq $v) { if (-not $problem) { $problem = "휴가 일수를 읽지 못했습니다(0~$($script:maxLeaveDays)): '$days'" } }
                 else { $e.LeaveDays = $v }
             }
+        }
+        # 휴가 발생: 날짜 하나 + 생긴 일수(0.5 단위, 0보다 큼). 설계 15.3
+        if ($e.Kind -eq 'leave-grant' -and -not $problem) {
+            if ($null -eq $e.LeaveDays -or $e.LeaveDays -le 0 -or $e.LeaveDays * 2 -ne [math]::Floor($e.LeaveDays * 2)) { $problem = '생긴 일수는 0.5일 단위로 적으세요' }
+            elseif ($e.HasTime -or $null -ne $Item.end) { $problem = '휴가 발생은 날짜 하나만 적습니다' }
+        }
+        # 시각은 오전 · 오후 반차에만, 같은 날 시작 < 끝(그날만 다른 반차). 설계 15.2
+        if ($e.Kind -eq 'leave' -and $e.HasTime -and -not $problem) {
+            if ($script:halfDayTypes -cnotcontains $e.LeaveType) { $problem = '시각은 오전 · 오후 반차에만 적습니다' }
+            elseif (-not $e.HasEnd -or $e.EndDate -ne $e.StartDate -or $e.End -le $e.Start) { $problem = '반차 시각은 같은 날 시작 ~ 끝으로 적습니다' }
         }
     }
     if (-not $e.Id -and -not $problem) { $problem = 'id가 없습니다' }
@@ -11886,6 +12321,50 @@ function ConvertFrom-WtAttendanceItem($Item) {
 function Test-WtAttWorkday([datetime]$Day, $DayOff) {
     $Day.DayOfWeek -ne [System.DayOfWeek]::Saturday -and $Day.DayOfWeek -ne [System.DayOfWeek]::Sunday -and
         -not ($DayOff -and $DayOff.Contains((ConvertTo-WtDateText $Day)))
+}
+
+# 휴가 종류의 화면 이름(연차 · 오전 반차 · 대휴 …). 모르는 값은 그대로
+function Get-WtLeaveTypeName([string]$Type) { if ($script:leaveNames.ContainsKey($Type)) { $script:leaveNames[$Type] } else { $Type } }
+
+<#
+반차의 휴가 구간 @([datetime]시작, [datetime]끝). 설계 15.2
+  시각이 적힌 기록은 그 시각(그날만 다른 반차). 없으면 그날 업무시간 규칙(core\Settings.psm1, 설계 15.1):
+  오전 반차 = 시작 ~ 반차 나누는 시각, 오후 반차 = 반차 나누는 시각 ~ 끝. 반차가 아니거나 오전 · 오후를 모르는 반차(half)는 $null
+#>
+function Get-WtLeaveRange($Entry) {
+    if ($Entry.Kind -cne 'leave' -or $script:halfDayTypes -cnotcontains $Entry.LeaveType) { return $null }
+    if ($Entry.HasTime) { return , @($Entry.Start, $Entry.End) }
+    $hours = Get-WtWorkHours -Date $Entry.StartDate
+    $split = $Entry.StartDate + (ConvertFrom-WtTimeText (Get-WtHalfDaySplit $hours))
+    if ($Entry.LeaveType -ceq 'half-am') { return , @(($Entry.StartDate + (ConvertFrom-WtTimeText $hours['work.start'])), $split) }
+    , @($split, ($Entry.StartDate + (ConvertFrom-WtTimeText $hours['work.end'])))
+}
+
+<#
+대휴 남은 일수(전체 기간, 설계 15.3). 상태가 ok인 기록만 센다.
+  Granted = 휴가 발생(leave-grant, comp) 일수 합, Used = 대휴(comp) 휴가가 쓰는 일수 합(앞으로 쓸 것 포함, Get-WtLeaveDays 규칙), Left = Granted − Used
+#>
+function Get-WtCompBalance([object[]]$Entries) {
+    $valid = @($Entries | Where-Object { $_ -and $_.State -ceq 'ok' -and $_.Kind -cin 'leave', 'leave-grant' -and $_.LeaveType -ceq 'comp' })
+    $granted = 0.0; $used = 0.0
+    foreach ($e in @($valid | Where-Object { $_.Kind -ceq 'leave-grant' })) { $granted += $e.LeaveDays }
+    $comp = @($valid | Where-Object { $_.Kind -ceq 'leave' })
+    if ($comp.Count) {
+        $first = @($comp | Sort-Object StartDate)[0].StartDate
+        $last = @($comp | Sort-Object EndDate)[-1].EndDate
+        $dayOff = Get-WtHolidayDates $first $last
+        foreach ($e in $comp) { $used += Get-WtLeaveDays $e $e.StartDate $e.EndDate $dayOff }
+    }
+    [pscustomobject]@{ Granted = $granted; Used = $used; Left = $granted - $used }
+}
+
+# 쉬는 날: 그날 업무시간 규칙의 근무 요일이 아님 · 휴무일 · 하루 종일 휴가(반차 날은 일하는 날). 「오늘 안 찍음」 점이 쓴다
+function Test-WtAttRestDay([datetime]$Date, [object[]]$Entries) {
+    $day = $Date.Date
+    $weekday = (([int]$day.DayOfWeek + 6) % 7) + 1
+    if ($weekday -notin @((Get-WtWorkHours -Date $day)['work.days'])) { return $true }
+    if ((Get-WtHolidayDates $day $day).Contains((ConvertTo-WtDateText $day))) { return $true }
+    @($Entries | Where-Object { $_ -and $_.State -ceq 'ok' -and $_.Kind -ceq 'leave' -and $_.LeaveType -cnotin $script:halfTypes -and $_.StartDate -le $day -and $_.EndDate -ge $day }).Count -gt 0
 }
 
 # 휴가 한 건이 그 달에 쓰는 일수. 사람이 정한 days가 있으면 시작한 달에 그 값을 센다.
@@ -11949,15 +12428,17 @@ function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, 
         }
     }
     $r.WorkDays = $workDates.Count
-    # 기존 att-2 칸은 그대로 두고, 초과근무만 업무시간 설정을 적용한다.
-    $hours = Get-WtWorkHours
-    $workStart = ConvertFrom-WtTimeText $hours['work.start']; $workEnd = ConvertFrom-WtTimeText $hours['work.end']
-    $lunchStart = ConvertFrom-WtTimeText $hours['work.lunchStart']; $lunchEnd = ConvertFrom-WtTimeText $hours['work.lunchEnd']
+    # 기존 칸은 그대로 두고, 초과근무만 업무시간 설정을 적용한다. att-3: 그날 적용되는 업무시간 규칙(설계 15.1) + 반차 구간 빼기(15.4)
     $valid = @($Entries | Where-Object { $_ -and $_.State -ceq 'ok' })
     $missing = [Collections.Generic.HashSet[datetime]]::new()
     $started = @($valid | Where-Object { $_.Kind -cin @('work', 'overtime') -and $_.StartDate -ge $first -and $_.StartDate -le $last })
     foreach ($dayGroup in @($started | Group-Object { $_.StartDate.Ticks })) {
         $day = $dayGroup.Group[0].StartDate
+        $hours = Get-WtWorkHours -Date $day
+        $workStart = ConvertFrom-WtTimeText $hours['work.start']; $workEnd = ConvertFrom-WtTimeText $hours['work.end']
+        $lunchStart = ConvertFrom-WtTimeText $hours['work.lunchStart']; $lunchEnd = ConvertFrom-WtTimeText $hours['work.lunchEnd']
+        # 반차 구간은 정규 구간에서 뺀다. 그 구간에 일한 것은 초과근무다(하루 휴가 날과 같은 규칙)
+        $leaveRanges = @(foreach ($l in @($valid | Where-Object { $_.Kind -ceq 'leave' -and $_.StartDate -eq $day })) { $lr = Get-WtLeaveRange $l; if ($lr) { , @($lr[0].Ticks, $lr[1].Ticks) } })
         $weekday = if ([int]$day.DayOfWeek -eq 0) { 7 } else { [int]$day.DayOfWeek }
         $fullLeave = @($valid | Where-Object { $_.Kind -ceq 'leave' -and $_.LeaveType -cnotin $script:halfTypes -and $_.StartDate -le $day -and $_.EndDate -ge $day }).Count -gt 0
         $working = $weekday -in $hours['work.days'] -and -not $DayOff.Contains((ConvertTo-WtDateText $day)) -and -not $fullLeave
@@ -11975,11 +12456,13 @@ function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, 
             $regularA = ($day + $workStart).Ticks; $regularB = ($day + $workEnd).Ticks
             $lunchA = ($day + $lunchStart).Ticks; $lunchB = ($day + $lunchEnd).Ticks
             foreach ($tick in $regularA, $regularB, $lunchA, $lunchB) { [void]$cuts.Add($tick) }
+            foreach ($lr in $leaveRanges) { [void]$cuts.Add($lr[0]); [void]$cuts.Add($lr[1]) }
         }
         $points = @($cuts)
         for ($index = 0; $index -lt $points.Count - 1; $index++) {
             $a = $points[$index]; $b = $points[$index + 1]
-            if ($working -and (($a -ge $regularA -and $a -lt $regularB) -or ($a -ge $lunchA -and $a -lt $lunchB))) { continue }
+            $onLeave = @($leaveRanges | Where-Object { $a -ge $_[0] -and $a -lt $_[1] }).Count -gt 0
+            if ($working -and ((-not $onLeave -and $a -ge $regularA -and $a -lt $regularB) -or ($a -ge $lunchA -and $a -lt $lunchB))) { continue }
             $winner = 3
             foreach ($range in $ranges) { if ($range.A -le $a -and $range.B -ge $b -and $range.Rank -lt $winner) { $winner = $range.Rank } }
             $length = [int](($b - $a) / [timespan]::TicksPerMinute)
@@ -12141,7 +12624,8 @@ function Save-WtAttendanceItem($Store, $Patch, [string]$Id, [string]$At = (Get-W
     }
     $entry = ConvertFrom-WtAttendanceItem $edit.Item
     if ($entry.State -ne 'ok') { $fail.Reason = $entry.Problem; return $fail }
-    if (($entry.Kind -in 'work', 'overtime' -and -not $entry.HasTime) -or ($entry.Kind -in 'trip', 'leave' -and $entry.HasTime)) {
+    # 휴가의 시각(반차만)은 읽기 규칙이 검사한다(설계 15.2)
+    if (($entry.Kind -in 'work', 'overtime' -and -not $entry.HasTime) -or ($entry.Kind -in 'trip', 'leave-grant' -and $entry.HasTime)) {
         $fail.Reason = '출근 · 업무외는 시각, 출장 · 휴가는 날짜만 적으세요'; return $fail
     }
     foreach ($field in 'place', 'note') { Set-WtField $edit.Item $field ([string](Get-WtField $edit.Item $field)) }
@@ -12199,6 +12683,8 @@ function Stop-WtAttendanceRecord($Store, [string]$Kind = 'work', [string]$Id, [s
 # ---- 달력 · 월 보고 ---------------------------------------------------------------------------
 
 # 날짜 범위 안의 표시 항목. 출근은 시작한 날, 업무외는 실제 걸친 날(끝 0시는 앞날까지), 휴가 · 출장은 기간의 날마다.
+# 휴가 글은 휴가 종류(연차 · 오전 반차 · 대휴 …). 반차는 하루의 일부라 AllDay = $false, Time = 휴가 구간의 시작(설계 15.5).
+# 휴가 발생(leave-grant)은 날의 일이 아니라 보이지 않는다
 function Get-WtAttendanceCalendarItems([datetime]$From, [datetime]$To, [object[]]$Entries) {
     foreach ($e in @($Entries)) {
         if ($e.State -ne 'ok' -or $e.Kind -cnotin @('work', 'leave', 'trip', 'overtime')) { continue }
@@ -12207,9 +12693,19 @@ function Get-WtAttendanceCalendarItems([datetime]$From, [datetime]$To, [object[]
         elseif ($e.Kind -eq 'overtime' -and $e.HasEnd -and $e.End -gt $e.Start -and $e.End.TimeOfDay -eq [timespan]::Zero) { $last = $last.AddDays(-1) }
         $a = if ($e.StartDate -lt $From.Date) { $From.Date } else { $e.StartDate }
         $b = if ($last -gt $To.Date) { $To.Date } else { $last }
-        $label = switch ($e.Kind) { work { '근무' }; leave { '휴가' }; trip { '출장' }; overtime { '업무외' } }
+        $label = switch ($e.Kind) { work { '근무' }; leave { Get-WtLeaveTypeName $e.LeaveType }; trip { '출장' }; overtime { '업무외' } }
         $style = switch ($e.Kind) { work { 'Att.Work' }; leave { 'Att.Leave' }; trip { 'Att.Trip' }; overtime { 'Att.Over' } }
+        # 반차의 표시 시각: 휴가 구간의 시작. 오전 · 오후를 모르는 반차(half)는 그날 업무 시작 시각
+        $partTime = $null
+        if ($e.Kind -ceq 'leave' -and $e.LeaveType -cin $script:halfTypes) {
+            $range = Get-WtLeaveRange $e
+            $partTime = if ($range) { $range[0].ToString('HH:mm', $script:inv) } else { [string](Get-WtWorkHours -Date $e.StartDate)['work.start'] }
+        }
         for ($day = $a; $day -le $b; $day = $day.AddDays(1)) {
+            if ($partTime) {
+                [pscustomobject]@{ Date = $day; Kind = $e.Kind; Text = $label; Style = $style; AllDay = $false; Time = $partTime; Id = $e.Id; Page = 'attendance' }
+                continue
+            }
             $time = if ($e.HasTime -and $day -eq $e.StartDate) { $e.Start.ToString('HH:mm', $script:inv) } else { $null }
             $text = if ($time) { "$label $time" } else { $label }
             if ($e.Kind -ceq 'work' -and $time -and $e.HasEnd) { $text += '–' + $e.End.ToString('HH:mm', $script:inv) }
@@ -12240,12 +12736,12 @@ function Get-WtAttendanceReport([datetime]$Month, [object[]]$Entries, $DayOff, [
             else { $_.StartDate -le $last -and $_.EndDate -ge $first })
     } | Sort-Object Start, Id -Culture 'ko-KR')
     foreach ($e in $rows) {
-        $kindName = switch ($e.Kind) { work { '출근' }; overtime { '업무외' }; trip { '출장' }; leave { '휴가' }; default { '기타' } }
+        $kindName = switch ($e.Kind) { work { '출근' }; overtime { '업무외' }; trip { '출장' }; leave { Get-WtLeaveTypeName $e.LeaveType }; 'leave-grant' { '대휴 발생' }; default { '기타' } }
         $days = ''; $basis = ''; $status = ''
         if ($e.Kind -eq 'leave') {
             $days = (Get-WtLeaveDays $e $first $last $DayOff).ToString('0.##', $script:inv)
             $basis = if ($null -ne $e.LeaveDays) { '확정' } else { '잠정' }
-        }
+        } elseif ($e.Kind -eq 'leave-grant') { $days = $e.LeaveDays.ToString('0.##', $script:inv); $basis = '발생' }
         if ($e.Kind -in 'work', 'overtime' -and -not $e.HasEnd) { $status = if ($e.Kind -eq 'work') { '퇴근 기록 없음' } else { '끝 시각 없음' } }
         $howName = switch ($e.How) { remote { '원격' }; onsite { '현장' }; default { '' } }
         $cells = @($kindName, (ConvertTo-WtDateText $e.StartDate), $(if ($e.HasTime) { $e.Start.ToString('HH:mm', $script:inv) } else { '' }),
@@ -12258,7 +12754,8 @@ function Get-WtAttendanceReport([datetime]$Month, [object[]]$Entries, $DayOff, [
 
 Export-ModuleMember -Function Open-WtAttendanceStore, Save-WtAttendanceItems, Get-WtAttendanceData, ConvertFrom-WtAttendanceItem,
     Get-WtLeaveDays, Get-WtAttendanceSummary, ConvertFrom-WtAttendanceRow, Update-WtAttendanceSchema, Import-WtAttendanceLegacy, Get-WtAttendanceLastImport,
-    Save-WtAttendanceItem, Set-WtAttendanceDeleted, Start-WtAttendanceRecord, Stop-WtAttendanceRecord, Get-WtAttendanceCalendarItems, Get-WtAttendanceReport
+    Save-WtAttendanceItem, Set-WtAttendanceDeleted, Start-WtAttendanceRecord, Stop-WtAttendanceRecord, Get-WtAttendanceCalendarItems, Get-WtAttendanceReport,
+    Get-WtLeaveTypeName, Get-WtLeaveRange, Get-WtCompBalance, Test-WtAttRestDay
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\attendance\AttendanceData.psm1 끝 ----
 
@@ -20282,7 +20779,7 @@ function ConvertTo-WtScheduleTableItems([object[]]$Rows, [switch]$Due) {
             $closed = $script:collapsed.Contains($group)
             [pscustomobject]@{ IsHead = $true; Group = $group; HeadName = $names[$group]; HeadCount = [string]@($Rows | Where-Object Group -CEQ $group).Count
                 HeadGlyph = [string][char]$(if ($closed) { 0xE76C } else { 0xE70D }); Key = "head:$group"; Done = $false; CanCheck = $false; Row = $null
-                DateText = ''; TimeText = ''; Title = $names[$group]; Tags = @(); DueText = ''; DueWarn = 'Collapsed'; DueStrong = $false
+                DateText = ''; TimeText = ''; Title = $names[$group]; Tags = @(); DueText = ''; DueWarn = 'Collapsed'; DueStrong = $false; DueKind = ''
                 RoutineShown = 'Collapsed'; MemoShown = 'Collapsed'; MemoCount = ''; Progress = ''; ProgressShown = 'Collapsed'; CheckTip = ''; CheckName = '' }
         }
         if ($Due -and $script:collapsed.Contains($row.Group)) { continue }
@@ -20295,6 +20792,7 @@ function ConvertTo-WtScheduleTableItems([object[]]$Rows, [switch]$Due) {
         [pscustomobject]@{ IsHead = $false; Group = $row.Group; Key = $row.Key; Row = $row; Done = [bool]$row.Done; CanCheck = $true
             DateText = $dateText; TimeText = $timeText; Title = $row.Title; Tags = @($row.Tags | ForEach-Object { "#$_" }); DueText = $dueInfo.Text
             DueWarn = $(if ($dueInfo.Overdue) { 'Visible' } else { 'Collapsed' }); DueStrong = $dueInfo.Overdue -or $dueInfo.Text -ceq '오늘'
+            DueKind = $(if ($dueInfo.Overdue) { 'over' } elseif ($dueInfo.Soon) { 'soon' } else { '' })
             RoutineShown = $(if ($row.Kind -ceq 'routine') { 'Visible' } else { 'Collapsed' }); MemoShown = $(if ($memo) { 'Visible' } else { 'Collapsed' }); MemoCount = [string]$memo
             Progress = [string]$row.Progress; ProgressShown = $(if ($row.Progress) { 'Visible' } else { 'Collapsed' })
             CheckTip = $(if ($row.Done) { '끝냄 풀기' } else { '끝냄으로 표시' }); CheckName = "$label 끝냄"; HeadName = ''; HeadCount = ''; HeadGlyph = '' }
@@ -20478,7 +20976,8 @@ function Switch-WtScheduleQueryTerm([string]$Term) {
     $script:searchTimer.Stop(); Invoke-WtScheduleSearch
 }
 
-# 날짜 칸 우클릭: 새 일정 · 새 루틴 · 휴무일로 지정(회사 · 개인) 또는 휴무일 해제. 휴무일은 코어(core\Calendar.psm1)에 저장한다
+# 날짜 칸 우클릭: 새 일정 · 새 루틴 · 구분선 · 다른 탭이 코어에 등록한 항목(근태의 「휴가 넣기 ›」 등, 설계 15.6) ·
+# 회사 휴무로 지정 또는 휴무일 해제. 휴무일은 코어(core\Calendar.psm1)에 저장한다. 개인 휴무는 설정 → 휴무일에서만 넣는다
 function Update-WtScheduleDayMenu($Button) {
     $menu = $Button.ContextMenu; $menu.Items.Clear(); $date = [datetime]$Button.DataContext
     foreach ($name in '새 일정', '새 루틴') {
@@ -20487,27 +20986,46 @@ function Update-WtScheduleDayMenu($Button) {
         [void]$menu.Items.Add($item)
     }
     [void]$menu.Items.Add([Windows.Controls.Separator]::new())
+    foreach ($entry in @(Get-WtDateMenuItems $date -Exclude 'schedule')) {
+        if ($entry.Error) {
+            $item = [Windows.Controls.MenuItem]::new(); $item.Header = "$($entry.Title) 메뉴"; $item.IsEnabled = $false; $item.ToolTip = $entry.Error
+            [Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true); [void]$menu.Items.Add($item)
+        } else { [void]$menu.Items.Add((New-WtScheduleDateMenuItem $entry.Item)) }
+    }
     $holiday = Get-WtHolidayData
     $dateText = ConvertTo-WtDateText $date
     $here = @($holiday.Entries | Where-Object { $_.State -eq 'ok' -and $_.DateText -ceq $dateText })
+    $item = [Windows.Controls.MenuItem]::new()
     if ($here.Count) {
-        $item = [Windows.Controls.MenuItem]::new(); $item.Header = '휴무일 해제'; $item.Tag = @{ Date = $dateText; Kinds = @($here.Kind | Select-Object -Unique); Name = '' }
+        $item.Header = '휴무일 해제'; $item.Tag = @{ Date = $dateText; Kinds = @($here.Kind | Select-Object -Unique); Name = '' }
         $item.Add_Click({ param($s, $e) Set-WtScheduleHoliday $s.Tag.Date $s.Tag.Kinds $false })
-        [void]$menu.Items.Add($item)
     } else {
-        $parent = [Windows.Controls.MenuItem]::new(); $parent.Header = '휴무일로 지정'
-        foreach ($kind in @(@('company', '회사 휴무'), @('personal', '개인 휴무'))) {
-            $item = [Windows.Controls.MenuItem]::new(); $item.Header = $kind[1]; $item.Tag = @{ Date = $dateText; Kinds = @($kind[0]); Name = $kind[1] }
-            $item.Add_Click({ param($s, $e) Set-WtScheduleHoliday $s.Tag.Date $s.Tag.Kinds $true $s.Tag.Name })
-            [void]$parent.Items.Add($item)
-        }
-        [void]$menu.Items.Add($parent)
+        $item.Header = '회사 휴무로 지정'; $item.Tag = @{ Date = $dateText; Kinds = @('company'); Name = '회사 휴무' }
+        $item.Add_Click({ param($s, $e) Set-WtScheduleHoliday $s.Tag.Date $s.Tag.Kinds $true $s.Tag.Name })
     }
-    if ($holiday.Error) {
-        foreach ($item in @($menu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] -and [string]$_.Header -like '휴무일*' })) {
-            $item.IsEnabled = $false; $item.ToolTip = $holiday.Error; [Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true)
-        }
-    }
+    if ($holiday.Error) { $item.IsEnabled = $false; $item.ToolTip = $holiday.Error; [Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true) }
+    [void]$menu.Items.Add($item)
+}
+# 다른 탭이 준 날짜 메뉴 항목 하나 → 메뉴 항목. '-'는 구분선, Items가 있으면 하위 메뉴, 아니면 누를 때 Action(Arg)
+function New-WtScheduleDateMenuItem($Spec) {
+    if ($Spec -is [string]) { return [Windows.Controls.Separator]::new() }
+    $item = [Windows.Controls.MenuItem]::new(); $item.Header = [string](Get-WtField $Spec 'Header')
+    $tip = [string](Get-WtField $Spec 'ToolTip')
+    if ($tip) { $item.ToolTip = $tip; [Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true) }
+    if ((Get-WtField $Spec 'IsEnabled') -eq $false) { $item.IsEnabled = $false }
+    # Get-WtField는 목록을 한 덩어리로 돌려주므로 변수에 받은 뒤 펼친다
+    $raw = Get-WtField $Spec 'Items'
+    $children = @($raw | Where-Object { $null -ne $_ })
+    if ($children.Count) { foreach ($child in $children) { [void]$item.Items.Add((New-WtScheduleDateMenuItem $child)) } }
+    elseif ((Get-WtField $Spec 'Action') -is [scriptblock]) { $item.Tag = $Spec; $item.Add_Click({ param($s, $e) Invoke-WtScheduleDateAction $s.Tag }) }
+    $item
+}
+# 다른 탭의 날짜 메뉴 동작을 부르고, 달력 · 메뉴 숫자를 다시 그린다(그 탭의 기록이 달력에 보이므로)
+function Invoke-WtScheduleDateAction($Spec) {
+    try { & (Get-WtField $Spec 'Action') (Get-WtField $Spec 'Arg') }
+    catch { Show-WtMessage "$(Get-WtField $Spec 'Header')을(를) 하지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
+    Update-WtScheduleView
+    if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
 }
 function Set-WtScheduleHoliday([string]$Date, [string[]]$Kinds, [bool]$Enabled, [string]$Name = '') {
     try {
@@ -21040,7 +21558,7 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
         $endDate = if (-not $Occurrence) { $date } elseif ($Occurrence.AllDay) { $Occurrence.LastDay } else { $Occurrence.End.Date }
         Add-WtScheduleRange date endDate '날짜' (ConvertTo-WtDateText $date) (ConvertTo-WtDateText $endDate) '시작 날짜' '끝 날짜'
         Add-WtScheduleField allDay '' (New-WtScheduleCheck '하루 종일' ($Occurrence -and $Occurrence.AllDay))
-        Add-WtScheduleRange start end '시각' $(if ($Occurrence -and -not $Occurrence.AllDay) { $Occurrence.Start.ToString('HH:mm', $script:inv) } else { Get-WtSetting 'work.start' }) $(if ($Occurrence -and -not $Occurrence.AllDay -and $Occurrence.End -gt $Occurrence.Start) { $Occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) '시작 시각' '끝 시각'
+        Add-WtScheduleRange start end '시각' $(if ($Occurrence -and -not $Occurrence.AllDay) { $Occurrence.Start.ToString('HH:mm', $script:inv) } else { (Get-WtWorkHours)['work.start'] }) $(if ($Occurrence -and -not $Occurrence.AllDay -and $Occurrence.End -gt $Occurrence.Start) { $Occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) '시작 시각' '끝 시각'
         $repeat = if ($Occurrence) { Get-WtRepeatLabel $Occurrence.Entry.Repeat } else { '없음' }; if (-not $repeat) { $repeat = '없음' }
         $repeatOptions = @('없음', '매일', '매주', '격주', '매월'); if ($repeat -notin $repeatOptions) { $repeatOptions += $repeat }
         Add-WtScheduleField repeat '반복' (New-WtScheduleCombo $repeatOptions $repeat)
@@ -21066,8 +21584,8 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
         Add-WtScheduleField time '시각' (New-WtScheduleInput $(if ($entry -and [string]$entry.routine.freq -cne 'hourly' -and $entry.routine.time) { [string]$entry.routine.time } else { '' }))
         $script:form.Fields.time.ToolTip = '비워 두면 시각 없이 그날의 루틴입니다. 예: 09:00'
         Add-WtScheduleField every '간격 시간' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { [string]$entry.routine.every } else { '2' }))
-        Add-WtScheduleField start '시작' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { $entry.routine.from } else { Get-WtSetting 'work.start' }))
-        Add-WtScheduleField end '끝 시각' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { $entry.routine.to } else { Get-WtSetting 'work.end' }))
+        Add-WtScheduleField start '시작' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { $entry.routine.from } else { (Get-WtWorkHours)['work.start'] }))
+        Add-WtScheduleField end '끝 시각' (New-WtScheduleInput $(if ($entry -and $entry.routine.freq -eq 'hourly') { $entry.routine.to } else { (Get-WtWorkHours)['work.end'] }))
         Add-WtScheduleField workdays '' (New-WtScheduleCheck '근무 요일만' ($entry -and $entry.routine.workdaysOnly))
         $script:form.Fields.workdays.ToolTip = '체크하면 근무 요일(설정 → 업무시간)이 아닌 날을 뺍니다. 휴무일 · 휴가에는 늘 빠집니다.'
         $script:form.Fields.freq.Add_SelectionChanged({ Update-WtScheduleFormFields })
@@ -22291,7 +22809,7 @@ function Read-WtRoutineEntries($Store) {
 # 근무 요일(work.days)이 아닌 날. 「근무 요일만」 루틴이 이날을 뺀다
 function Test-WtRoutineOffWeekday([datetime]$Date) {
     $day = (([int]$Date.DayOfWeek + 6) % 7) + 1
-    $day -notin @(Get-WtSetting 'work.days')
+    $day -notin @((Get-WtWorkHours -Date $Date)['work.days'])
 }
 # 휴무일 · 휴가인 날. 어떤 루틴도 이날에는 차례가 없다(2026-11-05 승호: 휴가 · 휴일에는 루틴을 모으지 않는다)
 function Test-WtRoutineDayOff([datetime]$Date) {
@@ -22300,7 +22818,8 @@ function Test-WtRoutineDayOff([datetime]$Date) {
     if ((Get-WtHolidayDates $Date $Date).Contains((ConvertTo-WtDateText $Date))) { return $true }
     $calendar = Get-WtCalendarItems $Date $Date -Exclude @('schedule')
     if (-not $calendar.Success) { throw ($calendar.Errors.Reason -join '; ') }
-    @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' }).Count -gt 0
+    # 반차(하루의 일부인 휴가)는 일하는 날이라 루틴을 쉬지 않는다(설계 15.5)
+    @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' -and -not (Test-WtCalendarPartDay $_) }).Count -gt 0
 }
 
 # 그날의 차례 키. DayOff(휴무일 · 휴가인지)를 넘기면 다시 묻지 않는다(여러 루틴을 한 번에 셀 때)
@@ -22337,8 +22856,8 @@ function New-WtRoutine {
     if ($Freq -ceq 'weekly') { $rule.days = @($Days) }
     if ($Freq -ceq 'hourly') {
         $rule.every = $Every
-        $rule.from = if ($PSBoundParameters.ContainsKey('From')) { $From } else { [string](Get-WtSetting 'work.start') }
-        $rule.to = if ($PSBoundParameters.ContainsKey('To')) { $To } else { [string](Get-WtSetting 'work.end') }
+        $rule.from = if ($PSBoundParameters.ContainsKey('From')) { $From } else { [string](Get-WtWorkHours)['work.start'] }
+        $rule.to = if ($PSBoundParameters.ContainsKey('To')) { $To } else { [string](Get-WtWorkHours)['work.end'] }
     }
     if ($WorkdaysOnly) { $rule.workdaysOnly = $true }
     if (($PSBoundParameters.ContainsKey('Days') -and $Freq -cne 'weekly') -or
@@ -22708,7 +23227,7 @@ function Get-WtScheduleRoutineRangeRows([datetime]$From, [datetime]$To, [string]
     $calendar = Get-WtCalendarItems $From $To -Exclude @('schedule')
     if (-not $calendar.Success) { throw ($calendar.Errors.Reason -join '; ') }
     $leave = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($item in @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' })) { [void]$leave.Add((ConvertTo-WtDateText $item.Date)) }
+    foreach ($item in @($calendar.Items | Where-Object { $_.Kind -ceq 'leave' -and -not (Test-WtCalendarPartDay $_) })) { [void]$leave.Add((ConvertTo-WtDateText $item.Date)) }
     $log = Open-WtStore -Name 'routine-log' -Schema 1
     if ($log.State -notin 'ok', 'missing') { throw "routine-log.json은 읽지 못했습니다. ($($log.Error))" }
     $done = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -22733,15 +23252,16 @@ function Sort-WtScheduleRows([object[]]$Rows) {
         @{ Expression = { if ($_.AllDay -or $_.Start.Date -lt $_.Date) { [timespan]::Zero } else { $_.Start.TimeOfDay } } }, @{ Expression = { $_.Title } }, @{ Expression = { $_.Key } })
 }
 
-# 기한 글(설계 14.5). { Text; Overdue }. 끝낸 것 · 오래 지난 것은 빈 글, 루틴은 오늘 차례만 「오늘」
+# 기한 글(설계 14.5). { Text; Overdue; Soon }. 끝낸 것 · 오래 지난 것은 빈 글, 루틴은 오늘 차례만 「오늘」.
+# Soon = 3일 안에 끝나는 하루 종일 여러 날 일정(마감 임박과 같은 기준). 화면은 Overdue · Soon을 색 배지로 그린다(설계 15.10)
 function Get-WtScheduleDue($Row, [datetime]$Today) {
-    if ($Row.Done) { return [pscustomobject]@{ Text = ''; Overdue = $false } }
-    if ($Row.Kind -ceq 'routine') { return [pscustomobject]@{ Text = $(if ($Row.Date -eq $Today.Date) { '오늘' } else { '' }); Overdue = $false } }
+    if ($Row.Done) { return [pscustomobject]@{ Text = ''; Overdue = $false; Soon = $false } }
+    if ($Row.Kind -ceq 'routine') { return [pscustomobject]@{ Text = $(if ($Row.Date -eq $Today.Date) { '오늘' } else { '' }); Overdue = $false; Soon = $false } }
     $diff = ($Row.DueDate - $Today.Date).Days
-    if ($diff -eq 0) { return [pscustomobject]@{ Text = '오늘'; Overdue = $false } }
-    if ($diff -gt 0) { return [pscustomobject]@{ Text = "D-$diff"; Overdue = $false } }
-    if (-$diff -le $script:dueOverdueDays) { return [pscustomobject]@{ Text = "$(-$diff)일 지남"; Overdue = $true } }
-    [pscustomobject]@{ Text = ''; Overdue = $false }
+    if ($diff -eq 0) { return [pscustomobject]@{ Text = '오늘'; Overdue = $false; Soon = $false } }
+    if ($diff -gt 0) { return [pscustomobject]@{ Text = "D-$diff"; Overdue = $false; Soon = $diff -le $script:dueSoonDays -and $Row.AllDay -and $Row.Multi } }
+    if (-$diff -le $script:dueOverdueDays) { return [pscustomobject]@{ Text = "$(-$diff)일 지남"; Overdue = $true; Soon = $false } }
+    [pscustomobject]@{ Text = ''; Overdue = $false; Soon = $false }
 }
 
 # 결과 묶음: { Success; Error(찾기 식 오류); Rows; Count; Truncated; From; To; Problems(읽지 못한 것의 이유) }
@@ -22801,7 +23321,7 @@ $script:dueCountCache = $null
 function Get-WtScheduleDueCount([string]$Now = (Get-WtStamp)) {
     $stamp = ConvertFrom-WtStamp $Now
     $key = @((ConvertTo-WtDateText $stamp.Date), (Get-WtStoreStamp 'schedule'), (Get-WtStoreStamp 'event-log'), (Get-WtStoreStamp 'routine-log'),
-        (Get-WtStoreStamp 'holidays'), (@(Get-WtSetting 'work.days') -join ',')) -join '#'
+        (Get-WtStoreStamp 'holidays'), (ConvertTo-Json -Compress -Depth 5 -InputObject @((Get-WtSetting 'work.days'), (Get-WtSetting 'work.periods')))) -join '#'
     $cache = $script:dueCountCache
     if ($cache -and $cache.Key -ceq $key -and [math]::Abs(($stamp - $cache.At).TotalSeconds) -lt 60) { return $cache.Count }
     $rows = @((Get-WtScheduleDueRows -Now $Now).Rows)
