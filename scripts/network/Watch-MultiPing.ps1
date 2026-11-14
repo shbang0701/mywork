@@ -5,7 +5,9 @@
 .DESCRIPTION
     - 대상 목록: 스크립트 옆 ping-hosts.txt (없으면 설정 블록의 Hosts).
       한 줄에 하나씩 "이름 주소" 또는 "주소"로 적고, # 뒤는 메모로 본다.
-      Excel에서 이름 · 주소 두 열을 복사해 붙여 넣어도 된다 (탭으로 나뉜다).
+      Excel에서 이름 · 주소 두 열을 복사해 붙여 넣어도 된다 (탭으로 나뉜다). 이름과 주소의 순서는 상관없다.
+      목록 파일이 없으면 실행했을 때 창에 바로 붙여 넣을 수 있다. 붙여 넣은 목록은 S를 고를 때만 파일로 저장한다.
+      한 줄에 IP만 여러 개 적으면(쉼표 · 공백으로 나눔) 하나씩 따로 본다.
       ping이 막힌 서버는 "이름 주소:포트"로 적으면 그 TCP 포트에 연결되는지로 확인한다 (예: SRV-01 10.0.0.10:22).
     - 한꺼번에 쏘지 않는다. 대상을 GapMs(기본 0.25초) 간격으로 하나씩 차례로 확인한다.
       1초에 최대 4번이라 cmd 창 네 개에서 ping -t를 돌리는 정도다. 대상이 늘어도 초당 횟수는 늘지 않고 한 바퀴가 길어진다.
@@ -71,6 +73,27 @@ function Read-HostLine {
     $text.TrimStart([char]0xFEFF) -split '\r?\n'
 }
 
+# 목록 파일이 없을 때: 대상을 창에 붙여 넣어 받는다 (Excel에서 복사한 열을 그대로 붙여도 된다). 빈 줄에서 Enter로 끝낸다.
+# 붙여 넣은 내용 중간에 빈 줄이 있어도 거기서 끝나지 않게, 빈 줄 뒤에 입력이 더 밀려 있으면 계속 읽는다
+function Read-PastedLine {
+    Write-Host ''
+    Write-Host " 목록 파일이 없습니다: $($Config.HostFile)"
+    Write-Host ' 확인할 대상을 여기에 붙여 넣고, 빈 줄에서 Enter를 누르세요.'
+    Write-Host '   - 한 줄에 하나씩 "이름 주소" 또는 "주소"만. Excel에서 이름 · 주소 열을 복사해 그대로 붙여도 됩니다.'
+    Write-Host '   - 아무것도 넣지 않고 Enter를 누르면 설정 블록의 Hosts를 씁니다.'
+    Write-Host ''
+    $lines = [System.Collections.Generic.List[string]]::new()
+    while ($true) {
+        $line = Read-Host
+        if ($line -and $line.Trim()) { $lines.Add($line); continue }
+        Start-Sleep -Milliseconds 200
+        $more = $false
+        try { $more = [Console]::KeyAvailable } catch { }
+        if (-not $more) { break }
+    }
+    $lines
+}
+
 # "주소:포트" · "[IPv6]:포트"를 나눈다. 포트를 안 적었으면 Port 0 (ping으로 확인)
 function Split-Endpoint([string]$Text) {
     if ($Text -match '^\[(.+)\]:(\d{1,5})$') { return @{ Host = $Matches[1]; Port = [int]$Matches[2]; HasPort = $true } }
@@ -88,6 +111,11 @@ function ConvertTo-Target([string]$Line) {
     $text = ($Line -replace '#.*$', '').Trim()
     if (-not $text) { return }
     $parts = @($text -split '[\t,; ]+' | Where-Object { $_ })
+    # 한 줄에 IP만 여러 개면 (10.0.0.10, 10.0.0.11, ...) 하나씩 따로 대상으로 본다
+    if ($parts.Count -gt 1 -and -not @($parts | Where-Object { -not (Test-IpText $_) }).Count) {
+        foreach ($p in $parts) { ConvertTo-Target $p }
+        return
+    }
     $at = $parts.Count - 1
     for ($i = 0; $i -lt $parts.Count; $i++) { if (Test-IpText $parts[$i]) { $at = $i; break } }
     $address = $parts[$at]
@@ -415,11 +443,28 @@ function Test-QuitKey {
 function Invoke-MultiPing {
     if ($HostFile) { $Config.HostFile = $HostFile }
     if ($IntervalSeconds) { $Config.IntervalSeconds = $IntervalSeconds }
-    $script:hostSource = if (Test-Path -LiteralPath $Config.HostFile -PathType Leaf) { Split-Path -Leaf $Config.HostFile } else { '설정 블록의 Hosts (목록 파일 없음)' }
-    $targets = @(Read-HostLine | ForEach-Object { ConvertTo-Target $_ })
+    # 목록: 파일이 있으면 파일. 없으면 창에 붙여 넣게 하고(사람이 보고 있는 창일 때만), 아무것도 안 넣으면 설정 블록의 Hosts
+    $pasted = @()
+    if (Test-Path -LiteralPath $Config.HostFile -PathType Leaf) { $script:hostSource = Split-Path -Leaf $Config.HostFile }
+    else {
+        $script:hostSource = '설정 블록의 Hosts (목록 파일 없음)'
+        if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) { $pasted = @(Read-PastedLine) }
+        if ($pasted.Count) { $script:hostSource = '붙여 넣은 목록' }
+    }
+    $lines = if ($pasted.Count) { $pasted } else { @(Read-HostLine) }
+    $targets = @($lines | ForEach-Object { ConvertTo-Target $_ })
     $bad = @($targets | Where-Object Error)
     if ($bad.Count) { throw ($bad.Error -join "`n") }
     if (-not $targets.Count) { throw "확인할 대상이 없습니다. 목록 파일($($Config.HostFile))에 대상을 적거나 설정 블록의 Hosts를 채우세요." }
+    # 붙여 넣은 목록은 사용자가 S를 고를 때만 파일로 남긴다 (다음 실행부터는 그 파일을 읽는다)
+    if ($pasted.Count) {
+        $leaf = Split-Path -Leaf $Config.HostFile
+        $answer = Read-Host " $($targets.Count)개를 읽었습니다. 다음에도 쓰게 ${leaf}로 저장하려면 S, 바로 시작하려면 Enter"
+        if ($answer -match '^\s*[sSㄴ]') {
+            try { [System.IO.File]::WriteAllLines($Config.HostFile, [string[]]$pasted, [System.Text.UTF8Encoding]::new($false)); $script:hostSource = $leaf }
+            catch { Write-Host " 저장하지 못했습니다: $($_.Exception.Message)"; Start-Sleep -Seconds 2 }
+        }
+    }
 
     $start = Get-Date
     if (-not (Test-Path -LiteralPath $Config.LogFolder)) { [void](New-Item -ItemType Directory -Path $Config.LogFolder) }
