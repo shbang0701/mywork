@@ -7,7 +7,10 @@
       한 줄에 하나씩 "이름 주소" 또는 "주소"로 적고, # 뒤는 메모로 본다.
       Excel에서 이름 · 주소 두 열을 복사해 붙여 넣어도 된다 (탭으로 나뉜다).
       ping이 막힌 서버는 "이름 주소:포트"로 적으면 그 TCP 포트에 연결되는지로 확인한다 (예: SRV-01 10.0.0.10:22).
-    - 모든 대상을 동시에 확인하고 간격마다 되풀이한다. 연속 DownAfter번 응답이 없으면 끊김으로 본다.
+    - 한꺼번에 쏘지 않는다. 대상을 GapMs(기본 0.25초) 간격으로 하나씩 차례로 확인한다.
+      1초에 최대 4번이라 cmd 창 네 개에서 ping -t를 돌리는 정도다. 대상이 늘어도 초당 횟수는 늘지 않고 한 바퀴가 길어진다.
+      한 바퀴를 다 돌면 IntervalSeconds(기본 5초)가 될 때까지 쉬었다가 되풀이한다. 연속 DownAfter번 응답이 없으면 끊김으로 본다.
+    - 목록에 적은 대상만 확인한다. IP 대역을 훑는 기능은 없다.
     - 상태가 바뀔 때마다 ping-logs 폴더의 CSV에 바로 한 줄씩 남긴다. 끝내면 대상별 요약 CSV도 만든다.
       파일 이름에 시작 시각이 붙어 이전 기록을 덮어쓰지 않는다. Excel 2016에서 한글이 깨지지 않게 UTF-8(BOM)로 저장한다.
     - Q 또는 Esc로 끝낸다 (Ctrl+C도 된다). 끝내면 요약을 화면에 보여 준다.
@@ -15,11 +18,11 @@
 
 .EXAMPLE
     .\Watch-MultiPing.ps1
-    목록의 대상을 1초마다 확인한다.
+    목록의 대상을 5초마다 한 바퀴씩 확인한다.
 
 .EXAMPLE
-    .\Watch-MultiPing.ps1 -HostFile .\pm-list.txt -IntervalSeconds 2
-    다른 목록 파일을 2초마다 확인한다.
+    .\Watch-MultiPing.ps1 -HostFile .\pm-list.txt -IntervalSeconds 10
+    다른 목록 파일을 10초마다 한 바퀴씩 확인한다.
 
 .EXAMPLE
     .\Watch-MultiPing.ps1 -Rounds 3
@@ -33,7 +36,7 @@
 [CmdletBinding()]
 param(
     [string]$HostFile,                              # 대상 목록 파일 (설정 블록의 HostFile 대신)
-    [ValidateRange(1, 3600)][int]$IntervalSeconds,  # 확인 간격(초) (설정 블록의 IntervalSeconds 대신)
+    [ValidateRange(1, 3600)][int]$IntervalSeconds,  # 한 바퀴 간격(초) (설정 블록의 IntervalSeconds 대신)
     [ValidateRange(0, 1000000)][int]$Rounds = 0     # 이만큼 확인하고 끝낸다. 0이면 끝낼 때까지
 )
 
@@ -45,7 +48,8 @@ $Config = @{
         'SRV-02      10.0.0.11'
         'SRV-01-iLO  10.0.1.10'
     )
-    IntervalSeconds = 1                                           # 확인 간격(초)
+    IntervalSeconds = 5                                           # 한 바퀴 간격(초). 한 바퀴가 이보다 오래 걸리면 다 돌고 바로 다음 바퀴를 돈다
+    GapMs           = 250                                         # 대상 하나를 확인하고 다음 대상까지 띄우는 시간(ms). 250이면 1초에 최대 4번. 0이면 한꺼번에 보낸다
     TimeoutMs       = 1000                                        # 응답을 기다리는 시간(ms)
     DownAfter       = 2                                           # 연속 이만큼 응답이 없으면 끊김으로 본다 (패킷 하나 놓친 것에 흔들리지 않게)
     LogFolder       = Join-Path $PSScriptRoot 'ping-logs'         # 기록(CSV)을 저장할 폴더
@@ -97,6 +101,7 @@ function ConvertTo-Target([string]$Line) {
         Sent = 0; Received = 0; LastRtt = $null; RttSum = 0.0; RttMax = 0.0; LastReply = $null
         Outages = 0; DownTotal = [TimeSpan]::Zero
         Task = $null; Pinger = $null; Client = $null; Watch = $null; Done = $false; Elapsed = 0.0
+        Busy = $false; At = $null
     }
 }
 
@@ -107,9 +112,12 @@ $script:pingText = @{
     DestinationUnreachable = '대상에 닿지 않음'; DestinationPortUnreachable = '포트에 닿지 않음'; TtlExpired = 'TTL 만료'; BadDestination = '잘못된 주소'
 }
 
+# 마지막으로 확인을 보낸 뒤 흐른 시간. 바퀴가 바뀌어도 GapMs 간격을 지키려고 스크립트 전체에서 하나만 둔다
+$script:sendWatch = $null
+
 # 대상 하나의 확인을 시작한다. 결과는 Read-ProbeResult에서 읽는다.
 function Start-Probe($Target) {
-    $Target.Done = $false; $Target.Elapsed = 0.0
+    $Target.Done = $false; $Target.Elapsed = 0.0; $Target.Busy = $true; $Target.At = Get-Date
     $Target.Watch = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         if ($Target.Port) {
@@ -124,16 +132,27 @@ function Start-Probe($Target) {
     }
 }
 
-# 모든 확인이 끝나거나 시간이 다 될 때까지 기다린다. 기다리는 동안 끝내기 키를 받으면 $true
-function Wait-Probe($Targets) {
-    $quit = $false
-    $watch = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($watch.ElapsedMilliseconds -lt $Config.TimeoutMs + 200) {
-        $pending = 0
-        foreach ($t in $Targets) {
-            if (-not $t.Done -and $t.Task.IsCompleted) { $t.Done = $true; $t.Elapsed = $t.Watch.Elapsed.TotalMilliseconds }
-            if (-not $t.Done) { $pending++ }
+# 한 바퀴를 돈다. 대상을 GapMs 간격으로 하나씩 확인하기 시작하고(한꺼번에 쏘지 않는다), 결과가 오는 대로 상태를 고친다.
+# 도는 동안 끝내기 키를 받으면 더 보내지 않고, 이미 보낸 것의 결과만 받은 뒤 $true를 돌려준다
+function Invoke-Round($Targets, [datetime]$Start, [int]$Round, [bool]$Live) {
+    $quit = $false; $next = 0; $dirty = $false
+    $draw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        while (-not $quit -and $next -lt $Targets.Count -and (-not $script:sendWatch -or $script:sendWatch.ElapsedMilliseconds -ge $Config.GapMs)) {
+            Start-Probe $Targets[$next]; $next++
+            $script:sendWatch = [System.Diagnostics.Stopwatch]::StartNew()
         }
+        $pending = if ($quit) { 0 } else { $Targets.Count - $next }
+        foreach ($t in $Targets) {
+            if (-not $t.Busy) { continue }
+            if ($t.Task.IsCompleted) { $t.Done = $true }
+            elseif ($t.Watch.ElapsedMilliseconds -lt $Config.TimeoutMs + 200) { $pending++; continue }
+            $t.Elapsed = $t.Watch.Elapsed.TotalMilliseconds
+            Update-TargetState $t (Read-ProbeResult $t) $t.At
+            $t.Busy = $false; $dirty = $true
+        }
+        # 한 바퀴가 길어도 화면이 멈춘 것처럼 보이지 않게, 결과가 오면 도는 중에도 다시 그린다
+        if ($Live -and $dirty -and $draw.ElapsedMilliseconds -ge 250) { Show-Board $Targets $Start $Round $Live; $dirty = $false; $draw.Restart() }
         if (-not $pending) { break }
         if (Test-QuitKey) { $quit = $true }
         Start-Sleep -Milliseconds 10
@@ -278,9 +297,13 @@ function Show-Board($Targets, [datetime]$Start, [int]$Round, [bool]$Live) {
     $up = @($Targets | Where-Object Status -eq 'UP').Count
     $down = @($Targets | Where-Object Status -eq 'DOWN').Count
     $lines = [System.Collections.Generic.List[string]]::new()
-    $lines.Add((' Multi Ping | 시작 {0:HH:mm:ss} | 경과 {1} | {2}초 간격 | {3}회째 | 대상 {4}: 응답 {5} · 끊김 {6} · 확인 중 {7}' -f
-            $Start, (Format-Span ((Get-Date) - $Start)), $Config.IntervalSeconds, $Round, $Targets.Count, $up, $down, ($Targets.Count - $up - $down)))
-    $lines.Add(" 목록: $($script:hostSource) | 기록: $($script:logPath)    $(if ($Live) { 'Q 또는 Esc: 끝내기' })")
+    $lines.Add((' Multi Ping | 시작 {0:HH:mm:ss} | 경과 {1} | {2}회째 | 대상 {3}: 응답 {4} · 끊김 {5} · 확인 중 {6}' -f
+            $Start, (Format-Span ((Get-Date) - $Start)), $Round, $Targets.Count, $up, $down, ($Targets.Count - $up - $down)))
+    # 얼마나 자주 보내는지 화면에 적어 둔다 (한 바퀴 = 간격과 '대상 수 x 띄우는 시간' 중 긴 쪽)
+    $cycle = [Math]::Max($Config.IntervalSeconds, [int][Math]::Ceiling($Targets.Count * $Config.GapMs / 1000.0))
+    $pace = if ($Config.GapMs -gt 0) { '{0:0.##}초에 하나씩 보냄 (1초에 최대 {1:0.#}번)' -f ($Config.GapMs / 1000.0), (1000.0 / $Config.GapMs) } else { '한꺼번에 보냄' }
+    $lines.Add(" 한 바퀴 약 ${cycle}초 | $pace$(if ($Live) { ' | Q 또는 Esc: 끝내기' })")
+    $lines.Add(" 목록: $($script:hostSource) | 기록: $($script:logPath)")
     $lines.Add('')
     $head = ' {0}  {1}  {2}  {3}  {4}  {5}  {6}' -f (Format-Cell '이름' $c.Name), (Format-Cell '주소' $c.Address), (Format-Cell '상태' $c.Status),
         (Format-Cell '응답' $c.Rtt -Right), (Format-Cell '바뀐 시각' $c.Since), (Format-Cell '끊김' $c.Outages -Right), (Format-Cell '손실률' $c.Loss -Right)
@@ -333,14 +356,14 @@ function Invoke-MultiPing {
     $live = -not [Console]::IsOutputRedirected
     $round = 0
     try {
-        if ($live) { [Console]::Write("`e[?1049h`e[?25l") }   # 따로 쓰는 화면으로 바꾸고 커서를 숨긴다
+        if ($live) {
+            [Console]::Write("`e[?1049h`e[?25l")   # 따로 쓰는 화면으로 바꾸고 커서를 숨긴다
+            Show-Board $targets $start 0 $live      # 첫 바퀴가 도는 동안 빈 화면이 아니게 목록부터 보여 준다
+        }
         while ($true) {
             $round++
             $roundWatch = [System.Diagnostics.Stopwatch]::StartNew()
-            $now = Get-Date
-            foreach ($t in $targets) { Start-Probe $t }
-            $quit = Wait-Probe $targets
-            foreach ($t in $targets) { Update-TargetState $t (Read-ProbeResult $t) $now }
+            $quit = Invoke-Round $targets $start $round $live
             Show-Board $targets $start $round $live
             if ($quit -or ($Rounds -and $round -ge $Rounds)) { break }
             while ($roundWatch.Elapsed.TotalSeconds -lt $Config.IntervalSeconds) {
