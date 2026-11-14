@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="828" height="384" viewBox="0 0 828 384" font-family="'D2Coding','Cascadia Mono',Consolas,'Malgun Gothic',monospace" font-size="16">
+  <rect width="828" height="384" rx="8" fill="#FDF6E3"/>
+  <path d="M0 8a8 8 0 0 1 8-8h812a8 8 0 0 1 8 8v22H0z" fill="#EEE8D5"/>
+  <text x="14" y="20" fill="#5E6E73" font-size="13">PowerShell  ·  Watch-MultiPing.ps1</text>
+  <text x="30" y="58" textLength="40" lengthAdjust="spacing" fill="#344B55" font-weight="bold">Multi</text>
+  <text x="78" y="58" textLength="32" lengthAdjust="spacing" fill="#344B55" font-weight="bold">Ping</text>
+  <text x="150" y="58" textLength="32" lengthAdjust="spacing" fill="#344B55">대상</text>
+  <text x="190" y="58" textLength="8" lengthAdjust="spacing" fill="#344B55">8</text>
+  <text x="230" y="58" textLength="32" lengthAdjust="spacing" fill="#344B55">응답</text>
+  <text x="270" y="58" textLength="8" lengthAdjust="spacing" fill="#5B7300" font-weight="bold">6</text>
+  <text x="310" y="58" textLength="32" lengthAdjust="spacing" fill="#344B55">끊김</text>
+  <text x="350" y="58" textLength="8" lengthAdjust="spacing" fill="#B5453D" font-weight="bold">1</text>
+  <text x="390" y="58" textLength="32" lengthAdjust="spacing" fill="#344B55">확인</text>
+  <text x="430" y="58" textLength="16" lengthAdjust="spacing" fill="#344B55">중</text>
+  <text x="454" y="58" textLength="8" lengthAdjust="spacing" fill="#344B55">1</text>
+  <text x="750" y="58" textLength="64" lengthAdjust="spacing" fill="#344B55">14:03:22</text>
+  <rect x="30" y="106" width="784" height="1" fill="#344B55"/>
+  <text x="38" y="102" textLength="32" lengthAdjust="spacing" fill="#344B55">상태</text>
+  <text x="110" y="102" textLength="32" lengthAdjust="spacing" fill="#344B55">이름</text>
+  <text x="206" y="102" textLength="32" lengthAdjust="spacing" fill="#344B55">주소</text>
+  <text x="318" y="102" textLength="32" lengthAdjust="spacing" fill="#344B55">응답</text>
+  <text x="358" y="102" textLength="32" lengthAdjust="spacing" fill="#344B55">시간</text>
+  <text x="406" y="102" textLength="32" lengthAdjust="spacing" fill="#344B55">바뀐</text>
+  <text x="446" y="102" textLength="32" lengthAdjust="spacing" fill="#344B55">시각</text>
+  <text x="494" y="102" textLength="32" lengthAdjust="spacing" fill="#344B55">끊김</text>
+  <text x="542" y="102" textLength="48" lengthAdjust="spacing" fill="#344B55">손실률</text>
+  <text x="606" y="102" textLength="32" lengthAdjust="spacing" fill="#344B55">메모</text>
+  <text x="38" y="124" textLength="32" lengthAdjust="spacing" fill="#5B7300">응답</text>
+  <text x="110" y="124" textLength="48" lengthAdjust="spacing" fill="#344B55">SRV-01</text>
+  <text x="206" y="124" textLength="72" lengthAdjust="spacing" fill="#344B55">10.0.0.10</text>
+  <text x="358" y="124" textLength="8" lengthAdjust="spacing" fill="#344B55">1</text>
+  <text x="374" y="124" textLength="16" lengthAdjust="spacing" fill="#344B55">ms</text>
+  <text x="406" y="124" textLength="64" lengthAdjust="spacing" fill="#344B55">13:50:44</text>
+  <text x="38" y="146" textLength="32" lengthAdjust="spacing" fill="#5B7300">응답</text>
+  <text x="110" y="146" textLength="80" lengthAdjust="spacing" fill="#344B55">SRV-01-iLO</text>
+  <text x="206" y="146" textLength="72" lengthAdjust="spacing" fill="#344B55">10.0.1.10</text>
+  <text x="350" y="146" textLength="16" lengthAdjust="spacing" fill="#344B55">&lt;1</text>
+  <text x="374" y="146" textLength="16" lengthAdjust="spacing" fill="#344B55">ms</text>
+  <text x="406" y="146" textLength="64" lengthAdjust="spacing" fill="#344B55">13:50:44</text>
+  <rect x="30" y="153" width="48" height="20" rx="3" fill="#B5453D"/>
+  <text x="38" y="168" textLength="32" lengthAdjust="spacing" fill="#FDF6E3" font-weight="bold">끊김</text>
+  <text x="110" y="168" textLength="48" lengthAdjust="spacing" fill="#344B55" font-weight="bold">SRV-02</text>
+  <text x="206" y="168" textLength="72" lengthAdjust="spacing" fill="#344B55">10.0.0.11</text>
+  <text x="382" y="168" textLength="8" lengthAdjust="spacing" fill="#344B55">-</text>
+  <text x="406" y="168" textLength="64" lengthAdjust="spacing" fill="#344B55">14:01:10</text>
+  <text x="518" y="168" textLength="8" lengthAdjust="spacing" fill="#344B55">1</text>
+  <text x="550" y="168" textLength="40" lengthAdjust="spacing" fill="#344B55">17.1%</text>
+  <text x="606" y="168" textLength="88" lengthAdjust="spacing" fill="#344B55">00:02:12째,</text>
+  <text x="702" y="168" textLength="32" lengthAdjust="spacing" fill="#344B55">시간</text>
+  <text x="742" y="168" textLength="32" lengthAdjust="spacing" fill="#344B55">초과</text>
+  <text x="38" y="190" textLength="32" lengthAdjust="spacing" fill="#5B7300">응답</text>
+  <text x="110" y="190" textLength="80" lengthAdjust="spacing" fill="#344B55">SRV-02-iLO</text>
+  <text x="206" y="190" textLength="72" lengthAdjust="spacing" fill="#344B55">10.0.1.11</text>
+  <text x="358" y="190" textLength="8" lengthAdjust="spacing" fill="#344B55">2</text>
+  <text x="374" y="190" textLength="16" lengthAdjust="spacing" fill="#344B55">ms</text>
+  <text x="406" y="190" textLength="64" lengthAdjust="spacing" fill="#344B55">13:50:45</text>
+  <text x="38" y="212" textLength="32" lengthAdjust="spacing" fill="#5B7300">응답</text>
+  <text x="110" y="212" textLength="40" lengthAdjust="spacing" fill="#344B55">DB-01</text>
+  <text x="206" y="212" textLength="72" lengthAdjust="spacing" fill="#344B55">10.0.0.20</text>
+  <text x="358" y="212" textLength="8" lengthAdjust="spacing" fill="#344B55">1</text>
+  <text x="374" y="212" textLength="16" lengthAdjust="spacing" fill="#344B55">ms</text>
+  <text x="406" y="212" textLength="64" lengthAdjust="spacing" fill="#344B55">13:58:41</text>
+  <text x="518" y="212" textLength="8" lengthAdjust="spacing" fill="#344B55">1</text>
+  <text x="558" y="212" textLength="32" lengthAdjust="spacing" fill="#344B55">8.6%</text>
+  <text x="38" y="234" textLength="32" lengthAdjust="spacing" fill="#8A6800">응답</text>
+  <text x="110" y="234" textLength="40" lengthAdjust="spacing" fill="#344B55">DB-02</text>
+  <text x="206" y="234" textLength="72" lengthAdjust="spacing" fill="#344B55">10.0.0.21</text>
+  <text x="382" y="234" textLength="8" lengthAdjust="spacing" fill="#344B55">-</text>
+  <text x="406" y="234" textLength="64" lengthAdjust="spacing" fill="#344B55">13:50:46</text>
+  <text x="558" y="234" textLength="32" lengthAdjust="spacing" fill="#344B55">0.7%</text>
+  <text x="606" y="234" textLength="32" lengthAdjust="spacing" fill="#344B55">시간</text>
+  <text x="646" y="234" textLength="32" lengthAdjust="spacing" fill="#344B55">초과</text>
+  <text x="38" y="256" textLength="32" lengthAdjust="spacing" fill="#5B7300">응답</text>
+  <text x="110" y="256" textLength="48" lengthAdjust="spacing" fill="#344B55">NAS-01</text>
+  <text x="206" y="256" textLength="96" lengthAdjust="spacing" fill="#344B55">10.0.0.30:22</text>
+  <text x="358" y="256" textLength="8" lengthAdjust="spacing" fill="#344B55">3</text>
+  <text x="374" y="256" textLength="16" lengthAdjust="spacing" fill="#344B55">ms</text>
+  <text x="406" y="256" textLength="64" lengthAdjust="spacing" fill="#344B55">13:50:46</text>
+  <text x="38" y="278" textLength="32" lengthAdjust="spacing" fill="#344B55">확인</text>
+  <text x="78" y="278" textLength="16" lengthAdjust="spacing" fill="#344B55">중</text>
+  <text x="110" y="278" textLength="48" lengthAdjust="spacing" fill="#344B55">ESX-01</text>
+  <text x="206" y="278" textLength="72" lengthAdjust="spacing" fill="#344B55">10.0.0.40</text>
+  <text x="382" y="278" textLength="8" lengthAdjust="spacing" fill="#344B55">-</text>
+  <text x="30" y="322" textLength="32" lengthAdjust="spacing" fill="#344B55">시작</text>
+  <text x="70" y="322" textLength="64" lengthAdjust="spacing" fill="#344B55">13:50:42</text>
+  <text x="158" y="322" textLength="32" lengthAdjust="spacing" fill="#344B55">경과</text>
+  <text x="198" y="322" textLength="64" lengthAdjust="spacing" fill="#344B55">00:12:40</text>
+  <text x="286" y="322" textLength="72" lengthAdjust="spacing" fill="#344B55">152바퀴째</text>
+  <text x="382" y="322" textLength="16" lengthAdjust="spacing" fill="#344B55">한</text>
+  <text x="406" y="322" textLength="32" lengthAdjust="spacing" fill="#344B55">바퀴</text>
+  <text x="446" y="322" textLength="16" lengthAdjust="spacing" fill="#344B55">약</text>
+  <text x="470" y="322" textLength="32" lengthAdjust="spacing" fill="#344B55">5초,</text>
+  <text x="510" y="322" textLength="64" lengthAdjust="spacing" fill="#344B55">0.25초에</text>
+  <text x="582" y="322" textLength="48" lengthAdjust="spacing" fill="#344B55">하나씩</text>
+  <text x="638" y="322" textLength="48" lengthAdjust="spacing" fill="#344B55">(1초에</text>
+  <text x="694" y="322" textLength="32" lengthAdjust="spacing" fill="#344B55">최대</text>
+  <text x="734" y="322" textLength="32" lengthAdjust="spacing" fill="#344B55">4번)</text>
+  <text x="30" y="344" textLength="32" lengthAdjust="spacing" fill="#344B55">목록</text>
+  <text x="70" y="344" textLength="112" lengthAdjust="spacing" fill="#344B55">ping-hosts.txt</text>
+  <text x="206" y="344" textLength="32" lengthAdjust="spacing" fill="#344B55">기록</text>
+  <text x="246" y="344" textLength="400" lengthAdjust="spacing" fill="#344B55">C:\work\scripts\ping-logs\ping_20261114_135042.csv</text>
+  <text x="30" y="366" textLength="8" lengthAdjust="spacing" fill="#344B55">Q</text>
+  <text x="46" y="366" textLength="32" lengthAdjust="spacing" fill="#344B55">또는</text>
+  <text x="86" y="366" textLength="32" lengthAdjust="spacing" fill="#344B55">Esc:</text>
+  <text x="126" y="366" textLength="48" lengthAdjust="spacing" fill="#344B55">끝내기</text>
+</svg>

@@ -151,8 +151,8 @@ function Invoke-Round($Targets, [datetime]$Start, [int]$Round, [bool]$Live) {
             Update-TargetState $t (Read-ProbeResult $t) $t.At
             $t.Busy = $false; $dirty = $true
         }
-        # 한 바퀴가 길어도 화면이 멈춘 것처럼 보이지 않게, 결과가 오면 도는 중에도 다시 그린다
-        if ($Live -and $dirty -and $draw.ElapsedMilliseconds -ge 250) { Show-Board $Targets $Start $Round $Live; $dirty = $false; $draw.Restart() }
+        # 한 바퀴가 길어도 화면이 멈춘 것처럼 보이지 않게, 결과가 오면 도는 중에도 다시 그린다 (시계 때문에 적어도 1초마다)
+        if ($Live -and (($dirty -and $draw.ElapsedMilliseconds -ge 250) -or $draw.ElapsedMilliseconds -ge 1000)) { Show-Board $Targets $Start $Round $Live; $dirty = $false; $draw.Restart() }
         if (-not $pending) { break }
         if (Test-QuitKey) { $quit = $true }
         Start-Sleep -Milliseconds 10
@@ -267,59 +267,136 @@ function Get-ConsoleSize {
     @{ Width = $w; Height = $h }
 }
 
-$script:cols = @{ Name = 16; Address = 21; Status = 7; Rtt = 7; Since = 9; Outages = 4; Loss = 6 }
+# 열 너비(칸). 이름 · 주소 열은 목록에서 가장 긴 것에 맞춘다 (Get-BoardLine)
+$script:cols = @{ Status = 9; Rtt = 9; Since = 9; Outages = 4; Loss = 6 }
+# 꾸밈(SGR 번호). 밝은 배경 · 어두운 배경 어디서나 읽히게 기본 색(초록 · 빨강 · 노랑)과 굵게 · 밑줄만 쓴다.
+# 흐리게(2) · 밝은 검정(90)은 배경에 따라 거꾸로 진해지거나 안 보여서 쓰지 않는다
+$script:style = @{ Title = '1'; Head = '4'; Up = '32'; Shaky = '33'; Down = '1;97;41'; Strong = '1'; Good = '1;32'; Bad = '1;31' }
 
-function Format-Row($Target, [bool]$Color, [int]$NoteWidth) {
-    $c = $script:cols
-    $rtt = if ($null -eq $Target.LastRtt) { '-' } elseif ($Target.LastRtt -lt 1) { '<1 ms' } else { "$($Target.LastRtt) ms" }
-    $since = if ($Target.Since) { $Target.Since.ToString('HH:mm:ss') } else { '' }
-    $loss = if ($Target.Sent) { '{0:0.0}%' -f (100.0 * ($Target.Sent - $Target.Received) / $Target.Sent) } else { '' }
-    $status = Format-Cell (Get-StatusText $Target.Status) $c.Status
-    $name = Format-Cell $Target.Name $c.Name
-    if ($Color) {
-        switch ($Target.Status) {
-            'UP' { $status = "$($PSStyle.Foreground.Green)$status$($PSStyle.Reset)" }
-            'DOWN' { $status = "$($PSStyle.Bold)$($PSStyle.Foreground.Red)$status$($PSStyle.Reset)"; $name = "$($PSStyle.Bold)$($PSStyle.Foreground.Red)$name$($PSStyle.Reset)" }
-        }
+# 조각 (글자, 꾸밈)들을 이어 한 줄을 만든다. 창 너비를 넘는 부분은 잘라서 줄이 다음 줄로 넘어가지 않게 한다
+function Join-Segment([object[]]$Segments, [int]$Width, [bool]$Color) {
+    $sb = [System.Text.StringBuilder]::new()
+    $used = 0
+    foreach ($x in $Segments) {
+        $text = [string]$x[0]
+        $room = $Width - $used
+        if ($room -le 0) { break }
+        if ((Get-CellWidth $text) -gt $room) { $text = Format-Cell $text $room }
+        $used += Get-CellWidth $text
+        [void]$sb.Append($(if ($Color -and $x[1]) { "`e[$($x[1])m$text`e[0m" } else { $text }))
     }
-    $line = ' {0}  {1}  {2}  {3}  {4}  {5}  {6}' -f $name, (Format-Cell $Target.Address $c.Address), $status, (Format-Cell $rtt $c.Rtt -Right),
-        (Format-Cell $since $c.Since), (Format-Cell ([string]$Target.Outages) $c.Outages -Right), (Format-Cell $loss $c.Loss -Right)
-    if ($NoteWidth -gt 4 -and $Target.Note) { $line += '  ' + (Format-Cell $Target.Note $NoteWidth) }
-    $line
+    $sb.ToString().TrimEnd()
 }
 
-# 화면 전체를 다시 그린다. 창보다 대상이 많으면 끊김 · 확인 중을 먼저 보여 주고 나머지는 개수만 적는다
-function Show-Board($Targets, [datetime]$Start, [int]$Round, [bool]$Live) {
-    $size = Get-ConsoleSize
-    $c = $script:cols
-    $fixed = 1 + $c.Name + 2 + $c.Address + 2 + $c.Status + 2 + $c.Rtt + 2 + $c.Since + 2 + $c.Outages + 2 + $c.Loss
-    $noteWidth = $size.Width - $fixed - 3
+# 긴 경로는 앞을 줄인다 (파일 이름이 있는 뒤쪽이 남게)
+function Format-PathTail([string]$Path, [int]$Width) {
+    if ((Get-CellWidth $Path) -le $Width -or $Width -lt 8) { return $Path }
+    $tail = $Path
+    while ((Get-CellWidth $tail) -gt $Width - 3) { $tail = $tail.Substring(1) }
+    "...$tail"
+}
+
+# 대상 한 줄의 조각들. 끊긴 대상만 빨간 딱지와 굵은 이름으로 눈에 띄게 하고, 나머지는 조용하게 둔다.
+# 0인 값(끊김 횟수 · 손실률)은 비워서 문제가 있는 줄만 숫자가 보이게 한다
+function Get-RowSegment($Target, $Layout, [datetime]$Now) {
+    $c = $script:cols; $s = $script:style
+    $rtt = if ($null -eq $Target.LastRtt) { '-' } elseif ($Target.LastRtt -lt 1) { '<1 ms' } else { "$($Target.LastRtt) ms" }
+    $since = if ($Target.Since) { $Target.Since.ToString('HH:mm:ss') } else { '' }
+    $lost = $Target.Sent - $Target.Received
+    $loss = if ($lost -gt 0) { '{0:0.0}%' -f (100.0 * $lost / $Target.Sent) } else { '' }
+    $outages = if ($Target.Outages) { [string]$Target.Outages } else { '' }
+    $note = $Target.Note
+    if ($Target.Status -eq 'DOWN') { $note = "$(Format-Span ($Now - $Target.DownSince))째" + $(if ($note) { ", $note" }) }
+    $label = " $(Get-StatusText $Target.Status) "
+    $labelStyle = switch ($Target.Status) { 'DOWN' { $s.Down } 'UP' { if ($Target.Misses) { $s.Shaky } else { $s.Up } } default { '' } }
+    $seg = [System.Collections.Generic.List[object[]]]::new()
+    $seg.Add(@('  ', ''))
+    $seg.Add(@($label, $labelStyle))
+    $seg.Add(@((' ' * [Math]::Max(1, $c.Status + 1 - (Get-CellWidth $label))), ''))
+    $seg.Add(@((Format-Cell $Target.Name $Layout.Name), $(if ($Target.Status -eq 'DOWN') { $s.Strong } else { '' })))
+    $seg.Add(@(('  {0}  {1}  {2}  ' -f (Format-Cell $Target.Address $Layout.Address), (Format-Cell $rtt $c.Rtt -Right), (Format-Cell $since $c.Since)), ''))
+    $seg.Add(@((Format-Cell $outages $c.Outages -Right), ''))
+    $seg.Add(@(('  ' + (Format-Cell $loss $c.Loss -Right)), ''))
+    if ($Layout.Note -gt 4 -and $note) { $seg.Add(@(('  ' + (Format-Cell $note $Layout.Note)), '')) }
+    $seg
+}
+
+# 화면 한 장을 줄 목록으로 만든다. 위: 제목 · 개수 · 지금 시각, 가운데: 표, 아래: 속도 · 파일 · 끝내는 키.
+# 창보다 대상이 많으면 끊김 · 확인 중을 먼저 보여 주고 나머지는 개수만 적는다
+function Get-BoardLine($Targets, [datetime]$Start, [int]$Round, [bool]$Live, $Size) {
+    $c = $script:cols; $s = $script:style
+    $now = Get-Date
+    $width = [Math]::Max(20, $Size.Width - 1)   # 마지막 칸까지 채우면 줄이 넘어가는 콘솔이 있어 한 칸 남긴다
+    $layout = @{
+        Name    = [Math]::Min(28, [Math]::Max(4, [int]($Targets | ForEach-Object { Get-CellWidth $_.Name } | Measure-Object -Maximum).Maximum))
+        Address = [Math]::Min(30, [Math]::Max(4, [int]($Targets | ForEach-Object { Get-CellWidth $_.Address } | Measure-Object -Maximum).Maximum))
+    }
+    $fixed = 2 + $c.Status + 1 + $layout.Name + 2 + $layout.Address + 2 + $c.Rtt + 2 + $c.Since + 2 + $c.Outages + 2 + $c.Loss
+    # 창이 좁으면 이름 열부터 줄여서 뒤쪽 열(바뀐 시각 · 손실률)이 잘리지 않게 한다
+    $shrink = [Math]::Min([Math]::Max(0, $fixed - $width), [Math]::Max(0, $layout.Name - 10))
+    $layout.Name -= $shrink; $fixed -= $shrink
+    $layout.Note = [Math]::Max(0, $width - $fixed - 2)
     $up = @($Targets | Where-Object Status -eq 'UP').Count
     $down = @($Targets | Where-Object Status -eq 'DOWN').Count
+    $wait = $Targets.Count - $up - $down
     $lines = [System.Collections.Generic.List[string]]::new()
-    $lines.Add((' Multi Ping | 시작 {0:HH:mm:ss} | 경과 {1} | {2}회째 | 대상 {3}: 응답 {4} · 끊김 {5} · 확인 중 {6}' -f
-            $Start, (Format-Span ((Get-Date) - $Start)), $Round, $Targets.Count, $up, $down, ($Targets.Count - $up - $down)))
-    # 얼마나 자주 보내는지 화면에 적어 둔다 (한 바퀴 = 간격과 '대상 수 x 띄우는 시간' 중 긴 쪽)
-    $cycle = [Math]::Max($Config.IntervalSeconds, [int][Math]::Ceiling($Targets.Count * $Config.GapMs / 1000.0))
-    $pace = if ($Config.GapMs -gt 0) { '{0:0.##}초에 하나씩 보냄 (1초에 최대 {1:0.#}번)' -f ($Config.GapMs / 1000.0), (1000.0 / $Config.GapMs) } else { '한꺼번에 보냄' }
-    $lines.Add(" 한 바퀴 약 ${cycle}초 | $pace$(if ($Live) { ' | Q 또는 Esc: 끝내기' })")
-    $lines.Add(" 목록: $($script:hostSource) | 기록: $($script:logPath)")
+
+    # 맨 윗줄: 제목과 개수, 오른쪽 끝에 지금 시각 (1초마다 바뀌어 화면이 살아 있는지 알 수 있다)
+    $seg = [System.Collections.Generic.List[object[]]]::new()
+    $seg.Add(@('  Multi Ping', $s.Title))
+    $seg.Add(@("     대상 $($Targets.Count)    응답 ", ''))
+    $seg.Add(@("$up", $s.Good))
+    $seg.Add(@('    끊김 ', ''))
+    $seg.Add(@("$down", $(if ($down) { $s.Bad } else { '' })))
+    if ($wait) { $seg.Add(@("    확인 중 $wait", '')) }
+    $used = 0
+    foreach ($x in $seg) { $used += Get-CellWidth $x[0] }
+    $clock = $now.ToString('HH:mm:ss')
+    if ($width - $used - $clock.Length -ge 2) { $seg.Add(@((' ' * ($width - $used - $clock.Length) + $clock), '')) }
+    $lines.Add((Join-Segment $seg $width $Live))
     $lines.Add('')
-    $head = ' {0}  {1}  {2}  {3}  {4}  {5}  {6}' -f (Format-Cell '이름' $c.Name), (Format-Cell '주소' $c.Address), (Format-Cell '상태' $c.Status),
-        (Format-Cell '응답' $c.Rtt -Right), (Format-Cell '바뀐 시각' $c.Since), (Format-Cell '끊김' $c.Outages -Right), (Format-Cell '손실률' $c.Loss -Right)
-    if ($noteWidth -gt 4) { $head += '  메모' }
-    $lines.Add($head)
+
+    # 표 머리: 밑줄로 표와 나눈다 (선 문자는 글꼴에 따라 두 칸이 되어 줄이 어긋날 수 있어 쓰지 않는다)
+    $head = '{0} {1}  {2}  {3}  {4}  {5}  {6}' -f (Format-Cell ' 상태' $c.Status), (Format-Cell '이름' $layout.Name), (Format-Cell '주소' $layout.Address),
+        (Format-Cell '응답 시간' $c.Rtt -Right), (Format-Cell '바뀐 시각' $c.Since), (Format-Cell '끊김' $c.Outages -Right), (Format-Cell '손실률' $c.Loss -Right)
+    if ($layout.Note -gt 4) { $head += '  ' + (Format-Cell '메모' $layout.Note) }
+    $seg = [System.Collections.Generic.List[object[]]]::new()
+    $seg.Add(@('  ', ''))
+    $seg.Add(@((Format-Cell $head ([Math]::Min((Get-CellWidth $head), $width - 2))), $s.Head))
+    $lines.Add((Join-Segment $seg $width $Live))
+
+    $footCount = if ($Live) { 3 } else { 2 }
     $rows = @($Targets)
     $hidden = 0
-    $room = if ($Live) { $size.Height - $lines.Count - 2 } else { [int]::MaxValue }
+    # 화면에서는 창 높이에 딱 맞춘다: 위 3줄 + 표 + 빈 줄 + 아래 줄들, 맨 아랫줄 하나는 비워 둔다
+    $room = if ($Live) { [Math]::Max(2, $Size.Height - 1 - $lines.Count - 1 - $footCount) } else { [int]::MaxValue }
     if ($rows.Count -gt $room) {
-        $rows = @($Targets | Sort-Object -Stable { switch ($_.Status) { 'DOWN' { 0 } 'WAIT' { 1 } default { 2 } } } | Select-Object -First ([Math]::Max(1, $room - 1)))
+        $rows = @($Targets | Sort-Object -Stable { switch ($_.Status) { 'DOWN' { 0 } 'WAIT' { 1 } default { 2 } } } | Select-Object -First ($room - 1))
         $hidden = $Targets.Count - $rows.Count
     }
-    foreach ($t in $rows) { $lines.Add((Format-Row $t $Live $noteWidth)) }
-    if ($hidden) { $lines.Add(" 그 밖에 ${hidden}개는 창이 작아 생략했습니다(끊김부터 보여 줍니다). 창을 키우면 모두 보입니다.") }
+    foreach ($t in $rows) { $lines.Add((Join-Segment (Get-RowSegment $t $layout $now) $width $Live)) }
+    if ($hidden) { $lines.Add((Join-Segment @(, @("  그 밖에 ${hidden}개는 창이 작아 생략했습니다(끊김부터 보여 줍니다). 창을 키우면 모두 보입니다.", '')) $width $false)) }
+
+    # 아래 줄들은 창 바닥에 붙인다. 얼마나 자주 보내는지도 여기에 적어 둔다 (한 바퀴 = 간격과 '대상 수 x 띄우는 시간' 중 긴 쪽)
+    $lines.Add('')
+    if ($Live) { while ($lines.Count -lt $Size.Height - 1 - $footCount) { $lines.Add('') } }
+    $cycle = [Math]::Max($Config.IntervalSeconds, [int][Math]::Ceiling($Targets.Count * $Config.GapMs / 1000.0))
+    $pace = if ($Config.GapMs -gt 0) { '{0:0.##}초에 하나씩 (1초에 최대 {1:0.#}번)' -f ($Config.GapMs / 1000.0), (1000.0 / $Config.GapMs) } else { '한꺼번에 보냄' }
+    $info = '  시작 {0:HH:mm:ss}   경과 {1}   {2}바퀴째   한 바퀴 약 {3}초, {4}' -f $Start, (Format-Span ($now - $Start)), $Round, $cycle, $pace
+    $lines.Add((Join-Segment @(, @($info, '')) $width $false))
+    $prefix = "  목록 $($script:hostSource)   기록 "
+    $lines.Add((Join-Segment @(, @(($prefix + (Format-PathTail $script:logPath ($width - (Get-CellWidth $prefix)))), '')) $width $false))
+    if ($Live) { $lines.Add('  Q 또는 Esc: 끝내기') }
+    # 창이 아주 낮으면 아래 줄들을 버린다 (창 높이를 넘겨 그리면 화면이 밀려 올라간다)
+    if ($Live -and $lines.Count -gt $Size.Height - 1) { $lines.RemoveRange([Math]::Max(1, $Size.Height - 1), $lines.Count - [Math]::Max(1, $Size.Height - 1)) }
+    $lines
+}
+
+# 화면 전체를 다시 그린다. 화면이 아니면(파일로 돌린 출력) 꾸밈 없이 한 장씩 이어서 적는다
+function Show-Board($Targets, [datetime]$Start, [int]$Round, [bool]$Live) {
+    $lines = @(Get-BoardLine $Targets $Start $Round $Live (Get-ConsoleSize))
     if ($Live) { [Console]::Write("`e[H" + (($lines | ForEach-Object { "$_`e[K" }) -join "`n") + "`e[J") }
-    else { $lines.Add(''); [Console]::Out.Write(($lines -join [Environment]::NewLine) + [Environment]::NewLine) }
+    else { [Console]::Out.Write(($lines -join [Environment]::NewLine) + [Environment]::NewLine + [Environment]::NewLine) }
 }
 
 function Test-QuitKey {
@@ -338,7 +415,7 @@ function Test-QuitKey {
 function Invoke-MultiPing {
     if ($HostFile) { $Config.HostFile = $HostFile }
     if ($IntervalSeconds) { $Config.IntervalSeconds = $IntervalSeconds }
-    $script:hostSource = if (Test-Path -LiteralPath $Config.HostFile -PathType Leaf) { $Config.HostFile } else { '설정 블록의 Hosts (목록 파일 없음)' }
+    $script:hostSource = if (Test-Path -LiteralPath $Config.HostFile -PathType Leaf) { Split-Path -Leaf $Config.HostFile } else { '설정 블록의 Hosts (목록 파일 없음)' }
     $targets = @(Read-HostLine | ForEach-Object { ConvertTo-Target $_ })
     $bad = @($targets | Where-Object Error)
     if ($bad.Count) { throw ($bad.Error -join "`n") }
@@ -366,8 +443,11 @@ function Invoke-MultiPing {
             $quit = Invoke-Round $targets $start $round $live
             Show-Board $targets $start $round $live
             if ($quit -or ($Rounds -and $round -ge $Rounds)) { break }
+            $tick = [System.Diagnostics.Stopwatch]::StartNew()
             while ($roundWatch.Elapsed.TotalSeconds -lt $Config.IntervalSeconds) {
                 if (Test-QuitKey) { $quit = $true; break }
+                # 쉬는 동안에도 시계 · 끊긴 시간이 흐르게 1초마다 다시 그린다
+                if ($live -and $tick.ElapsedMilliseconds -ge 1000) { Show-Board $targets $start $round $live; $tick.Restart() }
                 Start-Sleep -Milliseconds 50
             }
             if ($quit) { break }
