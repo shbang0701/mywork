@@ -277,9 +277,13 @@ function Sync-EdUi {
     [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([System.Action] {}, [System.Windows.Threading.DispatcherPriority]::Background)
 }
 
-# 글자 입력: PreviewTextInput → 처리 안 됐으면 TextInput (TextBox가 넣는다)
+# 실제 순서: PreviewTextInputStart → PreviewTextInput → 처리 안 됐으면 TextInput (TextBox가 넣는다)
 function Send-EdText($Ed, [string]$Text) {
     $target = Get-EdBox $Ed
+    $tc = [System.Windows.Input.TextComposition]::new([System.Windows.Input.InputManager]::Current, $target, $Text)
+    $start = [System.Windows.Input.TextCompositionEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $tc)
+    $start.RoutedEvent = [System.Windows.Input.TextCompositionManager]::PreviewTextInputStartEvent
+    $target.RaiseEvent($start)
     foreach ($ev in [System.Windows.Input.TextCompositionManager]::PreviewTextInputEvent, [System.Windows.Input.TextCompositionManager]::TextInputEvent) {
         $tc = [System.Windows.Input.TextComposition]::new([System.Windows.Input.InputManager]::Current, $target, $Text)
         $a = [System.Windows.Input.TextCompositionEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $tc)
@@ -1110,7 +1114,8 @@ try {
         [void](Test-EdContract $ed '닫는 울타리 뒤 Enter')
         $code = @($ed.Units | Where-Object { $_.Kind -eq 'code' })
         Assert-Ed '편집기 Enter: 닫는 ``` 뒤에서 Enter를 치면 코드 블록은 바로 그리고, 새 줄은 코드 바탕 없이 본문 글꼴' ((Get-EdText $ed) -ceq "# 임`n``````python`nprint(1)`n```````n뒤 글" -and $code.Count -eq 1 -and $ed.Island.Start -eq 4 -and $ed.Island.First -eq 2 -and (Get-EdIslandStyle $ed) -eq 'Memo.Island') "섬 $($ed.Island.Start)..$($ed.Island.End) First $($ed.Island.First) $(Get-EdIslandStyle $ed)"
-        Assert-Ed '편집기 Enter: 블록을 나눠도 OnChanged는 고칠 때마다 한 번씩' ($ed.TestChanged -eq 9) "$($ed.TestChanged)"
+        # 둘째 백틱은 커서만 옮기므로 변경 알림을 만들지 않는다.
+        Assert-Ed '편집기 Enter: 블록을 나눠도 OnChanged는 고칠 때마다 한 번씩' ($ed.TestChanged -eq 8) "$($ed.TestChanged)"
         Close-Ed $ed
         [void](Test-EdContract $ed '코드 블록 쓰고 닫기')
         $guard = 0
@@ -1443,6 +1448,297 @@ try {
         $readY = (Get-EdPoint $ed.View 'Notice').Y
         Set-WtMemoEditorText $ed "# Section`n`n> [!note] Notice`n> detail"
         Assert-Ed 'BlankSpacing-LiveOnly: 읽기 보기의 복수 빈 줄 접기는 그대로' ([Math]::Abs((Get-EdPoint $ed.View 'Notice').Y - $readY) -lt 2)
+    }
+    Invoke-EdCase 'Backtick-Selection' {
+        foreach ($mode in 'live', 'source') {
+            $ed = New-EdEditor
+            Set-WtMemoEditorMode $ed $mode
+            Set-EdText $ed ' a '
+            if ($mode -eq 'live') { Open-EdAt $ed 0 0 }
+            $box = Get-EdBox $ed; $box.SelectAll()
+            Send-EdText $ed '`'
+            $wrapped = (Get-EdText $ed) -ceq ' `a` ' -and $box.SelectedText -ceq 'a'
+            if ($mode -eq 'live') { Invoke-EdCommand $ed 'Ctrl+Z' } else { $box.Undo() }
+            Assert-Ed "Backtick-Selection: $mode 앞뒤 공백은 밖에 · 안쪽 선택 · 한 번 취소" ($wrapped -and (Get-EdText $ed) -ceq ' a ')
+            Set-EdText $ed "a`nb"
+            if ($mode -eq 'live') { & $em { param($x) Open-WtMemoIsland $x 0 2 0 0 1 1 } $ed }
+            $box = Get-EdBox $ed; $box.SelectAll()
+            Send-EdText $ed '`'
+            $wrapped = (Get-EdText $ed) -ceq ('```' + "`na`nb`n" + '```') -and $box.SelectedText.Replace("`r`n", "`n") -ceq "a`nb"
+            if ($mode -eq 'live') { Invoke-EdCommand $ed 'Ctrl+Z' } else { $box.Undo() }
+            Assert-Ed "Backtick-Selection: $mode 여러 줄 코드 블록 · 안쪽 선택 · 한 번 취소" ($wrapped -and (Get-EdText $ed) -ceq "a`nb")
+        }
+    }
+    Invoke-EdCase 'Backtick-Pair' {
+        foreach ($mode in 'live', 'source') {
+            $ed = New-EdEditor
+            Set-WtMemoEditorMode $ed $mode
+            Set-EdText $ed ''
+            if ($mode -eq 'live') { Open-EdAt $ed 0 0 }
+            Send-EdText $ed '`'
+            $box = Get-EdBox $ed
+            $pair = $box.Text -ceq '``' -and $box.SelectionStart -eq 1
+            Send-EdText $ed '`'
+            $skip = $box.Text -ceq '``' -and $box.SelectionStart -eq 2
+            Send-EdText $ed '`'
+            $fence = (Get-EdText $ed) -ceq ('```' + "`n" + '```') -and $box.SelectionStart -eq 3
+            if ($mode -eq 'live') { Invoke-EdCommand $ed 'Ctrl+Z' } else { $box.Undo() }
+            Assert-Ed "Backtick-Pair: $mode 빈 짝 · 넘기기 · 세 번으로 여닫는 울타리 · 입력 한 번 취소" ($pair -and $skip -and $fence -and (Get-EdText $ed) -ceq '``')
+            Set-EdText $ed ''
+            if ($mode -eq 'live') { Open-EdAt $ed 0 0 }
+            Send-EdText $ed '`'
+            Send-EdKey $ed Back
+            $deleted = (Get-EdText $ed) -ceq ''
+            if ($mode -eq 'live') { Invoke-EdCommand $ed 'Ctrl+Z' } else { $box.Undo() }
+            Assert-Ed "Backtick-Pair: $mode 직후 Backspace로 짝 삭제 · 삭제 한 번 취소" ($deleted -and (Get-EdText $ed) -ceq '``')
+        }
+    }
+    # 실제 타자에서는 보통 글자도 PreviewTextInputStart → PreviewTextInput 순서로 온다. 시작 이벤트가 온 뒤에도 입력 보조는 돌아야 하고
+    # (11-17 실제 화면에서 「조합 중」 검사 때문에 입력 보조가 모두 꺼졌던 회귀), 한글 확정 글에는 반응하지 않는다
+    Invoke-EdCase 'Backtick-Ime' {
+        foreach ($mode in 'live', 'source') {
+            foreach ($typed in '`', '가') {
+                $ed = New-EdEditor
+                Set-WtMemoEditorMode $ed $mode
+                Set-EdText $ed ''
+                if ($mode -eq 'live') { Open-EdAt $ed 0 0 }
+                $box = Get-EdBox $ed
+                $tc = [System.Windows.Input.TextComposition]::new([System.Windows.Input.InputManager]::Current, $box, $typed)
+                $start = [System.Windows.Input.TextCompositionEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $tc)
+                $start.RoutedEvent = [System.Windows.Input.TextCompositionManager]::PreviewTextInputStartEvent
+                $box.RaiseEvent($start)
+                $probe = @{ Handled = $false; Text = $typed }
+                & $em { param($b, $e) Invoke-WtMemoBoxText $b $e } $box $probe
+                if ($typed -ceq '`') { Assert-Ed "Backtick-Ime: $mode 시작 이벤트 뒤에도 백틱은 짝" ($probe.Handled -and $box.Text -ceq '``') "[$($box.Text)]" }
+                else { Assert-Ed "Backtick-Ime: $mode 한글 확정 글에는 입력 보조 없음" (-not $probe.Handled -and $box.Text -ceq '') "[$($box.Text)]" }
+            }
+        }
+    }
+    Invoke-EdCase 'Ime-InputStartKeepsCommands' {
+        foreach ($mode in 'live', 'source') {
+            $ed = New-EdEditor; Set-WtMemoEditorMode $ed $mode
+            Set-EdText $ed '- a'
+            if ($mode -eq 'live') { Open-EdAt $ed 0 3 }
+            $box = Get-EdBox $ed; $box.Select($box.Text.Length, 0)
+            $tc = [Windows.Input.TextComposition]::new([Windows.Input.InputManager]::Current, $box, '')
+            $args = [Windows.Input.TextCompositionEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $tc)
+            $args.RoutedEvent = [Windows.Input.TextCompositionManager]::PreviewTextInputStartEvent
+            $box.RaiseEvent($args)
+            Send-EdKey $ed Return
+            $changed = (Get-EdText $ed) -ceq "- a`n- "
+            $args = [Windows.Input.TextCompositionEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $tc)
+            $args.RoutedEvent = [Windows.Input.TextCompositionManager]::PreviewTextInputEvent
+            $box.RaiseEvent($args); Sync-EdUi
+            Assert-Ed "Ime-InputStartKeepsCommands: $mode 일반 Enter는 시작 표시만으로 막지 않음 · 섬 나누기 정상" (
+                $changed -and -not $ed.Composing -and (Get-EdText $ed) -ceq "- a`n- ")
+        }
+    }
+    Invoke-EdCase 'FindRegex-Replacements' {
+        $variants = @(
+            @('(a)(b)', '\2-\1', 'b-a'), @('(a)(b)', '$2-$1', 'b-a'),
+            @('(?<part>a)b', '${part}$$', 'a$'), @('(a)b', '\\1|\1|\n|\t|$$|\q', "\1|a|`n|`t|`$|\q")
+        )
+        foreach ($mode in 'live', 'source') {
+            $ed = New-EdEditor; Set-WtMemoEditorMode $ed $mode
+            Open-WtMemoFind $ed -Replace
+            $ed.Find.Regex.IsChecked = $true; $ed.Find.Case.IsChecked = $false
+            foreach ($variant in $variants) {
+                Set-EdText $ed 'ab ab'
+                $ed.Find.Query.Text = $variant[0]; $ed.Find.Replace.Text = $variant[1]
+                & $em { param($x) Invoke-WtMemoReplace $x -All } $ed
+                $changed = (Get-EdText $ed) -ceq ($variant[2] + ' ' + $variant[2]) -and $ed.Find.Count.Text -ceq '2개 바꿈'
+                if ($mode -eq 'live') { Invoke-EdCommand $ed 'Ctrl+Z' } else { $ed.Source.Undo() }
+                Assert-Ed "FindRegex-Replacements: $mode [$($variant[1])] · 모두 바꾸기 한 번 취소" ($changed -and (Get-EdText $ed) -ceq 'ab ab')
+            }
+            $ed.Find.Regex.IsChecked = $false
+            Set-EdText $ed 'ab AB'; $ed.Find.Query.Text = 'ab'; $ed.Find.Replace.Text = '\1$n\n'
+            & $em { param($x) Invoke-WtMemoReplace $x -All } $ed
+            Assert-Ed "FindRegex-Replacements: $mode 일반 모드는 대소문자 무시 · 바꾸기 글 그대로" ((Get-EdText $ed) -ceq '\1$n\n \1$n\n')
+        }
+        Set-WtSetting 'memo.find.regex' $false
+    }
+    Invoke-EdCase 'FindRegex-Matches' {
+        $ed = New-EdEditor; Set-WtMemoEditorMode $ed source
+        Open-WtMemoFind $ed -Replace
+        $ed.Find.Case.IsChecked = $false; $ed.Find.Regex.IsChecked = $false
+        Set-EdText $ed 'a.b A.B axb'; $ed.Find.Query.Text = 'a.b'
+        $literal = $ed.Find.Count.Text -match '(?:2개|/2)$'
+        $ed.Find.Case.IsChecked = $true; $exact = $ed.Find.Count.Text -match '(?:1개|/1)$'
+        $ed.Find.Regex.IsChecked = $true
+        Assert-Ed 'FindRegex-Matches: 기본 글자 찾기 · 대소문자 · 정규식 토글' ($literal -and $exact -and $ed.Find.Count.Text -match '(?:2개|/2)$') "기본=$literal 구분=$exact 개수=$($ed.Find.Count.Text)"
+        foreach ($nl in "`n", "`r`n") {
+            Set-EdText $ed ("row1${nl}ROW2${nl}row3")
+            $ed.Find.Case.IsChecked = $false; $ed.Find.Query.Text = '^row\d$'
+            & $em { param($x) Invoke-WtMemoFind $x -Here } $ed
+            $anchors = $ed.Find.Count.Text -match '/3$' -and $ed.Source.SelectedText -ceq 'row1'
+            & $em { param($x) Invoke-WtMemoFind $x -Back } $ed
+            $prev = $ed.Source.SelectedText -ceq 'row3'
+            & $em { param($x) Invoke-WtMemoFind $x } $ed
+            $next = $ed.Source.SelectedText -ceq 'row1'
+            $ed.Find.Replace.Text = 'x'
+            & $em { param($x) Invoke-WtMemoReplace $x } $ed
+            Assert-Ed 'FindRegex-Matches: ^ $ 줄마다 · 이전/다음 순환 · 하나 바꾸기 실제 길이' ($anchors -and $prev -and $next -and (Get-EdText $ed) -ceq "x`nROW2`nrow3" -and $ed.Source.SelectedText -ceq 'ROW2')
+        }
+        Set-EdText $ed "a`nb"; $ed.Find.Query.Text = '^'; $ed.Find.Replace.Text = '>'
+        & $em { param($x) Invoke-WtMemoFind $x } $ed
+        $zeroNext = $ed.Source.SelectionStart -eq 2
+        & $em { param($x) Invoke-WtMemoReplace $x -All } $ed
+        Assert-Ed 'FindRegex-Matches: 길이 0인 일치도 다음으로 이동 · 모두 바꾸기 종료' ($zeroNext -and (Get-EdText $ed) -ceq ">a`n>b")
+        Set-WtSetting 'memo.find.regex' $false; Set-WtSetting 'memo.find.case' $false
+    }
+    Invoke-EdCase 'FindRegex-Errors' {
+        $ed = New-EdEditor; Set-WtMemoEditorMode $ed source; Set-EdText $ed 'ab'
+        Open-WtMemoFind $ed -Replace; $ed.Find.Regex.IsChecked = $true
+        foreach ($bad in '(', '[') {
+            $ed.Find.Query.Text = $bad
+            & $em { param($x) Invoke-WtMemoReplace $x -All } $ed
+            Assert-Ed 'FindRegex-Errors: 틀린 식은 칸 오류 · 이유 툴팁 · 두 바꾸기 비활성 · 본문 보존' (
+                $ed.Find.Count.Text -ceq '식 오류' -and $ed.Find.Count.ToolTip -and
+                [Windows.Controls.Validation]::GetHasError($ed.Find.Query) -and $ed.Find.Query.ToolTip -and
+                -not $ed.Find.One.IsEnabled -and -not $ed.Find.All.IsEnabled -and (Get-EdText $ed) -ceq 'ab')
+        }
+        $ed.Find.Query.Text = 'z'
+        Assert-Ed 'FindRegex-Errors: 올바른 식으로 복구하면 0개 · 오류 지움 · 바꾸기 활성' (
+            $ed.Find.Count.Text -ceq '0개' -and -not [Windows.Controls.Validation]::GetHasError($ed.Find.Query) -and $ed.Find.One.IsEnabled -and $ed.Find.All.IsEnabled)
+        Set-EdText $ed (('a' * 50000) + '!')
+        foreach ($slow in '(a+)+$', '^(a|aa)+$') {
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            $ed.Find.Query.Text = $slow
+            Assert-Ed 'FindRegex-Errors: 500ms 시간 한도 · 시간 초과 이유 · 바꾸기 비활성' (
+                $ed.Find.Count.Text -ceq '식이 너무 오래 걸립니다' -and $ed.Find.Query.ToolTip -ceq '식이 너무 오래 걸립니다' -and
+                -not $ed.Find.One.IsEnabled -and -not $ed.Find.All.IsEnabled -and $watch.ElapsedMilliseconds -lt 3000) $watch.ElapsedMilliseconds
+        }
+        $ed.Find.Query.Clear(); Set-WtSetting 'memo.find.regex' $false
+    }
+    Invoke-EdCase 'FindRegex-Read' {
+        $ed = New-EdEditor; Set-EdText $ed "one **Target** end`nTarget"
+        Set-WtMemoEditorMode $ed read; Open-WtMemoFind $ed
+        $ed.Find.Case.IsChecked = $false; $ed.Find.Regex.IsChecked = $true
+        $ed.Find.Query.Text = '^target$'
+        Assert-Ed 'FindRegex-Read: 줄 단위 앵커 · 굵게 Run 경계는 줄 시작 아님' ($ed.Find.Count.Text -ceq '1/1' -and $ed.View.Selection.Text -ceq 'Target')
+        $ed.Find.Query.Text = 'one Target'; $across = $ed.Find.Count.Text -ceq '1/1'
+        $ed.Find.Case.IsChecked = $true; $ed.Find.Query.Text = 'target'
+        Assert-Ed 'FindRegex-Read: Run 사이 일치 · 대소문자 옵션' ($across -and $ed.Find.Count.Text -ceq '0개')
+        Set-EdText $ed ''; $ed.Find.Query.Text = '('
+        Assert-Ed 'FindRegex-Read: 빈 문서도 틀린 식 표시' ($ed.Find.Count.Text -ceq '식 오류')
+        $ed.Find.Query.Clear(); Set-WtSetting 'memo.find.case' $false; Set-WtSetting 'memo.find.regex' $false
+    }
+    Invoke-EdCase 'FindOptions-Remember' {
+        Set-WtSetting 'memo.find.case' $false; Set-WtSetting 'memo.find.regex' $false
+        $ed = New-EdEditor; Set-EdText $ed 'ab'; Open-WtMemoFind $ed -Replace
+        $original = & $em { ${function:Get-WtMemoEditorModifiers} }
+        try {
+            & $em { function script:Get-WtMemoEditorModifiers { [Windows.Input.ModifierKeys]::Alt } }
+            foreach ($key in 'C', 'R') {
+                $args = [Windows.Input.KeyEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $testSource, 0, [Windows.Input.Key]$key)
+                $args.RoutedEvent = [Windows.Input.Keyboard]::PreviewKeyDownEvent
+                $ed.Find.Query.RaiseEvent($args)
+                Assert-Ed "FindOptions-Remember: Alt+$key 찾기 막대 키 경로로 토글" ($args.Handled -and (Get-WtSetting $(if ($key -ceq 'C') { 'memo.find.case' } else { 'memo.find.regex' })))
+            }
+            Wait-WtTestWrites; Initialize-WtSettings
+            $restored = New-EdEditor
+            Set-WtMemoEditorMode $restored source
+            [void]$restored.Source.Focus(); Sync-EdUi
+            $outside = & $em { param($x) Invoke-WtMemoFindOptionKey $x 'C' ([Windows.Input.ModifierKeys]::Alt) } $restored
+            Assert-Ed 'FindOptions-Remember: 다시 읽은 설정 · 새 편집기 기억 · 막대 밖 키 무시 · 접근성 이름' (
+                $restored.Find.Case.IsChecked -and $restored.Find.Regex.IsChecked -and -not $outside -and
+                [Windows.Automation.AutomationProperties]::GetAutomationId($restored.Find.Case) -ceq 'Memo-Find-Case' -and
+                [Windows.Automation.AutomationProperties]::GetAutomationId($restored.Find.Regex) -ceq 'Memo-Find-Regex' -and
+                [Windows.Automation.AutomationProperties]::GetName($restored.Find.Case) -ceq '대소문자 구분' -and
+                [Windows.Automation.AutomationProperties]::GetName($restored.Find.Regex) -ceq '정규식')
+        } finally {
+            & $em { param($fn) Set-Item function:script:Get-WtMemoEditorModifiers $fn } $original
+            Set-WtSetting 'memo.find.case' $false; Set-WtSetting 'memo.find.regex' $false
+        }
+    }
+    Invoke-EdCase 'FindOptions-KeepsFocus' {
+        $original = & $em { ${function:Get-WtMemoEditorModifiers} }
+        function Send-FindKey([string]$Key, [Windows.Input.ModifierKeys]$Mods) {
+            & $em { param($m) $script:findTestMods = $m } $Mods
+            try {
+                $target = [Windows.Input.Keyboard]::FocusedElement
+                $args = [Windows.Input.KeyEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $testSource, 0, [Windows.Input.Key]$Key)
+                if ($Mods -eq [Windows.Input.ModifierKeys]::Alt) {
+                    [void][Windows.Input.KeyEventArgs].GetMethod('MarkSystem', [Reflection.BindingFlags]'Instance,NonPublic').Invoke($args, $null)
+                }
+                $args.RoutedEvent = [Windows.Input.Keyboard]::PreviewKeyDownEvent
+                $target.RaiseEvent($args)
+                $args.Handled
+            } finally { & $em { $script:findTestMods = [Windows.Input.ModifierKeys]::None } }
+        }
+        function Drain-FindUi {
+            $win.UpdateLayout()
+            [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
+            Wait-EdUi 20
+            [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
+        }
+        function Type-FindText([string]$Text) {
+            foreach ($letter in $Text.ToCharArray()) {
+                $target = [Windows.Input.Keyboard]::FocusedElement
+                $tc = [Windows.Input.TextComposition]::new([Windows.Input.InputManager]::Current, $target, [string]$letter)
+                foreach ($ev in [Windows.Input.TextCompositionManager]::PreviewTextInputStartEvent,
+                    [Windows.Input.TextCompositionManager]::PreviewTextInputEvent, [Windows.Input.TextCompositionManager]::TextInputEvent) {
+                    $args = [Windows.Input.TextCompositionEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $tc)
+                    $args.RoutedEvent = $ev; $target.RaiseEvent($args)
+                    if ($ev -ne [Windows.Input.TextCompositionManager]::PreviewTextInputStartEvent -and $args.Handled) { break }
+                }
+                Drain-FindUi
+            }
+        }
+        try {
+            & $em {
+                $script:findTestMods = [Windows.Input.ModifierKeys]::None
+                function script:Get-WtMemoEditorModifiers { $script:findTestMods }
+            }
+            foreach ($mode in 'live', 'source') {
+                Set-WtSetting 'memo.find.case' $false; Set-WtSetting 'memo.find.regex' $false
+                $ed = New-EdEditor; Set-WtMemoEditorMode $ed $mode
+                $body = "# 서버`n`nSRV-01`n`nsrv-02`n`nSRV-03"
+                Set-EdText $ed $body
+                if ($mode -eq 'live') { Open-EdAt $ed 2 0 } else { [void]$ed.Source.Focus() }
+                Drain-FindUi
+                [void](Get-EdBox $ed).Focus()
+                $opened = Send-FindKey H Control
+                Drain-FindUi
+                foreach ($option in $ed.Find.Case, $ed.Find.Regex) {
+                    [void]$option.Focus(); $option.IsChecked = $true; Drain-FindUi
+                }
+                [void]$ed.Find.Query.Focus(); Type-FindText '^SRV'
+                $typed = $opened -and $ed.Find.Bar.IsKeyboardFocusWithin -and $ed.Find.Query.Text -ceq '^SRV' -and
+                    $ed.Find.Count.Text -match '(?:2개|/2)$' -and (Get-EdText $ed) -ceq $body
+                $holder = if ($ed.Island) { $ed.Island.Holder } else { $null }
+                # 글이 있는 상태의 옵션 클릭과 뒤따르는 입력도 실제 포커스를 받는 곳으로 보낸다.
+                [void]$ed.Find.Case.Focus(); $ed.Find.Case.IsChecked = $false; Drain-FindUi
+                Type-FindText '-'
+                Assert-Ed "FindOptions-KeepsFocus: $mode 옵션 클릭 · 글자마다 Dispatcher 뒤에도 막대 포커스 · 본문 보존" (
+                    $typed -and $ed.Find.Bar.IsKeyboardFocusWithin -and $ed.Find.Query.Text -ceq '^SRV-' -and
+                    (Get-EdText $ed) -ceq $body -and ($mode -eq 'source' -or [object]::ReferenceEquals($holder, $ed.Island.Holder))) "찾기=[$($ed.Find.Query.Text)] 포커스=$([Windows.Input.Keyboard]::FocusedElement.GetType().Name) 막대=$($ed.Find.Bar.IsKeyboardFocusWithin)"
+                [void]$ed.Find.Query.Focus(); $ed.Find.Query.Text = '^SRV'; $ed.Find.Case.IsChecked = $true; Drain-FindUi
+                $steps = [Collections.Generic.List[string]]::new(); $kept = $true
+                foreach ($step in @(@('C', 3), @('C', 2), @('R', 0), @('R', 2))) {
+                    # 중간에 포커스를 다시 주지 않는다. 다음 키도 그때 실제 포커스가 있는 요소에서 출발한다.
+                    # 섬 재부착 때 WPF가 남기는 늦은 본문 포커스 요청을 같은 Dispatcher 경로로 재현한다.
+                    $lateTarget = Get-EdBox $ed
+                    [void]$lateTarget.Dispatcher.BeginInvoke([Action[object]] { param($b) [void]$b.Focus() },
+                        [Windows.Threading.DispatcherPriority]::Input, [object[]]@($lateTarget))
+                    $handled = Send-FindKey $step[0] Alt; Drain-FindUi
+                    $total = $step[1]; $count = $ed.Find.Count.Text
+                    $ok = $handled -and $ed.Find.Bar.IsKeyboardFocusWithin -and $count -match "(?:${total}개|/$total)$"
+                    $kept = $kept -and $ok
+                    $steps.Add("$($step[0]):$handled/$($ed.Find.Bar.IsKeyboardFocusWithin)/$count")
+                }
+                Assert-Ed "FindOptions-KeepsFocus: $mode Alt+C → Alt+C → Alt+R → Alt+R 실제 System 키 경로 · 포커스 유지" (
+                    $kept -and $ed.Find.Case.IsChecked -and $ed.Find.Regex.IsChecked -and (Get-EdText $ed) -ceq $body) ($steps -join ' | ')
+                $box = Get-EdBox $ed
+                $mouse = [Windows.Input.MouseButtonEventArgs]::new([Windows.Input.Mouse]::PrimaryDevice, 0, [Windows.Input.MouseButton]::Left)
+                $mouse.RoutedEvent = [Windows.Input.Mouse]::PreviewMouseDownEvent
+                $box.RaiseEvent($mouse); [void]$box.Focus(); Drain-FindUi
+                Assert-Ed "FindOptions-KeepsFocus: $mode 본문을 직접 클릭하면 본문으로 이동 가능" ($box.IsKeyboardFocused -and -not $ed.Find.Bar.IsKeyboardFocusWithin)
+            }
+        } finally {
+            & $em { param($fn) Set-Item function:script:Get-WtMemoEditorModifiers $fn } $original
+            Set-WtSetting 'memo.find.case' $false; Set-WtSetting 'memo.find.regex' $false
+        }
     }
     Invoke-EdCase 'FindHint-HidesWhileTyping' {
         $ed = New-EdEditor

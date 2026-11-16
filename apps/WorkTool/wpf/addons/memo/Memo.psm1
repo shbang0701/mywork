@@ -29,8 +29,11 @@ $script:listUpdating = $false
 $script:listMenuId = ''
 $script:rowCache = @{}
 $script:rowGetters = [scriptblock[]]@(
-    { if ($null -eq $this.StampValue) { $this.StampValue = Format-WtMemoTime $this.Updated }; $this.StampValue },
-    { if ($null -eq $this.SnippetValue) { $this.SnippetValue = Get-WtMarkdownSnippet $this.SnippetSource }; $this.SnippetValue },
+    { if ($null -eq $this.StampValue) { $this.StampValue = Format-WtMemoListTime $this.Updated }; $this.StampValue },
+    { if ($null -eq $this.SnippetValue) {
+        $text = if ($this.IsSearch) { $this.SnippetSource } else { ($this.SnippetSource -split '\r\n|\r|\n', 2)[0] }
+        $this.SnippetValue = Get-WtMarkdownSnippet $text
+    }; $this.SnippetValue },
     { if ($this.Snippet) { "$($this.Stamp) · $($this.Snippet)" } else { $this.Stamp } }
 )
 $script:quickOpen = $false
@@ -94,6 +97,22 @@ function Format-WtMemoTime([string]$Stamp) {
     if ($t.Date -eq [datetime]::Today) { return Format-WtDate $t "'오늘' HH:mm" }
     if ($t.Date -eq [datetime]::Today.AddDays(-1)) { return '어제' }
     Format-WtDate $t "M'/'d"
+}
+
+function Format-WtMemoListTime([string]$Stamp) {
+    $t = [datetime]::MinValue
+    if (-not [datetime]::TryParse($Stamp, [ref]$t)) { return $Stamp }
+    if ($t.Date -eq [datetime]::Today) { return Format-WtDate $t 'HH:mm' }
+    if ($t.Year -eq [datetime]::Today.Year) { return Format-WtDate $t "M'/'d" }
+    Format-WtDate $t "yyyy'/'M'/'d"
+}
+
+function Open-WtMemoRowToolTip($Element) {
+    $row = $Element.DataContext
+    if (-not $row -or -not $row.PSObject.Properties['SnippetSource']) { return }
+    $date = [datetime]::MinValue
+    $stamp = if ([datetime]::TryParse([string]$row.Updated, [ref]$date)) { Format-WtDate $date 'yyyy-MM-dd HH:mm' } else { $row.Updated }
+    $Element.ToolTip = "$($row.Title)`n수정일 $stamp`n$($row.Snippet)"
 }
 
 function Get-WtMemoStamp([datetime]$When) {
@@ -1603,21 +1622,15 @@ function Get-WtMemoListPage($Result, [int]$Skip, [int]$Take) {
     }
 }
 
-# 바인딩이 같은 ScriptProperty를 여러 번 평가하지 않게 앞/뒤 한 페이지의 표시 문자열을 한 번 완성한다.
-# 먼 위치 사이의 아직 표시되지 않은 행은 같은 getter를 남겨 처음 보일 때 원문으로 완성한다.
+# 앞/뒤 한 페이지의 짧은 수정일만 완성한다. 본문 요약은 툴팁을 열 때 getter가 한 번 만든다.
 function Complete-WtMemoRowText([object[]]$Rows) {
     for ($i = 0; $i -lt $Rows.Count; $i++) {
         if ($i -ge $script:listPage -and $i -lt $Rows.Count - $script:listPage) { $i = $Rows.Count - $script:listPage - 1; continue }
         $row = $Rows[$i]
-        if ($row.PSObject.Properties['Sub'] -isnot [Management.Automation.PSScriptProperty]) { continue }
-        $stamp = Format-WtMemoTime $row.Updated
-        $snippet = Get-WtMarkdownSnippet $row.SnippetSource
-        $row.StampValue = $stamp; $row.SnippetValue = $snippet
-        $sub = if ($snippet) { "$stamp · $snippet" } else { $stamp }
-        foreach ($pair in @(@('Stamp', $stamp), @('Snippet', $snippet), @('Sub', $sub))) {
-            $row.PSObject.Properties.Remove($pair[0])
-            $row.PSObject.Properties.Add([Management.Automation.PSNoteProperty]::new($pair[0], $pair[1]))
-        }
+        if ($row.PSObject.Properties['Stamp'] -isnot [Management.Automation.PSScriptProperty]) { continue }
+        $row.StampValue = Format-WtMemoListTime $row.Updated
+        $row.PSObject.Properties.Remove('Stamp')
+        $row.PSObject.Properties.Add([Management.Automation.PSNoteProperty]::new('Stamp', $row.StampValue))
     }
 }
 
@@ -1902,6 +1915,28 @@ function New-WtMemoView {
     [void](Add-WtChild $listEmpty $listClear)
     $list = [System.Windows.Controls.ListBox]::new()
     Set-WtStyle $list 'Memo.List'
+    # 공통 한 줄 행과 글자 스타일을 쓰고, 메모의 한 줄 배치만 이 탭에 둔다.
+    $rowStyle = [System.Windows.Style]::new([System.Windows.Controls.ListBoxItem], (Get-WtStyleDictionary)['Row'])
+    $rowStyle.Setters.Add([System.Windows.Setter]::new([System.Windows.FrameworkElement]::ToolTipProperty, ''))
+    # 화면 읽기 이름은 메모 제목(없으면 행 객체 글 「@{Id=…}」이 읽힌다, 11-17 실제 화면 시험)
+    $rowStyle.Setters.Add([System.Windows.Setter]::new([System.Windows.Automation.AutomationProperties]::NameProperty, [System.Windows.Data.Binding]::new('Title')))
+    # 툴팁 이벤트는 Direct이므로 가상화로 만든 행 자신에게 연결한다. 표시 내용은 아직 만들지 않는다.
+    $rowStyle.Setters.Add([System.Windows.EventSetter]::new([System.Windows.Controls.ToolTipService]::ToolTipOpeningEvent,
+        [System.Windows.Controls.ToolTipEventHandler]{ param($s, $e) Open-WtMemoRowToolTip $s }))
+    $rowStyle.Setters.Add([System.Windows.EventSetter]::new([System.Windows.Controls.ToolTipService]::ToolTipClosingEvent,
+        [System.Windows.Controls.ToolTipEventHandler]{ param($s, $e) $s.ToolTip = '' }))
+    $list.ItemContainerStyle = $rowStyle
+    $list.ItemTemplate = ConvertFrom-WtXaml @'
+<DataTemplate {NS}>
+  <DockPanel>
+    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+      <TextBlock Text="&#xE718;" Visibility="{Binding PinShown}" Style="{DynamicResource T.Icon}" FontSize="{DynamicResource F.Caption}" Foreground="{DynamicResource B.Text.Tertiary}" Margin="0,0,4,0"/>
+      <TextBlock Text="{Binding Stamp}" Style="{DynamicResource T.CaptionMuted}" TextWrapping="NoWrap"/>
+    </StackPanel>
+    <TextBlock Text="{Binding Title}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+  </DockPanel>
+</DataTemplate>
+'@
     $list.AddHandler([System.Windows.Controls.ScrollViewer]::ScrollChangedEvent, [System.Windows.Controls.ScrollChangedEventHandler] {
             param($s, $e)
             if ($e.ExtentHeight -gt 0 -and $e.VerticalOffset + $e.ViewportHeight -ge $e.ExtentHeight - 8) { Add-WtMemoListPage }
@@ -2490,7 +2525,10 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
     -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
     -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
-    -Help @('마크다운 메모를 탭과 두 칸으로 엽니다.', 'Ctrl+E로 편집 · 원문 · 읽기를 차례로 바꿉니다.', '찾기 칸에 #태그 · folder:업무 · updated:7d 같은 조건을 쓸 수 있습니다.') `
+    -Help @('마크다운 메모를 탭과 두 칸으로 엽니다.', 'Ctrl+E로 편집 · 원문 · 읽기를 차례로 바꿉니다.', '찾기 칸에 #태그 · folder:업무 · updated:7d 같은 조건을 쓸 수 있습니다.',
+        '백틱은 한 줄 선택을 인라인 코드로, 여러 줄 선택을 코드 블록으로 감싸며 빈 짝을 넣습니다. 닫는 백틱은 건너뛰고, 빈 짝 직후 Backspace는 둘 다 지웁니다.',
+        '편집기 찾기 막대에서 Alt+C는 대소문자 구분, Alt+R은 정규식을 켜고 끕니다.',
+        '정규식 바꾸기: $1 · ${이름} · $$ · \1~\9(그룹) · \n(줄바꿈) · \t(탭) · \\(역슬래시).') `
     -Shortcuts @(
         @('Ctrl + N', '새로 만들기 (새 탭)'), @('Ctrl + S', '바로 저장'), @('Ctrl + O', '메모 이름으로 찾아 열기'),
         @('Ctrl + W', '탭 닫기'), @('Ctrl + Shift + T', '닫은 탭 다시 열기'), @('Ctrl + Tab / Ctrl + Shift + Tab', '다음 / 이전 탭'),
@@ -2498,10 +2536,13 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
         @('Ctrl + E', '편집 → 원문 → 읽기'), @('Ctrl + /', '편집 / 원문'), @('Ctrl + Shift + F', '목록 찾기 칸으로'),
         @('Ctrl + 클릭 · 가운데 클릭', '목록 · 링크를 새 탭에서 열기'),
         @('Ctrl + B / Ctrl + I', '굵게 / 기울임 (다시 누르면 풀기)'), @('Ctrl + K', '링크 만들기'), @('Alt + Shift + 5', '취소선'),
-        @('` (글을 고르고)', '코드로 감싸기 (여러 줄이면 코드 블록)'), @('```', '줄 맨 앞에 치면 닫는 ``` 를 자동으로'),
+        @('`', '한 줄은 인라인 코드 · 여러 줄은 코드 블록 · 빈 짝 넣기 · 닫는 짝 넘기기 (빈 짝 직후 Backspace = 둘 다 삭제)'),
+        @('```', '줄 맨 앞에 치면 닫는 ``` 를 자동으로'),
         @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)'), @('Enter', '목록 · 할 일 이어 쓰기 (빈 항목에서 Enter = 목록 끝)'),
         @('Tab / Shift + Tab', '목록 들여쓰기 / 내어쓰기'), @('Ctrl + L', '할 일 체크박스 넣기 · 완료 / 해제'),
         @('Alt + ↑ / Alt + ↓', '줄 옮기기'), @('Ctrl + F / Ctrl + H / F3', '찾기 / 바꾸기 / 다음 찾기'),
+        @('Alt + C / Alt + R', '찾기 막대에서 대소문자 구분 / 정규식'),
+        @('정규식 바꾸기', '$1 · ${이름} · $$ · \1~\9(그룹) · \n(줄바꿈) · \t(탭) · \\(역슬래시)'),
         @('Ctrl + Z / Ctrl + Y', '실행 취소 / 다시 실행'), @('Ctrl + Shift + V', '바꾸지 않고 붙여넣기'),
         @('붙여넣기', '글을 고르고 URL을 붙이면 링크, 파일 경로는 경로 링크로'), @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크')) `
     -HelpCard { New-WtMemoMarkdownHelpCard }

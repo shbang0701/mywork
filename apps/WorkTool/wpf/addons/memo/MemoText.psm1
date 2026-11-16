@@ -341,16 +341,22 @@ function Get-WtMemoTypeEdit($s, [string]$Char) {
                 $open = "$ind$fence$nl"
                 return New-WtMemoTextResult $first.Start $body.Length "$open$body$nl$ind$fence" ($first.Start + $open.Length) $body.Length
             }
-            # 줄 맨 앞 ``` → 닫는 울타리를 아래 줄에
-            $line = Get-WtMemoTextLine $t $pos
-            $head = $t.Substring($line.Start, $pos - $line.Start) + '`'
-            if ($head -notmatch '^[ \t]{0,3}```$') { return $null }
-            if ($t.Substring($pos, $line.End - $pos).Trim()) { return $null }
-            $above = $script:mtFence.Matches($t.Substring(0, $line.Start)).Count
-            $below = if ($line.Next -ge 0) { $script:mtFence.Matches($t.Substring($line.Next)).Count } else { 0 }
-            if ($above % 2 -or $below % 2) { return $null }
-            $ind = [regex]::Match($line.Text, '^[ \t]*').Value
-            return New-WtMemoTextResult $pos ($line.End - $pos) ('`' + (Get-WtMemoTextNewline $t) + $ind + '```') ($pos + 1)
+            if ($pos -lt $t.Length -and $t[$pos] -eq '`') { return New-WtMemoTextResult $pos 0 '' ($pos + 1) }
+            if ($pos -ge 2 -and $t[$pos - 1] -eq '`' -and $t[$pos - 2] -eq '`') {
+                # 줄 맨 앞 ``` → 닫는 울타리를 아래 줄에 (짝 넣기보다 먼저)
+                $line = Get-WtMemoTextLine $t $pos
+                $head = $t.Substring($line.Start, $pos - $line.Start) + '`'
+                if ($head -match '^[ \t]{0,3}```$' -and -not $t.Substring($pos, $line.End - $pos).Trim()) {
+                    $above = $script:mtFence.Matches($t.Substring(0, $line.Start)).Count
+                    $below = if ($line.Next -ge 0) { $script:mtFence.Matches($t.Substring($line.Next)).Count } else { 0 }
+                    if (-not ($above % 2) -and -not ($below % 2)) {
+                        $ind = [regex]::Match($line.Text, '^[ \t]*').Value
+                        return New-WtMemoTextResult $pos ($line.End - $pos) ('`' + (Get-WtMemoTextNewline $t) + $ind + '```') ($pos + 1)
+                    }
+                }
+                return New-WtMemoTextResult $pos 0 '`' ($pos + 1)
+            }
+            return New-WtMemoTextResult $pos 0 '``' ($pos + 1)
         }
         '[' {
             if ($n -gt 0 -or $pos -lt 1 -or $t[$pos - 1] -ne '[') { return $null }
@@ -370,6 +376,13 @@ function Get-WtMemoTypeEdit($s, [string]$Char) {
         }
     }
     $null
+}
+
+# 자동으로 넣은 빈 짝만 직후 Backspace로 지운다. 직전 짝인지는 부르는 쪽에서 확인한다.
+function Get-WtMemoBackspaceEdit($s) {
+    $pos = [int]$s.Start; $t = [string]$s.Text
+    if ($s.Length -or $pos -lt 1 -or $pos -ge $t.Length -or $t.Substring($pos - 1, 2) -cne '``') { return $null }
+    New-WtMemoTextResult ($pos - 1) 2 '' ($pos - 1)
 }
 
 # ---- Enter -----------------------------------------------------------------------------------

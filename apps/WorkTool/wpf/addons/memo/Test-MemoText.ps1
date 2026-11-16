@@ -159,17 +159,27 @@ Test-MtRoundTrip '코드 왕복: `가 든 글' '«a`b»' $code
 # ---- 글자 입력 ---------------------------------------------------------------------------------
 
 Test-MtCase '` 입력: 한 줄 선택은 인라인 코드' '가 «ls» 나' $tick '가 `«ls»` 나'
+Test-MtCase '` 입력: 한 줄 선택 앞뒤 공백은 밖에' '« a »' $tick ' `«a»` '
+Test-MtCase '` 입력: 공백뿐인 선택은 보조 없음' '«   »' $tick '<null>'
 Test-MtCase '` 입력: 여러 줄 선택은 코드 블록' 'a¶«b¶c»¶d' $tick 'a¶```¶«b¶c»¶```¶d'
 Test-MtCase '` 입력: 여러 줄 선택 끝이 다음 줄 0칸이면 그 줄은 뺀다' '«b¶c¶»d' $tick '```¶«b¶c»¶```¶d'
 Test-MtCase '` 입력: 안에 ```가 있으면 더 긴 울타리' '«```¶x¶```»' $tick '````¶«```¶x¶```»¶````'
+Test-MtCase '` 입력: 여러 줄 공통 들여쓰기와 인용 접두어 유지' '>   «a¶>   b»' $tick '>   ```¶«>   a¶>   b»¶>   ```'
 Test-MtCase '` 입력: 줄 앞 ```이면 닫는 울타리를 넣는다' 'a¶``|' $tick 'a¶```|¶```'
 Test-MtCase '` 입력: 닫는 울타리도 같은 들여쓰기' '- a¶  ``|' $tick '- a¶  ```|¶  ```'
 Test-MtCase '` 입력: 줄바꿈 없는 글은 \r\n' '``|' $tick '```|¶```' $crlf
-Test-MtCase '` 입력: 열린 울타리 안(위쪽 홀수)이면 그대로' '```¶x¶``|' $tick '<null>'
-Test-MtCase '` 입력: 아래에 짝 없는 울타리가 있으면 그대로' '``|¶x¶```' $tick '<null>'
-Test-MtCase '` 입력: 커서 뒤에 글이 있으면 그대로' '``|a' $tick '<null>'
-Test-MtCase '` 입력: 앞 공백 4칸이면 그대로' '    ``|' $tick '<null>'
-Test-MtCase '` 입력: 그 밖에는 그대로' 'a|' $tick '<null>'
+Test-MtCase '` 입력: 빈 글에 짝과 가운데 커서' '|' $tick '`|`'
+Test-MtCase '` 입력: 글 사이에도 짝' 'a|b' $tick 'a`|`b'
+Test-MtCase '` 입력: 바로 뒤 백틱은 건너뛴다' '`|`' $tick '``|'
+Test-MtCase '` 입력: 글 뒤의 닫는 백틱도 건너뛴다' '`a|`' $tick '`a`|'
+Test-MtCase '` 입력: 열린 울타리 안(위쪽 홀수)이면 하나만' '```¶x¶``|' $tick '```¶x¶```|'
+Test-MtCase '` 입력: 아래에 짝 없는 울타리가 있으면 하나만' '``|¶x¶```' $tick '```|¶x¶```'
+Test-MtCase '` 입력: 커서 뒤에 글이 있으면 하나만' '``|a' $tick '```|a'
+Test-MtCase '` 입력: 앞 공백 4칸이면 하나만' '    ``|' $tick '    ```|'
+$backtickBack = { param($s) Get-WtMemoBackspaceEdit $s }
+Test-MtCase '백틱 Backspace: 빈 짝 둘 삭제' '`|`' $backtickBack '|'
+Test-MtCase '백틱 Backspace: 글이 있으면 기본 삭제' '`a|`' $backtickBack '<null>'
+Test-MtCase '백틱 Backspace: 선택이 있으면 기본 삭제' '`«a»`' $backtickBack '<null>'
 Test-MtCase '[ 입력: [[ ]] 짝을 넣는다' 'a [|' $open 'a [[|]]'
 $wiki = Get-WtMemoTypeEdit @{ Text = 'a ['; Start = 3; Length = 0 } '['
 Assert-MtTest '[ 입력: 자동 완성 표시(Suggest = wiki)' ($wiki.Suggest -eq 'wiki')

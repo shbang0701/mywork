@@ -1483,6 +1483,28 @@ $script:stylesXaml = @'
     <Setter Property="MaxHeight" Value="240"/>
   </Style>
   <!-- 편집기 위 찾기 · 바꾸기 막대 -->
+  <Style x:Key="Memo.FindOption" TargetType="ToggleButton">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Caption}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Width" Value="{DynamicResource F.Height.Compact}"/>
+    <Setter Property="Height" Value="{DynamicResource F.Height.Compact}"/>
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToggleButton">
+      <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}">
+        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Border>
+    </ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers>
+      <Trigger Property="IsChecked" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/><Setter Property="Foreground" Value="{DynamicResource B.Accent.Text}"/></Trigger>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/><Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/></Trigger>
+    </Style.Triggers>
+  </Style>
   <Style x:Key="Memo.FindBar" TargetType="Border">
     <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
     <Setter Property="BorderThickness" Value="0,0,0,1"/>
@@ -1648,6 +1670,8 @@ $script:stylesXaml = @'
   </Style>
   <Style x:Key="Memo.Row" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.MemoRow}"/>
+    <!-- 화면 읽기 이름은 메모 제목(없으면 행 객체 글이 읽힘, 11-17 실제 화면 시험에서 발견) -->
+    <Setter Property="AutomationProperties.Name" Value="{Binding Title}"/>
 
   </Style>
   <Style x:Key="T.CaptionMuted" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">

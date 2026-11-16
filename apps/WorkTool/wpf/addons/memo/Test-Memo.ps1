@@ -591,13 +591,23 @@ try {
 
     if (-not (Test-WtTestWpf)) { Write-Host 'SKIP 메모 화면 · 저장 실패 (Windows STA에서만)'; return }
     $addon = Get-WtAddon -Id 'memo'
+    $todayStamp = [datetime]::Today.AddHours(9).AddMinutes(12)
+    $yearStamp = [datetime]::new($todayStamp.Year, 1, $(if ($todayStamp.DayOfYear -eq 2) { 3 } else { 2 }), 9, 12, 0)
+    $oldStamp = [datetime]::new($todayStamp.Year - 1, 3, 4, 9, 12, 0)
+    foreach ($dateCase in @(@($todayStamp, '09:12'), @($yearStamp, "1/$($yearStamp.Day)"), @($oldStamp, "$($oldStamp.Year)/3/4"))) {
+        $short = & $memoModule { param($d) Format-WtMemoListTime ($d.ToString('s')) } $dateCase[0]
+        Assert-WtTest 'MemoRow-Date: 오늘 HH:mm · 올해 M/d · 지난 해 yyyy/M/d' ($short -ceq $dateCase[1]) $short
+    }
+    Assert-WtTest 'MemoHelp: 백틱 · 찾기 옵션 단축키 · 정규식 바꾸기 표기' (
+        ($addon.Help -join ' ') -match '백틱' -and ($addon.Help -join ' ') -match 'Alt\+C.*Alt\+R' -and
+        ($addon.Help -join ' ').Contains('\1~\9') -and ($addon.Shortcuts | ConvertTo-Json -Compress).Contains('Alt + C / Alt + R'))
     $lazyMemo = New-WtMemo; $lazyMemo.title = '가짜 요약 검사'; $lazyMemo.body = '# 제목' + "`n**본문**"
     $lazyRow = & $memoModule { param($m) New-WtMemoListItem $m } $lazyMemo
     $lazyBefore = $null -eq $lazyRow.SnippetValue
     $lazyText = [Windows.Controls.TextBlock]::new(); $lazyText.DataContext = $lazyRow
     [void][Windows.Data.BindingOperations]::SetBinding($lazyText, [Windows.Controls.TextBlock]::TextProperty, [Windows.Data.Binding]::new('Snippet'))
     $lazyText.GetBindingExpression([Windows.Controls.TextBlock]::TextProperty).UpdateTarget()
-    Assert-WtTest 'WPF 메모: 보이는 행이 요약을 읽을 때 원래 문자열로 한 번 만든다' ($lazyBefore -and $lazyText.Text -eq '제목 · 본문' -and $lazyRow.SnippetValue -eq $lazyText.Text)
+    Assert-WtTest 'WPF 메모: 보이는 행이 요약을 읽을 때 본문 첫 줄을 한 번 만든다' ($lazyBefore -and $lazyText.Text -eq '제목' -and $lazyRow.SnippetValue -eq $lazyText.Text)
 
     # ---- 화면 준비: 가짜 메모 셋 · 키 흉내 ----
     # 키 이벤트(KeyEventArgs)에 필요한 PresentationSource는 표시하지 않는 호스트로 만든다.
@@ -685,12 +695,75 @@ try {
 
     $mA = New-WtMemo; $mA.id = 'ma'; $mA.title = 'Alpha'; $mA.body = 'alpha body [[Beta]]'; $mA.updated = '2026-10-24 10:00:00'
     $mB = New-WtMemo; $mB.id = 'mb'; $mB.title = 'Beta'; $mB.body = 'beta body'; $mB.updated = '2026-10-23 10:00:00'
-    $mC = New-WtMemo; $mC.id = 'mc'; $mC.title = 'Gamma'; $mC.body = 'has keyword zeta'; $mC.updated = '2026-10-22 10:00:00'
+    $mC = New-WtMemo; $mC.id = 'mc'; $mC.title = 'Gamma'; $mC.body = "first line`nhas keyword zeta"; $mC.updated = '2026-10-22 10:00:00'
     Save-WtMemoItems @($mA, $mB, $mC)
     Set-WtSetting 'memo.tabs' $null
     Set-WtSetting 'memo.mode' 'edit'
     Show-TestView
     Assert-WtTest 'WPF 메모: 예전 memo.mode=edit는 편집(live)으로 연다' (& $memoModule { $script:mode -eq 'live' -and $script:panes[0].ViewButton.ToolTip -ceq '편집 보기 (Ctrl+E)' })
+    function Get-TestMemoRowVisual($Element) {
+        if ($Element -is [Windows.Controls.DockPanel] -and $Element.DataContext.PSObject.Properties['SnippetSource']) { return $Element }
+        for ($i = 0; $i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($Element); $i++) {
+            $found = Get-TestMemoRowVisual ([Windows.Media.VisualTreeHelper]::GetChild($Element, $i))
+            if ($found) { return $found }
+        }
+    }
+    function Send-TestMemoToolTip($Element, [bool]$Opening) {
+        $ctor = [Windows.Controls.ToolTipEventArgs].GetConstructor([Reflection.BindingFlags]'Instance,NonPublic', $null, [type[]]@([bool]), $null)
+        $args = $ctor.Invoke([object[]]@($Opening))
+        $Element.RaiseEvent($args)
+    }
+    $list = & $memoModule { $script:ui.List }
+    $list.UpdateLayout()
+    $container = $list.ItemContainerGenerator.ContainerFromIndex(0)
+    $rowVisual = Get-TestMemoRowVisual $container
+    $row = $rowVisual.DataContext
+    $beforeTip = $null -eq $row.SnippetValue -and $container.ToolTip -ceq ''
+    $right = $rowVisual.Children[0]
+    Assert-WtTest 'MemoRow-OneLine: 높이 32 · 오른쪽 수정일 · 핀 간격 4 · 제목 간격 12 · 미리보기 없음' (
+        $container.ActualHeight -eq 32 -and $rowVisual.Children.Count -eq 2 -and
+        [Windows.Controls.DockPanel]::GetDock($right) -eq 'Right' -and $right.Margin.Left -eq 12 -and
+        $right.Children[0].Margin.Right -eq 4 -and $right.Children[1].Text -ceq '10/24' -and
+        $rowVisual.Children[1].Text -ceq 'Alpha' -and $beforeTip)
+    Send-TestMemoToolTip $container $true
+    $made = $row.SnippetValue
+    $fullTip = $container.ToolTip
+    Send-TestMemoToolTip $container $false
+    Send-TestMemoToolTip $container $true
+    Assert-WtTest 'MemoRow-Tooltip: 열림 이벤트 때 제목 · 전체 수정일 · 본문 생성, 재열기는 요약 재사용' (
+        $beforeTip -and $fullTip -ceq "Alpha`n수정일 2026-10-24 10:00`nalpha body Beta" -and
+        [object]::ReferenceEquals($made, $row.SnippetValue) -and $container.ToolTip -ceq $fullTip) $fullTip
+    Send-TestMemoToolTip $container $false
+    $lazy3000 = & $memoModule {
+        param($items)
+        $rows = New-WtMemoViewRows $items $script:rowGetters @{}
+        Complete-WtMemoRowText $rows
+        , $rows
+    } $perfMemos
+    $savedSource = $list.ItemsSource; $savedSelection = $list.SelectedItem
+    & $memoModule { $script:listUpdating = $true }
+    try {
+        $list.ItemsSource = $lazy3000; $list.UpdateLayout()
+        Assert-WtTest 'MemoRow-3000: 가상화 · 재활용 · 한 줄 32 · 요약 3000개 모두 미생성' (
+            $lazy3000.Count -eq 3000 -and [Windows.Controls.VirtualizingPanel]::GetIsVirtualizing($list) -and
+            [Windows.Controls.VirtualizingPanel]::GetVirtualizationMode($list) -eq 'Recycling' -and
+            $list.ItemContainerGenerator.ContainerFromIndex(0).ActualHeight -eq 32 -and
+            $null -eq $list.ItemContainerGenerator.ContainerFromIndex(2999) -and
+            @($lazy3000 | Where-Object { $null -ne $_.SnippetValue }).Count -eq 0)
+    } finally {
+        $list.ItemsSource = $savedSource; $list.SelectedItem = $savedSelection; $list.UpdateLayout()
+        & $memoModule { $script:listUpdating = $false }
+    }
+    & $memoModule { Set-WtMemoSearch 'zeta' }
+    $list.UpdateLayout()
+    $searchContainer = $list.ItemContainerGenerator.ContainerFromIndex(0)
+    $searchLazy = $null -eq $searchContainer.DataContext.SnippetValue
+    Send-TestMemoToolTip $searchContainer $true
+    Assert-WtTest 'MemoRow-SearchTooltip: 본문만 일치해도 한 줄 · 열 때 일치 문맥 생성' (
+        $searchContainer.ActualHeight -eq 32 -and $searchContainer.DataContext.Title -ceq 'Gamma' -and $searchLazy -and
+        $searchContainer.ToolTip.Contains('zeta') -and $searchContainer.DataContext.SnippetValue.Contains('zeta')) $searchContainer.ToolTip
+    Send-TestMemoToolTip $searchContainer $false
+    & $memoModule { Clear-WtMemoFilter }
     $s = Get-TestTabs
     Assert-WtTest 'WPF 메모 탭: 처음에는 최근 메모 하나를 탭으로 연다' ($s.Panes -eq 1 -and $s.Tabs[0] -eq 'ma' -and $s.Current[0] -eq 'ma')
 
