@@ -13,8 +13,7 @@ $script:stylesXaml = @'
 
   <!-- 창 짜임 전용 치수: 디자인 2판 6·8절. Theme의 공통 토큰과 분리한다. -->
   <sys:Double x:Key="F.Chrome.Height">32</sys:Double>
-  <sys:Double x:Key="F.Nav.Width">200</sys:Double>
-  <sys:Double x:Key="F.Nav.CollapsedWidth">48</sys:Double>
+  <sys:Double x:Key="F.Nav.Width">48</sys:Double>
   <sys:Double x:Key="F.SidePanel.RailWidth">28</sys:Double>
   <sys:Double x:Key="F.SidePanel.Gap">8</sys:Double>
   <sys:Double x:Key="F.SidePanel.Breakpoint">1200</sys:Double>
@@ -272,25 +271,65 @@ $script:stylesXaml = @'
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
     </Style.Triggers>
   </Style>
-  <Style x:Key="Btn.NavFooter" TargetType="Button" BasedOn="{StaticResource Btn.Canvas}">
-    <Setter Property="Width" Value="32"/><Setter Property="Height" Value="32"/>
+  <Style x:Key="Btn.TitleAction" TargetType="Button" BasedOn="{StaticResource Btn.Canvas}">
+    <Setter Property="Width" Value="40"/><Setter Property="Height" Value="32"/>
+    <!-- 창 맨 위에 닿으므로 포커스 테두리를 안쪽에 그린다(바깥에 그리면 위가 창 밖으로 잘림, design.md 5.3) -->
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
   </Style>
-  <Style x:Key="T.NavGroup" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
-    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
-    <Setter Property="Height" Value="24"/><Setter Property="Margin" Value="12,0,0,0"/>
-    <Setter Property="VerticalAlignment" Value="Center"/>
+  <Style x:Key="T.TitleActionIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}">
+    <Setter Property="FontSize" Value="14"/>
   </Style>
-  <Style x:Key="T.NavCount" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+  <Style x:Key="Btn.Status" TargetType="Button" BasedOn="{StaticResource Btn.Canvas}">
+    <Setter Property="FlowDirection" Value="LeftToRight"/>
+    <Setter Property="Width" Value="Auto"/><Setter Property="Height" Value="{DynamicResource F.Height.StatusBar}"/>
+    <Setter Property="Padding" Value="8,0"/><Setter Property="HorizontalAlignment" Value="Left"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Caption}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Caption.Weight}"/>
+  </Style>
+  <Style x:Key="Shell.StatusText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+    <Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+  </Style>
+  <Style x:Key="Shell.StatusIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}">
+    <Setter Property="FontSize" Value="12"/><Setter Property="Width" Value="12"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
-    <Setter Property="VerticalAlignment" Value="Center"/>
-    <Setter Property="HorizontalAlignment" Value="Right"/>
-    <Setter Property="TextWrapping" Value="NoWrap"/>
+    <Setter Property="Margin" Value="0,0,4,0"/>
+  </Style>
+  <DataTemplate x:Key="Shell.StatusItem">
+    <Grid>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <TextBlock x:Name="Icon" Style="{DynamicResource Shell.StatusIcon}" VerticalAlignment="Center"/>
+      <TextBlock x:Name="Text" Grid.Column="1" Style="{DynamicResource Shell.StatusText}" VerticalAlignment="Center"/>
+    </Grid>
+  </DataTemplate>
+  <Style x:Key="Shell.StatusBar" TargetType="StatusBar">
+    <Setter Property="Height" Value="{DynamicResource F.Height.StatusBar}"/>
+    <Setter Property="Padding" Value="0"/><Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="ItemsPanel"><Setter.Value><ItemsPanelTemplate><Grid/></ItemsPanelTemplate></Setter.Value></Setter>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="StatusBar">
+      <Border Background="{TemplateBinding Background}"><ItemsPresenter/></Border>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="Shell.StatusBarItem" TargetType="StatusBarItem">
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="VerticalContentAlignment" Value="Stretch"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="StatusBarItem">
+      <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <!-- 보조 창 제목: 내용 자리(왼쪽 8) 안에서 메인 창과 같이 왼쪽 8 · 위아래 12 → 창 기준 x=16 (디자인 8절) -->
+  <Style x:Key="Utility.PageHeader" TargetType="DockPanel">
+    <Setter Property="Margin" Value="8,12,0,12"/>
+  </Style>
+  <Style x:Key="Shell.NavSeparator" TargetType="Border">
+    <Setter Property="Width" Value="24"/><Setter Property="Height" Value="1"/>
+    <Setter Property="Margin" Value="0,8"/><Setter Property="HorizontalAlignment" Value="Center"/>
+    <Setter Property="Background" Value="{DynamicResource B.Border.Muted}"/>
   </Style>
   <Style x:Key="T.NavIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}">
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
-  </Style>
-  <Style x:Key="T.NavGroup.Next" TargetType="TextBlock" BasedOn="{StaticResource T.NavGroup}">
-    <Setter Property="Margin" Value="12,12,0,0"/>
   </Style>
   <Style x:Key="Nav.Dot" TargetType="Ellipse">
     <Setter Property="Width" Value="6"/><Setter Property="Height" Value="6"/>
@@ -299,16 +338,10 @@ $script:stylesXaml = @'
     <Setter Property="Visibility" Value="Collapsed"/>
   </Style>
   <DataTemplate x:Key="Shell.NavItem">
-    <Grid>
-      <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <Grid Width="16" Height="16" VerticalAlignment="Center">
+      <Grid Width="16" Height="16" VerticalAlignment="Center" HorizontalAlignment="Center">
         <TextBlock x:Name="Icon" Style="{DynamicResource T.NavIcon}"/>
-        <Ellipse x:Name="IconDot" Style="{DynamicResource Nav.Dot}" VerticalAlignment="Top" Margin="0,-4,-4,0"/>
+        <Ellipse x:Name="IconDot" Style="{DynamicResource Nav.Dot}" VerticalAlignment="Top" Margin="0,-7,-7,0"/>
       </Grid>
-      <TextBlock x:Name="Label" Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-      <TextBlock x:Name="Count" Grid.Column="2" Style="{DynamicResource T.NavCount}"/>
-      <Ellipse x:Name="Dot" Grid.Column="2" Style="{DynamicResource Nav.Dot}"/>
-    </Grid>
   </DataTemplate>
   <DataTemplate x:Key="Shell.SidePanel">
     <Grid Panel.ZIndex="1">
@@ -344,7 +377,7 @@ $script:stylesXaml = @'
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Height" Value="{DynamicResource F.Height.Control}"/>
     <Setter Property="Margin" Value="0"/>
-    <Setter Property="Padding" Value="12,0,8,0"/>
+    <Setter Property="Padding" Value="8,0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
@@ -1254,8 +1287,9 @@ $script:stylesXaml = @'
   </Style>
   <Style x:Key="Md.InlineCode" TargetType="Run">
     <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
-    <Setter Property="FontSize" Value="{DynamicResource F.Code}"/>
-    <Setter Property="Background" Value="{DynamicResource B.Code.Bg}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Code}"/>
+    <!-- 굵기 · 글자색은 문단에서 물려받는다(본문 400 · B.Text.Primary). 조각마다 동적 리소스를 더 찾으면 긴 메모 그리기가 느려진다(11-17 측정) -->
+    <Setter Property="Background" Value="{DynamicResource B.Code.InlineBg}"/>
   </Style>
   <Style x:Key="Md.Math" TargetType="Paragraph">
     <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
@@ -1625,7 +1659,7 @@ $script:stylesXaml = @'
       <DockPanel KeyboardNavigation.TabNavigation="Local">
         <TabPanel DockPanel.Dock="Top" IsItemsHost="True" Margin="8,0,8,0" KeyboardNavigation.TabIndex="1"/>
         <Border Background="{DynamicResource B.Bg.Surface}" CornerRadius="{DynamicResource F.Radius.Card}">
-          <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" Margin="0,8,0,8"/>
+          <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"/>
         </Border>
       </DockPanel>
     </ControlTemplate></Setter.Value></Setter>
@@ -2090,9 +2124,15 @@ function Get-WtShellXaml {
   </WindowChrome.WindowChrome>
   <Border Background="{DynamicResource B.Bg.Canvas}">
     <Grid>
-      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
       <DockPanel x:Name="TitleBar" Height="{DynamicResource F.Chrome.Height}" Background="{DynamicResource B.Bg.Canvas}">
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <Button x:Name="HelpButton" Style="{DynamicResource Btn.TitleAction}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="도움말 (F1)" AutomationProperties.AutomationId="HelpButton" AutomationProperties.Name="도움말">
+            <TextBlock Text="&#xE897;" Style="{DynamicResource T.TitleActionIcon}"/>
+          </Button>
+          <Button x:Name="SettingsButton" Style="{DynamicResource Btn.TitleAction}" Margin="0,0,8,0" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="설정 (Ctrl+,)" AutomationProperties.AutomationId="SettingsButton" AutomationProperties.Name="설정">
+            <TextBlock Text="&#xE713;" Style="{DynamicResource T.TitleActionIcon}"/>
+          </Button>
           <Button x:Name="MinButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최소화" AutomationProperties.Name="최소화">
             <TextBlock Text="&#xE921;" Style="{DynamicResource T.Icon}" FontSize="10"/>
           </Button>
@@ -2111,31 +2151,24 @@ function Get-WtShellXaml {
       <Grid Grid.Row="1">
         <Grid.ColumnDefinitions><ColumnDefinition x:Name="NavColumn" Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
         <Border x:Name="NavBorder" Width="{DynamicResource F.Nav.Width}" Background="{DynamicResource B.Bg.Canvas}">
-          <DockPanel>
-            <Grid DockPanel.Dock="Top" Height="40">
-              <Button x:Name="CollapseButton" Style="{DynamicResource Btn.Canvas}" HorizontalAlignment="Left" Margin="12,0,0,0" ToolTip="메뉴 접기/펼치기 (Ctrl+B)" AutomationProperties.Name="메뉴 접기/펼치기">
-                <TextBlock Text="&#xE700;" Style="{DynamicResource T.Icon}"/>
-              </Button>
-            </Grid>
-            <StackPanel x:Name="FooterPanel" DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Left" Margin="12,8,0,12">
-              <Button x:Name="HelpButton" Style="{DynamicResource Btn.NavFooter}" ToolTip="도움말" AutomationProperties.Name="도움말" Margin="0,0,8,0">
-                <TextBlock Text="&#xE897;" Style="{DynamicResource T.Icon}"/>
-              </Button>
-              <Button x:Name="SettingsButton" Style="{DynamicResource Btn.NavFooter}" ToolTip="설정" AutomationProperties.Name="설정">
-                <TextBlock Text="&#xE713;" Style="{DynamicResource T.Icon}"/>
-              </Button>
-            </StackPanel>
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
-              <StackPanel x:Name="NavPanel" Margin="8,0,8,0"/>
+              <StackPanel x:Name="NavPanel" Margin="8,8,8,0"/>
             </ScrollViewer>
-          </DockPanel>
         </Border>
         <Grid Grid.Column="1" Margin="0,0,8,8">
           <ContentControl x:Name="WarmHost" Focusable="False" Visibility="Hidden" IsHitTestVisible="False"/>
           <ContentControl x:Name="PageHost" Focusable="False"/>
         </Grid>
       </Grid>
-      <Border x:Name="Frame" Grid.RowSpan="2" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
+      <StatusBar x:Name="StatusBar" Grid.Row="2" Style="{DynamicResource Shell.StatusBar}" AutomationProperties.AutomationId="StatusBar">
+        <StatusBarItem Style="{DynamicResource Shell.StatusBarItem}">
+        <DockPanel Margin="40,0,4,0">
+          <StackPanel x:Name="StatusRight" DockPanel.Dock="Right" Orientation="Horizontal" FlowDirection="RightToLeft"/>
+          <Grid x:Name="StatusLeft"/>
+        </DockPanel>
+        </StatusBarItem>
+      </StatusBar>
+      <Border x:Name="Frame" Grid.RowSpan="3" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
     </Grid>
   </Border>
 </Window>
@@ -2680,24 +2713,42 @@ Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGri
     New-WtStatTile, New-WtPageHeader, New-WtPage, New-WtListRow, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
 
 # 상태에 따른 치수·배치만 바꾼다. 저장·단축키 판단은 Shell이 한다.
-function Set-WtNavLayout($Ui, $Items, $Groups, [bool]$Collapsed) {
-    $styles = Get-WtStyleDictionary
-    $Ui.NavBorder.Width = $styles[$(if ($Collapsed) { 'F.Nav.CollapsedWidth' } else { 'F.Nav.Width' })]
-    $vis = if ($Collapsed) { 'Collapsed' } else { 'Visible' }
-    foreach ($group in $Groups) { $group.Visibility = $vis }
-    foreach ($item in $Items) {
-        $item.Label.Visibility = $vis
-        $item.Button.Padding = if ($Collapsed) { [System.Windows.Thickness]::new(8,0,8,0) } else { [System.Windows.Thickness]::new(12,0,8,0) }
-        $item.Count.Visibility = if (-not $Collapsed -and $null -ne $item.Value -and $item.Value -ne 'dot') { 'Visible' } else { 'Collapsed' }
-        $item.Dot.Visibility = if (-not $Collapsed -and $item.Value -eq 'dot') { 'Visible' } else { 'Collapsed' }
-        $item.IconDot.Visibility = if ($Collapsed -and $item.Value -eq 'dot') { 'Visible' } else { 'Collapsed' }
-    }
-    $Ui.FooterPanel.Orientation = if ($Collapsed) { 'Vertical' } else { 'Horizontal' }
-    $Ui.FooterPanel.Margin = if ($Collapsed) { [System.Windows.Thickness]::new(8,8,0,12) } else { [System.Windows.Thickness]::new(12,8,0,12) }
-    $Ui.HelpButton.Margin = if ($Collapsed) { [System.Windows.Thickness]::new(0,0,0,4) } else { [System.Windows.Thickness]::new(0,0,8,0) }
-    $Ui.CollapseButton.Margin = if ($Collapsed) { [System.Windows.Thickness]::new(10,0,0,0) } else { [System.Windows.Thickness]::new(12,0,0,0) }
+function Set-WtNavBadge($Item, [bool]$Visible) {
+    $Item.IconDot.Visibility = if ($Visible) { 'Visible' } else { 'Collapsed' }
+    Set-WtResource $Item.IconDot Fill $(if ($Item.Addon.BadgeKind -eq 'active') { 'B.Accent' } else { 'B.Status.Warning.Icon' })
 }
 
+function New-WtNavSeparator {
+    $line = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $line 'Shell.NavSeparator'
+    $line
+}
+
+function New-WtStatusButton([string]$Text, [int]$Icon = 0) {
+    $button = [System.Windows.Controls.Button]::new()
+    Set-WtStyle $button 'Btn.Status'
+    $row = (Get-WtStyleDictionary)['Shell.StatusItem'].LoadContent()
+    $row.FindName('Text').Text = $Text
+    $row.FindName('Icon').Text = if ($Icon) { [string][char]$Icon } else { '' }
+    $row.FindName('Icon').Visibility = if ($Icon) { 'Visible' } else { 'Collapsed' }
+    $button.Content = $row
+    $button
+}
+
+# 오른쪽은 원래 폭을 유지한다. 왼쪽은 뒤에서부터 폭을 확보해 앞 항목부터 줄인다.
+function Set-WtStatusLayout($Panel) {
+    $remaining = $Panel.ActualWidth
+    for ($i = $Panel.Children.Count - 1; $i -ge 0; $i--) {
+        $button = $Panel.Children[$i]
+        $button.MaxWidth = [double]::PositiveInfinity
+        $button.Measure([System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity))
+        $naturalWidth = $button.DesiredSize.Width
+        $width = [math]::Min($remaining, $naturalWidth)
+        # 남는 폭이 충분하면 원래 측정·배치에 맡긴다. 자연 폭으로 다시 제한하면 배치 반올림으로 끝 글자가 잘린다.
+        if ($naturalWidth -gt $remaining) { $button.MaxWidth = [math]::Max(0, $width) }
+        $remaining = [math]::Max(0, $remaining - $width)
+    }
+}
 function Set-WtSidePanelLayout($Panel, [bool]$Collapsed, [bool]$Narrow) {
     $railWidth = (Get-WtStyleDictionary)['F.SidePanel.RailWidth']
     $Panel.Root.Width = if ($Collapsed -or $Narrow) { $railWidth } else { $Panel.Width }
@@ -2716,7 +2767,37 @@ function Set-WtSidePanelLayout($Panel, [bool]$Collapsed, [bool]$Narrow) {
     $Panel.OpenGlyph.Text = [string][char]$(if ($Panel.Side -eq 'Right') { 0xE76B } else { 0xE76C })
 }
 
-Export-ModuleMember -Function Get-WtShellXaml, Set-WtNavLayout, Set-WtSidePanelLayout
+Export-ModuleMember -Function Get-WtShellXaml, Set-WtNavBadge, New-WtNavSeparator, New-WtStatusButton, Set-WtStatusLayout, Set-WtSidePanelLayout
+
+# 메뉴 툴팁은 항목 오른쪽에 두고, 내용 높이가 달라져도 항목과 세로 가운데를 맞춘다.
+function Set-WtNavToolTip($Button, [string]$Text) {
+    [System.Windows.Controls.ToolTipService]::SetPlacement($Button, [System.Windows.Controls.Primitives.PlacementMode]::Right)
+    if ($Button.ToolTip -isnot [System.Windows.Controls.ToolTip]) {
+        $tip = [System.Windows.Controls.ToolTip]::new()
+        Set-WtStyle $tip 'ToolTip'
+        $tip.Placement = 'Right'
+        $tip.PlacementTarget = $Button
+        $tip.Add_Opened({ param($s, $e) Update-WtNavToolTipPlacement $s })
+        $tip.Add_SizeChanged({ param($s, $e) Update-WtNavToolTipPlacement $s })
+        $Button.ToolTip = $tip
+    }
+    $Button.ToolTip.Content = $Text
+}
+function Update-WtNavToolTipPlacement($Tip) {
+    $button = $Tip.PlacementTarget
+    if (-not $button) { return }
+    $Tip.VerticalOffset = ($button.ActualHeight - $Tip.ActualHeight) / 2
+    if ($button.Parent) { $Tip.HorizontalOffset = $button.Parent.Margin.Right }
+}
+Export-ModuleMember -Function Set-WtNavToolTip
+
+function New-WtUtilityPageHeader([string]$Title) {
+    $header = New-WtPageHeader $Title
+    $header.ClearValue([System.Windows.FrameworkElement]::MarginProperty)
+    Set-WtStyle $header 'Utility.PageHeader'
+    $header
+}
+Export-ModuleMember -Function New-WtUtilityPageHeader
 
 # 홈 전용 배치 · 공통 부품. 값은 디자인 3판 7·8절.
 # 내용이 창보다 작으면 마지막 카드가 남은 높이를 채우고, 크면 화면 전체가 스크롤된다.
@@ -3029,13 +3110,21 @@ function New-WtNextEventLine([object[]]$Items) {
 
 function Update-WtNextEventLine($Line, [datetime]$Now = (Get-Date)) {
     $state = $Line.Tag
-    $next = @($state.Items | Where-Object { $(if ($_.End -gt $_.Start) { $_.End } else { $_.Start }) -gt $Now } | Select-Object -First 1)
+    $next = @(Get-WtNextEventItem $state.Items $Now)
     $Line.Visibility = if ($next.Count) { 'Visible' } else { 'Collapsed' }
     if (-not $next.Count) { return }
     $left = [int][Math]::Ceiling(($next[0].Start - $Now).TotalMinutes)
     $state.Pill.Child.Text = if ($left -le 0) { '진행 중' } elseif ($left -lt 60) { "${left}분 후" } elseif ($left % 60) { "$([Math]::Floor($left / 60))시간 $($left % 60)분 후" } else { "$($left / 60)시간 후" }
     $state.Title.Text = $next[0].Start.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) + ' ' + $next[0].Title
 }
+
+# 홈과 상태 줄이 같은 회차를 고른다. 끝낸 일정·종일 일정은 다음 일정에서 뺀다.
+function Get-WtNextEventItem([object[]]$Items, [datetime]$Now = (Get-Date)) {
+    $Items | Where-Object { -not $_.Done -and -not $_.AllDay -and
+        $(if ($_.End -gt $_.Start) { $_.End } else { $_.Start }) -gt $Now } |
+        Sort-Object Start, End, Title | Select-Object -First 1
+}
+Export-ModuleMember -Function Get-WtNextEventItem
 
 function Set-WtTargetRowSelected($Row, [bool]$Selected) {
     $state = $null
@@ -3105,15 +3194,17 @@ function Get-WtSideWindowXaml {
 }
 
 # 결과: @{ Window; Title(TextBlock); ToolLeft; ToolRight; Body(Border) }. 보이기(Show)는 부르는 쪽이 한다
-function New-WtSideWindow([string]$Title, [double]$Width = 640, [double]$Height = 560) {
-    $xaml = Get-WtSideWindowXaml
+function New-WtSideWindow([string]$Title, [double]$Width = 640, [double]$Height = 560, [switch]$Utility) {
+    $xaml = if ($Utility) { Get-WtUtilityWindowXaml } else { Get-WtSideWindowXaml }
     $w = ConvertFrom-WtXaml $xaml
     $owner = if (Get-Command Get-WtWindow -ErrorAction Ignore) { Get-WtWindow } else { $null }
-    if ($owner -and $owner.IsVisible) { $w.Owner = $owner; $w.Resources.MergedDictionaries.Add($owner.Resources) }
-    else { $w.WindowStartupLocation = 'CenterScreen'; $w.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary)) }
+    if ($owner -and ($owner.IsVisible -or ($Utility -and [System.Windows.Interop.WindowInteropHelper]::new($owner).Handle -ne [IntPtr]::Zero))) {
+        $w.Owner = $owner; $w.Resources.MergedDictionaries.Add($owner.Resources)
+    } else { $w.WindowStartupLocation = 'CenterScreen'; $w.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary)) }
     $w.Width = $Width; $w.Height = $Height; $w.Title = $Title
     $named = Get-WtNamedElements $w $xaml
     $named.TitleText.Text = $Title
+    if ($Utility) { $named.MinButton.Add_Click({ param($s, $e) [System.Windows.Window]::GetWindow($s).WindowState = 'Minimized' }) }
     $named.CloseButton.Add_Click({ param($s, $e) [System.Windows.Window]::GetWindow($s).Close() })
     $named.MaxButton.Add_Click({
             param($s, $e)
@@ -3128,8 +3219,61 @@ function New-WtSideWindow([string]$Title, [double]$Width = 640, [double]$Height 
             $s.FindName('MaxButton').ToolTip = if ($max) { '이전 크기로 복원' } else { '최대화' }
             $edge = [System.Windows.SystemParameters]::WindowResizeBorderThickness
             $s.FindName('Frame').Margin = if ($max) { [System.Windows.Thickness]::new($edge.Left + 2, $edge.Top + 2, $edge.Right + 2, $edge.Bottom + 2) } else { [System.Windows.Thickness]::new(0) }
+            $outline = $s.FindName('WindowBorder')
+            if ($outline) { $outline.BorderThickness = [System.Windows.Thickness]::new($(if ($max) { 0 } else { 1 })) }
         })
     @{ Window = $w; Title = $named.TitleText; ToolLeft = $named.ToolLeft; ToolRight = $named.ToolRight; Body = $named.Body }
 }
 
 Export-ModuleMember -Function New-WtSideWindow
+
+# 설정·도움말 전용 창. 다른 새 창의 크기·도구 줄에는 영향을 주지 않는다.
+function Get-WtUtilityWindowXaml {
+@'
+<Window {NS} Width="960" Height="680" MinWidth="720" MinHeight="480" WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="False"
+    WindowStartupLocation="CenterOwner" UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Ideal"
+    FontFamily="{DynamicResource Font.UI}" FontSize="{DynamicResource F.Body}" Foreground="{DynamicResource B.Text.Primary}" Background="{DynamicResource B.Bg.Canvas}">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="32" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
+  <Grid x:Name="Frame">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <DockPanel Height="{DynamicResource F.Chrome.Height}">
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button x:Name="MinButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최소화" AutomationProperties.Name="최소화">
+          <TextBlock Text="&#xE921;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+        </Button>
+        <Button x:Name="MaxButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최대화" AutomationProperties.Name="최대화">
+          <TextBlock x:Name="MaxGlyph" Text="&#xE922;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+        </Button>
+        <Button x:Name="CloseButton" Style="{DynamicResource Btn.Close}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="닫기" AutomationProperties.Name="닫기">
+          <TextBlock Text="&#xE8BB;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+        </Button>
+      </StackPanel>
+      <StackPanel Orientation="Horizontal">
+        <Border Style="{DynamicResource Shell.Brand}"><TextBlock Text="W" Style="{DynamicResource Shell.BrandLetter}"/></Border>
+        <TextBlock x:Name="TitleText" Style="{DynamicResource T.Sub}" Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+      </StackPanel>
+    </DockPanel>
+    <Border x:Name="Body" Grid.Row="1" Margin="8,0,8,8"/>
+    <Border x:Name="WindowBorder" Grid.RowSpan="2" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
+  </Grid>
+</Window>
+'@
+}
+
+function New-WtUtilityWindow([string]$Title) { New-WtSideWindow $Title -Width 960 -Height 680 -Utility }
+Export-ModuleMember -Function New-WtUtilityWindow
+
+# 기본 컨트롤이 먼저 처리한 Esc는 창에 오지 않는다. 남아 있는 펼침만 한 번 닫는다.
+function Close-WtOpenTransient($Root) {
+    if ($Root -is [System.Windows.Controls.Primitives.Popup] -and $Root.IsOpen) { $Root.IsOpen = $false; return $true }
+    if ($Root -is [System.Windows.Controls.ComboBox] -and $Root.IsDropDownOpen) { $Root.IsDropDownOpen = $false; return $true }
+    if ($Root -is [System.Windows.Controls.MenuItem] -and $Root.IsSubmenuOpen) { $Root.IsSubmenuOpen = $false; return $true }
+    if ($Root -is [System.Windows.FrameworkElement] -and $Root.ContextMenu -and $Root.ContextMenu.IsOpen) { $Root.ContextMenu.IsOpen = $false; return $true }
+    foreach ($child in [System.Windows.LogicalTreeHelper]::GetChildren($Root)) {
+        if ($child -is [System.Windows.DependencyObject] -and (Close-WtOpenTransient $child)) { return $true }
+    }
+    $false
+}
+Export-ModuleMember -Function Close-WtOpenTransient

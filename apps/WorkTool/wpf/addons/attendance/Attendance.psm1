@@ -399,7 +399,7 @@ Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -
         if (Test-WtAttRestDay ([datetime]::Today) $data.Entries) { return $null }
         if (-not @($data.Entries | Where-Object { $_.State -ceq 'ok' -and $_.Kind -ceq 'work' -and $_.HasTime -and $_.StartDate -eq [datetime]::Today }).Count) { 'dot' }
     } `
-    -BadgeToolTip '오늘 안 찍음' -NewView { New-WtAttendanceView } -Refresh { param($view) Update-WtAttendanceView } `
+    -BadgeKind dot -BadgeToolTip '오늘 안 찍음' -NewView { New-WtAttendanceView } -Refresh { param($view) Update-WtAttendanceView } `
     -OnOpen { param($OpenArgs) Open-WtAttArgs $OpenArgs } `
     -DateMenu { param([datetime]$Date) Get-WtAttDateMenu $Date } `
     -CalendarItems { param([datetime]$From, [datetime]$To) $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }; Get-WtAttendanceCalendarItems $From $To $data.Entries } `

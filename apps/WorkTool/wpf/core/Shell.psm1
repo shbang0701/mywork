@@ -16,6 +16,7 @@ $script:frame = $null
 $script:themeDict = $null
 $script:notify = $null
 $script:views = @{}
+$script:utilityWindows = @{}
 $script:navButtons = @{}
 $script:navGroups = @()
 $script:badgeTimer = $null
@@ -79,8 +80,74 @@ function Get-WtPageView([string]$Id) {
     $script:views[$Id]
 }
 
-function Select-WtPage([string]$Id) {
+function Select-WtPage([string]$Id, [string]$Tab = '', [switch]$Refresh) {
+    if ($Id -in '_settings', '_help') { Show-WtUtilityPage $Id $Tab -Refresh:$Refresh; return }
     [void](Invoke-WtPageSelection $Id)
+}
+
+# 보이기와 앞으로 가져오기는 한 통로로 한다. 창 없는 검사에서는 이 통로만 대신한다.
+function Show-WtUtilityHost($Window) {
+    if (-not $Window.IsVisible) { $Window.Show() }
+    if ($Window.WindowState -eq 'Minimized') { $Window.WindowState = 'Normal' }
+    [void]$Window.Activate()
+}
+
+function Show-WtUtilityPage([ValidateSet('_settings','_help')][string]$Id, [string]$Tab = '', [switch]$Refresh) {
+    if (-not $Tab -and $script:utilityWindows.ContainsKey($Id)) {
+        $tabs = $script:utilityWindows[$Id].Body.Child.Tag.Tabs
+        if ($tabs -and $tabs.SelectedItem) { $Tab = [string]$tabs.SelectedItem.Header }
+    }
+    # 열린 창의 입력·고른 탭은 다시 열기만으로 버리지 않는다. 데이터 위치를 바꾼 경우만 명시적으로 다시 읽는다.
+    $page = if ($script:utilityWindows.ContainsKey($Id) -and -not $Refresh) { @{ View = $script:utilityWindows[$Id].Body.Child } } else { Get-WtPageView $Id }
+    if (-not $script:utilityWindows.ContainsKey($Id)) {
+        $title = if ($Id -eq '_settings') { 'WorkTool · 설정' } else { 'WorkTool · 도움말' }
+        $hostWindow = New-WtUtilityWindow $title
+        $win = $hostWindow.Window
+        $hostWindow.Body.Child = $page.View
+        $win.Tag = @{ Id = $Id; Host = $hostWindow; BoundsKey = "window.$($Id.TrimStart('_')).bounds" }
+        $savedBounds = Get-WtSetting $win.Tag.BoundsKey
+        try {
+            if ($savedBounds -and [double]::IsFinite([double]$savedBounds.Left) -and [double]::IsFinite([double]$savedBounds.Top) -and
+                [double]::IsFinite([double]$savedBounds.Width) -and [double]::IsFinite([double]$savedBounds.Height) -and
+                $savedBounds.Width -ge $win.MinWidth -and $savedBounds.Height -ge $win.MinHeight) {
+                $win.WindowStartupLocation = 'Manual'
+                $win.Left = $savedBounds.Left; $win.Top = $savedBounds.Top
+                $win.Width = $savedBounds.Width; $win.Height = $savedBounds.Height
+            }
+        } catch { } # 잘못된 옛 위치는 첫 크기·가운데 배치로 연다.
+        $win.Add_Closing({
+            param($s, $e)
+            if (-not $script:exiting -and -not (Save-WtPendingChanges -Purpose switch -Only $s.Tag.Id)) { $e.Cancel = $true; return }
+            $bounds = if ($s.WindowState -eq 'Normal') { [System.Windows.Rect]::new($s.Left, $s.Top, $s.Width, $s.Height) } else { $s.RestoreBounds }
+            if (-not $bounds.IsEmpty -and [double]::IsFinite($bounds.Left) -and [double]::IsFinite($bounds.Top)) {
+                Set-WtSetting $s.Tag.BoundsKey @{ Left = $bounds.Left; Top = $bounds.Top; Width = $bounds.Width; Height = $bounds.Height }
+            }
+        })
+        $win.Add_Closed({ param($s, $e) $s.Tag.Host.Body.Child = $null; [void]$script:utilityWindows.Remove($s.Tag.Id) })
+        $win.Add_KeyDown({ param($s, $e) Invoke-WtUtilityKey $s $e })
+        $script:utilityWindows[$Id] = $hostWindow
+    } else {
+        $hostWindow = $script:utilityWindows[$Id]
+        $hostWindow.Body.Child = $page.View
+    }
+    if ($Tab) { Select-WtPageTab $page.View $Tab }
+    Show-WtUtilityHost $hostWindow.Window
+}
+
+function Invoke-WtUtilityKey($Window, $Event, $Modifiers = [System.Windows.Input.Keyboard]::Modifiers) {
+    if ($Event.Handled) { return }
+    if ($Event.Key -eq 'F1') { Select-WtPage '_help'; $Event.Handled = $true; return }
+    if (($Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -and $Event.Key -eq 'OemComma') {
+        Select-WtPage '_settings'; $Event.Handled = $true; return
+    }
+    if ($Event.Key -ne 'Escape') { return }
+    if (-not (Close-WtOpenTransient $Window)) { $Window.Close() }
+    $Event.Handled = $true
+}
+
+function Close-WtUtilityWindows {
+    foreach ($hostWindow in @($script:utilityWindows.Values)) { $hostWindow.Window.Close() }
+    $script:utilityWindows.Count -eq 0
 }
 
 # 공개된 Select-WtPage의 출력은 그대로 두고, 항목 열기는 전환 성공 여부까지 확인한다.
@@ -112,6 +179,7 @@ function Invoke-WtPageSelection([string]$Id) {
 # 데이터를 다시 가져온 뒤 현재 화면을 갱신한다. 숨긴 화면도 재진입할 때 갱신한다.
 function Open-WtPage {
     param([Parameter(Mandatory)][string]$Id, [hashtable]$Args = @{})
+    if ($Id -in '_settings','_help') { Show-WtUtilityPage $Id ([string]$Args.Tab); return }
     $addon = Get-WtAddon -Id $Id
     if (-not $addon -or $addon.Id -cne $Id) { return }
     $selected = Invoke-WtPageSelection $Id
@@ -127,6 +195,16 @@ function Reset-WtViews {
         $script:current = $null
         Select-WtPage $id
     }
+}
+
+function Initialize-WtMainPage {
+    $first = @(Get-WtAddon) | Select-Object -First 1
+    if ($first) { Select-WtPage $first.Id; return $first.Id }
+    $script:current = $null
+    $script:ui.PageHost.Content = New-WtText '켜진 탭이 없습니다.'
+    # 첫 업무시간 입력을 마치면 Close-WtFirstWorkSetup이 설정 창을 연다.
+    if (-not (Test-WtWorkSetupRequired)) { Select-WtPage '_settings' }
+    '_settings'
 }
 
 # ---- 미리 만들기 ------------------------------------------------------------------------------
@@ -165,7 +243,7 @@ function Invoke-WtWarmUpStep {
     if ($script:exiting -or -not $script:warmEnabled) { return $false }
     while ($script:warmQueue -and $script:warmQueue.Count) {
         $id = $script:warmQueue.Dequeue()
-        if ($id -eq $script:current -or ($id -notlike '_*' -and $script:views.ContainsKey($id))) { continue }   # 이미 열었다
+        if ($id -eq $script:current -or $script:utilityWindows.ContainsKey($id) -or ($id -notlike '_*' -and $script:views.ContainsKey($id))) { continue }   # 이미 열었다
         try {
             $page = Get-WtPageView $id
             if (-not $page) { continue }
@@ -204,26 +282,21 @@ function Update-WtNav {
     $script:navButtons = @{}
     $script:navGroups = @()
     foreach ($group in @(Get-WtNavGroups)) {
-        if ($group.Name) {
-            $style = if ($script:navGroups.Count) { 'T.NavGroup.Next' } else { 'T.NavGroup' }
-            $heading = New-WtText $group.Name $style
-            [void]$panel.Children.Add($heading)
-            $script:navGroups += $heading
+        if ($panel.Children.Count) {
+            $line = New-WtNavSeparator
+            [void]$panel.Children.Add($line)
+            $script:navGroups += $line
         }
         foreach ($addon in $group.Items) {
             $rb = [System.Windows.Controls.RadioButton]::new()
             Set-WtStyle $rb 'Nav'
             $rb.GroupName = 'WtNav'
             $rb.Tag = $addon.Id
-            $rb.ToolTip = $addon.Title
+            Set-WtNavToolTip $rb $addon.Title
             [System.Windows.Automation.AutomationProperties]::SetName($rb, $addon.Title)
             $row = (Get-WtStyleDictionary)['Shell.NavItem'].LoadContent()
-            $parts = @{ Button = $rb; Addon = $addon; Value = $null }
-            foreach ($name in 'Icon','Label','Count','Dot','IconDot') { $parts[$name] = $row.FindName($name) }
+            $parts = @{ Button = $rb; Addon = $addon; Value = $null; Icon = $row.FindName('Icon'); IconDot = $row.FindName('IconDot') }
             $parts.Icon.Text = [string][char]$addon.Icon
-            $parts.Label.Text = $addon.Title
-            $parts.Dot.ToolTip = $addon.BadgeToolTip
-            $parts.IconDot.ToolTip = $addon.BadgeToolTip
             $rb.Content = $row
             $rb.IsChecked = ($addon.Id -eq $script:current)
             $rb.Add_Checked({ param($s, $e) Select-WtPage ([string]$s.Tag) })
@@ -234,10 +307,12 @@ function Update-WtNav {
     Update-WtNavBadges
 }
 
-# 배지 계산은 선택·새로 그리기·분 타이머에서만. 한 출처가 실패해도 다른 배지는 계속 계산한다.
+# 한 출처가 실패해도 다른 배지·상태 항목은 계속 계산한다.
 function Update-WtNavBadges {
     foreach ($item in $script:navButtons.Values) {
+        if (-not $item.Addon -or -not $item.IconDot) { continue }
         $value = $null
+        $state = ''
         if ($item.Addon.Badge) {
             try {
                 $result = & $item.Addon.Badge
@@ -245,31 +320,62 @@ function Update-WtNavBadges {
                 elseif ($null -ne $result -and [Type]::GetTypeCode($result.GetType()) -in @('Byte','SByte','Int16','UInt16','Int32','UInt32','Int64','UInt64','Single','Double','Decimal')) {
                     $value = $result.ToString([System.Globalization.CultureInfo]::InvariantCulture)
                 }
-            } catch { $value = $null }
+                if ($value -eq 'dot' -or ($null -ne $value -and [double]$value -gt 0)) {
+                    $state = $item.Addon.BadgeToolTip -f $value
+                }
+            } catch { $value = $null; $state = '' }
         }
         $item.Value = $value
-        $item.Count.Text = if ($null -ne $value -and $value -ne 'dot') { $value } else { '' }
+        Set-WtNavToolTip $item.Button $(if ($state) { "$($item.Addon.Title) · $state" } else { $item.Addon.Title })
+        # 화면 읽기 이름은 탭 이름 그대로 두고(매크로 · 보조 기술이 늘 같은 이름으로 찾게), 상태는 도움말 글로 준다
+        [System.Windows.Automation.AutomationProperties]::SetName($item.Button, [string]$item.Addon.Title)
+        [System.Windows.Automation.AutomationProperties]::SetHelpText($item.Button, [string]$state)
+        $dot = ($item.Addon.BadgeKind -eq 'dot' -and $value -eq 'dot') -or
+            ($item.Addon.BadgeKind -eq 'active' -and $null -ne $value -and $value -ne 'dot' -and [double]$value -ge 1)
+        Set-WtNavBadge $item $dot
     }
-    Update-WtCollapsed
+    Update-WtStatusBar
 }
 
+function Update-WtStatusBar {
+    if (-not $script:ui -or -not $script:ui.StatusLeft) { return }
+    $script:ui.StatusLeft.Children.Clear()
+    $script:ui.StatusLeft.ColumnDefinitions.Clear()
+    $script:ui.StatusRight.Children.Clear()
+    foreach ($addon in @(Get-WtAddon)) {
+        if (-not $addon.StatusItems) { continue }
+        try { $items = @(& $addon.StatusItems) } catch { continue }
+        $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($item in $items) {
+            try {
+                if (-not $item.Key -or $item.Key -cnotmatch '^[a-z0-9-]+$' -or -not $item.Text -or $item.Side -cnotin 'left','right' -or
+                    -not $item.Open -or $item.Open.Id -cne $addon.Id -or ($null -ne $item.Open.Args -and $item.Open.Args -isnot [hashtable]) -or
+                    -not $keys.Add([string]$item.Key)) { continue }
+                $button = New-WtStatusButton ([string]$item.Text) -Icon ([int]$item.Icon)
+                $button.ToolTip = if ($item.ToolTip) { [string]$item.ToolTip } else { [string]$item.Text }
+                $button.Tag = @{ Id = $addon.Id; Args = $(if ($item.Open.Args) { $item.Open.Args } else { @{} }) }
+                [System.Windows.Automation.AutomationProperties]::SetAutomationId($button, "Status-$($addon.Id)-$($item.Key)")
+                [System.Windows.Automation.AutomationProperties]::SetName($button, [string]$item.Text)
+                $button.Add_Click({ param($s, $e) Open-WtPage -Id $s.Tag.Id -Args $s.Tag.Args })
+                if ($item.Side -ceq 'right') { [void]$script:ui.StatusRight.Children.Add($button) }
+                else {
+                    $column = [System.Windows.Controls.ColumnDefinition]::new()
+                    $column.Width = [System.Windows.GridLength]::Auto
+                    [System.Windows.Controls.Grid]::SetColumn($button, $script:ui.StatusLeft.Children.Count)
+                    $script:ui.StatusLeft.ColumnDefinitions.Add($column)
+                    [void]$script:ui.StatusLeft.Children.Add($button)
+                }
+            } catch { continue }
+        }
+    }
+    Set-WtStatusLayout $script:ui.StatusLeft
+}
 function Start-WtNavBadgeTimer {
     if ($script:badgeTimer) { $script:badgeTimer.Stop() }
     $script:badgeTimer = [System.Windows.Threading.DispatcherTimer]::new()
     $script:badgeTimer.Interval = [TimeSpan]::FromMinutes(1)
     $script:badgeTimer.Add_Tick({ Update-WtNavBadges })
     $script:badgeTimer.Start()
-}
-
-function Update-WtCollapsed {
-    if ($script:ui -and $script:ui.NavBorder) {
-        Set-WtNavLayout $script:ui $script:navButtons.Values $script:navGroups ([bool](Get-WtSetting 'nav.collapsed'))
-    }
-}
-
-function Switch-WtCollapsed {
-    Set-WtSetting 'nav.collapsed' (-not [bool](Get-WtSetting 'nav.collapsed'))
-    Update-WtCollapsed
 }
 
 # ---- 보조 칸 공용 틀 --------------------------------------------------------------------------
@@ -336,18 +442,13 @@ function Update-WtCurrentSidePanels {
 
 function Switch-WtPanelCycle {
     $panel = @(Get-WtSidePanels $script:ui.PageHost.Content | Where-Object { -not $_.Independent }) | Select-Object -First 1
-    if (-not $panel) { Switch-WtCollapsed; return }
+    if (-not $panel) { return }
     Update-WtSidePanel $panel
-    $nav = [bool](Get-WtSetting 'nav.collapsed')
-    if (-not $panel.Collapsed -and -not $nav) { $panel.Cycle = 'close-nav'; Set-WtSidePanelCollapsed $panel $true }
-    elseif ($panel.Collapsed -and -not $nav -and $panel.Cycle -eq 'open-side') { $panel.Cycle = ''; Set-WtSidePanelCollapsed $panel $false }
-    elseif (-not $nav) { $panel.Cycle = 'open-nav'; Switch-WtCollapsed }
-    else { $panel.Cycle = 'open-side'; Switch-WtCollapsed }
+    Set-WtSidePanelCollapsed $panel (-not $panel.Collapsed)
 }
-
 <#
 창 단축키를 화면 안 요소가 대신 쓰게 넘긴다. 그 요소(또는 그 안)에 포커스가 있으면 셸은 그 키를 처리하지 않는다.
-  Register-WtKeyOwner $element 'Ctrl+B'     예: 메모 편집기는 Ctrl+B를 굵게로 쓴다. 다른 곳에서는 그대로 메뉴 접기
+  Register-WtKeyOwner $element 'Ctrl+B'     예: 메모 편집기는 Ctrl+B를 굵게로 쓴다. 셸은 Ctrl+B를 처리하지 않는다
 요소가 사라지면 등록도 같이 사라진다(약한 참조).
 #>
 $script:keyOwners = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
@@ -647,6 +748,8 @@ function Stop-WtApp {
     if (-not $script:exiting) {
         $script:writingDropped = $false
         if (-not (Save-WtPendingChanges -Purpose exit)) { return $false }
+        # 보조 창 위치를 저장한 쓰기도 종료 확인에 포함한다.
+        if (-not (Close-WtUtilityWindows)) { return $false }
         if (-not (Confirm-WtDataWrites)) { return $false }
         foreach ($a in @(Get-WtAddon -All)) {
             if ($a.OnExit) { try { [void](& $a.OnExit) } catch { Show-WtError $_ "끝내기 전 저장: $($a.Title)" } }
@@ -724,12 +827,19 @@ function Initialize-WtShellSettings {
         switch -Wildcard ($key) {
             'theme.color' { Update-WtAppIcon }
             'ui.opacity' { Set-WtOpacity }
-            'nav.collapsed' { Update-WtCollapsed }
             'window.closeToTray' { Update-WtCloseTip }
             'addons.disabled' { Update-WtNav }
         }
     }
     $script:settingHandlerRegistered = $true
+}
+
+function Initialize-WtShellButtons {
+    $script:ui.MinButton.Add_Click({ $script:window.WindowState = 'Minimized' })
+    $script:ui.MaxButton.Add_Click({ Switch-WtMaximize })
+    $script:ui.CloseButton.Add_Click({ $script:window.Close() })
+    $script:ui.SettingsButton.Add_Click({ Select-WtPage '_settings' })
+    $script:ui.HelpButton.Add_Click({ Select-WtPage '_help' })
 }
 
 function Start-WtApp {
@@ -738,6 +848,7 @@ function Start-WtApp {
     $script:exiting = $false
     $script:notify = $null
     $script:views = @{}
+    $script:utilityWindows = @{}
     $script:current = $null
     $script:maxed = $false
     $script:fullscreen = $false
@@ -769,14 +880,10 @@ function Start-WtApp {
     Update-WtAppIcon
     $w.Add_ContentRendered({ Update-WtAppIcon; Start-WtWarmUp })
     $w.Add_SizeChanged({ Update-WtCurrentSidePanels })
+    $script:ui.StatusLeft.Add_SizeChanged({ param($s, $e) Set-WtStatusLayout $s })
 
-    # 제목 줄 · 메뉴 아래 버튼
-    $script:ui.CollapseButton.Add_Click({ Switch-WtCollapsed })
-    $script:ui.MinButton.Add_Click({ $script:window.WindowState = 'Minimized' })
-    $script:ui.MaxButton.Add_Click({ Switch-WtMaximize })
-    $script:ui.CloseButton.Add_Click({ $script:window.Close() })
-    $script:ui.SettingsButton.Add_Click({ Select-WtPage '_settings' })
-    $script:ui.HelpButton.Add_Click({ Select-WtPage '_help' })
+    # 제목 줄 버튼
+    Initialize-WtShellButtons
 
     # 제목 줄을 두 번 누르면 Windows가 Maximized로 바꾼다 → 작업 영역 최대화로 바꿔 준다
     $w.Add_StateChanged({
@@ -794,13 +901,14 @@ function Start-WtApp {
             Update-WtMaxGlyph
         })
 
-    # X(닫기)는 앱을 끝낸다. 설정에서 '트레이로 숨기기'를 켜면 트레이로 숨기고, 끄는 건 트레이 아이콘 우클릭 → 종료
+    # X는 기본으로 트레이로 숨긴다. 직접 고른 닫기 동작은 저장된 설정을 따른다.
     $w.Add_Closing({
             param($s, $e)
             if (-not $script:exiting -and (Close-WtFirstWorkSetup -UseDefaults)) { $e.Cancel = $true; return }
             if ($script:exiting) { return }
             if (-not [bool](Get-WtSetting 'window.closeToTray')) { $e.Cancel = -not (Stop-WtApp); return }
             $e.Cancel = $true
+            if (-not (Close-WtUtilityWindows)) { return }
             $s.Hide()
             if (-not $script:trayTipShown) {
                 $script:notify.ShowBalloonTip(3000, 'WorkTool', '트레이에서 계속 실행 중입니다. 끄려면 트레이 아이콘 우클릭 → 종료.',
@@ -817,7 +925,6 @@ function Start-WtApp {
                 $key = if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }
                 $shift = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0
                 if ($ctrl -and $shift -and $key -eq 'B') { Switch-WtPanelCycle; $e.Handled = $true; return }
-                if ($ctrl -and $key -eq 'B' -and -not (Test-WtKeyOwned 'Ctrl+B')) { Switch-WtCollapsed; $e.Handled = $true; return }
                 if ($key -eq 'F11') { Switch-WtFullScreen; $e.Handled = $true; return }
                 if ($key -eq 'Escape' -and $script:fullscreen) { Switch-WtFullScreen; $e.Handled = $true; return }
                 if ($key -eq 'F1') { Select-WtPage '_help'; $e.Handled = $true; return }
@@ -859,9 +966,8 @@ function Start-WtApp {
     # 실행 파일이 콘솔을 최소화해서 띄우면(start /min) 첫 창도 최소화돼서 뜬다 → 원래 크기로 앞에 띄운다
     if ($w.WindowState -eq 'Minimized') { $w.WindowState = 'Normal' }
     [void]$w.Activate()
-    $first = @(Get-WtAddon)[0]
-    if ($first) { Select-WtPage $first.Id } else { Select-WtPage '_settings' }
-    Show-WtFirstWorkSetup $w $(if ($first) { $first.Id } else { '_settings' })
+    $initialPage = Initialize-WtMainPage
+    Show-WtFirstWorkSetup $w $initialPage
     if (-not $script:exiting) { [System.Windows.Threading.Dispatcher]::PushFrame($script:frame) }
     } finally {
         if ($script:badgeTimer) { $script:badgeTimer.Stop() }
@@ -874,6 +980,6 @@ function Start-WtApp {
     }
 }
 
-Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Update-WtNavBadges, Switch-WtCollapsed, Register-WtKeyOwner, Test-WtKeyOwned,
+Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Update-WtNavBadges, Register-WtKeyOwner, Test-WtKeyOwned,
     New-WtSidePanel, Switch-WtPanelCycle, Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp

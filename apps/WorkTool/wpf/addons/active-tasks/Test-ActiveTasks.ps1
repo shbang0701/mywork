@@ -131,6 +131,7 @@ try {
         $shellModule = Get-Module Shell
         $testHost = [Windows.Window]::new(); $testHost.Title = 'WorkTool 표 검사'; $testHost.Width = 1100; $testHost.Height = 700
         $testHost.ShowInTaskbar = $false; $testHost.ShowActivated = $false; $testHost.Content = $view
+        if ($env:WORKTOOL_TEST_HIDDEN -eq '1') { $testHost.Opacity = 0 }
         & $shellModule { param($window) $script:window = $window } $testHost
         & $module {
             $script:originalStart = (Get-Command Start-WtTaskJob).ScriptBlock
@@ -140,6 +141,7 @@ try {
             Set-Item Function:script:New-WtModal -Value {
                 param($Title)
                 $dialog = & $script:originalModal $Title
+                if ($env:WORKTOOL_TEST_HIDDEN -eq '1') { $dialog.Window.Opacity = 0; $dialog.Window.ShowActivated = $false }
                 $script:testButtons = $dialog.Buttons
                 $dialog.Window.Add_ContentRendered({
                     param($s, $e)
@@ -264,6 +266,7 @@ try {
         # 일반 사용자 창은 열거하지 않는다. 아래 전용 핸들 하나만 worker에 전달한다.
         $fixture = [Windows.Window]::new(); $fixture.Title = 'WorkTool 전용 UIA 테스트'; $fixture.Width = 400; $fixture.Height = 240
         $fixture.ShowActivated = $false; $fixture.ShowInTaskbar = $false
+        if ($env:WORKTOOL_TEST_HIDDEN -eq '1') { $fixture.Opacity = 0 }
         $tabs = [Windows.Controls.TabControl]::new()
         $tabRefs = [Collections.Generic.List[object]]::new()   # 제목이 모두 같으므로 어떤 탭이 남았는지는 객체로 확인한다
         for ($i = 0; $i -lt 3; $i++) {
