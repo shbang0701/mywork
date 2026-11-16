@@ -1147,6 +1147,25 @@ try {
         $logAfter = @((Read-WtTestDocNamed 'event-log').items).Count
         Assert-WtTest '표 체크: UIA로 상자를 바꿔도 회차 기록을 남기고, 다시 그릴 때 들어오는 값은 저장하지 않는다' (
             $visualBoxes.Count -eq 1 -and (Get-WtEventDone).Contains("$weekly3@$(& $dt 0)") -and $logAfter -eq $logBefore + 1) "$($visualBoxes.Count) · $logBefore → $logAfter"
+        # 체크로 표를 다시 그리면 화면에서 떨어진 옛 줄 그릇의 DataContext가 {DisconnectedItem}이 된다. 그 그릇에서 시작한 누름 · 체크가 와도
+        # 고른 날을 지킨다. 전에는 고른 날이 비어 'Date' 오류가 나고, 앱을 끌 때까지 탭을 열 때마다 같은 오류가 났다(2026-11-16)
+        $staleRow = @(& $module { $script:tableItems } | Where-Object { -not $_.IsHead -and -not $_.Done -and $_.Row.Kind -ceq 'event' })[0]
+        $tableBox.ScrollIntoView($staleRow); $tableBox.UpdateLayout()
+        $staleBox = $tableBox.ItemContainerGenerator.ContainerFromItem($staleRow)
+        $selectedBefore = & $module { $script:selected }
+        & $module { param($i) Set-WtScheduleTableCheck $i $true } $staleRow
+        $tableBox.UpdateLayout()
+        $staleUp = [Windows.Input.MouseButtonEventArgs]::new([Windows.Input.Mouse]::PrimaryDevice, 0, [Windows.Input.MouseButton]::Left)
+        $staleUp.RoutedEvent = [Windows.UIElement]::MouseLeftButtonUpEvent; $staleUp.Source = $staleBox
+        $tableBox.RaiseEvent($staleUp)
+        & $module { param($i) Open-WtScheduleTableItem $i; Set-WtScheduleTableCheck $i $true } $staleBox.DataContext
+        & $module { Update-WtScheduleView }
+        $staleState = "$([object]::ReferenceEquals($staleBox.DataContext, [Windows.Data.BindingOperations]::DisconnectedSource))|$((& $module { $script:selected }) -eq $selectedBefore)"
+        Assert-WtTest '표 옛 줄: 다시 그린 뒤 떨어진 줄 그릇에서 누름 · 체크가 와도 고른 날을 지키고 다시 그린다' ($staleState -ceq 'True|True') $staleState
+        & $module { $script:selected = $null; $script:month = $null; Update-WtScheduleView }
+        $healed = & $module { "$($script:selected -eq [datetime]::Today)|$($script:month -eq [datetime]::new([datetime]::Today.Year, [datetime]::Today.Month, 1))" }
+        Assert-WtTest '일정 화면: 고른 날 · 보는 달이 비면 오늘로 되돌려 그린다' ($healed -ceq 'True|True') $healed
+        [void](Set-WtEventCheck -Event $staleRow.Row.Occurrence.Entry.Id -Date (ConvertTo-WtDateText $staleRow.Row.Occurrence.Original) -Done $false)
         & $module { $script:viewMode = 'calendar'; $script:search.Box.Text = '#점검'; $script:searchTimer.Stop(); Invoke-WtScheduleSearch }
         $found3 = & $module { "$($script:viewMode)|$([Windows.Automation.AutomationProperties]::GetName($script:view.ViewTitle))|$(@($script:tableItems | ForEach-Object Title) -join ',')" }
         & $module { $script:search.Box.Text = 'is:nope'; $script:searchTimer.Stop(); Invoke-WtScheduleSearch }

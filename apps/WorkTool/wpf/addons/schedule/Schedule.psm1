@@ -243,7 +243,7 @@ function Initialize-WtScheduleLists {
     $onToggle = [Windows.RoutedEventHandler]{
         param($s, $e)
         $box = $e.OriginalSource
-        if ($box -isnot [Windows.Controls.CheckBox] -or -not $box.DataContext -or $box.DataContext.IsHead -or $script:tableUpdating) { return }
+        if ($box -isnot [Windows.Controls.CheckBox] -or -not (Test-WtScheduleTableItem $box.DataContext) -or $box.DataContext.IsHead -or $script:tableUpdating) { return }
         if ([bool]$box.IsChecked -eq [bool]$box.DataContext.Done) { return }
         $e.Handled = $true; Set-WtScheduleTableCheck $box.DataContext ([bool]$box.IsChecked)
     }
@@ -257,7 +257,7 @@ function Initialize-WtScheduleLists {
                 if ($node -is [Windows.Controls.CheckBox]) { return }
                 $node = if ($node -is [Windows.Media.Visual] -or $node -is [Windows.Media.Media3D.Visual3D]) { [Windows.Media.VisualTreeHelper]::GetParent($node) } else { [Windows.LogicalTreeHelper]::GetParent($node) }
             }
-            if ($node) { Open-WtScheduleTableItem $node.DataContext }
+            if ($node -and (Test-WtScheduleTableItem $node.DataContext)) { Open-WtScheduleTableItem $node.DataContext }
         }, $true)
     $list.Add_PreviewKeyDown({
             param($s, $e)
@@ -448,9 +448,15 @@ function Update-WtScheduleTable {
     $v.TableNote.Text = ($notes -join ' '); $v.TableNote.Visibility = if ($notes.Count) { 'Visible' } else { 'Collapsed' }
 }
 
+# 표가 만든 줄인지(묶음 머리 또는 Row가 있는 줄). 표를 다시 그리면 화면에서 떨어진 옛 줄 그릇의 DataContext가
+# {DisconnectedItem}으로 바뀐다. 그 그릇으로 온 누름 · 체크를 받으면 고른 날이 비어 탭을 열 때마다 오류가 났다(2026-11-16)
+function Test-WtScheduleTableItem($Item) {
+    $null -ne $Item -and $null -ne $Item.PSObject.Properties['IsHead'] -and ($Item.IsHead -or $null -ne $Item.Row)
+}
+
 # 표 줄을 누르거나 Enter: 묶음 머리면 접기 · 펴기, 일정 · 루틴이면 오른쪽 편집 폼
 function Open-WtScheduleTableItem($Item) {
-    if ($null -eq $Item -or $script:tableUpdating) { return }
+    if (-not (Test-WtScheduleTableItem $Item) -or $script:tableUpdating) { return }
     if ($Item.IsHead) {
         if (-not $script:collapsed.Remove([string]$Item.Group)) { [void]$script:collapsed.Add([string]$Item.Group) }
         $script:focusKey = $Item.Key; Update-WtScheduleTable; return
@@ -463,6 +469,7 @@ function Open-WtScheduleTableItem($Item) {
 
 # 표 · 할 일의 체크: 일정 회차는 event-log, 루틴 차례는 routine-log에 남긴다
 function Set-WtScheduleTableCheck($Item, [bool]$Done) {
+    if (-not (Test-WtScheduleTableItem $Item) -or $Item.IsHead) { return }
     $row = $Item.Row
     try {
         $result = if ($row.Kind -ceq 'event') { Set-WtEventCheck -Event $row.Occurrence.Entry.Id -Date (ConvertTo-WtDateText $row.Occurrence.Original) -Done $Done }
@@ -649,6 +656,9 @@ function Set-WtChipText($TextBlock, [string]$Text, [bool]$Done) {
 # 보이는 보기만 다시 그린다(달력 · 표 · 할 일 · 루틴). 오른쪽 사이드바는 어느 보기든 고른 날 목록 또는 편집 폼
 function Update-WtScheduleView {
     if (-not $script:view) { return }
+    # 고른 날 · 보는 달은 화면 상태다. 어떤 길로든 비면 오늘로 되돌려, 오류가 탭을 열 때마다 남지 않게 한다
+    if ($script:selected -isnot [datetime]) { $script:selected = [datetime]::Today; $script:form = $null }
+    if ($script:month -isnot [datetime]) { $script:month = [datetime]::new($script:selected.Year, $script:selected.Month, 1) }
     $v = $script:view; $mode = $script:viewMode
     $v.CalendarHost.Visibility = if ($mode -ceq 'calendar') { 'Visible' } else { 'Collapsed' }
     $v.TableHost.Visibility = if ($mode -cin 'due', 'table') { 'Visible' } else { 'Collapsed' }
