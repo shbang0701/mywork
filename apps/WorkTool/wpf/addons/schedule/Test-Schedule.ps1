@@ -758,6 +758,52 @@ try {
     $farFind = Find-WtScheduleRows '2024-03-01' -Now $now
     Assert-WtTest '일정 찾기: 식 속 날짜가 앞뒤 1년 밖이면 찾는 기간을 그 날짜까지 넓힌다' ($farFind.Success -and $farFind.From -le [datetime]'2024-03-01') "$($farFind.From)"
 
+    $statusTextChecks = & (Get-Module Schedule) {
+        $homeItemsFunction = ${function:Get-WtScheduleHomeItems}
+        $dueCountFunction = (Get-Command Get-WtScheduleDueCount).ScriptBlock
+        $dueRowsFunction = (Get-Command Get-WtScheduleDueRows).ScriptBlock
+        try {
+            $day=[datetime]::Today
+            $script:statusTestDay=$day
+            function script:Get-WtScheduleHomeItems {
+                @(
+                    [pscustomobject]@{ Title='끝낸 일정';Start=$script:statusTestDay.AddHours(13);End=$script:statusTestDay.AddHours(16);Done=$true;AllDay=$false;ToolTip='끝냄' }
+                    [pscustomobject]@{ Title='종일';Start=$script:statusTestDay;End=$script:statusTestDay.AddDays(1);Done=$false;AllDay=$true;ToolTip='종일' }
+                    [pscustomobject]@{ Title='지난 일정';Start=$script:statusTestDay.AddHours(9);End=$script:statusTestDay.AddHours(10);Done=$false;AllDay=$false;ToolTip='지난 일정' }
+                    [pscustomobject]@{ Title='점검';Start=$script:statusTestDay.AddHours(14);End=$script:statusTestDay.AddHours(15);Done=$false;AllDay=$false;ToolTip="점검`n14:00–15:00`n매일`n10분 전" }
+                )
+            }
+            function script:Get-WtScheduleDueCount { param($Now) $script:statusTestCount }
+            function script:Get-WtScheduleDueRows {
+                param($Now)
+                @{ Rows=@(
+                    @{Kind='event';Group='overdue';Done=$false}, @{Kind='event';Group='today';Done=$false},
+                    @{Kind='routine';Group='today';RoutineId='r';RoutineDone=$false}, @{Kind='routine';Group='today';RoutineId='r';RoutineDone=$false},
+                    @{Kind='event';Group='soon';Done=$true}) }
+            }
+            $script:statusTestCount=3
+            $next=@(Get-WtScheduleStatusItems ($day.AddHours(12)))
+            $running=@(Get-WtScheduleStatusItems ($day.AddHours(14.5)))
+            $none=@(Get-WtScheduleStatusItems ($day.AddHours(16)))
+            $script:statusTestCount=0
+            function script:Get-WtScheduleDueRows { param($Now) @{Rows=@()} }
+            $zero=@(Get-WtScheduleStatusItems ($day.AddHours(16)))
+            @{ Next=$next[0].Text -ceq '다음 14:00 점검' -and $next[0].ToolTip -ceq "점검`n14:00–15:00`n매일`n10분 전" -and $next[0].Open.Args.Date -eq $day -and $next[0].Open.Args.View -ceq 'calendar'
+                Icons=$next[0].Icon -eq 0xE787 -and $running[0].Icon -eq 0xE787 -and $next[1].Icon -eq 0xE73E -and $zero[0].Icon -eq 0xE73E
+                Running=$running[0].Text -ceq '진행 중 14:00 점검' -and @($none | Where-Object Key -CEQ 'next').Count -eq 0
+                Due=$next[1].Text -ceq '남은 일 3' -and $next[1].ToolTip -ceq '기한 지남 1 · 오늘 2 · 마감 임박 0' -and $next[1].Open.Args.View -ceq 'due' -and
+                    $zero.Count -eq 1 -and $zero[0].Text -ceq '남은 일 없음' -and $zero[0].ToolTip -ceq '기한 지남 0 · 오늘 0 · 마감 임박 0' }
+        } finally {
+            Set-Item Function:script:Get-WtScheduleHomeItems $homeItemsFunction
+            Set-Item Function:script:Get-WtScheduleDueCount $dueCountFunction
+            Set-Item Function:script:Get-WtScheduleDueRows $dueRowsFunction
+        }
+    }
+    Assert-WtTest '일정 상태 줄: 홈과 같은 다음 일정·툴팁·오늘 달력 인자' $statusTextChecks.Next
+    Assert-WtTest '일정 상태 줄: 진행 중·끝낸 일정/종일/지난 일정 제외·없으면 숨김' $statusTextChecks.Running
+    Assert-WtTest '일정 상태 줄: 남은 일 0/n·세 묶음 툴팁·할 일 보기 인자' $statusTextChecks.Due
+    Assert-WtTest '일정 상태 줄 아이콘: next E787 · due E73E를 탭이 등록' $statusTextChecks.Icons
+
     if (Test-WtTestWpf) {
         $test = New-WtTestData 'schedule-view'; $tests.Add($test)
         $module = Get-Module Schedule
@@ -1111,6 +1157,14 @@ try {
         Assert-WtTest '할 일 보기: 묶음 머리(기한 지남 · 오늘 · 마감 임박) + 줄, 제목과 보기 단추에 할 일 수' (
             $dueShape3 -ceq '[기한 지남 1],늦은 일,[오늘 5],가 루틴,다 루틴,나 루틴,매주 회의,오늘 점검,[마감 임박 1],곧 끝남' -and
             $dueHeader -ceq '할 일 7|7' -and (Get-WtScheduleDueCount) -eq 7) "$dueShape3 / $dueHeader"
+        $statusOpen = & $module {
+            $script:search.Box.Text='찾지 못할 가짜 조건'
+            Open-WtScheduleArgs @{ Date=[datetime]::Today; View='calendar' }
+            $todayOpened=$script:viewMode -ceq 'calendar' -and $script:selected -eq [datetime]::Today -and -not (Get-WtScheduleQueryText)
+            Open-WtScheduleArgs @{ Date=[datetime]::Today; View='due' }
+            $todayOpened -and $script:viewMode -ceq 'due' -and -not (Get-WtScheduleQueryText)
+        }
+        Assert-WtTest '상태 줄 열기: 찾기 조건을 지우고 오늘 달력·할 일 보기로 이동' $statusOpen
         # 할 일 색(설계 15.10): 기한 지남 = over, 3일 안에 끝나는 여러 날 = soon 배지. 묶음 머리 배지 색은 Group(overdue · today · soon)으로 그린다
         $dueKinds = (@($dueItems | Where-Object { -not $_.IsHead -and $_.DueKind } | ForEach-Object { "$($_.Title):$($_.DueKind)" }) -join ',')
         $headGroups = (@($dueItems | Where-Object IsHead | ForEach-Object Group) -join ',')

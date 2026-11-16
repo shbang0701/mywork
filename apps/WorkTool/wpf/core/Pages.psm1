@@ -1,4 +1,4 @@
-# 셸에 붙은 기본 화면: 설정, 도움말. 메뉴 아래 톱니바퀴 · 물음표 버튼으로 연다.
+# 설정·도움말의 창 내용. 타이틀바 톱니바퀴 · 물음표 버튼으로 각각 새 창에 연다.
 # 이벤트 처리기는 $script: 변수와 보낸 요소의 Tag만 쓴다 (Shell.psm1 머리말 참고).
 
 $ErrorActionPreference = 'Stop'
@@ -177,7 +177,7 @@ function New-WtDataCard {
             $dlg.Description = '예전 WorkTool의 data 폴더를 고르세요 (memo.csv · schedule.csv · attendance.csv가 있는 폴더)'
             if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
                 Set-WtSetting 'legacy.path' $dlg.SelectedPath
-                Select-WtPage '_settings'
+                Select-WtPage '_settings' -Tab '데이터' -Refresh
             }
         })
     $again = New-WtButton '다시 가져오기' -Kind Primary
@@ -188,6 +188,7 @@ function New-WtDataCard {
             try {
                 $r = Import-WtLegacyData -Force
                 Reset-WtViews
+                Select-WtPage '_settings' -Tab '데이터' -Refresh
                 Show-WtMessage ("가져왔습니다: {0}" -f ($r.Tabs -join ', '))
             } catch { Show-WtError $_ '다시 가져오기' }
         })
@@ -202,10 +203,11 @@ function New-WtDataCard {
 
 function New-WtTabbedPage([string]$Title, [object[]]$Sections) {
     $page = New-WtPage -Fill
-    $heading = New-WtPageHeader $Title
+    $heading = New-WtUtilityPageHeader $Title
     [System.Windows.Controls.DockPanel]::SetDock($heading, 'Top')
     [void](Add-WtChild $page.Panel $heading)
     $tabs = [System.Windows.Controls.TabControl]::new()
+    $page.Root.Tag = @{ Tabs = $tabs }
     Set-WtStyle $tabs 'Tabs'
     [System.Windows.Automation.AutomationProperties]::SetName($tabs, "$Title 하위 탭")
     foreach ($section in $Sections) {
@@ -223,6 +225,13 @@ function New-WtTabbedPage([string]$Title, [object[]]$Sections) {
     $tabs.SelectedIndex = 0
     [void](Add-WtChild $page.Panel $tabs)
     $page.Root
+}
+
+function Select-WtPageTab($Page, [string]$Tab) {
+    if (-not $Page.Tag -or -not $Page.Tag.Tabs) { return }
+    foreach ($item in $Page.Tag.Tabs.Items) {
+        if ([string]$item.Header -ceq $Tab) { $Page.Tag.Tabs.SelectedItem = $item; return }
+    }
 }
 
 function New-WtSettingsPage {
@@ -316,6 +325,7 @@ function Update-WtHolidayTable {
         [void](Add-WtChild $table $row)
     }
     if (-not $rows.Count) { [void](Add-WtChild $table (New-WtText '이 해에는 휴무일이 없습니다.' 'Table.Empty')) }
+    Update-WtNavBadges
 }
 # 표 한 줄: 날짜 110 · 요일 56 · 이름(나머지) · 종류 110 · 넣은 곳 90. 머리 줄과 같은 칸을 쓴다
 function New-WtHolidayRowGrid([string[]]$Values, [string]$Style) {
@@ -632,7 +642,11 @@ function Show-WtFirstWorkSetup($Window, [string]$HomePage) {
     $overlay.Child = $page.Root
     [System.Windows.Controls.Grid]::SetRow($overlay, 1)
     $grid = $Window.Content.Child
-    $script:firstWorkSetup = @{ Window = $Window; Grid = $grid; Overlay = $overlay; Form = $form; Home = $HomePage }
+    $actions = @(foreach ($name in 'HelpButton','SettingsButton') {
+        $button = $Window.FindName($name)
+        if ($button) { @{ Button = $button; Enabled = $button.IsEnabled }; $button.IsEnabled = $false }
+    })
+    $script:firstWorkSetup = @{ Window = $Window; Grid = $grid; Overlay = $overlay; Form = $form; Home = $HomePage; Actions = $actions }
     [void]$grid.Children.Add($overlay)
     [System.Windows.Input.KeyboardNavigation]::SetTabNavigation($overlay, 'Cycle')
     [void]$form.Boxes['work.start'].Focus()
@@ -646,6 +660,7 @@ function Close-WtFirstWorkSetup([switch]$UseDefaults) {
     }
     $setup = $script:firstWorkSetup
     [void]$setup.Grid.Children.Remove($setup.Overlay)
+    foreach ($action in $setup.Actions) { $action.Button.IsEnabled = $action.Enabled }
     $script:firstWorkSetup = $null
     Select-WtPage $setup.Home
     $true
@@ -709,8 +724,7 @@ function New-WtHelpPage {
     [void](Add-WtChild $col (New-WtKeyRow '키' '하는 일' -Header))
     foreach ($r in @(
             @('Ctrl + 1 ~ 9', '메뉴 순서대로 화면 이동'),
-            @('Ctrl + B', '메뉴 접기 / 펼치기'),
-            @('Ctrl + Shift + B', '사이드바 접기 순서 전환'),
+            @('Ctrl + Shift + B', '사이드바 접기 / 펼치기'),
             @('F11', '전체 화면 (Esc로 나가기)'),
             @('Ctrl + ,', '설정'),
             @('F1', '도움말'))) {
@@ -747,4 +761,4 @@ function New-WtHelpPage {
     New-WtTabbedPage '도움말' @(@('단축키', $keys), @('탭', $tabsCard), @('정보', $win))
 }
 
-Export-ModuleMember -Function New-WtSettingsPage, New-WtHelpPage, Show-WtFirstWorkSetup, Close-WtFirstWorkSetup, Invoke-WtWorkSetupKey
+Export-ModuleMember -Function New-WtSettingsPage, New-WtHelpPage, Select-WtPageTab, Show-WtFirstWorkSetup, Close-WtFirstWorkSetup, Invoke-WtWorkSetupKey

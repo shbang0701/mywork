@@ -215,11 +215,15 @@ function Wait-EdUi([int]$Ms = 10) {
 
 # 나눠 그리기가 끝날 때까지 돌린다. -Check면 사이사이 문서 약속을 본다
 function Complete-EdRender($Ed, [switch]$Check, [string]$Where = '나눠 그리는 중') {
+    # 확인하는 것은 「멈추지 않고 끝까지 그린다」다. 걸린 시간은 PC · 프로세스 상태(전체 검사 안에서는 두 배 가까이)에 따라 달라
+    # 벽시계 한도 대신 15초 동안 한 단위도 더 못 그리면 멈춘 것으로 본다(11-17: 혼자 30초 · 전체 검사 안 60초 넘나듦). 5분은 무한 루프 막이
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $ok = $true
-    while ($Ed.Rendered -lt $Ed.Units.Count -and $sw.ElapsedMilliseconds -lt 60000) {
+    $last = $Ed.Rendered; $lastAt = 0
+    while ($Ed.Rendered -lt $Ed.Units.Count -and $sw.ElapsedMilliseconds - $lastAt -lt 15000 -and $sw.ElapsedMilliseconds -lt 300000) {
         Wait-EdUi 10
         if ($Check -and $ok) { $ok = Test-EdContract $Ed $Where }
+        if ($Ed.Rendered -ne $last) { $last = $Ed.Rendered; $lastAt = $sw.ElapsedMilliseconds }
     }
     $Ed.Live.UpdateLayout()
     $Ed.Rendered -ge $Ed.Units.Count
@@ -454,6 +458,40 @@ $longText = Join-EdLines $long
 try {
     $win.Measure([System.Windows.Size]::new(900, 700))
     $win.Arrange([System.Windows.Rect]::new(0, 0, 900, 700))
+
+    Invoke-EdCase '인라인 코드 바탕' {
+        $beforeColor = Get-WtSetting 'theme.color'
+        try {
+            $ed = New-EdEditor
+            Set-EdText $ed '본문 `config.json`
+
+> [!note] 안내
+> 콜아웃 `config.json`'
+            $findCode = {
+                param($Blocks)
+                foreach ($block in $Blocks) {
+                    if ($block -is [System.Windows.Documents.Section]) { & $findCode $block.Blocks }
+                    elseif ($block -is [System.Windows.Documents.Paragraph]) {
+                        foreach ($inline in $block.Inlines) {
+                            if ($inline -is [System.Windows.Documents.Run] -and $inline.Text -ceq 'config.json') { $inline }
+                        }
+                    }
+                }
+            }
+            $codeRuns = @(& $findCode $ed.Live.Document.Blocks)
+            $problems = @(foreach ($name in (Get-WtPalette).Keys) {
+                Set-WtSetting 'theme.color' $name
+                Sync-EdUi
+                $colors = Get-WtThemeColors $name
+                $tint = (Get-WtPalette)[$name].Tint
+                if ($codeRuns.Count -ne 2 -or $colors['Code.InlineBg'] -cne $tint -or
+                    (Get-WtContrast $colors['Text.Primary'] $colors['Code.InlineBg']) -lt 4.5 -or
+                    @($codeRuns | Where-Object { $_.Background.Color.ToString() -cne ('#FF' + $tint.TrimStart('#')) }).Count -or
+                    $colors['Code.Bg'] -cne $colors['Bg.Subtle']) { $name }
+            })
+            Assert-Ed '인라인 코드 바탕: 7색 T · 본문/콜아웃 반영 · 대비 4.5:1 · 블록 바탕 유지' (-not $problems) ($problems -join ', ')
+        } finally { Set-WtSetting 'theme.color' $beforeColor }
+    }
 
     # ---- 불러오기 · 돌려받기 ----
     Invoke-EdCase '불러오기' {

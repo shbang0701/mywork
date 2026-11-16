@@ -633,7 +633,7 @@ function New-WtActiveTasksView {
 }
 
 Register-WtAddon -Id 'active-tasks' -Title '활성 작업' -Icon 0xE7C4 -Group '작업' -Order 70 -WarmUp View `
-    -Badge { @($script:items).Count } `
+    -Badge { @($script:items).Count } -BadgeKind active -BadgeToolTip '{0}개' `
     -NewView { New-WtActiveTasksView } -Refresh { param($view) Start-WtTaskJob 'scan' } -OnExit { Stop-WtTasks } `
     -Help @(
         '열린 창과 브라우저 탭을 모아 봅니다.'

@@ -170,14 +170,14 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
         $script:navButtons = @{ 'test-pending' = @{ Button = [System.Windows.Controls.RadioButton]::new() }; 'test-other' = @{ Button = [System.Windows.Controls.RadioButton]::new() } }
         $script:navButtons['test-other'].Button.IsChecked = $true
     }
-    Select-WtPage '_help'
+    Select-WtPage 'test-other'
     Assert-WtTest '안정성: 저장 실패는 이동할지 묻고, [취소]면 페이지 전환을 멈춘다' ((& $shellModule { $script:current }) -eq 'test-pending' -and (& $shellModule { $script:testAsked -join ',' }) -eq 'switch')
     Assert-WtTest '안정성: 전환을 취소하면 메뉴 선택도 원래 화면으로 돌아간다' ((& $shellModule { $script:navButtons['test-pending'].Button.IsChecked }) -and -not (& $shellModule { $script:navButtons['test-other'].Button.IsChecked }))
     & $shellModule { $script:ui = @{ PageHost = [System.Windows.Controls.ContentControl]::new() }; $script:testChoices.Enqueue('proceed') }
-    Select-WtPage '_help'
-    Assert-WtTest '안정성: [이동]을 고르면 저장하지 못했어도 화면을 옮긴다' ((& $shellModule { $script:current }) -eq '_help')
+    Select-WtPage 'test-other'
+    Assert-WtTest '안정성: [이동]을 고르면 저장하지 못했어도 화면을 옮긴다' ((& $shellModule { $script:current }) -eq 'test-other')
     $askedBefore = & $shellModule { $script:testAsked.Count }
-    Assert-WtTest '안정성: 저장할 것이 없는 화면을 떠날 때는 묻지 않는다' ((& $shellModule { Save-WtPendingChanges -Purpose switch -Only '_help' }) -and (& $shellModule { $script:testAsked.Count }) -eq $askedBefore)
+    Assert-WtTest '안정성: 저장할 것이 없는 화면을 떠날 때는 묻지 않는다' ((& $shellModule { Save-WtPendingChanges -Purpose switch -Only 'test-other' }) -and (& $shellModule { $script:testAsked.Count }) -eq $askedBefore)
     & $shellModule { $script:current = 'test-pending'; $script:ui = $null }
     $pending.Saved = $true
     Assert-WtTest '안정성: 성공한 종료에서만 정리 처리를 실행한다' ((& $shellModule { Stop-WtApp }) -and $exitCounter.Count -eq 1)

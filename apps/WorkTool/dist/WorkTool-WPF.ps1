@@ -2158,8 +2158,7 @@ $script:defaults = @{
     'theme.color'     = 'sky'    # 파스텔: sky · pink · green · yellow · purple · gray · black
     'ui.opacity'      = 100      # 창 불투명도(%) 60~100
     'ui.fontScale'    = 'm'      # 글자 크기 s · m · l
-    'nav.collapsed'   = $false   # 왼쪽 메뉴 접힘
-    'window.closeToTray' = $false   # 창의 X를 누르면 끝내지 않고 트레이로 숨김
+    'window.closeToTray' = $true   # 창의 X를 누르면 끝내지 않고 트레이로 숨김
     'addons.disabled' = @()      # 메뉴에서 숨긴 애드온 ID
     'legacy.path'     = ''       # 예전 WorkTool data 폴더 (비우면 자동으로 찾음)
     'work.days'       = @(1, 2, 3, 4, 5)
@@ -2750,6 +2749,7 @@ $script:palettes = [ordered]@{
 # Tint에 섞을 색과 비율. 대비는 Test-Core.ps1이 일곱 색 모두 확인한다.
 $script:tinted = @{
     'Bg.Canvas' = @('#FFFFFF', 0.55); 'Bg.Subtle' = @('#FFFFFF', 0.72); 'Bg.Selected' = @('#FFFFFF', 0.35)
+    'Code.InlineBg' = @('#FFFFFF', 0)
     'Fill.Hover.Surface' = @('#FFFFFF', 0.65); 'Fill.Pressed.Surface' = @('#FFFFFF', 0.45)
     'Fill.Hover.Canvas' = @('#FFFFFF', 0.3); 'Fill.Pressed.Canvas' = @('#FFFFFF', 0.12); 'Fill.Selected.Nav' = @('#FFFFFF', 0)
     'Fill.Hover.Subtle' = @('#FFFFFF', 0.5); 'Fill.Pressed.Subtle' = @('#FFFFFF', 0.3)
@@ -2819,7 +2819,7 @@ $script:dimensions = @{
     'Radius.Joined' = 0; 'Radius.Small' = 2; 'Radius.Control' = 4; 'Radius.Card' = 8; 'Radius.Overlay' = 8; 'Radius.SelectionBar' = 1.5
     'Line.Border' = 1; 'Line.Focus' = 2; 'Line.FocusInner' = 1; 'Line.Selection' = 3; 'Line.TabActive' = 2
     'Height.Control' = 32; 'Height.Compact' = 28; 'Height.Row2' = 48; 'Height.MemoRow' = 52
-    'Height.PanelHeader' = 40; 'Height.Header' = 56; 'Height.Tab' = 36; 'Height.MemoTabBar' = 40; 'Height.MemoTab' = 28
+    'Height.PanelHeader' = 40; 'Height.Header' = 56; 'Height.Tab' = 36; 'Height.MemoTabBar' = 40; 'Height.MemoTab' = 28; 'Height.StatusBar' = 24
     'Height.Chip' = 20; 'Height.FilterChip' = 24; 'Height.Checklist' = 28
     'ToolTip.MaxWidth' = 320; 'ToolTip.InitialShowDelay' = 400; 'ToolTip.BetweenShowDelay' = 100
 }
@@ -2977,8 +2977,7 @@ $script:stylesXaml = @'
 
   <!-- 창 짜임 전용 치수: 디자인 2판 6·8절. Theme의 공통 토큰과 분리한다. -->
   <sys:Double x:Key="F.Chrome.Height">32</sys:Double>
-  <sys:Double x:Key="F.Nav.Width">200</sys:Double>
-  <sys:Double x:Key="F.Nav.CollapsedWidth">48</sys:Double>
+  <sys:Double x:Key="F.Nav.Width">48</sys:Double>
   <sys:Double x:Key="F.SidePanel.RailWidth">28</sys:Double>
   <sys:Double x:Key="F.SidePanel.Gap">8</sys:Double>
   <sys:Double x:Key="F.SidePanel.Breakpoint">1200</sys:Double>
@@ -3236,25 +3235,65 @@ $script:stylesXaml = @'
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
     </Style.Triggers>
   </Style>
-  <Style x:Key="Btn.NavFooter" TargetType="Button" BasedOn="{StaticResource Btn.Canvas}">
-    <Setter Property="Width" Value="32"/><Setter Property="Height" Value="32"/>
+  <Style x:Key="Btn.TitleAction" TargetType="Button" BasedOn="{StaticResource Btn.Canvas}">
+    <Setter Property="Width" Value="40"/><Setter Property="Height" Value="32"/>
+    <!-- 창 맨 위에 닿으므로 포커스 테두리를 안쪽에 그린다(바깥에 그리면 위가 창 밖으로 잘림, design.md 5.3) -->
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
   </Style>
-  <Style x:Key="T.NavGroup" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
-    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
-    <Setter Property="Height" Value="24"/><Setter Property="Margin" Value="12,0,0,0"/>
-    <Setter Property="VerticalAlignment" Value="Center"/>
+  <Style x:Key="T.TitleActionIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}">
+    <Setter Property="FontSize" Value="14"/>
   </Style>
-  <Style x:Key="T.NavCount" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+  <Style x:Key="Btn.Status" TargetType="Button" BasedOn="{StaticResource Btn.Canvas}">
+    <Setter Property="FlowDirection" Value="LeftToRight"/>
+    <Setter Property="Width" Value="Auto"/><Setter Property="Height" Value="{DynamicResource F.Height.StatusBar}"/>
+    <Setter Property="Padding" Value="8,0"/><Setter Property="HorizontalAlignment" Value="Left"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Caption}"/>
+    <Setter Property="FontWeight" Value="{DynamicResource F.Caption.Weight}"/>
+  </Style>
+  <Style x:Key="Shell.StatusText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+    <Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+  </Style>
+  <Style x:Key="Shell.StatusIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}">
+    <Setter Property="FontSize" Value="12"/><Setter Property="Width" Value="12"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
-    <Setter Property="VerticalAlignment" Value="Center"/>
-    <Setter Property="HorizontalAlignment" Value="Right"/>
-    <Setter Property="TextWrapping" Value="NoWrap"/>
+    <Setter Property="Margin" Value="0,0,4,0"/>
+  </Style>
+  <DataTemplate x:Key="Shell.StatusItem">
+    <Grid>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <TextBlock x:Name="Icon" Style="{DynamicResource Shell.StatusIcon}" VerticalAlignment="Center"/>
+      <TextBlock x:Name="Text" Grid.Column="1" Style="{DynamicResource Shell.StatusText}" VerticalAlignment="Center"/>
+    </Grid>
+  </DataTemplate>
+  <Style x:Key="Shell.StatusBar" TargetType="StatusBar">
+    <Setter Property="Height" Value="{DynamicResource F.Height.StatusBar}"/>
+    <Setter Property="Padding" Value="0"/><Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
+    <Setter Property="ItemsPanel"><Setter.Value><ItemsPanelTemplate><Grid/></ItemsPanelTemplate></Setter.Value></Setter>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="StatusBar">
+      <Border Background="{TemplateBinding Background}"><ItemsPresenter/></Border>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="Shell.StatusBarItem" TargetType="StatusBarItem">
+    <Setter Property="Padding" Value="0"/>
+    <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="VerticalContentAlignment" Value="Stretch"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="StatusBarItem">
+      <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <!-- 보조 창 제목: 내용 자리(왼쪽 8) 안에서 메인 창과 같이 왼쪽 8 · 위아래 12 → 창 기준 x=16 (디자인 8절) -->
+  <Style x:Key="Utility.PageHeader" TargetType="DockPanel">
+    <Setter Property="Margin" Value="8,12,0,12"/>
+  </Style>
+  <Style x:Key="Shell.NavSeparator" TargetType="Border">
+    <Setter Property="Width" Value="24"/><Setter Property="Height" Value="1"/>
+    <Setter Property="Margin" Value="0,8"/><Setter Property="HorizontalAlignment" Value="Center"/>
+    <Setter Property="Background" Value="{DynamicResource B.Border.Muted}"/>
   </Style>
   <Style x:Key="T.NavIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}">
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
-  </Style>
-  <Style x:Key="T.NavGroup.Next" TargetType="TextBlock" BasedOn="{StaticResource T.NavGroup}">
-    <Setter Property="Margin" Value="12,12,0,0"/>
   </Style>
   <Style x:Key="Nav.Dot" TargetType="Ellipse">
     <Setter Property="Width" Value="6"/><Setter Property="Height" Value="6"/>
@@ -3263,16 +3302,10 @@ $script:stylesXaml = @'
     <Setter Property="Visibility" Value="Collapsed"/>
   </Style>
   <DataTemplate x:Key="Shell.NavItem">
-    <Grid>
-      <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <Grid Width="16" Height="16" VerticalAlignment="Center">
+      <Grid Width="16" Height="16" VerticalAlignment="Center" HorizontalAlignment="Center">
         <TextBlock x:Name="Icon" Style="{DynamicResource T.NavIcon}"/>
-        <Ellipse x:Name="IconDot" Style="{DynamicResource Nav.Dot}" VerticalAlignment="Top" Margin="0,-4,-4,0"/>
+        <Ellipse x:Name="IconDot" Style="{DynamicResource Nav.Dot}" VerticalAlignment="Top" Margin="0,-7,-7,0"/>
       </Grid>
-      <TextBlock x:Name="Label" Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-      <TextBlock x:Name="Count" Grid.Column="2" Style="{DynamicResource T.NavCount}"/>
-      <Ellipse x:Name="Dot" Grid.Column="2" Style="{DynamicResource Nav.Dot}"/>
-    </Grid>
   </DataTemplate>
   <DataTemplate x:Key="Shell.SidePanel">
     <Grid Panel.ZIndex="1">
@@ -3308,7 +3341,7 @@ $script:stylesXaml = @'
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Height" Value="{DynamicResource F.Height.Control}"/>
     <Setter Property="Margin" Value="0"/>
-    <Setter Property="Padding" Value="12,0,8,0"/>
+    <Setter Property="Padding" Value="8,0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
@@ -4218,8 +4251,9 @@ $script:stylesXaml = @'
   </Style>
   <Style x:Key="Md.InlineCode" TargetType="Run">
     <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
-    <Setter Property="FontSize" Value="{DynamicResource F.Code}"/>
-    <Setter Property="Background" Value="{DynamicResource B.Code.Bg}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Code}"/>
+    <!-- 굵기 · 글자색은 문단에서 물려받는다(본문 400 · B.Text.Primary). 조각마다 동적 리소스를 더 찾으면 긴 메모 그리기가 느려진다(11-17 측정) -->
+    <Setter Property="Background" Value="{DynamicResource B.Code.InlineBg}"/>
   </Style>
   <Style x:Key="Md.Math" TargetType="Paragraph">
     <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
@@ -4589,7 +4623,7 @@ $script:stylesXaml = @'
       <DockPanel KeyboardNavigation.TabNavigation="Local">
         <TabPanel DockPanel.Dock="Top" IsItemsHost="True" Margin="8,0,8,0" KeyboardNavigation.TabIndex="1"/>
         <Border Background="{DynamicResource B.Bg.Surface}" CornerRadius="{DynamicResource F.Radius.Card}">
-          <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" Margin="0,8,0,8"/>
+          <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"/>
         </Border>
       </DockPanel>
     </ControlTemplate></Setter.Value></Setter>
@@ -5054,9 +5088,15 @@ function Get-WtShellXaml {
   </WindowChrome.WindowChrome>
   <Border Background="{DynamicResource B.Bg.Canvas}">
     <Grid>
-      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
       <DockPanel x:Name="TitleBar" Height="{DynamicResource F.Chrome.Height}" Background="{DynamicResource B.Bg.Canvas}">
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <Button x:Name="HelpButton" Style="{DynamicResource Btn.TitleAction}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="도움말 (F1)" AutomationProperties.AutomationId="HelpButton" AutomationProperties.Name="도움말">
+            <TextBlock Text="&#xE897;" Style="{DynamicResource T.TitleActionIcon}"/>
+          </Button>
+          <Button x:Name="SettingsButton" Style="{DynamicResource Btn.TitleAction}" Margin="0,0,8,0" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="설정 (Ctrl+,)" AutomationProperties.AutomationId="SettingsButton" AutomationProperties.Name="설정">
+            <TextBlock Text="&#xE713;" Style="{DynamicResource T.TitleActionIcon}"/>
+          </Button>
           <Button x:Name="MinButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최소화" AutomationProperties.Name="최소화">
             <TextBlock Text="&#xE921;" Style="{DynamicResource T.Icon}" FontSize="10"/>
           </Button>
@@ -5075,31 +5115,24 @@ function Get-WtShellXaml {
       <Grid Grid.Row="1">
         <Grid.ColumnDefinitions><ColumnDefinition x:Name="NavColumn" Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
         <Border x:Name="NavBorder" Width="{DynamicResource F.Nav.Width}" Background="{DynamicResource B.Bg.Canvas}">
-          <DockPanel>
-            <Grid DockPanel.Dock="Top" Height="40">
-              <Button x:Name="CollapseButton" Style="{DynamicResource Btn.Canvas}" HorizontalAlignment="Left" Margin="12,0,0,0" ToolTip="메뉴 접기/펼치기 (Ctrl+B)" AutomationProperties.Name="메뉴 접기/펼치기">
-                <TextBlock Text="&#xE700;" Style="{DynamicResource T.Icon}"/>
-              </Button>
-            </Grid>
-            <StackPanel x:Name="FooterPanel" DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Left" Margin="12,8,0,12">
-              <Button x:Name="HelpButton" Style="{DynamicResource Btn.NavFooter}" ToolTip="도움말" AutomationProperties.Name="도움말" Margin="0,0,8,0">
-                <TextBlock Text="&#xE897;" Style="{DynamicResource T.Icon}"/>
-              </Button>
-              <Button x:Name="SettingsButton" Style="{DynamicResource Btn.NavFooter}" ToolTip="설정" AutomationProperties.Name="설정">
-                <TextBlock Text="&#xE713;" Style="{DynamicResource T.Icon}"/>
-              </Button>
-            </StackPanel>
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
-              <StackPanel x:Name="NavPanel" Margin="8,0,8,0"/>
+              <StackPanel x:Name="NavPanel" Margin="8,8,8,0"/>
             </ScrollViewer>
-          </DockPanel>
         </Border>
         <Grid Grid.Column="1" Margin="0,0,8,8">
           <ContentControl x:Name="WarmHost" Focusable="False" Visibility="Hidden" IsHitTestVisible="False"/>
           <ContentControl x:Name="PageHost" Focusable="False"/>
         </Grid>
       </Grid>
-      <Border x:Name="Frame" Grid.RowSpan="2" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
+      <StatusBar x:Name="StatusBar" Grid.Row="2" Style="{DynamicResource Shell.StatusBar}" AutomationProperties.AutomationId="StatusBar">
+        <StatusBarItem Style="{DynamicResource Shell.StatusBarItem}">
+        <DockPanel Margin="40,0,4,0">
+          <StackPanel x:Name="StatusRight" DockPanel.Dock="Right" Orientation="Horizontal" FlowDirection="RightToLeft"/>
+          <Grid x:Name="StatusLeft"/>
+        </DockPanel>
+        </StatusBarItem>
+      </StatusBar>
+      <Border x:Name="Frame" Grid.RowSpan="3" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
     </Grid>
   </Border>
 </Window>
@@ -5644,24 +5677,42 @@ Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGri
     New-WtStatTile, New-WtPageHeader, New-WtPage, New-WtListRow, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
 
 # 상태에 따른 치수·배치만 바꾼다. 저장·단축키 판단은 Shell이 한다.
-function Set-WtNavLayout($Ui, $Items, $Groups, [bool]$Collapsed) {
-    $styles = Get-WtStyleDictionary
-    $Ui.NavBorder.Width = $styles[$(if ($Collapsed) { 'F.Nav.CollapsedWidth' } else { 'F.Nav.Width' })]
-    $vis = if ($Collapsed) { 'Collapsed' } else { 'Visible' }
-    foreach ($group in $Groups) { $group.Visibility = $vis }
-    foreach ($item in $Items) {
-        $item.Label.Visibility = $vis
-        $item.Button.Padding = if ($Collapsed) { [System.Windows.Thickness]::new(8,0,8,0) } else { [System.Windows.Thickness]::new(12,0,8,0) }
-        $item.Count.Visibility = if (-not $Collapsed -and $null -ne $item.Value -and $item.Value -ne 'dot') { 'Visible' } else { 'Collapsed' }
-        $item.Dot.Visibility = if (-not $Collapsed -and $item.Value -eq 'dot') { 'Visible' } else { 'Collapsed' }
-        $item.IconDot.Visibility = if ($Collapsed -and $item.Value -eq 'dot') { 'Visible' } else { 'Collapsed' }
-    }
-    $Ui.FooterPanel.Orientation = if ($Collapsed) { 'Vertical' } else { 'Horizontal' }
-    $Ui.FooterPanel.Margin = if ($Collapsed) { [System.Windows.Thickness]::new(8,8,0,12) } else { [System.Windows.Thickness]::new(12,8,0,12) }
-    $Ui.HelpButton.Margin = if ($Collapsed) { [System.Windows.Thickness]::new(0,0,0,4) } else { [System.Windows.Thickness]::new(0,0,8,0) }
-    $Ui.CollapseButton.Margin = if ($Collapsed) { [System.Windows.Thickness]::new(10,0,0,0) } else { [System.Windows.Thickness]::new(12,0,0,0) }
+function Set-WtNavBadge($Item, [bool]$Visible) {
+    $Item.IconDot.Visibility = if ($Visible) { 'Visible' } else { 'Collapsed' }
+    Set-WtResource $Item.IconDot Fill $(if ($Item.Addon.BadgeKind -eq 'active') { 'B.Accent' } else { 'B.Status.Warning.Icon' })
 }
 
+function New-WtNavSeparator {
+    $line = [System.Windows.Controls.Border]::new()
+    Set-WtStyle $line 'Shell.NavSeparator'
+    $line
+}
+
+function New-WtStatusButton([string]$Text, [int]$Icon = 0) {
+    $button = [System.Windows.Controls.Button]::new()
+    Set-WtStyle $button 'Btn.Status'
+    $row = (Get-WtStyleDictionary)['Shell.StatusItem'].LoadContent()
+    $row.FindName('Text').Text = $Text
+    $row.FindName('Icon').Text = if ($Icon) { [string][char]$Icon } else { '' }
+    $row.FindName('Icon').Visibility = if ($Icon) { 'Visible' } else { 'Collapsed' }
+    $button.Content = $row
+    $button
+}
+
+# 오른쪽은 원래 폭을 유지한다. 왼쪽은 뒤에서부터 폭을 확보해 앞 항목부터 줄인다.
+function Set-WtStatusLayout($Panel) {
+    $remaining = $Panel.ActualWidth
+    for ($i = $Panel.Children.Count - 1; $i -ge 0; $i--) {
+        $button = $Panel.Children[$i]
+        $button.MaxWidth = [double]::PositiveInfinity
+        $button.Measure([System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity))
+        $naturalWidth = $button.DesiredSize.Width
+        $width = [math]::Min($remaining, $naturalWidth)
+        # 남는 폭이 충분하면 원래 측정·배치에 맡긴다. 자연 폭으로 다시 제한하면 배치 반올림으로 끝 글자가 잘린다.
+        if ($naturalWidth -gt $remaining) { $button.MaxWidth = [math]::Max(0, $width) }
+        $remaining = [math]::Max(0, $remaining - $width)
+    }
+}
 function Set-WtSidePanelLayout($Panel, [bool]$Collapsed, [bool]$Narrow) {
     $railWidth = (Get-WtStyleDictionary)['F.SidePanel.RailWidth']
     $Panel.Root.Width = if ($Collapsed -or $Narrow) { $railWidth } else { $Panel.Width }
@@ -5680,7 +5731,37 @@ function Set-WtSidePanelLayout($Panel, [bool]$Collapsed, [bool]$Narrow) {
     $Panel.OpenGlyph.Text = [string][char]$(if ($Panel.Side -eq 'Right') { 0xE76B } else { 0xE76C })
 }
 
-Export-ModuleMember -Function Get-WtShellXaml, Set-WtNavLayout, Set-WtSidePanelLayout
+Export-ModuleMember -Function Get-WtShellXaml, Set-WtNavBadge, New-WtNavSeparator, New-WtStatusButton, Set-WtStatusLayout, Set-WtSidePanelLayout
+
+# 메뉴 툴팁은 항목 오른쪽에 두고, 내용 높이가 달라져도 항목과 세로 가운데를 맞춘다.
+function Set-WtNavToolTip($Button, [string]$Text) {
+    [System.Windows.Controls.ToolTipService]::SetPlacement($Button, [System.Windows.Controls.Primitives.PlacementMode]::Right)
+    if ($Button.ToolTip -isnot [System.Windows.Controls.ToolTip]) {
+        $tip = [System.Windows.Controls.ToolTip]::new()
+        Set-WtStyle $tip 'ToolTip'
+        $tip.Placement = 'Right'
+        $tip.PlacementTarget = $Button
+        $tip.Add_Opened({ param($s, $e) Update-WtNavToolTipPlacement $s })
+        $tip.Add_SizeChanged({ param($s, $e) Update-WtNavToolTipPlacement $s })
+        $Button.ToolTip = $tip
+    }
+    $Button.ToolTip.Content = $Text
+}
+function Update-WtNavToolTipPlacement($Tip) {
+    $button = $Tip.PlacementTarget
+    if (-not $button) { return }
+    $Tip.VerticalOffset = ($button.ActualHeight - $Tip.ActualHeight) / 2
+    if ($button.Parent) { $Tip.HorizontalOffset = $button.Parent.Margin.Right }
+}
+Export-ModuleMember -Function Set-WtNavToolTip
+
+function New-WtUtilityPageHeader([string]$Title) {
+    $header = New-WtPageHeader $Title
+    $header.ClearValue([System.Windows.FrameworkElement]::MarginProperty)
+    Set-WtStyle $header 'Utility.PageHeader'
+    $header
+}
+Export-ModuleMember -Function New-WtUtilityPageHeader
 
 # 홈 전용 배치 · 공통 부품. 값은 디자인 3판 7·8절.
 # 내용이 창보다 작으면 마지막 카드가 남은 높이를 채우고, 크면 화면 전체가 스크롤된다.
@@ -5993,13 +6074,21 @@ function New-WtNextEventLine([object[]]$Items) {
 
 function Update-WtNextEventLine($Line, [datetime]$Now = (Get-Date)) {
     $state = $Line.Tag
-    $next = @($state.Items | Where-Object { $(if ($_.End -gt $_.Start) { $_.End } else { $_.Start }) -gt $Now } | Select-Object -First 1)
+    $next = @(Get-WtNextEventItem $state.Items $Now)
     $Line.Visibility = if ($next.Count) { 'Visible' } else { 'Collapsed' }
     if (-not $next.Count) { return }
     $left = [int][Math]::Ceiling(($next[0].Start - $Now).TotalMinutes)
     $state.Pill.Child.Text = if ($left -le 0) { '진행 중' } elseif ($left -lt 60) { "${left}분 후" } elseif ($left % 60) { "$([Math]::Floor($left / 60))시간 $($left % 60)분 후" } else { "$($left / 60)시간 후" }
     $state.Title.Text = $next[0].Start.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) + ' ' + $next[0].Title
 }
+
+# 홈과 상태 줄이 같은 회차를 고른다. 끝낸 일정·종일 일정은 다음 일정에서 뺀다.
+function Get-WtNextEventItem([object[]]$Items, [datetime]$Now = (Get-Date)) {
+    $Items | Where-Object { -not $_.Done -and -not $_.AllDay -and
+        $(if ($_.End -gt $_.Start) { $_.End } else { $_.Start }) -gt $Now } |
+        Sort-Object Start, End, Title | Select-Object -First 1
+}
+Export-ModuleMember -Function Get-WtNextEventItem
 
 function Set-WtTargetRowSelected($Row, [bool]$Selected) {
     $state = $null
@@ -6069,15 +6158,17 @@ function Get-WtSideWindowXaml {
 }
 
 # 결과: @{ Window; Title(TextBlock); ToolLeft; ToolRight; Body(Border) }. 보이기(Show)는 부르는 쪽이 한다
-function New-WtSideWindow([string]$Title, [double]$Width = 640, [double]$Height = 560) {
-    $xaml = Get-WtSideWindowXaml
+function New-WtSideWindow([string]$Title, [double]$Width = 640, [double]$Height = 560, [switch]$Utility) {
+    $xaml = if ($Utility) { Get-WtUtilityWindowXaml } else { Get-WtSideWindowXaml }
     $w = ConvertFrom-WtXaml $xaml
     $owner = if (Get-Command Get-WtWindow -ErrorAction Ignore) { Get-WtWindow } else { $null }
-    if ($owner -and $owner.IsVisible) { $w.Owner = $owner; $w.Resources.MergedDictionaries.Add($owner.Resources) }
-    else { $w.WindowStartupLocation = 'CenterScreen'; $w.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary)) }
+    if ($owner -and ($owner.IsVisible -or ($Utility -and [System.Windows.Interop.WindowInteropHelper]::new($owner).Handle -ne [IntPtr]::Zero))) {
+        $w.Owner = $owner; $w.Resources.MergedDictionaries.Add($owner.Resources)
+    } else { $w.WindowStartupLocation = 'CenterScreen'; $w.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary)) }
     $w.Width = $Width; $w.Height = $Height; $w.Title = $Title
     $named = Get-WtNamedElements $w $xaml
     $named.TitleText.Text = $Title
+    if ($Utility) { $named.MinButton.Add_Click({ param($s, $e) [System.Windows.Window]::GetWindow($s).WindowState = 'Minimized' }) }
     $named.CloseButton.Add_Click({ param($s, $e) [System.Windows.Window]::GetWindow($s).Close() })
     $named.MaxButton.Add_Click({
             param($s, $e)
@@ -6092,11 +6183,64 @@ function New-WtSideWindow([string]$Title, [double]$Width = 640, [double]$Height 
             $s.FindName('MaxButton').ToolTip = if ($max) { '이전 크기로 복원' } else { '최대화' }
             $edge = [System.Windows.SystemParameters]::WindowResizeBorderThickness
             $s.FindName('Frame').Margin = if ($max) { [System.Windows.Thickness]::new($edge.Left + 2, $edge.Top + 2, $edge.Right + 2, $edge.Bottom + 2) } else { [System.Windows.Thickness]::new(0) }
+            $outline = $s.FindName('WindowBorder')
+            if ($outline) { $outline.BorderThickness = [System.Windows.Thickness]::new($(if ($max) { 0 } else { 1 })) }
         })
     @{ Window = $w; Title = $named.TitleText; ToolLeft = $named.ToolLeft; ToolRight = $named.ToolRight; Body = $named.Body }
 }
 
 Export-ModuleMember -Function New-WtSideWindow
+
+# 설정·도움말 전용 창. 다른 새 창의 크기·도구 줄에는 영향을 주지 않는다.
+function Get-WtUtilityWindowXaml {
+@'
+<Window {NS} Width="960" Height="680" MinWidth="720" MinHeight="480" WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="False"
+    WindowStartupLocation="CenterOwner" UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Ideal"
+    FontFamily="{DynamicResource Font.UI}" FontSize="{DynamicResource F.Body}" Foreground="{DynamicResource B.Text.Primary}" Background="{DynamicResource B.Bg.Canvas}">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="32" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
+  <Grid x:Name="Frame">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <DockPanel Height="{DynamicResource F.Chrome.Height}">
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button x:Name="MinButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최소화" AutomationProperties.Name="최소화">
+          <TextBlock Text="&#xE921;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+        </Button>
+        <Button x:Name="MaxButton" Style="{DynamicResource Btn.Chrome}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="최대화" AutomationProperties.Name="최대화">
+          <TextBlock x:Name="MaxGlyph" Text="&#xE922;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+        </Button>
+        <Button x:Name="CloseButton" Style="{DynamicResource Btn.Close}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="닫기" AutomationProperties.Name="닫기">
+          <TextBlock Text="&#xE8BB;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+        </Button>
+      </StackPanel>
+      <StackPanel Orientation="Horizontal">
+        <Border Style="{DynamicResource Shell.Brand}"><TextBlock Text="W" Style="{DynamicResource Shell.BrandLetter}"/></Border>
+        <TextBlock x:Name="TitleText" Style="{DynamicResource T.Sub}" Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+      </StackPanel>
+    </DockPanel>
+    <Border x:Name="Body" Grid.Row="1" Margin="8,0,8,8"/>
+    <Border x:Name="WindowBorder" Grid.RowSpan="2" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
+  </Grid>
+</Window>
+'@
+}
+
+function New-WtUtilityWindow([string]$Title) { New-WtSideWindow $Title -Width 960 -Height 680 -Utility }
+Export-ModuleMember -Function New-WtUtilityWindow
+
+# 기본 컨트롤이 먼저 처리한 Esc는 창에 오지 않는다. 남아 있는 펼침만 한 번 닫는다.
+function Close-WtOpenTransient($Root) {
+    if ($Root -is [System.Windows.Controls.Primitives.Popup] -and $Root.IsOpen) { $Root.IsOpen = $false; return $true }
+    if ($Root -is [System.Windows.Controls.ComboBox] -and $Root.IsDropDownOpen) { $Root.IsDropDownOpen = $false; return $true }
+    if ($Root -is [System.Windows.Controls.MenuItem] -and $Root.IsSubmenuOpen) { $Root.IsSubmenuOpen = $false; return $true }
+    if ($Root -is [System.Windows.FrameworkElement] -and $Root.ContextMenu -and $Root.ContextMenu.IsOpen) { $Root.ContextMenu.IsOpen = $false; return $true }
+    foreach ($child in [System.Windows.LogicalTreeHelper]::GetChildren($Root)) {
+        if ($child -is [System.Windows.DependencyObject] -and (Close-WtOpenTransient $child)) { return $true }
+    }
+    $false
+}
+Export-ModuleMember -Function Close-WtOpenTransient
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Ui.psm1 끝 ----
 
@@ -9083,7 +9227,10 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   Order        메뉴 순서 (작을수록 위)
   Group        메뉴 묶음 이름. 순서대로 처음 만난 묶음부터 그린다 (선택)
   Badge        { } → 숫자(개수), 'dot'(점), $null(없음). 실패하면 배지만 숨긴다 (선택)
-  BadgeToolTip 점의 뜻을 보여 주는 툴팁 (선택)
+  BadgeToolTip 상태 글. 숫자는 {0} 자리에 넣는다. 0·없음이면 이름만 보인다 (선택)
+  BadgeKind    count(기본: 툴팁만) · dot(주의 점) · active(1 이상이면 강조 점)
+  StatusItems  { } → @{ Key; Text; ToolTip; Icon = Segoe 글자 코드(선택); Side = 'left'|'right'; Open = @{ Id; Args = @{} } } 목록.
+               켜진 탭만 탭 순서·등록 순서로 그린다. 실패한 탭·잘못된 항목은 뺀다 (선택)
   Required     $true면 설정에서 끌 수 없음 (홈)
   NewView      { } → 화면 요소를 돌려준다. 처음 열 때 한 번 부른다.
   Refresh      { param($view) } → 화면을 열 때마다 부른다 (선택)
@@ -9124,6 +9271,8 @@ function Register-WtAddon {
         [string]$Group = '',
         [scriptblock]$Badge,
         [string]$BadgeToolTip = '',
+        [ValidateSet('count', 'dot', 'active')][string]$BadgeKind = 'count',
+        [scriptblock]$StatusItems,
         [switch]$Required,
         [Parameter(Mandatory)][scriptblock]$NewView,
         [scriptblock]$Refresh,
@@ -9179,7 +9328,7 @@ function Register-WtAddon {
         if ($script:addons[$i].Id -eq $Id) { $script:addons.RemoveAt($i) }
     }
     $script:addons.Add(@{
-            Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Group = $Group; Badge = $Badge; BadgeToolTip = $BadgeToolTip; Required = [bool]$Required
+            Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Group = $Group; Badge = $Badge; BadgeToolTip = $BadgeToolTip; BadgeKind = $BadgeKind; StatusItems = $StatusItems; Required = [bool]$Required
             NewView = $NewView; Refresh = $Refresh; OnOpen = $OnOpen; ShortcutExists = $ShortcutExists
             HomeCard = $HomeCard; HomeSlot = $HomeSlot; HomeOrder = $HomeOrder; CalendarHost = [bool]$CalendarHost
             HomeCards = $cards
@@ -9432,7 +9581,7 @@ Export-ModuleMember -Function Add-WtUse, Set-WtHomePin, Test-WtHomePin, Get-WtSh
 
 # ---- core\Pages.psm1 ----
 New-Module -Name 'WorkTool.Pages' -ScriptBlock {
-# 셸에 붙은 기본 화면: 설정, 도움말. 메뉴 아래 톱니바퀴 · 물음표 버튼으로 연다.
+# 설정·도움말의 창 내용. 타이틀바 톱니바퀴 · 물음표 버튼으로 각각 새 창에 연다.
 # 이벤트 처리기는 $script: 변수와 보낸 요소의 Tag만 쓴다 (Shell.psm1 머리말 참고).
 
 $ErrorActionPreference = 'Stop'
@@ -9611,7 +9760,7 @@ function New-WtDataCard {
             $dlg.Description = '예전 WorkTool의 data 폴더를 고르세요 (memo.csv · schedule.csv · attendance.csv가 있는 폴더)'
             if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
                 Set-WtSetting 'legacy.path' $dlg.SelectedPath
-                Select-WtPage '_settings'
+                Select-WtPage '_settings' -Tab '데이터' -Refresh
             }
         })
     $again = New-WtButton '다시 가져오기' -Kind Primary
@@ -9622,6 +9771,7 @@ function New-WtDataCard {
             try {
                 $r = Import-WtLegacyData -Force
                 Reset-WtViews
+                Select-WtPage '_settings' -Tab '데이터' -Refresh
                 Show-WtMessage ("가져왔습니다: {0}" -f ($r.Tabs -join ', '))
             } catch { Show-WtError $_ '다시 가져오기' }
         })
@@ -9636,10 +9786,11 @@ function New-WtDataCard {
 
 function New-WtTabbedPage([string]$Title, [object[]]$Sections) {
     $page = New-WtPage -Fill
-    $heading = New-WtPageHeader $Title
+    $heading = New-WtUtilityPageHeader $Title
     [System.Windows.Controls.DockPanel]::SetDock($heading, 'Top')
     [void](Add-WtChild $page.Panel $heading)
     $tabs = [System.Windows.Controls.TabControl]::new()
+    $page.Root.Tag = @{ Tabs = $tabs }
     Set-WtStyle $tabs 'Tabs'
     [System.Windows.Automation.AutomationProperties]::SetName($tabs, "$Title 하위 탭")
     foreach ($section in $Sections) {
@@ -9657,6 +9808,13 @@ function New-WtTabbedPage([string]$Title, [object[]]$Sections) {
     $tabs.SelectedIndex = 0
     [void](Add-WtChild $page.Panel $tabs)
     $page.Root
+}
+
+function Select-WtPageTab($Page, [string]$Tab) {
+    if (-not $Page.Tag -or -not $Page.Tag.Tabs) { return }
+    foreach ($item in $Page.Tag.Tabs.Items) {
+        if ([string]$item.Header -ceq $Tab) { $Page.Tag.Tabs.SelectedItem = $item; return }
+    }
 }
 
 function New-WtSettingsPage {
@@ -9750,6 +9908,7 @@ function Update-WtHolidayTable {
         [void](Add-WtChild $table $row)
     }
     if (-not $rows.Count) { [void](Add-WtChild $table (New-WtText '이 해에는 휴무일이 없습니다.' 'Table.Empty')) }
+    Update-WtNavBadges
 }
 # 표 한 줄: 날짜 110 · 요일 56 · 이름(나머지) · 종류 110 · 넣은 곳 90. 머리 줄과 같은 칸을 쓴다
 function New-WtHolidayRowGrid([string[]]$Values, [string]$Style) {
@@ -10066,7 +10225,11 @@ function Show-WtFirstWorkSetup($Window, [string]$HomePage) {
     $overlay.Child = $page.Root
     [System.Windows.Controls.Grid]::SetRow($overlay, 1)
     $grid = $Window.Content.Child
-    $script:firstWorkSetup = @{ Window = $Window; Grid = $grid; Overlay = $overlay; Form = $form; Home = $HomePage }
+    $actions = @(foreach ($name in 'HelpButton','SettingsButton') {
+        $button = $Window.FindName($name)
+        if ($button) { @{ Button = $button; Enabled = $button.IsEnabled }; $button.IsEnabled = $false }
+    })
+    $script:firstWorkSetup = @{ Window = $Window; Grid = $grid; Overlay = $overlay; Form = $form; Home = $HomePage; Actions = $actions }
     [void]$grid.Children.Add($overlay)
     [System.Windows.Input.KeyboardNavigation]::SetTabNavigation($overlay, 'Cycle')
     [void]$form.Boxes['work.start'].Focus()
@@ -10080,6 +10243,7 @@ function Close-WtFirstWorkSetup([switch]$UseDefaults) {
     }
     $setup = $script:firstWorkSetup
     [void]$setup.Grid.Children.Remove($setup.Overlay)
+    foreach ($action in $setup.Actions) { $action.Button.IsEnabled = $action.Enabled }
     $script:firstWorkSetup = $null
     Select-WtPage $setup.Home
     $true
@@ -10143,8 +10307,7 @@ function New-WtHelpPage {
     [void](Add-WtChild $col (New-WtKeyRow '키' '하는 일' -Header))
     foreach ($r in @(
             @('Ctrl + 1 ~ 9', '메뉴 순서대로 화면 이동'),
-            @('Ctrl + B', '메뉴 접기 / 펼치기'),
-            @('Ctrl + Shift + B', '사이드바 접기 순서 전환'),
+            @('Ctrl + Shift + B', '사이드바 접기 / 펼치기'),
             @('F11', '전체 화면 (Esc로 나가기)'),
             @('Ctrl + ,', '설정'),
             @('F1', '도움말'))) {
@@ -10181,7 +10344,7 @@ function New-WtHelpPage {
     New-WtTabbedPage '도움말' @(@('단축키', $keys), @('탭', $tabsCard), @('정보', $win))
 }
 
-Export-ModuleMember -Function New-WtSettingsPage, New-WtHelpPage, Show-WtFirstWorkSetup, Close-WtFirstWorkSetup, Invoke-WtWorkSetupKey
+Export-ModuleMember -Function New-WtSettingsPage, New-WtHelpPage, Select-WtPageTab, Show-WtFirstWorkSetup, Close-WtFirstWorkSetup, Invoke-WtWorkSetupKey
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Pages.psm1 끝 ----
 
@@ -10205,6 +10368,7 @@ $script:frame = $null
 $script:themeDict = $null
 $script:notify = $null
 $script:views = @{}
+$script:utilityWindows = @{}
 $script:navButtons = @{}
 $script:navGroups = @()
 $script:badgeTimer = $null
@@ -10268,8 +10432,74 @@ function Get-WtPageView([string]$Id) {
     $script:views[$Id]
 }
 
-function Select-WtPage([string]$Id) {
+function Select-WtPage([string]$Id, [string]$Tab = '', [switch]$Refresh) {
+    if ($Id -in '_settings', '_help') { Show-WtUtilityPage $Id $Tab -Refresh:$Refresh; return }
     [void](Invoke-WtPageSelection $Id)
+}
+
+# 보이기와 앞으로 가져오기는 한 통로로 한다. 창 없는 검사에서는 이 통로만 대신한다.
+function Show-WtUtilityHost($Window) {
+    if (-not $Window.IsVisible) { $Window.Show() }
+    if ($Window.WindowState -eq 'Minimized') { $Window.WindowState = 'Normal' }
+    [void]$Window.Activate()
+}
+
+function Show-WtUtilityPage([ValidateSet('_settings','_help')][string]$Id, [string]$Tab = '', [switch]$Refresh) {
+    if (-not $Tab -and $script:utilityWindows.ContainsKey($Id)) {
+        $tabs = $script:utilityWindows[$Id].Body.Child.Tag.Tabs
+        if ($tabs -and $tabs.SelectedItem) { $Tab = [string]$tabs.SelectedItem.Header }
+    }
+    # 열린 창의 입력·고른 탭은 다시 열기만으로 버리지 않는다. 데이터 위치를 바꾼 경우만 명시적으로 다시 읽는다.
+    $page = if ($script:utilityWindows.ContainsKey($Id) -and -not $Refresh) { @{ View = $script:utilityWindows[$Id].Body.Child } } else { Get-WtPageView $Id }
+    if (-not $script:utilityWindows.ContainsKey($Id)) {
+        $title = if ($Id -eq '_settings') { 'WorkTool · 설정' } else { 'WorkTool · 도움말' }
+        $hostWindow = New-WtUtilityWindow $title
+        $win = $hostWindow.Window
+        $hostWindow.Body.Child = $page.View
+        $win.Tag = @{ Id = $Id; Host = $hostWindow; BoundsKey = "window.$($Id.TrimStart('_')).bounds" }
+        $savedBounds = Get-WtSetting $win.Tag.BoundsKey
+        try {
+            if ($savedBounds -and [double]::IsFinite([double]$savedBounds.Left) -and [double]::IsFinite([double]$savedBounds.Top) -and
+                [double]::IsFinite([double]$savedBounds.Width) -and [double]::IsFinite([double]$savedBounds.Height) -and
+                $savedBounds.Width -ge $win.MinWidth -and $savedBounds.Height -ge $win.MinHeight) {
+                $win.WindowStartupLocation = 'Manual'
+                $win.Left = $savedBounds.Left; $win.Top = $savedBounds.Top
+                $win.Width = $savedBounds.Width; $win.Height = $savedBounds.Height
+            }
+        } catch { } # 잘못된 옛 위치는 첫 크기·가운데 배치로 연다.
+        $win.Add_Closing({
+            param($s, $e)
+            if (-not $script:exiting -and -not (Save-WtPendingChanges -Purpose switch -Only $s.Tag.Id)) { $e.Cancel = $true; return }
+            $bounds = if ($s.WindowState -eq 'Normal') { [System.Windows.Rect]::new($s.Left, $s.Top, $s.Width, $s.Height) } else { $s.RestoreBounds }
+            if (-not $bounds.IsEmpty -and [double]::IsFinite($bounds.Left) -and [double]::IsFinite($bounds.Top)) {
+                Set-WtSetting $s.Tag.BoundsKey @{ Left = $bounds.Left; Top = $bounds.Top; Width = $bounds.Width; Height = $bounds.Height }
+            }
+        })
+        $win.Add_Closed({ param($s, $e) $s.Tag.Host.Body.Child = $null; [void]$script:utilityWindows.Remove($s.Tag.Id) })
+        $win.Add_KeyDown({ param($s, $e) Invoke-WtUtilityKey $s $e })
+        $script:utilityWindows[$Id] = $hostWindow
+    } else {
+        $hostWindow = $script:utilityWindows[$Id]
+        $hostWindow.Body.Child = $page.View
+    }
+    if ($Tab) { Select-WtPageTab $page.View $Tab }
+    Show-WtUtilityHost $hostWindow.Window
+}
+
+function Invoke-WtUtilityKey($Window, $Event, $Modifiers = [System.Windows.Input.Keyboard]::Modifiers) {
+    if ($Event.Handled) { return }
+    if ($Event.Key -eq 'F1') { Select-WtPage '_help'; $Event.Handled = $true; return }
+    if (($Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -and $Event.Key -eq 'OemComma') {
+        Select-WtPage '_settings'; $Event.Handled = $true; return
+    }
+    if ($Event.Key -ne 'Escape') { return }
+    if (-not (Close-WtOpenTransient $Window)) { $Window.Close() }
+    $Event.Handled = $true
+}
+
+function Close-WtUtilityWindows {
+    foreach ($hostWindow in @($script:utilityWindows.Values)) { $hostWindow.Window.Close() }
+    $script:utilityWindows.Count -eq 0
 }
 
 # 공개된 Select-WtPage의 출력은 그대로 두고, 항목 열기는 전환 성공 여부까지 확인한다.
@@ -10301,6 +10531,7 @@ function Invoke-WtPageSelection([string]$Id) {
 # 데이터를 다시 가져온 뒤 현재 화면을 갱신한다. 숨긴 화면도 재진입할 때 갱신한다.
 function Open-WtPage {
     param([Parameter(Mandatory)][string]$Id, [hashtable]$Args = @{})
+    if ($Id -in '_settings','_help') { Show-WtUtilityPage $Id ([string]$Args.Tab); return }
     $addon = Get-WtAddon -Id $Id
     if (-not $addon -or $addon.Id -cne $Id) { return }
     $selected = Invoke-WtPageSelection $Id
@@ -10316,6 +10547,16 @@ function Reset-WtViews {
         $script:current = $null
         Select-WtPage $id
     }
+}
+
+function Initialize-WtMainPage {
+    $first = @(Get-WtAddon) | Select-Object -First 1
+    if ($first) { Select-WtPage $first.Id; return $first.Id }
+    $script:current = $null
+    $script:ui.PageHost.Content = New-WtText '켜진 탭이 없습니다.'
+    # 첫 업무시간 입력을 마치면 Close-WtFirstWorkSetup이 설정 창을 연다.
+    if (-not (Test-WtWorkSetupRequired)) { Select-WtPage '_settings' }
+    '_settings'
 }
 
 # ---- 미리 만들기 ------------------------------------------------------------------------------
@@ -10354,7 +10595,7 @@ function Invoke-WtWarmUpStep {
     if ($script:exiting -or -not $script:warmEnabled) { return $false }
     while ($script:warmQueue -and $script:warmQueue.Count) {
         $id = $script:warmQueue.Dequeue()
-        if ($id -eq $script:current -or ($id -notlike '_*' -and $script:views.ContainsKey($id))) { continue }   # 이미 열었다
+        if ($id -eq $script:current -or $script:utilityWindows.ContainsKey($id) -or ($id -notlike '_*' -and $script:views.ContainsKey($id))) { continue }   # 이미 열었다
         try {
             $page = Get-WtPageView $id
             if (-not $page) { continue }
@@ -10393,26 +10634,21 @@ function Update-WtNav {
     $script:navButtons = @{}
     $script:navGroups = @()
     foreach ($group in @(Get-WtNavGroups)) {
-        if ($group.Name) {
-            $style = if ($script:navGroups.Count) { 'T.NavGroup.Next' } else { 'T.NavGroup' }
-            $heading = New-WtText $group.Name $style
-            [void]$panel.Children.Add($heading)
-            $script:navGroups += $heading
+        if ($panel.Children.Count) {
+            $line = New-WtNavSeparator
+            [void]$panel.Children.Add($line)
+            $script:navGroups += $line
         }
         foreach ($addon in $group.Items) {
             $rb = [System.Windows.Controls.RadioButton]::new()
             Set-WtStyle $rb 'Nav'
             $rb.GroupName = 'WtNav'
             $rb.Tag = $addon.Id
-            $rb.ToolTip = $addon.Title
+            Set-WtNavToolTip $rb $addon.Title
             [System.Windows.Automation.AutomationProperties]::SetName($rb, $addon.Title)
             $row = (Get-WtStyleDictionary)['Shell.NavItem'].LoadContent()
-            $parts = @{ Button = $rb; Addon = $addon; Value = $null }
-            foreach ($name in 'Icon','Label','Count','Dot','IconDot') { $parts[$name] = $row.FindName($name) }
+            $parts = @{ Button = $rb; Addon = $addon; Value = $null; Icon = $row.FindName('Icon'); IconDot = $row.FindName('IconDot') }
             $parts.Icon.Text = [string][char]$addon.Icon
-            $parts.Label.Text = $addon.Title
-            $parts.Dot.ToolTip = $addon.BadgeToolTip
-            $parts.IconDot.ToolTip = $addon.BadgeToolTip
             $rb.Content = $row
             $rb.IsChecked = ($addon.Id -eq $script:current)
             $rb.Add_Checked({ param($s, $e) Select-WtPage ([string]$s.Tag) })
@@ -10423,10 +10659,12 @@ function Update-WtNav {
     Update-WtNavBadges
 }
 
-# 배지 계산은 선택·새로 그리기·분 타이머에서만. 한 출처가 실패해도 다른 배지는 계속 계산한다.
+# 한 출처가 실패해도 다른 배지·상태 항목은 계속 계산한다.
 function Update-WtNavBadges {
     foreach ($item in $script:navButtons.Values) {
+        if (-not $item.Addon -or -not $item.IconDot) { continue }
         $value = $null
+        $state = ''
         if ($item.Addon.Badge) {
             try {
                 $result = & $item.Addon.Badge
@@ -10434,31 +10672,62 @@ function Update-WtNavBadges {
                 elseif ($null -ne $result -and [Type]::GetTypeCode($result.GetType()) -in @('Byte','SByte','Int16','UInt16','Int32','UInt32','Int64','UInt64','Single','Double','Decimal')) {
                     $value = $result.ToString([System.Globalization.CultureInfo]::InvariantCulture)
                 }
-            } catch { $value = $null }
+                if ($value -eq 'dot' -or ($null -ne $value -and [double]$value -gt 0)) {
+                    $state = $item.Addon.BadgeToolTip -f $value
+                }
+            } catch { $value = $null; $state = '' }
         }
         $item.Value = $value
-        $item.Count.Text = if ($null -ne $value -and $value -ne 'dot') { $value } else { '' }
+        Set-WtNavToolTip $item.Button $(if ($state) { "$($item.Addon.Title) · $state" } else { $item.Addon.Title })
+        # 화면 읽기 이름은 탭 이름 그대로 두고(매크로 · 보조 기술이 늘 같은 이름으로 찾게), 상태는 도움말 글로 준다
+        [System.Windows.Automation.AutomationProperties]::SetName($item.Button, [string]$item.Addon.Title)
+        [System.Windows.Automation.AutomationProperties]::SetHelpText($item.Button, [string]$state)
+        $dot = ($item.Addon.BadgeKind -eq 'dot' -and $value -eq 'dot') -or
+            ($item.Addon.BadgeKind -eq 'active' -and $null -ne $value -and $value -ne 'dot' -and [double]$value -ge 1)
+        Set-WtNavBadge $item $dot
     }
-    Update-WtCollapsed
+    Update-WtStatusBar
 }
 
+function Update-WtStatusBar {
+    if (-not $script:ui -or -not $script:ui.StatusLeft) { return }
+    $script:ui.StatusLeft.Children.Clear()
+    $script:ui.StatusLeft.ColumnDefinitions.Clear()
+    $script:ui.StatusRight.Children.Clear()
+    foreach ($addon in @(Get-WtAddon)) {
+        if (-not $addon.StatusItems) { continue }
+        try { $items = @(& $addon.StatusItems) } catch { continue }
+        $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($item in $items) {
+            try {
+                if (-not $item.Key -or $item.Key -cnotmatch '^[a-z0-9-]+$' -or -not $item.Text -or $item.Side -cnotin 'left','right' -or
+                    -not $item.Open -or $item.Open.Id -cne $addon.Id -or ($null -ne $item.Open.Args -and $item.Open.Args -isnot [hashtable]) -or
+                    -not $keys.Add([string]$item.Key)) { continue }
+                $button = New-WtStatusButton ([string]$item.Text) -Icon ([int]$item.Icon)
+                $button.ToolTip = if ($item.ToolTip) { [string]$item.ToolTip } else { [string]$item.Text }
+                $button.Tag = @{ Id = $addon.Id; Args = $(if ($item.Open.Args) { $item.Open.Args } else { @{} }) }
+                [System.Windows.Automation.AutomationProperties]::SetAutomationId($button, "Status-$($addon.Id)-$($item.Key)")
+                [System.Windows.Automation.AutomationProperties]::SetName($button, [string]$item.Text)
+                $button.Add_Click({ param($s, $e) Open-WtPage -Id $s.Tag.Id -Args $s.Tag.Args })
+                if ($item.Side -ceq 'right') { [void]$script:ui.StatusRight.Children.Add($button) }
+                else {
+                    $column = [System.Windows.Controls.ColumnDefinition]::new()
+                    $column.Width = [System.Windows.GridLength]::Auto
+                    [System.Windows.Controls.Grid]::SetColumn($button, $script:ui.StatusLeft.Children.Count)
+                    $script:ui.StatusLeft.ColumnDefinitions.Add($column)
+                    [void]$script:ui.StatusLeft.Children.Add($button)
+                }
+            } catch { continue }
+        }
+    }
+    Set-WtStatusLayout $script:ui.StatusLeft
+}
 function Start-WtNavBadgeTimer {
     if ($script:badgeTimer) { $script:badgeTimer.Stop() }
     $script:badgeTimer = [System.Windows.Threading.DispatcherTimer]::new()
     $script:badgeTimer.Interval = [TimeSpan]::FromMinutes(1)
     $script:badgeTimer.Add_Tick({ Update-WtNavBadges })
     $script:badgeTimer.Start()
-}
-
-function Update-WtCollapsed {
-    if ($script:ui -and $script:ui.NavBorder) {
-        Set-WtNavLayout $script:ui $script:navButtons.Values $script:navGroups ([bool](Get-WtSetting 'nav.collapsed'))
-    }
-}
-
-function Switch-WtCollapsed {
-    Set-WtSetting 'nav.collapsed' (-not [bool](Get-WtSetting 'nav.collapsed'))
-    Update-WtCollapsed
 }
 
 # ---- 보조 칸 공용 틀 --------------------------------------------------------------------------
@@ -10525,18 +10794,13 @@ function Update-WtCurrentSidePanels {
 
 function Switch-WtPanelCycle {
     $panel = @(Get-WtSidePanels $script:ui.PageHost.Content | Where-Object { -not $_.Independent }) | Select-Object -First 1
-    if (-not $panel) { Switch-WtCollapsed; return }
+    if (-not $panel) { return }
     Update-WtSidePanel $panel
-    $nav = [bool](Get-WtSetting 'nav.collapsed')
-    if (-not $panel.Collapsed -and -not $nav) { $panel.Cycle = 'close-nav'; Set-WtSidePanelCollapsed $panel $true }
-    elseif ($panel.Collapsed -and -not $nav -and $panel.Cycle -eq 'open-side') { $panel.Cycle = ''; Set-WtSidePanelCollapsed $panel $false }
-    elseif (-not $nav) { $panel.Cycle = 'open-nav'; Switch-WtCollapsed }
-    else { $panel.Cycle = 'open-side'; Switch-WtCollapsed }
+    Set-WtSidePanelCollapsed $panel (-not $panel.Collapsed)
 }
-
 <#
 창 단축키를 화면 안 요소가 대신 쓰게 넘긴다. 그 요소(또는 그 안)에 포커스가 있으면 셸은 그 키를 처리하지 않는다.
-  Register-WtKeyOwner $element 'Ctrl+B'     예: 메모 편집기는 Ctrl+B를 굵게로 쓴다. 다른 곳에서는 그대로 메뉴 접기
+  Register-WtKeyOwner $element 'Ctrl+B'     예: 메모 편집기는 Ctrl+B를 굵게로 쓴다. 셸은 Ctrl+B를 처리하지 않는다
 요소가 사라지면 등록도 같이 사라진다(약한 참조).
 #>
 $script:keyOwners = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
@@ -10836,6 +11100,8 @@ function Stop-WtApp {
     if (-not $script:exiting) {
         $script:writingDropped = $false
         if (-not (Save-WtPendingChanges -Purpose exit)) { return $false }
+        # 보조 창 위치를 저장한 쓰기도 종료 확인에 포함한다.
+        if (-not (Close-WtUtilityWindows)) { return $false }
         if (-not (Confirm-WtDataWrites)) { return $false }
         foreach ($a in @(Get-WtAddon -All)) {
             if ($a.OnExit) { try { [void](& $a.OnExit) } catch { Show-WtError $_ "끝내기 전 저장: $($a.Title)" } }
@@ -10913,12 +11179,19 @@ function Initialize-WtShellSettings {
         switch -Wildcard ($key) {
             'theme.color' { Update-WtAppIcon }
             'ui.opacity' { Set-WtOpacity }
-            'nav.collapsed' { Update-WtCollapsed }
             'window.closeToTray' { Update-WtCloseTip }
             'addons.disabled' { Update-WtNav }
         }
     }
     $script:settingHandlerRegistered = $true
+}
+
+function Initialize-WtShellButtons {
+    $script:ui.MinButton.Add_Click({ $script:window.WindowState = 'Minimized' })
+    $script:ui.MaxButton.Add_Click({ Switch-WtMaximize })
+    $script:ui.CloseButton.Add_Click({ $script:window.Close() })
+    $script:ui.SettingsButton.Add_Click({ Select-WtPage '_settings' })
+    $script:ui.HelpButton.Add_Click({ Select-WtPage '_help' })
 }
 
 function Start-WtApp {
@@ -10927,6 +11200,7 @@ function Start-WtApp {
     $script:exiting = $false
     $script:notify = $null
     $script:views = @{}
+    $script:utilityWindows = @{}
     $script:current = $null
     $script:maxed = $false
     $script:fullscreen = $false
@@ -10958,14 +11232,10 @@ function Start-WtApp {
     Update-WtAppIcon
     $w.Add_ContentRendered({ Update-WtAppIcon; Start-WtWarmUp })
     $w.Add_SizeChanged({ Update-WtCurrentSidePanels })
+    $script:ui.StatusLeft.Add_SizeChanged({ param($s, $e) Set-WtStatusLayout $s })
 
-    # 제목 줄 · 메뉴 아래 버튼
-    $script:ui.CollapseButton.Add_Click({ Switch-WtCollapsed })
-    $script:ui.MinButton.Add_Click({ $script:window.WindowState = 'Minimized' })
-    $script:ui.MaxButton.Add_Click({ Switch-WtMaximize })
-    $script:ui.CloseButton.Add_Click({ $script:window.Close() })
-    $script:ui.SettingsButton.Add_Click({ Select-WtPage '_settings' })
-    $script:ui.HelpButton.Add_Click({ Select-WtPage '_help' })
+    # 제목 줄 버튼
+    Initialize-WtShellButtons
 
     # 제목 줄을 두 번 누르면 Windows가 Maximized로 바꾼다 → 작업 영역 최대화로 바꿔 준다
     $w.Add_StateChanged({
@@ -10983,13 +11253,14 @@ function Start-WtApp {
             Update-WtMaxGlyph
         })
 
-    # X(닫기)는 앱을 끝낸다. 설정에서 '트레이로 숨기기'를 켜면 트레이로 숨기고, 끄는 건 트레이 아이콘 우클릭 → 종료
+    # X는 기본으로 트레이로 숨긴다. 직접 고른 닫기 동작은 저장된 설정을 따른다.
     $w.Add_Closing({
             param($s, $e)
             if (-not $script:exiting -and (Close-WtFirstWorkSetup -UseDefaults)) { $e.Cancel = $true; return }
             if ($script:exiting) { return }
             if (-not [bool](Get-WtSetting 'window.closeToTray')) { $e.Cancel = -not (Stop-WtApp); return }
             $e.Cancel = $true
+            if (-not (Close-WtUtilityWindows)) { return }
             $s.Hide()
             if (-not $script:trayTipShown) {
                 $script:notify.ShowBalloonTip(3000, 'WorkTool', '트레이에서 계속 실행 중입니다. 끄려면 트레이 아이콘 우클릭 → 종료.',
@@ -11006,7 +11277,6 @@ function Start-WtApp {
                 $key = if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }
                 $shift = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0
                 if ($ctrl -and $shift -and $key -eq 'B') { Switch-WtPanelCycle; $e.Handled = $true; return }
-                if ($ctrl -and $key -eq 'B' -and -not (Test-WtKeyOwned 'Ctrl+B')) { Switch-WtCollapsed; $e.Handled = $true; return }
                 if ($key -eq 'F11') { Switch-WtFullScreen; $e.Handled = $true; return }
                 if ($key -eq 'Escape' -and $script:fullscreen) { Switch-WtFullScreen; $e.Handled = $true; return }
                 if ($key -eq 'F1') { Select-WtPage '_help'; $e.Handled = $true; return }
@@ -11048,9 +11318,8 @@ function Start-WtApp {
     # 실행 파일이 콘솔을 최소화해서 띄우면(start /min) 첫 창도 최소화돼서 뜬다 → 원래 크기로 앞에 띄운다
     if ($w.WindowState -eq 'Minimized') { $w.WindowState = 'Normal' }
     [void]$w.Activate()
-    $first = @(Get-WtAddon)[0]
-    if ($first) { Select-WtPage $first.Id } else { Select-WtPage '_settings' }
-    Show-WtFirstWorkSetup $w $(if ($first) { $first.Id } else { '_settings' })
+    $initialPage = Initialize-WtMainPage
+    Show-WtFirstWorkSetup $w $initialPage
     if (-not $script:exiting) { [System.Windows.Threading.Dispatcher]::PushFrame($script:frame) }
     } finally {
         if ($script:badgeTimer) { $script:badgeTimer.Stop() }
@@ -11063,7 +11332,7 @@ function Start-WtApp {
     }
 }
 
-Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Update-WtNavBadges, Switch-WtCollapsed, Register-WtKeyOwner, Test-WtKeyOwned,
+Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Update-WtNavBadges, Register-WtKeyOwner, Test-WtKeyOwned,
     New-WtSidePanel, Switch-WtPanelCycle, Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp
 } | Import-Module -Force -DisableNameChecking
@@ -11706,7 +11975,7 @@ function New-WtActiveTasksView {
 }
 
 Register-WtAddon -Id 'active-tasks' -Title '활성 작업' -Icon 0xE7C4 -Group '작업' -Order 70 -WarmUp View `
-    -Badge { @($script:items).Count } `
+    -Badge { @($script:items).Count } -BadgeKind active -BadgeToolTip '{0}개' `
     -NewView { New-WtActiveTasksView } -Refresh { param($view) Start-WtTaskJob 'scan' } -OnExit { Stop-WtTasks } `
     -Help @(
         '열린 창과 브라우저 탭을 모아 봅니다.'
@@ -12122,7 +12391,7 @@ Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -
         if (Test-WtAttRestDay ([datetime]::Today) $data.Entries) { return $null }
         if (-not @($data.Entries | Where-Object { $_.State -ceq 'ok' -and $_.Kind -ceq 'work' -and $_.HasTime -and $_.StartDate -eq [datetime]::Today }).Count) { 'dot' }
     } `
-    -BadgeToolTip '오늘 안 찍음' -NewView { New-WtAttendanceView } -Refresh { param($view) Update-WtAttendanceView } `
+    -BadgeKind dot -BadgeToolTip '오늘 안 찍음' -NewView { New-WtAttendanceView } -Refresh { param($view) Update-WtAttendanceView } `
     -OnOpen { param($OpenArgs) Open-WtAttArgs $OpenArgs } `
     -DateMenu { param([datetime]$Date) Get-WtAttDateMenu $Date } `
     -CalendarItems { param([datetime]$From, [datetime]$To) $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }; Get-WtAttendanceCalendarItems $From $To $data.Entries } `
@@ -21945,6 +22214,32 @@ function New-WtNextEventHomeLine {
     $script:homeNext = New-WtNextEventLine @(Get-WtScheduleHomeItems | Where-Object { -not $_.Done })
     $script:homeNext
 }
+
+function Get-WtScheduleStatusItems([datetime]$Now = (Get-Date)) {
+    # 항목마다 따로 실패를 격리한다. 일정 읽기 실패가 남은 일 표시까지 없애지 않는다.
+    try {
+        $next = Get-WtNextEventItem @(Get-WtScheduleHomeItems) $Now
+        if ($next) {
+            $prefix = if ($next.Start -le $Now) { '진행 중' } else { '다음' }
+            @{ Key = 'next'; Icon = 0xE787; Text = "$prefix $($next.Start.ToString('HH:mm', $script:inv)) $($next.Title)"; ToolTip = $next.ToolTip
+                Side = 'left'; Open = @{ Id = 'schedule'; Args = @{ Date = $Now.Date; View = 'calendar' } } }
+        }
+    } catch { }
+    try {
+        $stamp = Get-WtStamp $Now
+        $count = Get-WtScheduleDueCount -Now $stamp
+        $rows = @((Get-WtScheduleDueRows -Now $stamp).Rows)
+        $counts = @{}
+        foreach ($group in 'overdue','today','soon') {
+            $groupRows = @($rows | Where-Object { $_.Group -ceq $group })
+            $counts[$group] = @($groupRows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count +
+                @($groupRows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count
+        }
+        @{ Key = 'due'; Icon = 0xE73E; Text = $(if ($count) { "남은 일 $count" } else { '남은 일 없음' })
+            ToolTip = "기한 지남 $($counts.overdue) · 오늘 $($counts.today) · 마감 임박 $($counts.soon)"
+            Side = 'right'; Open = @{ Id = 'schedule'; Args = @{ Date = $Now.Date; View = 'due' } } }
+    } catch { }
+}
 function New-WtScheduleHomeCards {
     $data = Get-WtScheduleData
     $today = [datetime]::Today
@@ -21967,6 +22262,12 @@ function New-WtRoutineHomeCard {
 }
 function Open-WtScheduleArgs($OpenArgs) {
     if (-not $script:view) { return }
+    if ($OpenArgs.View -cin $script:viewModes) {
+        # 상태 줄에서 여는 오늘·할 일은 전에 남긴 찾기 조건 없이 연다.
+        $script:search.Box.Text = ''
+        $script:searchTimer.Stop()
+        Set-WtScheduleViewMode ([string]$OpenArgs.View)
+    }
     $date = if ($OpenArgs.Date -is [datetime]) { $OpenArgs.Date.Date } elseif ($OpenArgs.Date) { ConvertFrom-WtDateText ([string]$OpenArgs.Date) }
     if ($OpenArgs.Id) {
         $data = Get-WtScheduleData; $entry = @($data.Entries | Where-Object { $_.Id -ceq [string]$OpenArgs.Id -and $_.State -eq 'ok' } | Select-Object -First 1)
@@ -21977,7 +22278,7 @@ function Open-WtScheduleArgs($OpenArgs) {
 }
 
 # 메뉴 개수 = 할 일 수(기한 지남 + 오늘 남은 일정 · 루틴 + 마감 임박, 설계 14.5). 보기 단추의 숫자와 같다
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } -Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } -Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
 Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\schedule\Schedule.psm1 끝 ----

@@ -17,6 +17,7 @@ $script:palettes = [ordered]@{
 # Tint에 섞을 색과 비율. 대비는 Test-Core.ps1이 일곱 색 모두 확인한다.
 $script:tinted = @{
     'Bg.Canvas' = @('#FFFFFF', 0.55); 'Bg.Subtle' = @('#FFFFFF', 0.72); 'Bg.Selected' = @('#FFFFFF', 0.35)
+    'Code.InlineBg' = @('#FFFFFF', 0)
     'Fill.Hover.Surface' = @('#FFFFFF', 0.65); 'Fill.Pressed.Surface' = @('#FFFFFF', 0.45)
     'Fill.Hover.Canvas' = @('#FFFFFF', 0.3); 'Fill.Pressed.Canvas' = @('#FFFFFF', 0.12); 'Fill.Selected.Nav' = @('#FFFFFF', 0)
     'Fill.Hover.Subtle' = @('#FFFFFF', 0.5); 'Fill.Pressed.Subtle' = @('#FFFFFF', 0.3)
@@ -86,7 +87,7 @@ $script:dimensions = @{
     'Radius.Joined' = 0; 'Radius.Small' = 2; 'Radius.Control' = 4; 'Radius.Card' = 8; 'Radius.Overlay' = 8; 'Radius.SelectionBar' = 1.5
     'Line.Border' = 1; 'Line.Focus' = 2; 'Line.FocusInner' = 1; 'Line.Selection' = 3; 'Line.TabActive' = 2
     'Height.Control' = 32; 'Height.Compact' = 28; 'Height.Row2' = 48; 'Height.MemoRow' = 52
-    'Height.PanelHeader' = 40; 'Height.Header' = 56; 'Height.Tab' = 36; 'Height.MemoTabBar' = 40; 'Height.MemoTab' = 28
+    'Height.PanelHeader' = 40; 'Height.Header' = 56; 'Height.Tab' = 36; 'Height.MemoTabBar' = 40; 'Height.MemoTab' = 28; 'Height.StatusBar' = 24
     'Height.Chip' = 20; 'Height.FilterChip' = 24; 'Height.Checklist' = 28
     'ToolTip.MaxWidth' = 320; 'ToolTip.InitialShowDelay' = 400; 'ToolTip.BetweenShowDelay' = 100
 }

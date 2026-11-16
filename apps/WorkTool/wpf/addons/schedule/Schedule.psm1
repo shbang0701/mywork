@@ -1352,6 +1352,32 @@ function New-WtNextEventHomeLine {
     $script:homeNext = New-WtNextEventLine @(Get-WtScheduleHomeItems | Where-Object { -not $_.Done })
     $script:homeNext
 }
+
+function Get-WtScheduleStatusItems([datetime]$Now = (Get-Date)) {
+    # 항목마다 따로 실패를 격리한다. 일정 읽기 실패가 남은 일 표시까지 없애지 않는다.
+    try {
+        $next = Get-WtNextEventItem @(Get-WtScheduleHomeItems) $Now
+        if ($next) {
+            $prefix = if ($next.Start -le $Now) { '진행 중' } else { '다음' }
+            @{ Key = 'next'; Icon = 0xE787; Text = "$prefix $($next.Start.ToString('HH:mm', $script:inv)) $($next.Title)"; ToolTip = $next.ToolTip
+                Side = 'left'; Open = @{ Id = 'schedule'; Args = @{ Date = $Now.Date; View = 'calendar' } } }
+        }
+    } catch { }
+    try {
+        $stamp = Get-WtStamp $Now
+        $count = Get-WtScheduleDueCount -Now $stamp
+        $rows = @((Get-WtScheduleDueRows -Now $stamp).Rows)
+        $counts = @{}
+        foreach ($group in 'overdue','today','soon') {
+            $groupRows = @($rows | Where-Object { $_.Group -ceq $group })
+            $counts[$group] = @($groupRows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count +
+                @($groupRows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count
+        }
+        @{ Key = 'due'; Icon = 0xE73E; Text = $(if ($count) { "남은 일 $count" } else { '남은 일 없음' })
+            ToolTip = "기한 지남 $($counts.overdue) · 오늘 $($counts.today) · 마감 임박 $($counts.soon)"
+            Side = 'right'; Open = @{ Id = 'schedule'; Args = @{ Date = $Now.Date; View = 'due' } } }
+    } catch { }
+}
 function New-WtScheduleHomeCards {
     $data = Get-WtScheduleData
     $today = [datetime]::Today
@@ -1374,6 +1400,12 @@ function New-WtRoutineHomeCard {
 }
 function Open-WtScheduleArgs($OpenArgs) {
     if (-not $script:view) { return }
+    if ($OpenArgs.View -cin $script:viewModes) {
+        # 상태 줄에서 여는 오늘·할 일은 전에 남긴 찾기 조건 없이 연다.
+        $script:search.Box.Text = ''
+        $script:searchTimer.Stop()
+        Set-WtScheduleViewMode ([string]$OpenArgs.View)
+    }
     $date = if ($OpenArgs.Date -is [datetime]) { $OpenArgs.Date.Date } elseif ($OpenArgs.Date) { ConvertFrom-WtDateText ([string]$OpenArgs.Date) }
     if ($OpenArgs.Id) {
         $data = Get-WtScheduleData; $entry = @($data.Entries | Where-Object { $_.Id -ceq [string]$OpenArgs.Id -and $_.State -eq 'ok' } | Select-Object -First 1)
@@ -1384,5 +1416,5 @@ function Open-WtScheduleArgs($OpenArgs) {
 }
 
 # 메뉴 개수 = 할 일 수(기한 지남 + 오늘 남은 일정 · 루틴 + 마감 임박, 설계 14.5). 보기 단추의 숫자와 같다
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } -Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } -Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
 Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel

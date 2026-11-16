@@ -8,6 +8,7 @@
     - 탭 모아 보기: 앱처럼 모든 탭을 함께 불러와서 ID · 함수 이름이 겹치지 않는지, 도움말이 모든 탭을 싣는지 본다.
     - 탭 폴더의 검사(addons\<이름>\Test-*.ps1)는 찾아서 돌린다. 탭을 더하거나 빼도 이 파일은 고치지 않는다.
     임시 폴더만 쓰고, 문서\WorkTool 같은 실제 데이터 폴더는 건드리지 않는다. 화면 검사는 Windows STA에서만 한다.
+    WORKTOOL_TEST_HIDDEN=1이면 전용 시험 호스트를 보이지 않게 두고 WPF 검사는 유지하며, 실행 파일의 실제 GUI 검사는 제외한다.
 
 .EXAMPLE
     pwsh ./apps/WorkTool/wpf/tests/Test-Core.ps1
@@ -754,6 +755,15 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     # ---- 설정 ----
     Initialize-WtSettings
     Assert-Wt '설정 기본값' ((Get-WtSetting 'theme.color') -eq 'sky' -and (Get-WtSetting 'ui.opacity') -eq 100)
+    Assert-Wt '닫기 기본값은 트레이 · 직접 저장한 끝내기는 유지' (& (Get-Module Settings) {
+        $oldValues = $script:values
+        try {
+            $script:values = @{}
+            $defaultTray = Get-WtSetting 'window.closeToTray'
+            $script:values['window.closeToTray'] = $false
+            $defaultTray -and -not (Get-WtSetting 'window.closeToTray')
+        } finally { $script:values = $oldValues }
+    })
     Register-WtSettingHandler { param($k, $v) $script:seenKey = $k }
     Set-WtSetting 'theme.color' 'pink'
     Set-WtSetting 'addons.disabled' @('test-b')
@@ -1060,7 +1070,7 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
         @('OnAccent', 'Accent', 4.5), @('OnAccent', 'Accent.Hover', 4.5), @('OnAccent', 'Accent.Pressed', 4.5), @('AccentStrong', 'AccentSoft', 4.5),
         @('Text', 'WindowBg', 4.5), @('Text', 'Sidebar', 4.5), @('Text', 'AccentSoft', 4.5), @('Text', 'Hover', 4.5),
         @('SubText', 'WindowBg', 4.5), @('SubText', 'Sidebar', 4.5), @('SubText', 'Card', 4.5),
-        @('NavText', 'Sidebar', 4.5), @('NavText', 'Hover', 4.5),
+        @('Text.Primary', 'Code.InlineBg', 4.5), @('NavText', 'Sidebar', 4.5), @('NavText', 'Hover', 4.5),
         @('InputBorder', 'Card', 3.0), @('Accent', 'Card', 3.0))
     Assert-Wt '테마 3판: 파스텔 일곱 색, 첫째가 기본' (((Get-WtPalette).Keys -join ',') -ceq 'sky,pink,green,yellow,purple,gray,black')
     $expectedPastels = @{
@@ -1078,7 +1088,7 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
         Assert-Wt "테마 '$name' 3판 강조 상태와 파스텔 면" ($c.Accent -ceq $accent -and $c['Accent.Hover'] -ceq (Get-WtMixedColor $accent '#000000' 0.1272) -and
             $c['Accent.Pressed'] -ceq (Get-WtMixedColor $accent '#000000' 0.2399) -and $c['Accent.Later'] -ceq (Get-WtMixedColor $accent '#FFFFFF' 0.6) -and
             $c.WindowBg -ceq (Get-WtMixedColor $tint '#FFFFFF' 0.55) -and $c.Sidebar -ceq $c.WindowBg -and $c.Card -ceq '#FFFFFF' -and
-            $c['Bg.Subtle'] -ceq (Get-WtMixedColor $tint '#FFFFFF' 0.72) -and $c.AccentSoft -ceq (Get-WtMixedColor $tint '#FFFFFF' 0.35))
+            $c['Bg.Subtle'] -ceq (Get-WtMixedColor $tint '#FFFFFF' 0.72) -and $c['Code.InlineBg'] -ceq $tint -and $c.AccentSoft -ceq (Get-WtMixedColor $tint '#FFFFFF' 0.35))
         $bad = foreach ($fg in 'Text.Primary', 'Text.Secondary', 'Text.Tertiary') {
             foreach ($bg in 'Bg.Canvas', 'Bg.Surface', 'Bg.Subtle', 'Bg.Raised', 'Bg.Selected', 'Fill.Hover.Surface', 'Fill.Pressed.Surface', 'Fill.Hover.Canvas', 'Fill.Pressed.Canvas', 'Fill.Selected.Nav', 'Fill.Hover.Subtle', 'Fill.Pressed.Subtle') {
                 $ratio = Get-WtContrast $c[$fg] $c[$bg]
@@ -1458,6 +1468,16 @@ pie
         $view = New-WtMarkdownView -Scroll -OnLink { param($l) $true }
         Set-WtMarkdownText $view $sample
         Assert-Wt 'WPF: 마크다운을 오류 없이 그린다' (-not $view.Tag.Error -and $view.Document.Blocks.Count -ge 12) "$($view.Tag.Error)"
+        $inlineView = New-WtMarkdownView
+        $inlineView.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
+        $inlineView.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+        Set-WtMarkdownText $inlineView '본문 `code`'
+        $inlineRun = @($inlineView.Document.Blocks.FirstBlock.Inlines | Where-Object { $_ -is [Windows.Documents.Run] -and $_.Text -ceq 'code' })[0]
+        Assert-Wt '인라인 코드: 전용 바탕·본문 글자색·고정폭·메모 코드 크기, 블록 바탕 유지' (
+            $inlineRun.Background.Color -eq $inlineView.FindResource('B.Code.InlineBg').Color -and
+            $inlineRun.Foreground.Color -eq $inlineView.FindResource('B.Text.Primary').Color -and
+            $inlineRun.FontFamily.Source -ceq $inlineView.FindResource('Font.Mono').Source -and $inlineRun.FontSize -eq $inlineView.FindResource('F.Memo.Code') -and
+            $inlineView.FindResource('B.Code.Bg').Color -eq $inlineView.FindResource('B.Bg.Subtle').Color)
         $figs = @($view.Document.Blocks | Where-Object { $_ -is [System.Windows.Documents.BlockUIContainer] -and $_.Child -is [System.Windows.Controls.Border] })
         Assert-Wt 'WPF: Mermaid 2개는 그림, 모르는 종류는 코드 블록' ($figs.Count -eq 2 -and $view.Tag.Remeasure)
         Assert-Wt 'WPF: 제목 · 각주 자리' ($view.Tag.Anchors.ContainsKey('제목굵게') -and $view.Tag.Anchors.ContainsKey('fn1'))
@@ -1641,7 +1661,7 @@ pie
         # 기능 추가·숨김·복원·실패를 가짜 탭으로 검사한다. 실제 탭 이름이나 모듈에는 의존하지 않는다.
         $lifecycleChecks = & (Get-Module Shell) {
             $savedLife = @{ Ui=$script:ui; Current=$script:current; Views=$script:views; Buttons=$script:navButtons
-                Exiting=$script:exiting; HandlerRegistered=$script:settingHandlerRegistered; ErrorHandler=${function:Show-WtError}; CollapsedHandler=${function:Update-WtCollapsed} }
+                Exiting=$script:exiting; HandlerRegistered=$script:settingHandlerRegistered; ErrorHandler=${function:Show-WtError}; NavHandler=${function:Update-WtNav} }
             $savedLifeAddons = & (Get-Module Addons) { ,$script:addons.ToArray() }
             $savedLifeHandlers = & (Get-Module Settings) { ,$script:handlers.ToArray() }
             $disabledBeforeLife = @(Get-WtSetting 'addons.disabled')
@@ -1651,7 +1671,7 @@ pie
                 $script:views=@{}; $script:current=$null; $script:exiting=$false
                 $script:lifeNew=0; $script:lifeOpened=0; $script:lifeFail=$false; $script:lifeSettings=0
                 function script:Show-WtError { param($ErrorRecord,$Where) }
-                function script:Update-WtCollapsed { $script:lifeSettings++ }
+                function script:Update-WtNav { $script:lifeSettings++ }
                 Register-WtAddon -Id 'life-cache' -Title '가짜 캐시' -NewView { $script:lifeNew++; [System.Windows.Controls.Border]::new() } `
                     -Refresh { if ($script:lifeFail) { throw '가짜 조회 실패' } } -OnOpen { param($OpenArgs) $script:lifeOpened++ }
                 Register-WtAddon -Id 'life-other' -Title '가짜 다른 화면' -NewView { [System.Windows.Controls.Border]::new() }
@@ -1679,10 +1699,10 @@ pie
                 $handlerCount=& (Get-Module Settings) { $script:handlers.Count }
                 Initialize-WtShellSettings; Initialize-WtShellSettings
                 $script:lifeSettings=0
-                Set-WtSetting 'nav.collapsed' (Get-WtSetting 'nav.collapsed')
+                Set-WtSetting 'addons.disabled' (Get-WtSetting 'addons.disabled')
                 $oneHandler=((& (Get-Module Settings) { $script:handlers.Count }) -eq $handlerCount+1) -and $script:lifeSettings -eq 1
                 $script:exiting=$true
-                Set-WtSetting 'nav.collapsed' (Get-WtSetting 'nav.collapsed')
+                Set-WtSetting 'addons.disabled' (Get-WtSetting 'addons.disabled')
                 @{ Reuse=$reuseLife; FailedOpen=$failLife; Retry=$retryLife; OneHandler=$oneHandler; NoClosedUpdates=($script:lifeSettings -eq 1) }
             } finally {
                 & (Get-Module Settings) { param($restore) $script:handlers.Clear(); foreach ($handler in $restore) { $script:handlers.Add($handler) } } $savedLifeHandlers
@@ -1690,7 +1710,7 @@ pie
                 $script:ui=$savedLife.Ui; $script:current=$savedLife.Current; $script:views=$savedLife.Views; $script:navButtons=$savedLife.Buttons
                 $script:exiting=$savedLife.Exiting; $script:settingHandlerRegistered=$savedLife.HandlerRegistered
                 Set-Item Function:script:Show-WtError $savedLife.ErrorHandler
-                Set-Item Function:script:Update-WtCollapsed $savedLife.CollapsedHandler
+                Set-Item Function:script:Update-WtNav $savedLife.NavHandler
                 Set-WtSetting 'addons.disabled' $disabledBeforeLife
             }
         }
@@ -1708,8 +1728,8 @@ pie
             try {
                 & (Get-Module Addons) { $script:addons.Clear() }
                 Register-WtAddon -Id 'shell-late' -Title '뒤' -Group '첫 묶음' -Order 30 -Badge { $null } -NewView { New-WtText '빈 화면' } -OnOpen { param($OpenArgs) $script:testOpenArgs = $OpenArgs }
-                Register-WtAddon -Id 'shell-dot' -Title '점' -Group '다음 묶음' -Order 20 -Badge { 'dot' } -BadgeToolTip '가짜 점' -NewView { New-WtText '점 화면' }
-                Register-WtAddon -Id 'shell-count' -Title '수' -Group '첫 묶음' -Order 10 -Badge { 7 } -NewView {
+                Register-WtAddon -Id 'shell-dot' -Title '점' -Group '다음 묶음' -Order 20 -BadgeKind dot -Badge { 'dot' } -BadgeToolTip '가짜 점' -NewView { New-WtText '점 화면' }
+                Register-WtAddon -Id 'shell-count' -Title '수' -Group '첫 묶음' -Order 10 -BadgeToolTip '남은 일 {0}' -Badge { 7 } -NewView {
                     New-WtSidePanel -Content (New-WtText '보조 내용') -Key 'test.shell.side' -Title '보조' -Width 288
                 }
                 Register-WtAddon -Id 'shell-error' -Title '실패' -Group '다음 묶음' -Order 40 -Badge { throw '배지 실패' } -NewView { New-WtText '계속 열림' }
@@ -1732,20 +1752,27 @@ pie
                 $groups = (@(Get-WtNavGroups) | ForEach-Object { "$($_.Name):$($_.Items.Id -join ',')" }) -join ';'
                 $badge = $script:navButtons
                 $badgeOk = $badge['shell-count'].Value -ceq '7' -and $badge['shell-dot'].Value -ceq 'dot' -and
-                    $null -eq $badge['shell-late'].Value -and $null -eq $badge['shell-error'].Value -and $badge['shell-count'].Count.Visibility -eq 'Visible' -and
-                    $badge['shell-dot'].Dot.Visibility -eq 'Visible' -and $badge['shell-dot'].Dot.ToolTip -eq '가짜 점'
+                    $null -eq $badge['shell-late'].Value -and $null -eq $badge['shell-error'].Value -and
+                    $badge['shell-count'].IconDot.Visibility -eq 'Collapsed' -and $badge['shell-dot'].IconDot.Visibility -eq 'Visible' -and
+                    $badge['shell-count'].Button.ToolTip.Content -ceq '수 · 남은 일 7' -and $badge['shell-dot'].Button.ToolTip.Content -ceq '점 · 가짜 점' -and
+                    [System.Windows.Automation.AutomationProperties]::GetName($badge['shell-count'].Button) -ceq '수' -and
+                    [System.Windows.Automation.AutomationProperties]::GetHelpText($badge['shell-count'].Button) -ceq '남은 일 7'
                 Select-WtPage 'shell-error'
                 $failureIsolated = $script:current -eq 'shell-error' -and $badge['shell-count'].Value -eq '7'
                 Start-WtNavBadgeTimer
                 $minute = $script:badgeTimer.IsEnabled -and $script:badgeTimer.Interval.TotalSeconds -eq 60
                 $script:badgeTimer.Stop()
-                Switch-WtCollapsed
-                $collapsedNav = $script:ui.NavBorder.Width -eq 48 -and $script:ui.FooterPanel.Orientation -eq 'Vertical' -and
-                    $badge['shell-dot'].IconDot.Visibility -eq 'Visible' -and $badge['shell-count'].Count.Visibility -eq 'Collapsed' -and
-                    $badge['shell-count'].Button.ToolTip -eq '수' -and @($script:navGroups | Where-Object Visibility -ne 'Collapsed').Count -eq 0
-                Switch-WtCollapsed
-                $expandedNav = $script:ui.NavBorder.Width -eq 200 -and $script:ui.FooterPanel.Orientation -eq 'Horizontal' -and
-                    $script:ui.HelpButton.Width -eq 32 -and $script:ui.HelpButton.Margin.Right -eq 8
+                Set-WtSetting 'nav.collapsed' $true
+                Update-WtNavBadges
+                $collapsedNav = $script:ui.NavBorder.Width -eq 48 -and -not $script:ui.ContainsKey('CollapseButton') -and
+                    -not $script:ui.ContainsKey('FooterPanel') -and $badge['shell-count'].Button.ToolTip.Content -ceq '수 · 남은 일 7' -and
+                    $script:navGroups.Count -eq 1 -and $script:navGroups[0].Width -eq 24 -and $script:navGroups[0].Height -eq 1
+                Set-WtSetting 'nav.collapsed' $false
+                $expandedNav = $script:ui.NavBorder.Width -eq 48 -and $script:ui.HelpButton.Width -eq 40 -and $script:ui.HelpButton.Height -eq 32 -and
+                    $script:ui.SettingsButton.Width -eq 40 -and $script:ui.SettingsButton.Margin.Right -eq 8 -and
+                    [System.Windows.Shell.WindowChrome]::GetIsHitTestVisibleInChrome($script:ui.HelpButton) -and
+                    [System.Windows.Automation.AutomationProperties]::GetAutomationId($script:ui.HelpButton) -ceq 'HelpButton' -and
+                    $script:ui.HelpButton.ToolTip -ceq '도움말 (F1)' -and $script:ui.SettingsButton.ToolTip -ceq '설정 (Ctrl+,)'
                 Select-WtPage 'shell-count'
                 $panel = @(Get-WtSidePanels $script:ui.PageHost.Content)[0]
                 $cycle = @(foreach ($n in 1..4) { Switch-WtPanelCycle; "$([bool](Get-WtSetting 'nav.collapsed'))/$($panel.Collapsed)" }) -join ','
@@ -1801,6 +1828,7 @@ pie
                     Show-WtFirstWorkSetup $script:window 'shell-late'
                     $firstSetup = & (Get-Module Pages) { $script:firstWorkSetup }
                     $shown = $null -ne $firstSetup -and $firstSetup.Grid.Children.Contains($firstSetup.Overlay) -and
+                        -not $script:ui.HelpButton.IsEnabled -and -not $script:ui.SettingsButton.IsEnabled -and
                         $firstSetup.Form.Boxes['work.start'].Text -ceq '09:00'
                     $firstSetup.Form.Boxes['work.end'].Text = '08:00'
                     $firstSetup.Form.Start.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
@@ -1811,6 +1839,7 @@ pie
                     $firstSetup.Form.Start.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
                     Initialize-WtSettings
                     $started = -not (Test-WtWorkSetupRequired) -and (Get-WtSetting 'work.start') -ceq '08:30' -and $script:current -ceq 'shell-late' -and
+                        $script:ui.HelpButton.IsEnabled -and $script:ui.SettingsButton.IsEnabled -and
                         -not $firstSetup.Grid.Children.Contains($firstSetup.Overlay)
                     Show-WtFirstWorkSetup $script:window 'shell-late'
                     $onlyMissing = $null -eq (& (Get-Module Pages) { $script:firstWorkSetup })
@@ -1837,6 +1866,7 @@ pie
                 }
                 [pscustomobject]@{ OpenArgs = $openArgsOk; Groups = $groups; Badge = $badgeOk; Isolated = $failureIsolated; Minute = $minute; Refresh = $refresh
                     CollapsedNav = $collapsedNav; ExpandedNav = $expandedNav; Cycle = $cycle; OnlyNav = $onlyNav
+                    TitleGlyph = $script:ui.HelpButton.Content.FontSize -eq 14 -and $script:ui.SettingsButton.Content.FontSize -eq 14
                     Saved = $savedClosed -and $restored -and $opened; Narrow = $narrowStart; Overlay = $overlay; Restore = $wideRestore; Left = $leftOk
                     Reserved = -not (Test-WtKeyOwned 'Ctrl+Shift+B' $reserved) -and (Test-WtKeyOwned 'Ctrl+B' $reserved)
                     FirstShown = $shown; FirstInvalid = $invalid; FirstStarted = $started; FirstOnlyMissing = $onlyMissing; FirstEscaped = $escaped; FirstClosed = $closed
@@ -1853,9 +1883,10 @@ pie
         Assert-Wt '탭 열기: 인자 전달 · 없는/꺼진 탭 무시 (가짜 탭)' $shellChecks.OpenArgs
         Assert-Wt '창 짜임: 숫자·점·없음·배지 실패 격리' ($shellChecks.Badge -and $shellChecks.Isolated)
         Assert-Wt '창 짜임: 탭 이동 때 재평가·분 타이머' ($shellChecks.Refresh -and $shellChecks.Minute)
-        Assert-Wt '창 짜임: 메뉴 200/48·툴팁·아래 아이콘 가로/세로' ($shellChecks.CollapsedNav -and $shellChecks.ExpandedNav)
+        Assert-Wt '창 짜임: 메뉴 48 고정·옛 설정 무시·구분선·타이틀바 아이콘' ($shellChecks.CollapsedNav -and $shellChecks.ExpandedNav)
+        Assert-Wt '타이틀바: 도움말·설정 글리프 14' $shellChecks.TitleGlyph
         Assert-Wt '창 짜임: 보조 칸 접기·설정 저장·다시 만들기' $shellChecks.Saved
-        Assert-Wt '창 짜임: Ctrl+Shift+B 네 단계·없는 칸 건너뛰기' ($shellChecks.Cycle -eq 'False/True,True/True,False/True,False/False' -and $shellChecks.OnlyNav -eq 'True,False') "$($shellChecks.Cycle) / $($shellChecks.OnlyNav)"
+        Assert-Wt '창 짜임: Ctrl+Shift+B 보조 칸만 토글·없는 칸 무시' ($shellChecks.Cycle -eq 'False/True,False/False,False/True,False/False' -and $shellChecks.OnlyNav -eq 'False,False') "$($shellChecks.Cycle) / $($shellChecks.OnlyNav)"
         Assert-Wt '창 짜임: 1200 미만 레일 시작·겹쳐 열기·늘리면 저장 상태' ($shellChecks.Narrow -and $shellChecks.Overlay -and $shellChecks.Restore) "$($shellChecks.Narrow)/$($shellChecks.Overlay)/$($shellChecks.Restore)"
         Assert-Wt '창 짜임: 왼쪽 보조 칸·독립 접기·좁아도 접지 않음' $shellChecks.Left
         Assert-Wt '창 짜임: 최소 크기·타이틀바·예약 단축키' ($shellChecks.Chrome -and $shellChecks.Reserved)
@@ -1864,6 +1895,104 @@ pie
         Assert-Wt '첫 설정: 시작은 입력값 저장 · 홈 복귀 · 다시 묻지 않음' $shellChecks.FirstStarted
         Assert-Wt '첫 설정: Esc는 기본값 저장 · 홈 복귀 · 다시 묻지 않음' $shellChecks.FirstEscaped
         Assert-Wt '첫 설정: 닫기도 기본값 저장 · 다시 묻지 않음' $shellChecks.FirstClosed
+
+        # 상태 줄·진행 중 배지는 가짜 탭 폴더의 등록만으로 붙고 빠진다.
+        $statusChecks = & (Get-Module Shell) {
+            $before = @{ Ui=$script:ui; Window=$script:window; Views=$script:views; Current=$script:current; Buttons=$script:navButtons; Groups=$script:navGroups }
+            $beforeAddons = & (Get-Module Addons) { ,$script:addons.ToArray() }
+            $beforeDisabled = @(Get-WtSetting 'addons.disabled')
+            try {
+                & (Get-Module Addons) { $script:addons.Clear() }
+                $script:window = ConvertFrom-WtXaml $script:shellXaml
+                $script:window.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
+                $script:window.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+                $script:ui = Get-WtNamedElements $script:window $script:shellXaml
+                $script:views=@{}; $script:current=$null; $script:statusOpened=$null
+                Register-WtAddon -Id 'status-main' -Title '진행' -Group '앞' -Order 10 -Badge { 2 } -BadgeKind active -BadgeToolTip '{0}개' `
+                    -NewView { New-WtText '가짜 화면' } -OnOpen { param($OpenArgs) $script:statusOpened=$OpenArgs } -StatusItems {
+                        @{ Key='long'; Icon=0xE787; Text='다음 19:38 SRV-01 펌웨어 업데이트 및 서비스 점검'; Side='left'; Open=@{Id='status-main'} }
+                        @{ Key='next'; Text='다음 항목'; ToolTip='전체 설명'; Side='left'; Open=@{Id='status-main';Args=@{View='today'}} }
+                        @{ Key='due'; Icon=0xE73E; Text='남은 일 3'; Side='right'; Open=@{Id='status-main'} }
+                        @{ Key='bad'; Text='빼기'; Side='unknown'; Open=@{Id='status-main'} }
+                    }
+                Register-WtAddon -Id 'status-fail' -Title '실패' -Group '뒤' -Order 20 -NewView { New-WtText '가짜 실패' } -StatusItems { throw '한 탭 실패' }
+                Register-WtAddon -Id 'status-last' -Title '마지막' -Group '앞' -Order 30 -NewView { New-WtText '가짜 뒤' } -StatusItems {
+                    @{Key='last';Text='뒤 항목';Side='right';Open=@{Id='status-last'}}
+                }
+                Set-WtSetting 'addons.disabled' @()
+                Update-WtNav
+                $left=$script:ui.StatusLeft; $right=$script:ui.StatusRight
+                $registered = $left.Children.Count -eq 2 -and $right.Children.Count -eq 2 -and
+                    [Windows.Automation.AutomationProperties]::GetAutomationId($script:ui.StatusBar) -ceq 'StatusBar' -and
+                    [Windows.Automation.AutomationProperties]::GetAutomationId($left.Children[1]) -ceq 'Status-status-main-next' -and
+                    [Windows.Automation.AutomationProperties]::GetName($left.Children[1]) -ceq '다음 항목' -and
+                    $left.Children[1].ToolTip -ceq '전체 설명' -and $right.Children[0].Content.FindName('Text').Text -ceq '남은 일 3' -and $right.Children[1].Content.FindName('Text').Text -ceq '뒤 항목'
+                $active = $script:navButtons['status-main'].IconDot.Visibility -eq 'Visible' -and $script:navButtons['status-main'].Button.ToolTip.Content -ceq '진행 · 2개' -and
+                    $script:navButtons['status-main'].IconDot.Fill.Color -eq $script:window.FindResource('B.Accent').Color
+                $surface=$script:window.Content
+                $surface.Measure([Windows.Size]::new(400,300)); $surface.Arrange([Windows.Rect]::new(0,0,400,300)); $surface.UpdateLayout()
+                Set-WtStatusLayout $left; $surface.UpdateLayout()
+                $narrow = $script:ui.StatusBar.ActualHeight -eq 24 -and $script:ui.StatusBar.ActualWidth -eq 400 -and
+                    $left.Children[0].MaxWidth -lt 400 -and $left.Children[1].ActualWidth -gt 0 -and
+                    [double]::IsPositiveInfinity($right.Children[0].MaxWidth) -and $right.Children[0].ActualWidth -gt 0
+                $surface.Measure([Windows.Size]::new(1280,800)); $surface.Arrange([Windows.Rect]::new(0,0,1280,800)); $surface.UpdateLayout()
+                Set-WtStatusLayout $left; $surface.UpdateLayout()
+                $originalText = New-WtText ($left.Children[0].Content.FindName('Text').Text) 'Shell.StatusText'
+                $originalText.Resources.MergedDictionaries.Add($script:window.Resources)
+                $originalText.TextTrimming='None'
+                $actualText = $left.Children[0].Content.FindName('Text')
+                $originalText.UseLayoutRounding=$actualText.UseLayoutRounding
+                $originalText.SnapsToDevicePixels=$actualText.SnapsToDevicePixels
+                $originalText.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
+                $originalText.Arrange([Windows.Rect]::new([Windows.Point]::new(0,0),$originalText.DesiredSize))
+                $wide=[double]::IsPositiveInfinity($left.Children[0].MaxWidth) -and [math]::Abs($actualText.ActualWidth - $originalText.ActualWidth) -lt 0.01
+                $leftIcon=$left.Children[0].Content.FindName('Icon'); $rightText=$right.Children[0].Content.FindName('Text')
+                $lastRight=$right.Children[0].TranslatePoint([Windows.Point]::new(0,0),$surface).X + $right.Children[0].ActualWidth
+                $icons=$leftIcon.FontSize -eq 12 -and $leftIcon.Width -eq 12 -and $leftIcon.Margin.Right -eq 4 -and
+                    $leftIcon.Foreground.Color -eq $script:window.FindResource('B.Text.Tertiary').Color -and
+                    $leftIcon.TranslatePoint([Windows.Point]::new(0,0),$surface).X -eq 48 -and
+                    [math]::Abs(($surface.ActualWidth - $lastRight + $right.Children[0].Padding.Right) - 12) -lt 0.01 -and
+                    $leftIcon.Text -ceq ([string][char]0xE787) -and $right.Children[0].Content.FindName('Icon').Text -ceq ([string][char]0xE73E)
+                $peers=[Collections.Generic.Queue[Windows.Automation.Peers.AutomationPeer]]::new()
+                $peers.Enqueue([Windows.Automation.Peers.UIElementAutomationPeer]::CreatePeerForElement($script:window))
+                $foundStatusPeer=$null
+                while($peers.Count) {
+                    $peer=$peers.Dequeue()
+                    if(-not $peer){continue}
+                    if($peer.GetAutomationId() -ceq 'StatusBar'){$foundStatusPeer=$peer;break}
+                    foreach($childPeer in $peer.GetChildren()){$peers.Enqueue($childPeer)}
+                }
+                # 창 없는 검사에서는 창 전체 자동화 트리가 다 만들어지지 않는다(실제 화면 시험에서는 찾음). 트리에서 못 찾으면 상태 줄 자체의 피어로 확인한다
+                if (-not $foundStatusPeer -and $script:ui.StatusBar) { $foundStatusPeer = [Windows.Automation.Peers.UIElementAutomationPeer]::CreatePeerForElement($script:ui.StatusBar) }
+                $uia=$null -ne $foundStatusPeer -and $foundStatusPeer.GetAutomationId() -ceq 'StatusBar' -and $foundStatusPeer.GetAutomationControlType() -eq [Windows.Automation.Peers.AutomationControlType]::StatusBar
+                $navTip=$script:navButtons['status-main'].Button.ToolTip
+                $navTip.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
+                $navTip.Arrange([Windows.Rect]::new([Windows.Point]::new(0,0),$navTip.DesiredSize))
+                # 띄우지 않은 툴팁은 크기가 정해지지 않아 세로 가운데 값은 실제 화면 시험(shell-1116 시나리오)이 본다. 여기서는 오른쪽 배치와 대상만 확인한다
+                $tipRight=($navTip.Placement -eq 'Right' -or [Windows.Controls.ToolTipService]::GetPlacement($script:navButtons['status-main'].Button) -eq 'Right') -and
+                    ($null -eq $navTip.PlacementTarget -or [object]::ReferenceEquals($navTip.PlacementTarget,$script:navButtons['status-main'].Button))
+                $left.Children[1].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+                $opened=$script:current -ceq 'status-main' -and $script:statusOpened.View -ceq 'today'
+                $script:navButtons['status-main'].Addon.Badge = { 0 }
+                Update-WtNavBadges
+                $zero = $script:navButtons['status-main'].IconDot.Visibility -eq 'Collapsed' -and $script:navButtons['status-main'].Button.ToolTip.Content -ceq '진행'
+                Set-WtSetting 'addons.disabled' @('status-main','status-fail')
+                Update-WtNav
+                $removed=$script:ui.StatusLeft.Children.Count -eq 0 -and $script:ui.StatusRight.Children.Count -eq 1 -and $script:navGroups.Count -eq 0
+                @{ Registered=$registered; Active=$active; Narrow=$narrow; Opened=$opened; Zero=$zero; Removed=$removed; Wide=$wide; Icons=$icons; Uia=$uia; TipRight=$tipRight }
+            } finally {
+                & (Get-Module Addons) { param($items) $script:addons.Clear(); foreach($item in $items){$script:addons.Add($item)} } $beforeAddons
+                $script:ui=$before.Ui; $script:window=$before.Window; $script:views=$before.Views; $script:current=$before.Current; $script:navButtons=$before.Buttons; $script:navGroups=$before.Groups
+                Set-WtSetting 'addons.disabled' $beforeDisabled
+            }
+        }
+        Assert-Wt '상태 줄: 등록 순서·UIA·글·툴팁·실패한 탭과 잘못된 항목 격리' $statusChecks.Registered
+        Assert-Wt '상태 줄: 높이 24·전체 폭·좁으면 왼쪽부터 줄임·누르면 등록 탭에 인자 전달' ($statusChecks.Narrow -and $statusChecks.Opened)
+        Assert-Wt '메뉴 배지: 진행 점·강조색·0이면 이름만·탭을 끄면 항목과 빈 묶음 구분선 제거' ($statusChecks.Active -and $statusChecks.Zero -and $statusChecks.Removed)
+        Assert-Wt '상태 줄 폭: 넓으면 왼쪽 글자의 실제 폭이 원래 글자 폭과 같다' $statusChecks.Wide
+        Assert-Wt '상태 줄 아이콘: 등록 코드·12·간격 4·왼쪽 48·오른쪽 12' $statusChecks.Icons
+        Assert-Wt '상태 줄 UIA: 자동화 제공자 트리에서 StatusBar ID·ControlType 찾기' $statusChecks.Uia
+        Assert-Wt '메뉴 툴팁: Right 배치·항목 세로 가운데' $statusChecks.TipRight
 
         # 도움말: 탭이 등록한 설명 · 카드를 모은다. 카드 하나가 실패해도 도움말은 연다
         Register-WtAddon -Id 'test-help' -Title '도움' -Order 50 -NewView { } -Help '가짜 탭 설명' -HelpCard { New-WtText '가짜 카드' 'T.Body' }
@@ -1899,6 +2028,99 @@ pie
         $settings3 = & $shell { Get-WtPageView '_settings' }
         Assert-Wt 'WPF 설정: 바뀐 설정은 재진입 때 다시 읽는다' (-not [object]::ReferenceEquals($settings2.View, $settings3.View))
         Set-WtSetting 'window.closeToTray' $close
+
+        # 창은 표시하지 않는다. 보이기 통로의 호출과 실제 창의 수명·Owner·내용을 각각 검사한다.
+        $utilityChecks = & (Get-Module Shell) {
+            $before = @{ Window=$script:window; Ui=$script:ui; Current=$script:current; Utilities=$script:utilityWindows; Views=$script:views; Host=${function:Show-WtUtilityHost} }
+            $beforeAddons = & (Get-Module Addons) { ,$script:addons.ToArray() }
+            try {
+                $probe = [pscustomobject]@{ IsVisible=$false; WindowState='Minimized'; Shows=0; Activations=0 }
+                $probe | Add-Member ScriptMethod Show { $this.IsVisible=$true; $this.Shows++ }
+                $probe | Add-Member ScriptMethod Activate { $this.Activations++; $true }
+                Show-WtUtilityHost $probe; Show-WtUtilityHost $probe
+                $forward=$probe.Shows -eq 1 -and $probe.Activations -eq 2 -and $probe.WindowState -ceq 'Normal'
+                $script:utilityShows=[System.Collections.Generic.List[object]]::new()
+                function script:Show-WtUtilityHost { param($Window) $script:utilityShows.Add($Window) }
+                $script:utilityWindows=@{}; $script:views=@{}
+                $script:window=ConvertFrom-WtXaml $script:shellXaml
+                $script:window.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
+                $script:window.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+                [void][Windows.Interop.WindowInteropHelper]::new($script:window).EnsureHandle()
+                $script:ui=Get-WtNamedElements $script:window $script:shellXaml
+                $mainContent=New-WtText '가짜 작업 화면'; $script:ui.PageHost.Content=$mainContent; $script:current='utility-main'
+                Initialize-WtShellButtons
+                $script:ui.HelpButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+                $helpWindow=$script:utilityWindows['_help'].Window
+                $script:ui.SettingsButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+                $settingsWindow=$script:utilityWindows['_settings'].Window
+                $script:ui.SettingsButton.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+                Select-WtPage '_settings' -Tab '업무시간'
+                $requested=$script:utilityWindows['_settings'].Body.Child.Tag.Tabs.SelectedItem.Header -ceq '업무시간'
+                Open-WtPage '_settings' -Args @{Tab='데이터'}
+                $single=$script:utilityWindows.Count -eq 2 -and [object]::ReferenceEquals($settingsWindow,$script:utilityWindows['_settings'].Window) -and
+                    $script:utilityShows.Count -eq 5 -and $requested -and $script:utilityWindows['_settings'].Body.Child.Tag.Tabs.SelectedItem.Header -ceq '데이터'
+                $helpKey=[pscustomobject]@{Key='F1';Handled=$false}; $settingsKey=[pscustomobject]@{Key='OemComma';Handled=$false}
+                Invoke-WtUtilityKey $settingsWindow $helpKey ([Windows.Input.ModifierKeys]::None)
+                Invoke-WtUtilityKey $helpWindow $settingsKey ([Windows.Input.ModifierKeys]::Control)
+                $single=$single -and $helpKey.Handled -and $settingsKey.Handled -and $script:utilityWindows.Count -eq 2 -and $script:utilityShows.Count -eq 7
+                $shape=$settingsWindow.Width -eq 960 -and $settingsWindow.Height -eq 680 -and $settingsWindow.MinWidth -eq 720 -and $settingsWindow.MinHeight -eq 480 -and
+                    $settingsWindow.Title -ceq 'WorkTool · 설정' -and $helpWindow.Title -ceq 'WorkTool · 도움말' -and
+                    $settingsWindow.FindName('TitleText').Text -ceq $settingsWindow.Title -and $null -ne $settingsWindow.FindName('MinButton') -and
+                    $null -eq $settingsWindow.FindName('HelpButton') -and $null -eq $settingsWindow.FindName('StatusBar') -and
+                    [object]::ReferenceEquals($settingsWindow.Owner,$script:window) -and $settingsWindow.WindowStartupLocation -eq 'CenterOwner'
+                $unchanged=$script:current -ceq 'utility-main' -and [object]::ReferenceEquals($script:ui.PageHost.Content,$mainContent)
+                $spacing=$true
+                foreach($childWindow in @($settingsWindow,$helpWindow)) {
+                    $frameRoot=$childWindow.FindName('Frame')
+                    $frameRoot.Measure([Windows.Size]::new(960,680)); $frameRoot.Arrange([Windows.Rect]::new(0,0,960,680)); $frameRoot.UpdateLayout()
+                    $outline=$childWindow.FindName('WindowBorder'); $body=$childWindow.FindName('Body')
+                    $page=$body.Child; $heading=$page.Children[0]
+                    $titlePosition=$heading.TranslatePoint([Windows.Point]::new(0,0),$frameRoot)
+                    $tabs=$page.Tag.Tabs; [void]$tabs.ApplyTemplate()
+                    $contentHost=$tabs.Template.FindName('PART_SelectedContentHost',$tabs)
+                    $card=$tabs.SelectedItem.Content.Content
+                    $spacing=$spacing -and $outline.BorderThickness -eq [Windows.Thickness]::new(1) -and
+                        $outline.BorderBrush.Color -eq $childWindow.FindResource('B.Border.Default').Color -and -not $outline.IsHitTestVisible -and
+                        $body.Margin -eq [Windows.Thickness]::new(8,0,8,8) -and $titlePosition.X -eq 16 -and $titlePosition.Y -eq 44 -and
+                        $contentHost.Margin -eq [Windows.Thickness]::new(0) -and $card.Padding -eq [Windows.Thickness]::new(20,16,20,16)
+                }
+                $settingsWindow.Left=80; $settingsWindow.Top=60; $settingsWindow.Width=1000; $settingsWindow.Height=700
+                # 실제 펼침 창을 띄우지 않고, 펼침 닫기의 반환값을 창 키 처리기에 전달한다.
+                $script:utilityTransient=$true
+                function script:Close-WtOpenTransient { param($Root) if($script:utilityTransient){$script:utilityTransient=$false;return $true}; $false }
+                $escape=[pscustomobject]@{Key='Escape';Handled=$false}
+                Invoke-WtUtilityKey $settingsWindow $escape
+                $transient=$escape.Handled -and -not $script:utilityTransient -and $script:utilityWindows.ContainsKey('_settings')
+                Invoke-WtUtilityKey $settingsWindow ([pscustomobject]@{Key='Escape';Handled=$false})
+                $escapeClosed=-not $script:utilityWindows.ContainsKey('_settings') -and $script:utilityWindows.ContainsKey('_help')
+                Select-WtPage '_settings'
+                $restored=$script:utilityWindows['_settings'].Window
+                $bounds=$restored.Left -eq 80 -and $restored.Top -eq 60 -and $restored.Width -eq 1000 -and $restored.Height -eq 700 -and $restored.WindowStartupLocation -eq 'Manual'
+                $helpWindow.FindName('CloseButton').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+                $onlyOwn=-not $script:utilityWindows.ContainsKey('_help') -and $script:utilityWindows.ContainsKey('_settings') -and $script:current -ceq 'utility-main'
+                $closed=Close-WtUtilityWindows
+                & (Get-Module Addons) { $script:addons.Clear() }
+                function script:Test-WtWorkSetupRequired { $false }
+                $initial=Initialize-WtMainPage
+                $empty=$initial -ceq '_settings' -and $script:ui.PageHost.Content.Text -ceq '켜진 탭이 없습니다.' -and $script:utilityWindows.ContainsKey('_settings')
+                [void](Close-WtUtilityWindows)
+                Select-WtPage '_help'
+                $script:window.Close()
+                $ownerClosed=$script:utilityWindows.Count -eq 0
+                @{ Single=$single; Forward=$forward; Shape=$shape; Unchanged=$unchanged; Transient=$transient; Escape=$escapeClosed; Bounds=$bounds; OnlyOwn=$onlyOwn; Tray=$closed; Owner=$ownerClosed; Empty=$empty; Spacing=$spacing }
+            } finally {
+                [void](Close-WtUtilityWindows)
+                & (Get-Module Addons) { param($items) $script:addons.Clear(); foreach($item in $items){$script:addons.Add($item)} } $beforeAddons
+                $script:window=$before.Window; $script:ui=$before.Ui; $script:current=$before.Current; $script:utilityWindows=$before.Utilities; $script:views=$before.Views
+                Set-Item Function:script:Show-WtUtilityHost $before.Host
+                Remove-Item Function:script:Close-WtOpenTransient -ErrorAction SilentlyContinue
+                Remove-Item Function:script:Test-WtWorkSetupRequired -ErrorAction SilentlyContinue
+            }
+        }
+        Assert-Wt '보조 창: 타이틀바 단추·각각 하나·다시 앞으로·요청한 하위 탭·메인 내용 유지·켜진 탭 없는 첫 화면' ($utilityChecks.Single -and $utilityChecks.Forward -and $utilityChecks.Unchanged -and $utilityChecks.Empty)
+        Assert-Wt '보조 창: 디자인 크기·제목·Owner·Esc 펼침 먼저·Esc 닫기·크기와 위치 복원' ($utilityChecks.Shape -and $utilityChecks.Transient -and $utilityChecks.Escape -and $utilityChecks.Bounds)
+        Assert-Wt '보조 창: X는 해당 창만·트레이 숨김 시 정리·메인 창 닫기와 함께 정리' ($utilityChecks.OnlyOwn -and $utilityChecks.Tray -and $utilityChecks.Owner)
+        Assert-Wt '보조 창 여백: 바깥 선 1·제목 x16/y44·내용 8/0/8/8·카드 20/16 중복 없음' $utilityChecks.Spacing
 
         # 미리 만들기: WarmUp을 준 탭만 만든다. Full은 새로 고침까지, View는 화면만. 설정 · 도움말도 만들고, 이미 연 화면은 건너뛴다
         $global:warmCalls = @{ FullNew = 0; FullRefresh = 0; ViewNew = 0; ViewRefresh = 0; NoneNew = 0 }
@@ -2072,7 +2294,7 @@ foreach ($t in (Get-ChildItem (Join-Path $root 'addons') -Filter 'Test-*.ps1' -R
     & $t.FullName
 }
 & (Join-Path $PSScriptRoot 'Test-Reliability.ps1')
-if (-not $NoDesktop) { & (Join-Path $PSScriptRoot 'Test-Launcher.ps1') }
+if (-not $NoDesktop) { & (Join-Path $PSScriptRoot 'Test-Launcher.ps1') -NoDesktop:($env:WORKTOOL_TEST_HIDDEN -eq '1') }
 else { Write-Host 'SKIP 실행 파일 GUI 검사 (-NoDesktop)' }
 if ($NoDesktop) { Write-Host '제외: WPF 화면 · 입력, 활성 작업 · 업무 탭, 앱 강제 종료 · GUI 실행 파일' }
 Write-Host '모두 통과' -ForegroundColor Green

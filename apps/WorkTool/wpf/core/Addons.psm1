@@ -14,7 +14,10 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   Order        메뉴 순서 (작을수록 위)
   Group        메뉴 묶음 이름. 순서대로 처음 만난 묶음부터 그린다 (선택)
   Badge        { } → 숫자(개수), 'dot'(점), $null(없음). 실패하면 배지만 숨긴다 (선택)
-  BadgeToolTip 점의 뜻을 보여 주는 툴팁 (선택)
+  BadgeToolTip 상태 글. 숫자는 {0} 자리에 넣는다. 0·없음이면 이름만 보인다 (선택)
+  BadgeKind    count(기본: 툴팁만) · dot(주의 점) · active(1 이상이면 강조 점)
+  StatusItems  { } → @{ Key; Text; ToolTip; Icon = Segoe 글자 코드(선택); Side = 'left'|'right'; Open = @{ Id; Args = @{} } } 목록.
+               켜진 탭만 탭 순서·등록 순서로 그린다. 실패한 탭·잘못된 항목은 뺀다 (선택)
   Required     $true면 설정에서 끌 수 없음 (홈)
   NewView      { } → 화면 요소를 돌려준다. 처음 열 때 한 번 부른다.
   Refresh      { param($view) } → 화면을 열 때마다 부른다 (선택)
@@ -55,6 +58,8 @@ function Register-WtAddon {
         [string]$Group = '',
         [scriptblock]$Badge,
         [string]$BadgeToolTip = '',
+        [ValidateSet('count', 'dot', 'active')][string]$BadgeKind = 'count',
+        [scriptblock]$StatusItems,
         [switch]$Required,
         [Parameter(Mandatory)][scriptblock]$NewView,
         [scriptblock]$Refresh,
@@ -110,7 +115,7 @@ function Register-WtAddon {
         if ($script:addons[$i].Id -eq $Id) { $script:addons.RemoveAt($i) }
     }
     $script:addons.Add(@{
-            Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Group = $Group; Badge = $Badge; BadgeToolTip = $BadgeToolTip; Required = [bool]$Required
+            Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Group = $Group; Badge = $Badge; BadgeToolTip = $BadgeToolTip; BadgeKind = $BadgeKind; StatusItems = $StatusItems; Required = [bool]$Required
             NewView = $NewView; Refresh = $Refresh; OnOpen = $OnOpen; ShortcutExists = $ShortcutExists
             HomeCard = $HomeCard; HomeSlot = $HomeSlot; HomeOrder = $HomeOrder; CalendarHost = [bool]$CalendarHost
             HomeCards = $cards
