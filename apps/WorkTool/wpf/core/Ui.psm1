@@ -1711,6 +1711,24 @@ $script:stylesXaml = @'
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
     </Style.Triggers>
   </Style>
+  <!-- 공통 메뉴의 하위 메뉴. 보통 항목의 글꼴·상태·높이를 이어 쓰고 WPF 메뉴 키보드 동작을 유지한다. -->
+  <Style x:Key="Home.PinSubmenuItem" TargetType="MenuItem" BasedOn="{StaticResource Home.PinMenuItem}">
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem">
+      <Grid>
+        <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="4">
+          <DockPanel><TextBlock x:Name="SubmenuChevron" DockPanel.Dock="Right" Text="&#xE76C;" Margin="12,0,0,0" Style="{StaticResource T.Icon}"/>
+            <ContentPresenter ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+          </DockPanel>
+        </Border>
+        <Popup x:Name="PART_Popup" Placement="Right" AllowsTransparency="True" Focusable="False" PopupAnimation="None"
+               IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}">
+          <Border Background="{DynamicResource B.Bg.Raised}" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" Padding="4" CornerRadius="8">
+            <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
+          </Border>
+        </Popup>
+      </Grid>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
   <!-- 항목 모양은 ItemContainerStyle 대신 이 메뉴 안의 기본 모양으로 준다. ItemContainerStyle은 구분선(Separator)에도 씌우려다
        「MenuItem 모양을 Separator에 쓸 수 없음」 오류로 메뉴가 안 열린다(2026-11-07 관련 메모 줄 우클릭에서 찾음) -->
   <Style x:Key="Home.PinMenu" TargetType="ContextMenu">

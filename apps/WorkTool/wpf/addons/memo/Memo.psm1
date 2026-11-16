@@ -382,7 +382,7 @@ function New-WtMemoTabButton($Pane, $Tab) {
             if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Middle) { [void](Close-WtMemoTab $s.Tag.Pane $s.Tag.Tab); $e.Handled = $true }
         })
     # 우클릭 메뉴: 닫기 · 다른 탭 닫기 · 오른쪽에 나눠 열기(나눴으면 다른 칸으로 옮기기)
-    $menu = New-WtContextMenu
+    $menu = New-WtHomePinContextMenu
     $menu.Tag = $b.Tag
     foreach ($spec in @(@('close', '닫기', 'Ctrl+W'), @('others', '다른 탭 닫기', ''), @('side', '오른쪽에 나눠 열기', 'Ctrl+\'))) {
         $mi = [System.Windows.Controls.MenuItem]::new()
@@ -1498,10 +1498,13 @@ function Set-WtMemoActionItems($Menu, [string]$Id, $Pane) {
     [void]$Menu.Items.Add((New-WtMemoMenuItem $(if ($archived) { '보관 해제' } else { '보관' }) { param($v) Invoke-WtMemoAction archive $v.Id $v.Value } @{ Id = $Id; Value = -not $archived }))
     $folders = @(try { Get-WtMemoFolders $script:memoStore } catch { })
     if ($folders.Count) {
-        [void]$Menu.Items.Add((New-WtMemoMenuCaption '폴더로 옮기기'))
+        $move = [System.Windows.Controls.MenuItem]::new()
+        $move.Header = '폴더로 옮기기'
+        Set-WtStyle $move 'Home.PinSubmenuItem'
+        [void]$Menu.Items.Add($move)
         foreach ($folder in @($folders) + @([pscustomobject]@{ id = ''; name = '폴더 없음' })) {
             $on = [string]$m.folder -ceq [string]$folder.id
-            [void]$Menu.Items.Add((New-WtMemoMenuItem ([string]$folder.name) { param($v) Invoke-WtMemoAction folder $v.Id $v.Value } @{ Id = $Id; Value = [string]$folder.id } -Checked:$on))
+            [void]$move.Items.Add((New-WtMemoMenuItem ([string]$folder.name) { param($v) Invoke-WtMemoAction folder $v.Id $v.Value } @{ Id = $Id; Value = [string]$folder.id } -Checked:$on))
         }
     }
     [void]$Menu.Items.Add((New-WtMemoMenuItem '삭제' { param($v) Remove-WtMemoItem $v.Id $v.Pane } @{ Id = $Id; Pane = $Pane }))
@@ -1750,9 +1753,20 @@ function Invoke-WtMemoKey([System.Windows.Input.Key]$Key, [System.Windows.Input.
         'T' { if (-not $shift) { return $false }; Restore-WtMemoClosedTab; return $true }
         'O' { if ($script:quickOpen) { Close-WtMemoQuick -Refocus } else { Open-WtMemoQuick }; return $true }
         'F' {
-            if (-not $shift) { return $false }   # Ctrl+F는 편집기 찾기
+            if (-not $shift) { $pane = Get-WtMemoActivePane; if (-not $pane.Current) { return $false }; Open-WtMemoFind $pane.Editor; return $true }
             Close-WtMemoQuick
             [void]$script:ui.Search.Focus(); $script:ui.Search.SelectAll()
+            return $true
+        }
+        'H' {
+            if ($shift) { return $false }
+            $pane = Get-WtMemoActivePane
+            if (-not $pane.Current) { return $false }
+            if ($pane.Editor.Mode -eq 'read') {
+                Set-WtMemoEditorMode $pane.Editor 'live' -NoFocus
+                Set-WtMemoMode 'live'
+            }
+            Open-WtMemoFind $pane.Editor -Replace
             return $true
         }
         'E' { Switch-WtMemoView; return $true }
@@ -1900,7 +1914,7 @@ function New-WtMemoView {
             if ($memoId -eq (Get-WtMemoCurrentId)) { return }
             if (@(Open-WtMemo $memoId 'here')[-1] -ne $true) { Sync-WtMemoListSelection }
         })
-    # Ctrl+클릭 · 가운데 클릭: 새 탭. 우클릭: 메뉴 (선택은 바꾸지 않는다)
+    # Ctrl+클릭 · 가운데 클릭: 새 탭. 우클릭: 대상 줄을 먼저 고르고 메뉴를 연다.
     $list.Add_PreviewMouseDown({
             param($s, $e)
             $c = $null
@@ -1913,6 +1927,9 @@ function New-WtMemoView {
                 $e.Handled = $true
             } elseif ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Right) {
                 $script:listMenuId = $memoId
+                $updating = $script:listUpdating
+                $script:listUpdating = $true
+                try { $s.SelectedItem = $c.DataContext } finally { $script:listUpdating = $updating }
                 $e.Handled = $true
             }
         })
