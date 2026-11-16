@@ -4,19 +4,23 @@
 
 .DESCRIPTION
     tests\Test-Core.ps1이 찾아서 돌린다. 혼자 돌려도 된다. 실제 데이터 폴더(문서\WorkTool)는 쓰지 않는다.
-    화면 · 저장 실패 검사는 Windows STA에서만 한다. 키 입력을 흉내 내려고 화면 밖에 시험 창을 잠깐 띄운다(활성화하지 않음).
+    화면 · 저장 실패 검사는 Windows STA에서만 한다. 보이지 않는 HwndSource에 배치하며 창을 표시하거나 활성화하지 않는다.
+
+.PARAMETER Measure
+    함수 성능을 10회 측정한다. 기본 실행은 시간을 재지 않고 같은 검색 결과를 한 번씩 검증한다.
 
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/addons/memo/Test-Memo.ps1
 #>
 #Requires -Version 7.0
 [CmdletBinding()]
-param()
+param([switch]$Measure)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'fixtures/new-memo-perf-fixture.ps1')
 . (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'tests/TestKit.ps1')
 Import-WtTestCore
+if ($IsWindows) { Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase }
 Import-Module (Join-Path $PSScriptRoot 'MemoEditor.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Memo.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'MemoData.psm1') -Force -DisableNameChecking
@@ -460,6 +464,7 @@ try {
 
     # 함수 단위 Stopwatch, 창 없음. GC는 측정 밖에서만 한다. 실행 환경 차이가 있어 시간은 실패 조건으로 삼지 않는다.
     function Write-MemoPerf([string]$Label, [double[]]$Samples, [string]$Unit = 'ms') {
+        if (-not $Measure) { return }
         $firstSample = $Samples[0]; $orderedSamples = [double[]]$Samples.Clone(); [Array]::Sort($orderedSamples)
         $medianSample = ($orderedSamples[4] + $orderedSamples[5]) / 2
         Write-Host ('PERF {0} 10회 중앙값 {1:F1}{4} 최댓값 {2:F1}{4} 첫 회 {3:F1}{4}' -f $Label, $medianSample, $orderedSamples[-1], $firstSample, $Unit)
@@ -484,31 +489,36 @@ try {
         id = "perf$i"; title = "메모 $i"; body = $perfBodies[$i]; tags = @('백업'); folder = 'work'; pinned = ($i % 100 -eq 0)
         created = '2026-10-01T09:00:00+09:00'; updated = '2026-10-26T09:00:00+09:00'
     } })
-    $watch = [Diagnostics.Stopwatch]::new()
-    $indexTimes = [double[]]::new(10); $firstTimes = [double[]]::new(10); $indexMemory = [double[]]::new(10)
+    $watch = if ($Measure) { [Diagnostics.Stopwatch]::new() } else { $null }
+    $runs = if ($Measure) { 10 } else { 1 }
+    $indexTimes = [double[]]::new($runs); $firstTimes = [double[]]::new($runs); $indexMemory = [double[]]::new($runs)
     $validFirst = $true
     for ($repeat = 0; $repeat -lt $indexTimes.Length; $repeat++) {
         $perfIndex = $null; $perfResult = $null
-        [GC]::Collect(); [GC]::WaitForPendingFinalizers(); $memoryBefore = [GC]::GetTotalMemory($true)
-        $watch.Restart(); $perfIndex = New-WtMemoIndex $perfMemos; $watch.Stop(); $indexTimes[$repeat] = $watch.Elapsed.TotalMilliseconds
+        if ($Measure) { [GC]::Collect(); [GC]::WaitForPendingFinalizers(); $memoryBefore = [GC]::GetTotalMemory($true); $watch.Restart() }
+        $perfIndex = New-WtMemoIndex $perfMemos
+        if ($Measure) { $watch.Stop(); $indexTimes[$repeat] = $watch.Elapsed.TotalMilliseconds; $watch.Restart() }
         # 매번 새 색인에서 검색한다. 정렬/연결 준비를 이전 검색에서 빌려 오지 않는다.
-        $watch.Restart(); $perfResult = Find-WtMemo -Index $perfIndex -Query '권한 오류'; $watch.Stop(); $firstTimes[$repeat] = $watch.Elapsed.TotalMilliseconds
+        $perfResult = Find-WtMemo -Index $perfIndex -Query '권한 오류'
+        if ($Measure) { $watch.Stop(); $firstTimes[$repeat] = $watch.Elapsed.TotalMilliseconds }
         $validFirst = $validFirst -and $perfResult.Success -and $perfResult.Count -eq 3000
-        $perfResult = $null; $indexMemory[$repeat] = ([GC]::GetTotalMemory($true) - $memoryBefore) / 1MB
+        $perfResult = $null
+        if ($Measure) { $indexMemory[$repeat] = ([GC]::GetTotalMemory($true) - $memoryBefore) / 1MB }
     }
-    Assert-WtTest '5a 속도 자료: 새 색인 10개 첫 검색 결과 개수' $validFirst
-    Write-Host "PERF 씨앗 $perfSeed 메모 3000개 본문 모두 다름 · 평균 약1.2KB + 검색 검사용 접두어 · 1%는20KB (메모리는 입력 자료를 제외한 GC 후 색인 보유량)"
+    Assert-WtTest "5a 속도 자료: 새 색인 ${runs}개 첫 검색 결과 개수" $validFirst
+    if ($Measure) { Write-Host "PERF 씨앗 $perfSeed 메모 3000개 본문 모두 다름 · 평균 약1.2KB + 검색 검사용 접두어 · 1%는20KB (메모리는 입력 자료를 제외한 GC 후 색인 보유량)" }
     Write-MemoPerf '색인 (연결은 첫 검색에 포함)' $indexTimes
     Write-MemoPerf '새 색인의 첫 검색 [권한 오류]' $firstTimes
     Write-MemoPerf '색인 관리 힙' $indexMemory 'MiB'
     foreach ($perfQuery in '권한 오류', 'title:메모', '#백업', 'folder:업무 updated:2026-10-01..2026-10-31', 'has:link -is:pinned') {
-        $times = [double[]]::new(10); $validPerf = $true
+        $times = [double[]]::new($runs); $validPerf = $true
         for ($repeat = 0; $repeat -lt $times.Length; $repeat++) {
-            $watch.Restart(); $perfResult = Find-WtMemo -Index $perfIndex -Query $perfQuery; $watch.Stop()
-            $times[$repeat] = $watch.Elapsed.TotalMilliseconds
+            if ($Measure) { $watch.Restart() }
+            $perfResult = Find-WtMemo -Index $perfIndex -Query $perfQuery
+            if ($Measure) { $watch.Stop(); $times[$repeat] = $watch.Elapsed.TotalMilliseconds }
             $validPerf = $validPerf -and $perfResult.Success -and $perfResult.Count -eq $(if ($perfQuery -eq 'has:link -is:pinned') { 2970 } else { 3000 })
         }
-        Assert-WtTest "5a 속도 자료: [$perfQuery] 10회 결과 개수" $validPerf
+        Assert-WtTest "5a 속도 자료: [$perfQuery] ${runs}회 결과 개수" $validPerf
         Write-MemoPerf "검색 [$perfQuery]" $times
     }
     $full = Find-WtMemo -Index $perfIndex -Query 'body:오류' -SnippetLimit ([int]::MaxValue)
@@ -524,11 +534,12 @@ try {
         else { $same = $same -and $limited.Items[$i].Snippet -ceq '' }
     }
     Assert-WtTest '5a 일부 한도: 정렬/개수/일치 위치 유지, 앞 200개만 원문, 0/전체 선택 가능' $same
-    $perfChanged = Copy-WtItem $perfMemos[0]; $times = [double[]]::new(10)
+    $perfChanged = Copy-WtItem $perfMemos[0]; $times = [double[]]::new($runs)
     for ($repeat = 0; $repeat -lt $times.Length; $repeat++) {
         $perfChanged.body = $perfBodies[0] + " 수정 $repeat"
-        $watch.Restart(); Update-WtMemoIndex -Index $perfIndex -Memo $perfChanged; $watch.Stop()
-        $times[$repeat] = $watch.Elapsed.TotalMilliseconds
+        if ($Measure) { $watch.Restart() }
+        Update-WtMemoIndex -Index $perfIndex -Memo $perfChanged
+        if ($Measure) { $watch.Stop(); $times[$repeat] = $watch.Elapsed.TotalMilliseconds }
     }
     Write-MemoPerf '메모 하나 본문/연결 갱신' $times
 
@@ -589,25 +600,30 @@ try {
     Assert-WtTest 'WPF 메모: 보이는 행이 요약을 읽을 때 원래 문자열로 한 번 만든다' ($lazyBefore -and $lazyText.Text -eq '제목 · 본문' -and $lazyRow.SnippetValue -eq $lazyText.Text)
 
     # ---- 화면 준비: 가짜 메모 셋 · 키 흉내 ----
-    # 키 이벤트(KeyEventArgs)는 창의 PresentationSource가 있어야 만든다. 화면 밖에 활성화하지 않고 띄운다.
+    # 키 이벤트(KeyEventArgs)에 필요한 PresentationSource는 표시하지 않는 호스트로 만든다.
     # 보조 키(Ctrl · Shift · Alt)는 실제 키보드 상태 대신 $script:testMods를 읽게 바꾼다
     & $memoModule { $script:testMods = [System.Windows.Input.ModifierKeys]::None; function script:Get-WtMemoModifiers { $script:testMods } }
-    $win = [System.Windows.Window]::new()
-    $win.Width = 1280; $win.Height = 720; $win.Left = -4000; $win.Top = 0
-    $win.WindowStartupLocation = 'Manual'; $win.ShowActivated = $false; $win.ShowInTaskbar = $false
+    $win = [System.Windows.Controls.Border]::new()
+    $win.Width = 1280; $win.Height = 720
+    $sourceParams = [System.Windows.Interop.HwndSourceParameters]::new('Memo test')
+    $sourceParams.Width = 1280; $sourceParams.Height = 720; $sourceParams.WindowStyle = 0
+    $testSource = [System.Windows.Interop.HwndSource]::new($sourceParams)
+    $testSource.RootVisual = $win
     function Show-TestView {
         $script:view = New-WtTestView 'memo'
-        $win.Content = $script:view
-        if (-not $win.IsVisible) { $win.Show() }
+        $win.Child = $script:view
+        $win.Measure([System.Windows.Size]::new(1280, 720))
+        $win.Arrange([System.Windows.Rect]::new(0, 0, 1280, 720))
         [void](& $addon.Refresh $script:view)
         $win.UpdateLayout()
     }
-    function Send-TestKey([string]$Key, [string]$Mods = 'None') {
+    function Send-TestKey([string]$Key, [string]$Mods = 'None', $Target = $null) {
         & $memoModule { param($m) $script:testMods = [System.Enum]::Parse([System.Windows.Input.ModifierKeys], $m) } $Mods
         $src = [System.Windows.PresentationSource]::FromVisual($win)
         $a = [System.Windows.Input.KeyEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $src, 0, [System.Windows.Input.Key]$Key)
         $a.RoutedEvent = [System.Windows.Input.Keyboard]::PreviewKeyDownEvent
-        $script:view.RaiseEvent($a)
+        if (-not $Target) { $Target = $script:view }
+        $Target.RaiseEvent($a)
         & $memoModule { $script:testMods = [System.Windows.Input.ModifierKeys]::None }
         $a.Handled
     }
@@ -715,6 +731,104 @@ try {
     Assert-WtTest 'WPF 메모 탭: 탭을 오가도 편집기 커서(줄 · 칸)를 돌려놓는다' ($kept[1] -gt 0 -and $kept[0] -eq $kept[2] -and $kept[1] -eq $kept[3]) "$($kept -join ',')"
     $menuItems = & $memoModule { @($script:panes[0].Current.Button.ContextMenu.Items | ForEach-Object { "$($_.Header)|$($_.InputGestureText)" }) }
     Assert-WtTest 'WPF 메모 탭: 우클릭 메뉴(닫기 · 다른 탭 닫기 · 오른쪽에 나눠 열기)와 단축키 표시' (($menuItems -join ';') -eq '닫기|Ctrl+W;다른 탭 닫기|;오른쪽에 나눠 열기|Ctrl+\') ($menuItems -join ';')
+    $tabMenu = & $memoModule { $script:panes[0].Current.Button.ContextMenu }
+    $tabMenu.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $tabMenu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    Assert-WtTest 'TabContextMenu-AppStyle: 열린 탭도 앱 공통 메뉴 모양' ([object]::ReferenceEquals($tabMenu.Style, $view.FindResource('Home.PinMenu')))
+    foreach ($mode in 'live', 'source', 'read') {
+        & $memoModule { param($m) Set-WtMemoMode $m; $script:panes[0].TitleBox.Focus() } $mode | Out-Null
+        $pane = & $memoModule { $script:panes[0] }
+        # 제목 입력칸에서 올라오는 실제 PreviewKeyDown 전달 경로를 사용한다.
+        & $memoModule { $script:testMods = [System.Windows.Input.ModifierKeys]::Control }
+        $keyArgs = [System.Windows.Input.KeyEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $testSource, 0, [System.Windows.Input.Key]::H)
+        $keyArgs.RoutedEvent = [System.Windows.Input.Keyboard]::PreviewKeyDownEvent
+        $pane.TitleBox.RaiseEvent($keyArgs)
+        & $memoModule { $script:testMods = [System.Windows.Input.ModifierKeys]::None }
+        Assert-WtTest "FindReplace-ModeVisibility: $mode 제목 칸 Ctrl+H 전달 · 바꾸기 열림" (
+            $keyArgs.Handled -and $pane.Editor.Find.ReplaceRow.Visibility -eq 'Visible' -and
+            $pane.Editor.Mode -eq $(if ($mode -eq 'read') { 'live' } else { $mode }) -and $pane.Current.Mode -ceq $pane.Editor.Mode)
+        $pane.Editor.Find.Bar.Visibility = 'Collapsed'
+    }
+    & $memoModule { Set-WtMemoMode 'live' }
+
+    # 화면 재현 26~29와 같은 키 순서. 본문/찾기 칸에서 실제 PreviewKeyDown 경로로 올린다.
+    $findPane = & $memoModule { $script:panes[0] }
+    $findEd = $findPane.Editor
+    $findBefore = Get-WtMemoEditorText $findEd
+    $findPump = { [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action] {}, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle) }
+    try {
+        $findEd.Find.Query.Clear(); $findEd.Find.Bar.Visibility = 'Collapsed'
+        & $memoModule { Set-WtMemoMode 'read' }
+        [void]$findEd.View.Focus()
+        & $findPump
+        $readHandled = Send-TestKey H Control $findEd.View
+        & $findPump
+        $readFind = $readHandled -and $findEd.Mode -ceq 'live' -and $findPane.Current.Mode -ceq 'live' -and
+            $findEd.Find.ReplaceRow.Visibility -eq 'Visible' -and $findEd.Find.Query.IsKeyboardFocused -and -not $findEd.Island -and
+            $findEd.Find.Query.SelectionStart -eq 0 -and $findEd.Find.Query.SelectionLength -eq $findEd.Find.Query.Text.Length
+        $readDetail = "모드=$($findEd.Mode) 검색어=[$($findEd.Find.Query.Text)] 찾기포커스=$($findEd.Find.Query.IsKeyboardFocused) 섬=$([bool]$findEd.Island)"
+
+        # 읽기 본문 → Ctrl+H 뒤 Esc → 제목 칸 Ctrl+H(27), 새 본문에서 Ctrl+F → target → Ctrl+H(28~29).
+        [void](Send-TestKey Escape None ([System.Windows.Input.Keyboard]::FocusedElement))
+        & $findPump
+        [void]$findPane.TitleBox.Focus()
+        [void](Send-TestKey H Control $findPane.TitleBox)
+        & $findPump
+        $titleFind = $findEd.Find.ReplaceRow.Visibility -eq 'Visible' -and $findEd.Find.Query.IsKeyboardFocused
+        [void](Send-TestKey Escape None ([System.Windows.Input.Keyboard]::FocusedElement))
+        & $findPump
+        [void]$findPane.TitleBox.Focus()   # 새 메모 준비의 Close-LiveIsland와 같은 이탈을 끝낸 뒤 본문을 누른다.
+        & $findPump
+        $findEd.Find.Query.Clear(); $findEd.Find.Bar.Visibility = 'Collapsed'
+        Set-WtMemoEditorText $findEd ("First server target SRV-01 check`r`nSecond server target SRV-02 check`r`nThird server target SRV-03 check`r`n" * 4)
+        $findEd.Live.UpdateLayout()
+        & (Get-Module MemoEditor) {
+            param($ed)
+            $hit = Find-WtMemoLiveHit $ed ([System.Windows.Point]::new(90, 30))
+            Open-WtMemoIslandAt $ed $hit.Line $hit.Col
+        } $findEd
+        $findEd.Live.UpdateLayout()   # 표시하지 않는 시험 호스트에서는 본문 클릭 뒤의 실제 화면 배치를 직접 끝낸다.
+        & $findPump
+        $liveHandled = Send-TestKey F Control $findEd.IslandBox
+        & $findPump
+        $findTrace = "CtrlF=$liveHandled 모드=$($findEd.Mode) 섬=$([bool]$findEd.Island) 찾기=$($findEd.Find.Query.IsKeyboardFocused) 포커스=$([System.Windows.Input.Keyboard]::FocusedElement.GetType().Name) 막대=$($findEd.Find.Bar.Visibility)"
+        foreach ($letter in 'target'.ToCharArray()) {
+            $inputTarget = [System.Windows.Input.Keyboard]::FocusedElement
+            foreach ($event in [System.Windows.Input.TextCompositionManager]::PreviewTextInputEvent, [System.Windows.Input.TextCompositionManager]::TextInputEvent) {
+                $composition = [System.Windows.Input.TextComposition]::new([System.Windows.Input.InputManager]::Current, $inputTarget, [string]$letter)
+                $textArgs = [System.Windows.Input.TextCompositionEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $composition)
+                $textArgs.RoutedEvent = $event
+                $inputTarget.RaiseEvent($textArgs)
+                if ($textArgs.Handled) { break }
+            }
+            & $findPump
+            $findTrace += " | $letter 찾기=$($findEd.Find.Query.IsKeyboardFocused) 검색어=[$($findEd.Find.Query.Text)] 포커스=$([System.Windows.Input.Keyboard]::FocusedElement.GetType().Name)"
+        }
+        $selectedBeforeH = $findEd.IslandBox.SelectedText
+        $queryBeforeH = $findEd.Find.Query.Text
+        $focusBeforeH = $findEd.Find.Query.IsKeyboardFocused
+        $replaceHandled = Send-TestKey H Control ([System.Windows.Input.Keyboard]::FocusedElement)
+        & $findPump
+        $liveFind = $titleFind -and $liveHandled -and $replaceHandled -and $queryBeforeH -ceq 'target' -and $focusBeforeH -and
+            $selectedBeforeH -ceq 'target' -and $findEd.Island -and $findEd.IslandBox.SelectedText -ceq 'target' -and
+            $findEd.Find.Query.Text -ceq 'target' -and $findEd.Find.Query.IsKeyboardFocused -and $findEd.Find.Query.SelectedText -ceq 'target' -and
+            $findEd.Find.ReplaceRow.Visibility -eq 'Visible' -and $findEd.Find.Count.Text -match '(?:12개|/12)$'
+        $liveDetail = "검색어전후=[$queryBeforeH]/[$($findEd.Find.Query.Text)] 본문선택전후=[$selectedBeforeH]/[$($findEd.IslandBox.SelectedText)] 찾기포커스전후=$focusBeforeH/$($findEd.Find.Query.IsKeyboardFocused) 개수=$($findEd.Find.Count.Text) $findTrace"
+        # 화면에 남았던 Second의 d 선택이 있어도 Ctrl+H는 이미 입력한 검색어를 우선한다.
+        $findEd.IslandBox.Select($findEd.IslandBox.Text.IndexOf('Second') + 5, 1)
+        [void](Send-TestKey H Control $findEd.Find.Query)
+        & $findPump
+        $staleFind = $findEd.Find.Query.Text -ceq 'target' -and $findEd.Find.Query.IsKeyboardFocused -and $findEd.Find.Count.Text -match '(?:12개|/12)$'
+    } finally {
+        $findEd.Find.Bar.Visibility = 'Collapsed'; $findEd.Find.Query.Clear()
+        Set-WtMemoEditorText $findEd $findBefore
+        & $memoModule { Set-WtMemoMode 'live' }
+        & $findPump
+    }
+    Write-Host "찾기 재현(읽기 Ctrl+H): $readDetail"
+    Write-Host "찾기 재현(편집 Ctrl+F→입력→Ctrl+H): $liveDetail"
+    Assert-WtTest 'FindReplace-ReadBodyKeepsQueryFocus: 읽기 본문 Ctrl+H · 찾기 칸 포커스 · 섬 없음' $readFind $readDetail
+    Assert-WtTest 'FindReplace-PreservesQueryAndMatch: Ctrl+F → target → Ctrl+H · 검색어와 전체 일치 선택 유지' $liveFind $liveDetail
+    Assert-WtTest 'FindReplace-KeepsExistingQuery: 본문 d 선택이 남아도 Ctrl+H는 target 유지' $staleFind
 
     # ---- 나누기 · 같은 메모 두 칸 · 설정 복원 ----
     [void](Send-TestKey Oem5 Control)
@@ -770,10 +884,11 @@ try {
     }
     Assert-WtTest '메모: 목록 홈 고정 메뉴' (Test-WtHomePin -Page memo -Key ma)
     Send-TestListClick 'mc' Right
-    $menuState = & $memoModule { [pscustomobject]@{ MenuId = $script:listMenuId; Current = $script:panes[0].Current.Id } }
+    $menuState = & $memoModule { [pscustomobject]@{ MenuId = $script:listMenuId; Selected = $script:ui.List.SelectedItem.Id; Current = $script:panes[0].Current.Id } }
+    Assert-WtTest 'ListContextMenu-SelectsTarget: 우클릭한 비선택 행을 먼저 표시' ($menuState.MenuId -ceq 'mc' -and $menuState.Selected -ceq 'mc' -and $menuState.Current -ceq 'mb')
     & $memoModule { $script:listMenuId = ''; $m = $script:ui.List.ContextMenu; Set-WtMemoListMenu $m 'mb'; $m.Items[1].RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.MenuItem]::ClickEvent)) }
     $s = Get-TestTabs
-    Assert-WtTest 'WPF 메모 칸: 목록 우클릭은 선택을 바꾸지 않고, 메뉴 [오른쪽에 열기]는 오른쪽 칸에 연다' ($menuState.MenuId -eq 'mc' -and $menuState.Current -eq 'mb' -and $s.Panes -eq 2 -and $s.Tabs[1] -eq 'mb' -and $s.Tabs[0] -eq 'ma,mb') "$($menuState.MenuId) $($s.Tabs -join ' | ')"
+    Assert-WtTest 'WPF 메모 칸: 목록 우클릭은 대상 행을 고르고, 메뉴 [오른쪽에 열기]는 오른쪽 칸에 연다' ($menuState.MenuId -eq 'mc' -and $menuState.Selected -eq 'mc' -and $menuState.Current -eq 'mb' -and $s.Panes -eq 2 -and $s.Tabs[1] -eq 'mb' -and $s.Tabs[0] -eq 'ma,mb') "$($menuState.MenuId) $($s.Tabs -join ' | ')"
     & $memoModule { Remove-WtMemoCurrent }
     $s = Get-TestTabs
     Assert-WtTest 'WPF 메모 칸: 메모를 지우면 그 탭을 모든 칸에서 닫는다' ($s.Panes -eq 1 -and $s.Tabs[0] -eq 'ma' -and -not ((Get-WtMemoItems) | Where-Object id -eq 'mb') -and (& $memoModule { $script:ui.UndoBar.Visibility }) -eq 'Visible')
@@ -1089,6 +1204,21 @@ try {
     }
     Assert-WtTest '메모 메뉴: 조건 · 정렬 · 목록 우클릭 항목' ($menus.Filter -like '수정일|오늘|최근 7일|최근 30일|상태|고정|*#장애*' -and $menus.Sort -ceq '✓ 기본|수정일|생성일|제목|최근 열기|받은 연결 수' -and
         $menus.List -like '새 탭에서 열기|오른쪽에 열기|홈에 고정|고정|보관|폴더로 옮기기|*삭제') ($menus | ConvertTo-Json -Compress)
+    $folderMenu = & $memoModule {
+        $menu = $script:ui.List.ContextMenu
+        $menu.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $menu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+        $move = @($menu.Items | Where-Object Header -CEQ '폴더로 옮기기')[0]
+        $move.ApplyTemplate() | Out-Null
+        @{ TopCount = $menu.Items.Count; Names = @($move.Items.Header) -join '|'; Style = $move.Style;
+            Popup = $move.Template.FindName('PART_Popup', $move); Count = $move.Items.Count; Chevron = $move.Template.FindName('SubmenuChevron', $move) }
+    }
+    Assert-WtTest 'ListContextMenu-FolderSubmenu: 폴더는 하위 메뉴 · 공통 스타일 · 펼침 템플릿' (
+        $folderMenu.TopCount -eq 7 -and $folderMenu.Count -gt 1 -and $folderMenu.Names.EndsWith('폴더 없음') -and
+        $folderMenu.Popup -is [System.Windows.Controls.Primitives.Popup] -and
+        [object]::ReferenceEquals($folderMenu.Style, $view.FindResource('Home.PinSubmenuItem'))) $folderMenu.Names
+    Assert-WtTest 'FolderSubmenu-IconChevron: 공통 아이콘 글꼴 · 펼침 화살표 · 기존 크기' (
+        $folderMenu.Chevron.Text -ceq [string][char]0xE76C -and $folderMenu.Chevron.FontFamily.Source -ceq $view.FindResource('Font.Icon').Source -and
+        $folderMenu.Chevron.FontSize -eq $view.FindResource('F.Icon'))
     $toc = & $memoModule {
         [void](Open-WtMemo 'toc' 'tab')
         $p = Get-WtMemoActivePane
@@ -1130,7 +1260,7 @@ try {
     # ---- 큰 저장소: 직렬화 전부터 보유 · 연속 저장 · 실패 · 종료 확인 · 캐시 ----
     Wait-WtTestWrites 30000
     & $memoModule { foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } }; $script:ui = @{}; $script:panes.Clear() }
-    if ($win) { $win.Close(); $win = $null }
+    if ($testSource) { $testSource.Dispose(); $testSource = $null; $win = $null }
     Stop-WtAllWork
     $backgroundTest = New-WtTestData 'memo-background'
     $backgroundFixture = New-WtMemoPerfFixture -Count 320
@@ -1248,7 +1378,7 @@ try {
     }
 } finally {
     if ($held) { $held.Dispose() }
-    if ($win) { try { $win.Close() } catch { } }
+    if ($testSource) { $testSource.Dispose() }
     & $memoModule { foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } }
     Remove-WtTestData $test
 }

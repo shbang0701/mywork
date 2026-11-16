@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    메모 편집기(MemoEditor.psm1)를 화면 밖 시험 창에서 검사한다: 불러오기 · 섬 · 이동 · 잇기 · 실행 취소 · 모드 · 할 일 · 클릭 위치 · 나눠 그리기 · 편집 명령 · 섬 나누기(Enter).
+    메모 편집기(MemoEditor.psm1)를 표시하지 않는 시험 호스트에서 검사한다: 불러오기 · 섬 · 이동 · 잇기 · 실행 취소 · 모드 · 할 일 · 클릭 위치 · 나눠 그리기 · 편집 명령 · 섬 나누기(Enter).
 
 .DESCRIPTION
     tests\Test-Core.ps1이 찾아서 돌린다. 혼자 돌려도 된다. 실제 데이터 폴더(문서\WorkTool)는 쓰지 않는다.
-    Windows STA에서만 돌린다(그 밖에는 건너뛴다). 시험 창은 화면 밖에 활성화하지 않고 띄운다.
+    Windows STA에서만 돌린다(그 밖에는 건너뛴다). 보이지 않는 HwndSource에 배치하며 창을 표시하거나 활성화하지 않는다.
     오류 창(MessageBox)이 뜨지 않게 Show-WtError · Show-WtMessage를 콘솔 출력으로 바꿔 끼우고, 찍힌 오류가 있으면 실패로 본다.
 
     키는 KeyEventArgs를 PreviewKeyDown → (처리 안 됐으면) KeyDown 순서로 흉내 낸다.
@@ -29,6 +29,9 @@
 .PARAMETER Steps
     무작위 편집 한 번의 단계 수
 
+.PARAMETER Cases
+    지정한 이름의 검사만 실행한다. 생략하면 기존 검사와 회귀 검사를 모두 실행한다.
+
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/addons/memo/Test-MemoEditor.ps1
 
@@ -37,7 +40,7 @@
 #>
 #Requires -Version 7.0
 [CmdletBinding()]
-param([switch]$KnownBugs, [int[]]$Seeds = @(20261025, 7, 4242), [int]$Steps = 150)
+param([switch]$KnownBugs, [int[]]$Seeds = @(20261025, 7, 4242), [int]$Steps = 150, [string[]]$Cases = @())
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'tests/TestKit.ps1')
@@ -76,6 +79,7 @@ function Assert-Ed([string]$Name, [bool]$Ok, $Detail = '') {
 
 # 검사 하나. 예외가 나도 실패로 적고 다음 검사로 간다. -Bug는 알려진 버그 검사(기본은 건너뜀)
 function Invoke-EdCase([string]$Name, [scriptblock]$Body, [string]$Bug = '') {
+    if ($Cases.Count -and $Name -notin $Cases) { return }
     if ($Bug -and -not $KnownBugs -and $bugList -contains $Bug) {
         $script:edSkip.Add("$Bug ($Name)")
         Write-Host "SKIP 알려진 버그 $Bug : $Name" -ForegroundColor Yellow
@@ -177,13 +181,16 @@ $onUnhandled = [System.Windows.Threading.DispatcherUnhandledExceptionEventHandle
 }
 $dispatcher.add_UnhandledException($onUnhandled)
 
-$win = [System.Windows.Window]::new()
-$win.Width = 900; $win.Height = 700; $win.Left = -12000; $win.Top = 0
-$win.WindowStartupLocation = 'Manual'; $win.ShowActivated = $false; $win.ShowInTaskbar = $false; $win.WindowStyle = 'None'
+$win = [System.Windows.Controls.Border]::new()
+$win.Width = 900; $win.Height = 700
+$sourceParams = [System.Windows.Interop.HwndSourceParameters]::new('MemoEditor test')
+$sourceParams.Width = 900; $sourceParams.Height = 700; $sourceParams.WindowStyle = 0
+$testSource = [System.Windows.Interop.HwndSource]::new($sourceParams)
+$testSource.RootVisual = $win
 $edHost = [System.Windows.Controls.Grid]::new()
 $edHost.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
 $edHost.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
-$win.Content = $edHost
+$win.Child = $edHost
 
 function New-EdEditor([switch]$AsIs) {
     $x = New-WtMemoEditor -OnChanged { param($one) $one.TestChanged++ } -OnLeave { param($one) $one.TestLeft++ }
@@ -445,7 +452,8 @@ for ($k = 1; $k -le 80; $k++) {
 $longText = Join-EdLines $long
 
 try {
-    $win.Show()
+    $win.Measure([System.Windows.Size]::new(900, 700))
+    $win.Arrange([System.Windows.Rect]::new(0, 0, 900, 700))
 
     # ---- 불러오기 · 돌려받기 ----
     Invoke-EdCase '불러오기' {
@@ -1227,6 +1235,224 @@ try {
         Assert-Ed '편집기 단위: 닫히지 않은 ``` 는 글 끝까지 코드 한 단위 (읽기 모드와 같게)' ($kinds -eq '0-4 code') $kinds
     } -Bug 'unclosed-fence'
 
+    Invoke-EdCase 'Callout-NewMemoKeepsFocus' {
+        $ed = New-EdEditor
+        Set-EdText $ed ''
+        Open-EdAt $ed 0 0
+        Sync-EdUi
+        Send-EdText $ed '> [!note] Fresh Callout'
+        Send-EdKey $ed Return
+        Assert-Ed 'Callout-NewMemoKeepsFocus: 첫 Enter 뒤 인용 섬 · 커서 · 키보드 포커스 유지' (
+            $ed.Island -and $ed.IslandBox.IsKeyboardFocused -and (Get-EdCaret $ed) -ceq '1:2' -and
+            $ed.IslandBox.Text -ceq "> [!note] Fresh Callout`r`n> ") "섬=$([bool]$ed.Island) 포커스=$($ed.IslandBox.IsKeyboardFocused)"
+        if (-not $ed.IslandBox.IsKeyboardFocused) { throw '둘째 줄을 받을 키보드 포커스가 없습니다.' }
+        Send-EdText $ed 'Callout line content'
+        Send-EdKey $ed Return 2
+        $exitFocus = $ed.Island -and $ed.IslandBox.IsKeyboardFocused -and (Get-EdCaret $ed) -ceq '2:0'
+        if (-not $ed.IslandBox.IsKeyboardFocused) { throw '다음 문단을 받을 키보드 포커스가 없습니다.' }
+        Send-EdText $ed 'Next paragraph text'
+        Sync-EdUi
+        Assert-Ed 'Callout-NewMemoKeepsFocus: 인용 탈출 뒤 다음 문단까지 입력 보존 · 포커스 유지' (
+            $exitFocus -and $ed.Island -and $ed.IslandBox.IsKeyboardFocused -and
+            (Get-EdText $ed) -ceq "> [!note] Fresh Callout`n> Callout line content`nNext paragraph text") "글=$((Get-EdText $ed).Replace("`n", '¶'))"
+        Assert-EdContract $ed 'Callout-NewMemoKeepsFocus: 문서 약속'
+    }
+    Invoke-EdCase 'BlankSpacing-DefaultSeparator' {
+        foreach ($blank in 0, 1, 3) {
+            $ed = New-EdEditor
+            $text = 'first paragraph' + ("`n" * ($blank + 1)) + "## Next`n`nafter"
+            Set-EdText $ed $text
+            $liveY = (Get-EdPoint $ed.Live 'Next').Y
+            Set-WtMemoEditorMode $ed 'read'
+            $readY = (Get-EdPoint $ed.View 'Next').Y
+            Set-WtMemoEditorMode $ed 'live'
+            [void](Complete-EdRender $ed)
+            Open-EdAt $ed 0 0
+            $openY = (Get-EdPoint $ed.Live 'Next').Y
+            Close-Ed $ed
+            $closeY = (Get-EdPoint $ed.Live 'Next').Y
+            $h = [double]$ed.Live.FindResource('F.Memo.Body.LineHeight')
+            $ok = [Math]::Abs($liveY - $readY - [Math]::Max(0, $blank - 1) * $h) -lt 2 -and
+                [Math]::Abs($openY - $liveY) -lt 2 -and [Math]::Abs($closeY - $liveY) -lt 2
+            $afterY = (Get-EdPoint $ed.Live 'after').Y
+            Open-EdAt $ed ($blank + 1) 0
+            $headingY = (Get-EdPoint $ed.Live 'after').Y
+            Close-Ed $ed
+            $ok = $ok -and [Math]::Abs($headingY - $afterY) -lt 2 -and [Math]::Abs((Get-EdPoint $ed.Live 'after').Y - $afterY) -lt 2
+            if ($blank) {
+                Open-EdAt $ed 1 0
+                $blankY = (Get-EdPoint $ed.Live 'Next').Y
+                Close-Ed $ed
+                $ok = $ok -and [Math]::Abs($blankY - $liveY) -lt 2 -and [Math]::Abs((Get-EdPoint $ed.Live 'Next').Y - $liveY) -lt 2
+            }
+            Assert-Ed "BlankSpacing-DefaultSeparator: 빈 줄 $blank · 읽기 대비 추가 높이 · 섬 열고 닫기" $ok "읽기=$readY 편집=$liveY 열림=$openY 닫힘=$closeY 빈섬=$blankY 제목섬=$headingY/$afterY"
+        }
+    }
+    Invoke-EdCase 'IslandContextMenu-KeepsEditing' {
+        $ed = New-EdEditor
+        Set-EdText $ed '본문'
+        Open-EdAt $ed 0 1
+        $ed.IslandBox.Select(0, 2)
+        $island = $ed.Island
+        $menu = $ed.IslandBox.ContextMenu
+        # 팝업을 띄우지 않고 메뉴로의 LostKeyboardFocus 이벤트를 실제 입력칸에서 올린다.
+        $menu.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $menu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+        $outside = [System.Windows.Controls.Button]::new()
+        [void]$edHost.Children.Add($outside)
+        $ed.Busy++
+        try { [void]$outside.Focus() } finally { $ed.Busy-- }
+        $focusArgs = [System.Windows.Input.KeyboardFocusChangedEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, 0, $ed.IslandBox, $menu.Items[1])
+        $focusArgs.RoutedEvent = [System.Windows.Input.Keyboard]::LostKeyboardFocusEvent
+        $ed.IslandBox.RaiseEvent($focusArgs)
+        Assert-Ed 'IslandContextMenu-KeepsEditing: 메뉴 포커스가 섬을 닫지 않고 선택 · 한글 메뉴 유지' (
+            [object]::ReferenceEquals($ed.Island, $island) -and $ed.IslandBox.SelectedText -ceq '본문' -and
+            ($menu.Items.Header -join ',') -ceq '잘라내기,복사,붙여넣기,모두 선택' -and $ed.TestLeft -eq 0) "섬=$([bool]$ed.Island) 저장이탈=$($ed.TestLeft)"
+        [void]$edHost.Children.Remove($outside)
+        [void]$ed.IslandBox.Focus()
+        $menu.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.ContextMenu]::ClosedEvent))
+        Sync-EdUi
+        Assert-Ed 'IslandContextMenu-KeepsEditing: 메뉴 닫은 뒤에도 섬 포커스 · 선택 유지' (
+            [object]::ReferenceEquals($ed.Island, $island) -and $ed.IslandBox.IsKeyboardFocused -and $ed.IslandBox.SelectedText -ceq '본문')
+    }
+
+    Invoke-EdCase 'ListEnter-BeforeCallout' {
+        $ed = New-EdEditor
+        $initial = "- first`n- second`n`n> [!note] Notice`n> detail"
+        Set-EdText $ed $initial
+        $y = (Get-EdPoint $ed.Live 'Notice').Y
+        Open-EdAt $ed 1 8
+        Send-EdKey $ed Return 3
+        Assert-Ed 'ListEnter-BeforeCallout: 원문 · 빈 줄 섬 · 블록 순서' (
+            (Get-EdText $ed) -ceq "- first`n- second`n`n`n`n> [!note] Notice`n> detail" -and
+            $ed.Island.Start -eq 2 -and @($ed.IslandBox.Text -split "\r?\n").Count -eq 2 -and $ed.Island.Last -lt $ed.Island.First -and
+            ($ed.Units.Kind -join ',') -ceq 'list-item,list-item,callout') "글=$((Get-EdText $ed).Replace("`n", '¶')) 섬=$($ed.Island.Start)..$($ed.Island.End) 섬줄=$(@($ed.IslandBox.Text -split "\r?\n").Count)"
+        $openY = (Get-EdPoint $ed.Live 'Notice').Y
+        $boxHeight = $ed.IslandBox.ActualHeight; $holderPadding = $ed.Island.Holder.Padding
+        Close-Ed $ed
+        $closedY = (Get-EdPoint $ed.Live 'Notice').Y
+        $h = [double]$ed.Live.FindResource('F.Memo.Body.LineHeight')
+        Assert-Ed 'ListEnter-BeforeCallout: 빈 줄 높이 · 섬 닫아도 같은 간격' (
+            [Math]::Abs($closedY - $y - 2 * $h) -lt 2 -and [Math]::Abs($openY - $closedY) -lt 2) "처음=$y 열림=$openY 닫힘=$closedY 줄=$h 상자=$boxHeight 여백=$holderPadding"
+        Assert-EdContract $ed 'ListEnter-BeforeCallout: 문서 약속'
+    }
+    Invoke-EdCase 'HeadingEnter-BeforeCallout' {
+        $ed = New-EdEditor
+        Set-EdText $ed "# Section`r`n> [!note] Header Note`r`n> detail"
+        $y = (Get-EdPoint $ed.Live 'Header Note').Y
+        Open-EdAt $ed 0 9
+        Send-EdKey $ed Return 3
+        $openY = (Get-EdPoint $ed.Live 'Header Note').Y
+        Assert-Ed 'HeadingEnter-BeforeCallout: 빈 줄 세 개 · 섬 범위 · 블록 순서' (
+            (Get-EdText $ed) -ceq "# Section`n`n`n`n> [!note] Header Note`n> detail" -and
+            $ed.Island.Start -eq 1 -and @($ed.IslandBox.Text -split "\r?\n").Count -eq 3 -and ($ed.Units.Kind -join ',') -ceq 'heading,callout') "글=$((Get-EdText $ed).Replace("`n", '¶')) 섬=$($ed.Island.Start)..$($ed.Island.End)"
+        Close-Ed $ed
+        $closedY = (Get-EdPoint $ed.Live 'Header Note').Y
+        $h = [double]$ed.Live.FindResource('F.Memo.Body.LineHeight')
+        Assert-Ed 'HeadingEnter-BeforeCallout: 기본 빈 줄을 뺀 두 줄 높이 · 섬 닫아도 같은 간격' (
+            [Math]::Abs($closedY - $y - 2 * $h) -lt 2 -and [Math]::Abs($openY - $closedY) -lt 2) "처음=$y 열림=$openY 닫힘=$closedY"
+        Assert-EdContract $ed 'HeadingEnter-BeforeCallout: 문서 약속'
+    }
+    Invoke-EdCase 'HeadingStartEnter-PreservesBlank' {
+        $ed = New-EdEditor
+        $initial = "## 제목`n`n본문"
+        Set-EdText $ed $initial
+        $y = (Get-EdPoint $ed.Live '본문').Y
+        Open-EdAt $ed 0 0
+        Send-EdKey $ed Return
+        $openY = (Get-EdPoint $ed.Live '본문').Y
+        Assert-Ed 'HeadingStartEnter-PreservesBlank: 앞 빈 줄 · 제목 섬 · 커서' (
+            (Get-EdText $ed) -ceq "`n## 제목`n`n본문" -and $ed.Island.Start -eq 1 -and $ed.Island.End -eq 2 -and (Get-EdCaret $ed) -ceq '1:0')
+        Close-Ed $ed
+        $closedY = (Get-EdPoint $ed.Live '본문').Y
+        $h = [double]$ed.Live.FindResource('F.Memo.Body.LineHeight')
+        Assert-Ed 'HeadingStartEnter-PreservesBlank: 앞 빈 줄 높이 유지' (
+            [Math]::Abs($closedY - $y - $h) -lt 2 -and [Math]::Abs($openY - $closedY) -lt 2) "처음=$y 열림=$openY 닫힘=$closedY"
+        Invoke-EdCommand $ed 'Ctrl+Z'
+        Close-Ed $ed
+        Assert-Ed 'HeadingStartEnter-PreservesBlank: 실행 취소로 원문과 간격 복원' (
+            (Get-EdText $ed) -ceq $initial -and [Math]::Abs((Get-EdPoint $ed.Live '본문').Y - $y) -lt 2)
+        Assert-EdContract $ed 'HeadingStartEnter-PreservesBlank: 문서 약속'
+    }
+    Invoke-EdCase 'Callout-RenderOnExit' {
+        $ed = New-EdEditor
+        Set-EdText $ed "> [!note] Notice`n> detail"
+        Open-EdAt $ed 1 8
+        Send-EdKey $ed Return
+        Assert-Ed 'Callout-RenderOnExit: 인용 안 작성 중에는 원문' ($ed.Island.Start -eq 0 -and $ed.IslandBox.Text.EndsWith('> '))
+        Send-EdKey $ed Return
+        Assert-Ed 'Callout-RenderOnExit: 두 번째 Enter 즉시 콜아웃을 그리고 빈 줄만 섬' (
+            (Get-EdText $ed) -ceq "> [!note] Notice`n> detail`n" -and $ed.Island.Start -eq 2 -and $ed.Island.End -eq 3 -and
+            $ed.Units[0].Kind -ceq 'callout' -and [object]::ReferenceEquals($ed.Live.Document.Blocks.FirstBlock, $ed.Sections[0]) -and
+            (Get-EdPoint $ed.Live 'Notice').Y -ge 0)
+        Assert-EdContract $ed 'Callout-RenderOnExit: 문서 약속'
+        Set-EdText $ed '> plain'
+        Open-EdAt $ed 0 7
+        Send-EdKey $ed Return 2
+        Assert-Ed 'Callout-RenderOnExit: 일반 인용도 탈출 즉시 그리고 빈 줄만 섬' (
+            (Get-EdText $ed) -ceq "> plain`n" -and $ed.Island.Start -eq 1 -and $ed.Units[0].Kind -ceq 'quote' -and
+            [object]::ReferenceEquals($ed.Live.Document.Blocks.FirstBlock, $ed.Sections[0]))
+    }
+    Invoke-EdCase 'BlankSpacing-LiveOnly' {
+        $ed = New-EdEditor
+        Set-EdText $ed "# Section`n`n`n`n> [!note] Notice`n> detail"
+        $y = (Get-EdPoint $ed.Live 'Notice').Y
+        Open-EdAt $ed 2 0
+        $openY = (Get-EdPoint $ed.Live 'Notice').Y
+        Close-Ed $ed
+        Assert-Ed 'BlankSpacing-LiveOnly: 빈 간격 가운데 한 줄을 열고 닫아도 같은 높이' (
+            [Math]::Abs($openY - $y) -lt 2 -and [Math]::Abs((Get-EdPoint $ed.Live 'Notice').Y - $y) -lt 2) "처음=$y 열림=$openY"
+        Set-WtMemoEditorMode $ed 'read'
+        $readY = (Get-EdPoint $ed.View 'Notice').Y
+        Set-WtMemoEditorText $ed "# Section`n`n> [!note] Notice`n> detail"
+        Assert-Ed 'BlankSpacing-LiveOnly: 읽기 보기의 복수 빈 줄 접기는 그대로' ([Math]::Abs((Get-EdPoint $ed.View 'Notice').Y - $readY) -lt 2)
+    }
+    Invoke-EdCase 'FindHint-HidesWhileTyping' {
+        $ed = New-EdEditor
+        Set-EdText $ed 'target'
+        Open-WtMemoFind $ed -Replace
+        $ed.Find.Query.Text = 'target'
+        $ed.Find.Replace.Text = 'next'
+        $win.UpdateLayout()
+        Assert-Ed 'FindHint-HidesWhileTyping: 입력 즉시 두 안내 글자 숨김 · 같은 폭' (
+            $ed.Find.Query.Tag.Text -ceq '찾기' -and $ed.Find.Query.Tag.Visibility -eq 'Collapsed' -and
+            $ed.Find.Replace.Tag.Text -ceq '바꿀 글' -and $ed.Find.Replace.Tag.Visibility -eq 'Collapsed' -and
+            [Math]::Abs($ed.Find.Query.ActualWidth - $ed.Find.Replace.ActualWidth) -lt 1) "찾기=$($ed.Find.Query.ActualWidth) 바꾸기=$($ed.Find.Replace.ActualWidth)"
+        $ed.Find.Query.Clear(); $ed.Find.Replace.Clear()
+        Assert-Ed 'FindHint-HidesWhileTyping: 비우면 두 안내 글자 복원' ($ed.Find.Query.Tag.Visibility -eq 'Visible' -and $ed.Find.Replace.Tag.Visibility -eq 'Visible')
+    }
+    Invoke-EdCase 'FindReplace-ModeVisibility' {
+        $ed = New-EdEditor
+        Set-EdText $ed 'target'
+        foreach ($mode in 'live', 'source', 'read') {
+            Set-WtMemoEditorMode $ed $mode
+            Open-WtMemoFind $ed
+            $findOnly = $ed.Find.ReplaceRow.Visibility -eq 'Collapsed' -and $ed.Mode -eq $mode
+            Open-WtMemoFind $ed -Replace
+            Assert-Ed "FindReplace-ModeVisibility: $mode 찾기 · 바꾸기" (
+                $findOnly -and $ed.Find.ReplaceRow.Visibility -eq 'Visible' -and $ed.Mode -eq $(if ($mode -eq 'read') { 'live' } else { $mode }))
+        }
+    }
+    Invoke-EdCase 'BodyContextMenu-KoreanCommands' {
+        $ed = New-EdEditor
+        Set-EdText $ed '본문'
+        foreach ($target in $ed.Live, $ed.IslandBox, $ed.Source) {
+            $target.ContextMenu.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
+            $target.ContextMenu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+            & $em { param($m) Update-WtMemoContextMenu $m } $target.ContextMenu
+            Assert-Ed 'BodyContextMenu-KoreanCommands: 한글 · 단축키 · 공통 스타일 · 선택 전 비활성' (
+                ($target.ContextMenu.Items.Header -join ',') -ceq '잘라내기,복사,붙여넣기,모두 선택' -and
+                ($target.ContextMenu.Items.InputGestureText -join ',') -ceq 'Ctrl+X,Ctrl+C,Ctrl+V,Ctrl+A' -and
+                -not $target.ContextMenu.Items[0].IsEnabled -and -not $target.ContextMenu.Items[1].IsEnabled -and
+                [object]::ReferenceEquals($target.ContextMenu.Style, $edHost.FindResource('Home.PinMenu')))
+        }
+        & $em { param($x) Invoke-WtMemoContextAction $x 'SelectAll'; Update-WtMemoContextMenu $x.IslandBox.ContextMenu } $ed
+        Assert-Ed 'BodyContextMenu-KoreanCommands: 모두 선택은 본문 전체 섬 · 잘라내기와 복사 가능' (
+            $ed.IslandBox.SelectedText -ceq '본문' -and $ed.IslandBox.ContextMenu.Items[0].IsEnabled -and $ed.IslandBox.ContextMenu.Items[1].IsEnabled)
+        $ed.IslandBox.SelectedText = "본문`r`n둘째"
+        & $em { param($x) Invoke-WtMemoContextAction $x 'SelectAll' } $ed
+        Assert-Ed 'BodyContextMenu-KoreanCommands: 아직 저장하지 않은 새 줄도 모두 선택' ($ed.IslandBox.SelectedText -ceq "본문`r`n둘째")
+    }
+
     # ---- 무작위 편집 (고정 시드) ----
     # 코드 블록 없는 글로 돌린다 (울타리 짝이 깨지면 알려진 버그 fence-kind-change에 걸려 그 뒤를 못 봐서)
     $randSample = @($sample[0..10]) + @($sample[15..25])
@@ -1310,7 +1536,7 @@ try {
 
     Assert-Ed '편집기: 오류 창(Show-WtError · Show-WtMessage)이 뜨지 않았다' ($script:edErrors.Count -eq 0)
 } finally {
-    try { $win.Close() } catch { }
+    $testSource.Dispose()
     $dispatcher.remove_UnhandledException($onUnhandled)
     & (Get-Module Ui) { param($o) Set-Item function:script:Show-WtError $o.Error; Set-Item function:script:Show-WtMessage $o.Message } $origUi
     & (Get-Module Markdown) { Remove-Item function:script:Show-WtError, function:script:Show-WtMessage -ErrorAction SilentlyContinue }
