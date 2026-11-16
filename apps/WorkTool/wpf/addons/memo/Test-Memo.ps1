@@ -594,9 +594,9 @@ try {
     $todayStamp = [datetime]::Today.AddHours(9).AddMinutes(12)
     $yearStamp = [datetime]::new($todayStamp.Year, 1, $(if ($todayStamp.DayOfYear -eq 2) { 3 } else { 2 }), 9, 12, 0)
     $oldStamp = [datetime]::new($todayStamp.Year - 1, 3, 4, 9, 12, 0)
-    foreach ($dateCase in @(@($todayStamp, '09:12'), @($yearStamp, "1/$($yearStamp.Day)"), @($oldStamp, "$($oldStamp.Year)/3/4"))) {
+    foreach ($dateCase in @(@($todayStamp, '09:12'), @($yearStamp, "1/$($yearStamp.Day)"), @($oldStamp, ('{0:D2}/3/4' -f ($oldStamp.Year % 100))))) {
         $short = & $memoModule { param($d) Format-WtMemoListTime ($d.ToString('s')) } $dateCase[0]
-        Assert-WtTest 'MemoRow-Date: 오늘 HH:mm · 올해 M/d · 지난 해 yyyy/M/d' ($short -ceq $dateCase[1]) $short
+        Assert-WtTest 'MemoRow-Date: 오늘 HH:mm · 올해 M/d · 지난 해 yy/M/d' ($short -ceq $dateCase[1]) $short
     }
     Assert-WtTest 'MemoHelp: 백틱 · 찾기 옵션 단축키 · 정규식 바꾸기 표기' (
         ($addon.Help -join ' ') -match '백틱' -and ($addon.Help -join ' ') -match 'Alt\+C.*Alt\+R' -and

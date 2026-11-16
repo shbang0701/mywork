@@ -2063,6 +2063,7 @@ function New-WtMemoFindBar($Ed) {
     $bar = [System.Windows.Controls.Border]::new()
     $bar.Tag = $Ed
     Set-WtStyle $bar 'Memo.FindBar'
+    [System.Windows.Input.FocusManager]::SetIsFocusScope($bar, $true)
     $bar.Visibility = 'Collapsed'
     $bar.Add_GotKeyboardFocus({
         param($s, $e)
@@ -2079,12 +2080,16 @@ function New-WtMemoFindBar($Ed) {
     $optionsColumn = [System.Windows.Controls.ColumnDefinition]::new(); $optionsColumn.Width = 'Auto'
     $top.ColumnDefinitions.Insert(1, $optionsColumn)
     $options = New-WtStack Horizontal 4
+    Set-WtStyle $options 'Memo.FindOptions'
     $options.VerticalAlignment = 'Center'
-    [System.Windows.Controls.Grid]::SetColumn($options, 1)
-    [void]$top.Children.Add($options)
+    # 여백까지 든 폭을 ActualWidth 의존 속성으로 알리는 칸. ColumnDefinition.ActualWidth는 변경 알림이 없다.
+    $optionSlot = [System.Windows.Controls.Grid]::new()
+    [System.Windows.Controls.Grid]::SetColumn($optionSlot, 1)
+    [void]$optionSlot.Children.Add($options)
+    [void]$top.Children.Add($optionSlot)
     $case = New-WtMemoFindOption $Ed 'case' 'Aa' '대소문자 구분' 'Memo-Find-Case' 'Alt+C'
     $regex = New-WtMemoFindOption $Ed 'regex' '.*' '정규식' 'Memo-Find-Regex' 'Alt+R'
-    foreach ($option in $case, $regex) { [void]$options.Children.Add($option) }
+    foreach ($option in $case, $regex) { [void](Add-WtChild $options $option) }
     $topActions = New-WtStack Horizontal
     [System.Windows.Controls.Grid]::SetColumn($topActions, 2)
     [void]$top.Children.Add($topActions)
@@ -2121,7 +2126,7 @@ function New-WtMemoFindBar($Ed) {
     $space = [System.Windows.Controls.ColumnDefinition]::new()
     $space.Width = [System.Windows.GridLength]::new(0)
     [void][System.Windows.Data.BindingOperations]::SetBinding($space, [System.Windows.Controls.ColumnDefinition]::WidthProperty,
-        [System.Windows.Data.Binding]@{ Source = $options; Path = 'ActualWidth' })
+        [System.Windows.Data.Binding]@{ Source = $optionSlot; Path = 'ActualWidth' })
     $low.ColumnDefinitions.Insert(1, $space)
     $lowActions = New-WtStack Horizontal
     [System.Windows.Controls.Grid]::SetColumn($lowActions, 2)
@@ -2134,20 +2139,31 @@ function New-WtMemoFindBar($Ed) {
     $one.Add_Click({ param($s, $e) Invoke-WtMemoReplace $s.Tag })
     $one.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
     $all.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
-    foreach ($c in $one, $all) { [void](Add-WtChild $lowActions $c) }
-    $replaceBox = New-WtSearchBox '바꿀 글'
-    $rep = $replaceBox.Box
-    $replaceBox.Root.Tag = $Ed
+    foreach ($c in $one, $all) {
+        [void](Add-WtChild $lowActions $c)
+        [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($c, $true)
+    }
+    $replaceRoot = [System.Windows.Controls.Grid]::new()
+    $replaceRoot.Tag = $Ed
+    $rep = [System.Windows.Controls.TextBox]::new()
+    Set-WtStyle $rep 'Input'
+    $hint = New-WtText '바꿀 글' 'Input.Hint'
+    $rep.Tag = $hint
+    $rep.Add_TextChanged({ param($s, $e) $s.Tag.Visibility = if ($s.Text) { 'Collapsed' } else { 'Visible' } })
+    [void]$replaceRoot.Children.Add($rep)
+    [void]$replaceRoot.Children.Add($hint)
     $rep.ToolTip = '바꿀 글'
     $rep.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; Invoke-WtMemoReplace $s.Parent.Tag } })
-    [void]$low.Children.Add($replaceBox.Root)
+    [void]$low.Children.Add($replaceRoot)
     [void](Add-WtChild $rows $low)
     $bar.Child = $rows
     $validation = [System.Windows.Data.Binding]::new('Value')
     $validation.Source = [pscustomobject]@{ Value = '' }
     $Ed.Find = @{ Bar = $bar; Query = $sb.Box; Count = $count; ReplaceRow = $low; Replace = $rep; ReadIndex = -1
         Case = $case; Regex = $regex; One = $one; All = $all; Error = ''; LastMatch = $null; KeepFocus = $false
+        Total = 0; ReplaceTips = @($one.ToolTip, $all.ToolTip)
         Validation = $sb.Box.SetBinding([System.Windows.FrameworkElement]::UidProperty, $validation) }
+    Update-WtMemoReplaceButtons $Ed
     $bar
 }
 
@@ -2167,18 +2183,41 @@ function New-WtMemoFindOption($Ed, [string]$Option, [string]$Text, [string]$Name
 function Set-WtMemoFindError($Ed, [string]$Reason = '') {
     $f = $Ed.Find
     $f.Error = $Reason
-    $f.One.IsEnabled = $f.All.IsEnabled = -not [bool]$Reason
+    Update-WtMemoReplaceButtons $Ed
+    Set-WtStyle $f.Count $(if ($Reason) { 'T.Error' } else { 'T.Sub' })
     if ($Reason) {
         [System.Windows.Controls.Validation]::MarkInvalid($f.Validation,
             [System.Windows.Controls.ValidationError]::new([System.Windows.Controls.ExceptionValidationRule]::new(), $f.Validation, $Reason, $null))
         $f.Query.Padding = [System.Windows.Thickness]::new(32, 0, 32, 0)
-        $f.Count.Text = if ($Reason -ceq '식이 너무 오래 걸립니다') { $Reason } else { '식 오류' }
+        $f.Count.Text = '식 오류'
         $f.Count.ToolTip = $Reason
     } else {
         [System.Windows.Controls.Validation]::ClearInvalid($f.Validation)
         $f.Query.Padding = [System.Windows.Thickness]::new(32, 0, 10, 0)
         $f.Count.ToolTip = $null
     }
+}
+
+function Update-WtMemoReplaceButtons($Ed) {
+    $f = $Ed.Find
+    $reason = if ($f.Error) { '찾기 식을 고치면 바꿀 수 있습니다.' } elseif ($f.Total -le 0) { '찾은 것이 없습니다.' } else { $null }
+    $i = 0
+    foreach ($button in $f.One, $f.All) {
+        $button.IsEnabled = -not [bool]$reason
+        $button.ToolTip = if ($reason) { $reason } else { $f.ReplaceTips[$i] }
+        $i++
+    }
+}
+
+function Format-WtMemoRegexError([System.Text.RegularExpressions.RegexParseException]$ParseError) {
+    switch ([string]$ParseError.Error) {
+        'InsufficientClosingParentheses' { return '닫는 괄호 )가 모자랍니다.' }
+        'InsufficientOpeningParentheses' { return '여는 괄호 (가 모자랍니다.' }
+        'UnterminatedBracket' { return '[ ]의 닫는 ]가 없습니다.' }
+        'QuantifierAfterNothing' { return '반복(* + ? {})할 글자가 앞에 없습니다.' }
+        'UnescapedEndingBackslash' { return '끝의 \가 혼자 있습니다.' }
+    }
+    '정규식을 확인하세요. ({0}번째 글자 근처)' -f $ParseError.Offset
 }
 
 function Open-WtMemoFind($Ed, [switch]$Replace) {
@@ -2237,13 +2276,15 @@ function Get-WtMemoFindHits($Ed, [string]$Text, [switch]$Read) {
         $hits = if ($Read) { Get-WtMemoReadMatches $Ed $f.Query.Text } else {
             Get-WtMemoMatches $Text $f.Query.Text -CaseSensitive:($f.Case.IsChecked -eq $true) -RegexMode:($f.Regex.IsChecked -eq $true)
         }
+        $f.Total = $hits.Count
         Set-WtMemoFindError $Ed
         return , $hits
     } catch {
         $error = $_.Exception
         while ($error.InnerException) { $error = $error.InnerException }
-        if ($error -is [System.Text.RegularExpressions.RegexMatchTimeoutException]) { Set-WtMemoFindError $Ed '식이 너무 오래 걸립니다' }
-        elseif ($error -is [ArgumentException]) { Set-WtMemoFindError $Ed $error.Message }
+        $f.Total = 0
+        if ($error -is [System.Text.RegularExpressions.RegexMatchTimeoutException]) { Set-WtMemoFindError $Ed '식이 너무 오래 걸립니다. 식을 좁히세요.' }
+        elseif ($error -is [System.Text.RegularExpressions.RegexParseException]) { Set-WtMemoFindError $Ed (Format-WtMemoRegexError $error) }
         else { throw }
         return $null
     }
@@ -2335,12 +2376,14 @@ function Select-WtMemoTextRange($Ed, [string]$Text, [int]$Offset, [int]$Length, 
 
 function Update-WtMemoFindCount($Ed, [int]$Current = -1, [int]$Total = -1) {
     $f = $Ed.Find
-    if (-not $f.Query.Text) { Set-WtMemoFindError $Ed; $f.Count.Text = ''; $f.LastMatch = $null; return }
+    if (-not $f.Query.Text) { $f.Total = 0; Set-WtMemoFindError $Ed; $f.Count.Text = ''; $f.LastMatch = $null; return }
     if ($Total -lt 0) {
         $hits = Get-WtMemoFindHits $Ed ((Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")) -Read:($Ed.Mode -eq 'read')
         if ($f.Error) { return }
         $Total = $hits.Count
     }
+    $f.Total = $Total
+    Update-WtMemoReplaceButtons $Ed
     $f.Count.Text = if (-not $Total) { '0개' } elseif ($Current -ge 0) { "$($Current + 1)/$Total" } else { "${Total}개" }
 }
 

@@ -473,7 +473,7 @@ $script:stylesXaml = @'
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/>
     <Setter Property="VerticalContentAlignment" Value="Center"/>
     <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Body.LineHeight}"/>
-    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
     <Setter Property="Validation.ErrorTemplate" Value="{x:Null}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox">
@@ -490,6 +490,12 @@ $script:stylesXaml = @'
       <Trigger Property="Validation.HasError" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource B.Status.Error.Icon}"/><Setter Property="Padding" Value="10,0,32,0"/><Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=(Validation.Errors)[0].ErrorContent}"/></Trigger>
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/><Setter Property="Opacity" Value="1"/></Trigger>
     </Style.Triggers>
+  </Style>
+  <Style x:Key="Input.Hint" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
+    <Setter Property="Margin" Value="10,0,0,0"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+    <Setter Property="IsHitTestVisible" Value="False"/>
   </Style>
   <Style x:Key="Reader" TargetType="TextBox" BasedOn="{StaticResource Input}">
     <Setter Property="IsReadOnly" Value="True"/>
@@ -598,7 +604,20 @@ $script:stylesXaml = @'
   </Style>
 
   <!-- 편집 칸: 카드 안을 채우는 테두리 없는 여러 줄 입력 (메모 본문 등) -->
+  <!-- 강조선은 안쪽에 겹쳐 그려 섬 열기/닫기의 글 배치와 높이를 유지한다. -->
+  <ControlTemplate x:Key="Memo.EditorTemplate" TargetType="TextBox">
+    <Grid>
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
+        <ScrollViewer x:Name="PART_ContentHost" Focusable="False" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+      </Border>
+      <Border x:Name="FocusBorder" BorderBrush="{DynamicResource B.Accent}" BorderThickness="2" CornerRadius="{DynamicResource F.Radius.Control}" Visibility="Collapsed" IsHitTestVisible="False"/>
+    </Grid>
+    <ControlTemplate.Triggers><Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="FocusBorder" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
+  </ControlTemplate>
   <Style x:Key="Editor" TargetType="TextBox" BasedOn="{StaticResource Input}">
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
+    <Setter Property="Template" Value="{StaticResource Memo.EditorTemplate}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
     <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.Body.LineHeight}"/>
     <Setter Property="BorderThickness" Value="0"/>
@@ -1414,7 +1433,9 @@ $script:stylesXaml = @'
     <Setter Property="AcceptsTab" Value="True"/>
     <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
     <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
-    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
+    <Setter Property="Template" Value="{StaticResource Memo.EditorTemplate}"/>
     <Setter Property="HorizontalAlignment" Value="Stretch"/>
   </Style>
   <Style x:Key="Memo.IslandH1" TargetType="TextBox" BasedOn="{StaticResource Memo.Island}">
@@ -1483,23 +1504,26 @@ $script:stylesXaml = @'
     <Setter Property="MaxHeight" Value="240"/>
   </Style>
   <!-- 편집기 위 찾기 · 바꾸기 막대 -->
+  <Style x:Key="Memo.FindOptions" TargetType="StackPanel"><Setter Property="Margin" Value="4,0,0,0"/></Style>
   <Style x:Key="Memo.FindOption" TargetType="ToggleButton">
     <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Caption}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
     <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
+    <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Width" Value="{DynamicResource F.Height.Compact}"/>
     <Setter Property="Height" Value="{DynamicResource F.Height.Compact}"/>
     <Setter Property="Padding" Value="0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToggleButton">
-      <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}">
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource F.Radius.Control}">
         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
       </Border>
     </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers>
-      <Trigger Property="IsChecked" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/><Setter Property="Foreground" Value="{DynamicResource B.Accent.Text}"/></Trigger>
+      <Trigger Property="IsChecked" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter Property="Foreground" Value="{DynamicResource B.Accent.Text}"/></Trigger>
       <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
       <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/><Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/></Trigger>

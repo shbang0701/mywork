@@ -1598,16 +1598,43 @@ try {
                 -not $ed.Find.One.IsEnabled -and -not $ed.Find.All.IsEnabled -and (Get-EdText $ed) -ceq 'ab')
         }
         $ed.Find.Query.Text = 'z'
-        Assert-Ed 'FindRegex-Errors: 올바른 식으로 복구하면 0개 · 오류 지움 · 바꾸기 활성' (
-            $ed.Find.Count.Text -ceq '0개' -and -not [Windows.Controls.Validation]::GetHasError($ed.Find.Query) -and $ed.Find.One.IsEnabled -and $ed.Find.All.IsEnabled)
+        Assert-Ed 'FindRegex-Errors: 올바른 식으로 복구하면 0개 · 오류 지움 · 바꾸기 비활성 이유' (
+            $ed.Find.Count.Text -ceq '0개' -and -not [Windows.Controls.Validation]::GetHasError($ed.Find.Query) -and
+            -not $ed.Find.One.IsEnabled -and -not $ed.Find.All.IsEnabled -and
+            $ed.Find.One.ToolTip -ceq '찾은 것이 없습니다.' -and $ed.Find.All.ToolTip -ceq '찾은 것이 없습니다.')
+        $ed.Find.Query.Text = 'ab'
+        Assert-Ed 'FindReplace-DisabledTips: 일치하면 활성 · 정상 툴팁 복원 · 꺼진 단추도 툴팁 표시' (
+            $ed.Find.One.IsEnabled -and $ed.Find.All.IsEnabled -and $ed.Find.One.ToolTip -ceq '고른 곳을 바꾸고 다음을 찾습니다 (Enter)' -and
+            $ed.Find.All.ToolTip -ceq '찾은 것을 모두 바꿉니다' -and
+            [Windows.Controls.ToolTipService]::GetShowOnDisabled($ed.Find.One) -and [Windows.Controls.ToolTipService]::GetShowOnDisabled($ed.Find.All))
         Set-EdText $ed (('a' * 50000) + '!')
         foreach ($slow in '(a+)+$', '^(a|aa)+$') {
             $watch = [Diagnostics.Stopwatch]::StartNew()
             $ed.Find.Query.Text = $slow
             Assert-Ed 'FindRegex-Errors: 500ms 시간 한도 · 시간 초과 이유 · 바꾸기 비활성' (
-                $ed.Find.Count.Text -ceq '식이 너무 오래 걸립니다' -and $ed.Find.Query.ToolTip -ceq '식이 너무 오래 걸립니다' -and
+                $ed.Find.Count.Text -ceq '식 오류' -and $ed.Find.Query.ToolTip -ceq '식이 너무 오래 걸립니다. 식을 좁히세요.' -and
                 -not $ed.Find.One.IsEnabled -and -not $ed.Find.All.IsEnabled -and $watch.ElapsedMilliseconds -lt 3000) $watch.ElapsedMilliseconds
         }
+        $ed.Find.Query.Clear(); Set-WtSetting 'memo.find.regex' $false
+    }
+    Invoke-EdCase 'FindRegex-KoreanReasons' {
+        $ed = New-EdEditor; Set-EdText $ed 'SRV-01'
+        Open-WtMemoFind $ed -Replace; $ed.Find.Regex.IsChecked = $true
+        $cases = @(
+            @('SRV-(', '닫는 괄호 )가 모자랍니다.'), @(')', '여는 괄호 (가 모자랍니다.'),
+            @('[', '[ ]의 닫는 ]가 없습니다.'), @('*', '반복(* + ? {})할 글자가 앞에 없습니다.'),
+            @('\', '끝의 \가 혼자 있습니다.'), @('\q', '정규식을 확인하세요. (2번째 글자 근처)')
+        )
+        $ok = $true; $details = [Collections.Generic.List[string]]::new()
+        foreach ($case in $cases) {
+            $ed.Find.Query.Text = $case[0]
+            $ok = $ok -and $ed.Find.Query.ToolTip -ceq $case[1] -and $ed.Find.Count.ToolTip -ceq $case[1] -and
+                $ed.Find.Count.Text -ceq '식 오류' -and $ed.Find.Count.Foreground.Color -eq $ed.Root.FindResource('B.Status.Error.Text').Color -and
+                -not $ed.Find.One.IsEnabled -and -not $ed.Find.All.IsEnabled -and
+                $ed.Find.One.ToolTip -ceq '찾기 식을 고치면 바꿀 수 있습니다.' -and $ed.Find.All.ToolTip -ceq '찾기 식을 고치면 바꿀 수 있습니다.'
+            $details.Add("$($case[0])=$($ed.Find.Query.ToolTip)")
+        }
+        Assert-Ed 'FindRegex-KoreanReasons: Error별 한국어 · Offset 대체 문구 · 오류 글자색 · 비활성 이유' $ok ($details -join ' | ')
         $ed.Find.Query.Clear(); Set-WtSetting 'memo.find.regex' $false
     }
     Invoke-EdCase 'FindRegex-Read' {
@@ -1740,6 +1767,69 @@ try {
             Set-WtSetting 'memo.find.case' $false; Set-WtSetting 'memo.find.regex' $false
         }
     }
+    Invoke-EdCase 'FindLayout-OptionGap' {
+        $ed = New-EdEditor; Set-EdText $ed '본문'; Open-WtMemoFind $ed -Replace
+        $win.UpdateLayout(); Sync-EdUi; $win.UpdateLayout()
+        $caseX = $ed.Find.Case.TranslatePoint([Windows.Point]::new(0, 0), $ed.Find.Query).X
+        $regexX = $ed.Find.Regex.TranslatePoint([Windows.Point]::new(0, 0), $ed.Find.Case).X
+        Assert-Ed 'FindLayout-OptionGap: 찾기 칸 → Aa 4 · Aa → .* 4 · 두 입력칸 같은 폭' (
+            [Math]::Abs($caseX - $ed.Find.Query.ActualWidth - 4) -lt 0.5 -and
+            [Math]::Abs($regexX - $ed.Find.Case.ActualWidth - 4) -lt 0.5 -and
+            [Math]::Abs($ed.Find.Query.ActualWidth - $ed.Find.Replace.ActualWidth) -lt 0.5)
+    }
+    Invoke-EdCase 'FindOptions-VisibleBorder' {
+        $ed = New-EdEditor; Set-EdText $ed '본문'; Open-WtMemoFind $ed
+        foreach ($checked in $false, $true) {
+            $ok = $true
+            foreach ($button in $ed.Find.Case, $ed.Find.Regex) {
+                $button.IsChecked = $checked; $button.ApplyTemplate() | Out-Null
+                $border = [Windows.Media.VisualTreeHelper]::GetChild($button, 0)
+                $brush = if ($checked) { 'B.Accent' } else { 'B.Border.Default' }
+                $text = if ($checked) { 'B.Accent.Text' } else { 'B.Text.Secondary' }
+                $ok = $ok -and $button.BorderThickness.Equals([Windows.Thickness]::new(1)) -and
+                    $button.BorderBrush.Color -eq $ed.Root.FindResource($brush).Color -and
+                    $button.Foreground.Color -eq $ed.Root.FindResource($text).Color -and $border.CornerRadius.TopLeft -eq 4 -and
+                    $border.BorderThickness.Equals([Windows.Thickness]::new(1))
+                $ok = $ok -and $(if ($checked) { $button.Background.Color -eq $ed.Root.FindResource('B.Bg.Selected').Color } else { $button.Background.Color.A -eq 0 })
+            }
+            Assert-Ed "FindOptions-VisibleBorder: 켜짐=$checked · 선 1 · 모서리 4 · 지정한 바탕/선/글자색" $ok
+        }
+        Set-WtSetting 'memo.find.case' $false; Set-WtSetting 'memo.find.regex' $false
+    }
+    Invoke-EdCase 'FindSelection-Inactive' {
+        foreach ($mode in 'live', 'source') {
+            $ed = New-EdEditor; Set-WtMemoEditorMode $ed $mode
+            Set-EdText $ed "# 제목`n`n선택 needle 본문"; Open-WtMemoFind $ed
+            $ed.Find.Query.Text = 'needle'; Sync-EdUi; $win.UpdateLayout()
+            $box = Get-EdBox $ed
+            Assert-Ed "FindSelection-Inactive: $mode 그린 블록을 선택 · 비활성 선택 표시 · 찾기 포커스 범위 분리" (
+                $box.IsInactiveSelectionHighlightEnabled -and $box.SelectedText -ceq 'needle' -and -not $box.IsKeyboardFocusWithin -and
+                $ed.Find.Query.IsKeyboardFocusWithin -and [Windows.Input.FocusManager]::GetIsFocusScope($ed.Find.Bar) -and
+                ($mode -eq 'source' -or ($ed.Island -and $ed.Island.Start -eq 2)))
+        }
+    }
+    Invoke-EdCase 'InputFocus-SingleOutline' {
+        $ed = New-EdEditor; Set-EdText $ed '본문'; Open-WtMemoFind $ed -Replace
+        $win.UpdateLayout(); Sync-EdUi
+        $ok = $null -eq $ed.Find.Query.FocusVisualStyle -and $null -eq $ed.Find.Replace.FocusVisualStyle -and
+            $ed.Find.Query.BorderThickness.Equals([Windows.Thickness]::new(2)) -and
+            $ed.Find.Query.BorderBrush.Color -eq $ed.Root.FindResource('B.Accent').Color
+        foreach ($mode in 'source', 'live') {
+            & $em { param($x) Close-WtMemoFind $x } $ed
+            Set-WtMemoEditorMode $ed $mode
+            if ($mode -eq 'live') { Open-EdAt $ed 0 0 }
+            $win.UpdateLayout(); $box = Get-EdBox $ed; [void]$box.Focus(); Sync-EdUi
+            $border = $box.Template.FindName('FocusBorder', $box)
+            $ok = $ok -and $null -eq $box.FocusVisualStyle -and $border.Visibility -eq 'Visible' -and
+                $border.BorderThickness.Equals([Windows.Thickness]::new(2)) -and
+                $border.BorderBrush.Color -eq $ed.Root.FindResource('B.Accent').Color
+        }
+        foreach ($key in 'Btn', 'Row', 'Check') {
+            $focus = @((Get-WtStyleDictionary)[$key].Setters | Where-Object { $_.Property.Name -ceq 'FocusVisualStyle' })
+            $ok = $ok -and $focus.Count -eq 1 -and $null -ne $focus[0].Value
+        }
+        Assert-Ed 'InputFocus-SingleOutline: Input · 원문 · 섬 바깥 포커스 없음 · 안쪽 2 Accent · 단추/행/체크 포커스 유지' $ok
+    }
     Invoke-EdCase 'FindHint-HidesWhileTyping' {
         $ed = New-EdEditor
         Set-EdText $ed 'target'
@@ -1750,7 +1840,9 @@ try {
         Assert-Ed 'FindHint-HidesWhileTyping: 입력 즉시 두 안내 글자 숨김 · 같은 폭' (
             $ed.Find.Query.Tag.Text -ceq '찾기' -and $ed.Find.Query.Tag.Visibility -eq 'Collapsed' -and
             $ed.Find.Replace.Tag.Text -ceq '바꿀 글' -and $ed.Find.Replace.Tag.Visibility -eq 'Collapsed' -and
-            [Math]::Abs($ed.Find.Query.ActualWidth - $ed.Find.Replace.ActualWidth) -lt 1) "찾기=$($ed.Find.Query.ActualWidth) 바꾸기=$($ed.Find.Replace.ActualWidth)"
+            [Math]::Abs($ed.Find.Query.ActualWidth - $ed.Find.Replace.ActualWidth) -lt 1 -and
+            $ed.Find.Replace.Parent.Children.Count -eq 2 -and $ed.Find.Replace.Padding.Left -eq 10 -and
+            [object]::ReferenceEquals($ed.Find.Replace.Style, $ed.Root.FindResource('Input'))) "찾기=$($ed.Find.Query.ActualWidth) 바꾸기=$($ed.Find.Replace.ActualWidth)"
         $ed.Find.Query.Clear(); $ed.Find.Replace.Clear()
         Assert-Ed 'FindHint-HidesWhileTyping: 비우면 두 안내 글자 복원' ($ed.Find.Query.Tag.Visibility -eq 'Visible' -and $ed.Find.Replace.Tag.Visibility -eq 'Visible')
     }

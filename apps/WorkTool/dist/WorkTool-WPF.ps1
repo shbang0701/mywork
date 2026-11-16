@@ -3437,7 +3437,7 @@ $script:stylesXaml = @'
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/>
     <Setter Property="VerticalContentAlignment" Value="Center"/>
     <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Body.LineHeight}"/>
-    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
     <Setter Property="Validation.ErrorTemplate" Value="{x:Null}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox">
@@ -3454,6 +3454,12 @@ $script:stylesXaml = @'
       <Trigger Property="Validation.HasError" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource B.Status.Error.Icon}"/><Setter Property="Padding" Value="10,0,32,0"/><Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=(Validation.Errors)[0].ErrorContent}"/></Trigger>
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/><Setter Property="Opacity" Value="1"/></Trigger>
     </Style.Triggers>
+  </Style>
+  <Style x:Key="Input.Hint" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
+    <Setter Property="Margin" Value="10,0,0,0"/>
+    <Setter Property="VerticalAlignment" Value="Center"/>
+    <Setter Property="IsHitTestVisible" Value="False"/>
   </Style>
   <Style x:Key="Reader" TargetType="TextBox" BasedOn="{StaticResource Input}">
     <Setter Property="IsReadOnly" Value="True"/>
@@ -3562,7 +3568,20 @@ $script:stylesXaml = @'
   </Style>
 
   <!-- 편집 칸: 카드 안을 채우는 테두리 없는 여러 줄 입력 (메모 본문 등) -->
+  <!-- 강조선은 안쪽에 겹쳐 그려 섬 열기/닫기의 글 배치와 높이를 유지한다. -->
+  <ControlTemplate x:Key="Memo.EditorTemplate" TargetType="TextBox">
+    <Grid>
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
+        <ScrollViewer x:Name="PART_ContentHost" Focusable="False" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+      </Border>
+      <Border x:Name="FocusBorder" BorderBrush="{DynamicResource B.Accent}" BorderThickness="2" CornerRadius="{DynamicResource F.Radius.Control}" Visibility="Collapsed" IsHitTestVisible="False"/>
+    </Grid>
+    <ControlTemplate.Triggers><Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="FocusBorder" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
+  </ControlTemplate>
   <Style x:Key="Editor" TargetType="TextBox" BasedOn="{StaticResource Input}">
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
+    <Setter Property="Template" Value="{StaticResource Memo.EditorTemplate}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
     <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.Body.LineHeight}"/>
     <Setter Property="BorderThickness" Value="0"/>
@@ -4378,7 +4397,9 @@ $script:stylesXaml = @'
     <Setter Property="AcceptsTab" Value="True"/>
     <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
     <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
-    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
+    <Setter Property="Template" Value="{StaticResource Memo.EditorTemplate}"/>
     <Setter Property="HorizontalAlignment" Value="Stretch"/>
   </Style>
   <Style x:Key="Memo.IslandH1" TargetType="TextBox" BasedOn="{StaticResource Memo.Island}">
@@ -4447,23 +4468,26 @@ $script:stylesXaml = @'
     <Setter Property="MaxHeight" Value="240"/>
   </Style>
   <!-- 편집기 위 찾기 · 바꾸기 막대 -->
+  <Style x:Key="Memo.FindOptions" TargetType="StackPanel"><Setter Property="Margin" Value="4,0,0,0"/></Style>
   <Style x:Key="Memo.FindOption" TargetType="ToggleButton">
     <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Caption}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
     <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
+    <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="Width" Value="{DynamicResource F.Height.Compact}"/>
     <Setter Property="Height" Value="{DynamicResource F.Height.Compact}"/>
     <Setter Property="Padding" Value="0"/>
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToggleButton">
-      <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}">
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource F.Radius.Control}">
         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
       </Border>
     </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers>
-      <Trigger Property="IsChecked" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/><Setter Property="Foreground" Value="{DynamicResource B.Accent.Text}"/></Trigger>
+      <Trigger Property="IsChecked" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/><Setter Property="Foreground" Value="{DynamicResource B.Accent.Text}"/></Trigger>
       <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
       <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/><Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/></Trigger>
@@ -14049,7 +14073,7 @@ function Format-WtMemoListTime([string]$Stamp) {
     if (-not [datetime]::TryParse($Stamp, [ref]$t)) { return $Stamp }
     if ($t.Date -eq [datetime]::Today) { return Format-WtDate $t 'HH:mm' }
     if ($t.Year -eq [datetime]::Today.Year) { return Format-WtDate $t "M'/'d" }
-    Format-WtDate $t "yyyy'/'M'/'d"
+    Format-WtDate $t "yy'/'M'/'d"
 }
 
 function Open-WtMemoRowToolTip($Element) {
@@ -19995,6 +20019,7 @@ function New-WtMemoFindBar($Ed) {
     $bar = [System.Windows.Controls.Border]::new()
     $bar.Tag = $Ed
     Set-WtStyle $bar 'Memo.FindBar'
+    [System.Windows.Input.FocusManager]::SetIsFocusScope($bar, $true)
     $bar.Visibility = 'Collapsed'
     $bar.Add_GotKeyboardFocus({
         param($s, $e)
@@ -20011,12 +20036,16 @@ function New-WtMemoFindBar($Ed) {
     $optionsColumn = [System.Windows.Controls.ColumnDefinition]::new(); $optionsColumn.Width = 'Auto'
     $top.ColumnDefinitions.Insert(1, $optionsColumn)
     $options = New-WtStack Horizontal 4
+    Set-WtStyle $options 'Memo.FindOptions'
     $options.VerticalAlignment = 'Center'
-    [System.Windows.Controls.Grid]::SetColumn($options, 1)
-    [void]$top.Children.Add($options)
+    # 여백까지 든 폭을 ActualWidth 의존 속성으로 알리는 칸. ColumnDefinition.ActualWidth는 변경 알림이 없다.
+    $optionSlot = [System.Windows.Controls.Grid]::new()
+    [System.Windows.Controls.Grid]::SetColumn($optionSlot, 1)
+    [void]$optionSlot.Children.Add($options)
+    [void]$top.Children.Add($optionSlot)
     $case = New-WtMemoFindOption $Ed 'case' 'Aa' '대소문자 구분' 'Memo-Find-Case' 'Alt+C'
     $regex = New-WtMemoFindOption $Ed 'regex' '.*' '정규식' 'Memo-Find-Regex' 'Alt+R'
-    foreach ($option in $case, $regex) { [void]$options.Children.Add($option) }
+    foreach ($option in $case, $regex) { [void](Add-WtChild $options $option) }
     $topActions = New-WtStack Horizontal
     [System.Windows.Controls.Grid]::SetColumn($topActions, 2)
     [void]$top.Children.Add($topActions)
@@ -20053,7 +20082,7 @@ function New-WtMemoFindBar($Ed) {
     $space = [System.Windows.Controls.ColumnDefinition]::new()
     $space.Width = [System.Windows.GridLength]::new(0)
     [void][System.Windows.Data.BindingOperations]::SetBinding($space, [System.Windows.Controls.ColumnDefinition]::WidthProperty,
-        [System.Windows.Data.Binding]@{ Source = $options; Path = 'ActualWidth' })
+        [System.Windows.Data.Binding]@{ Source = $optionSlot; Path = 'ActualWidth' })
     $low.ColumnDefinitions.Insert(1, $space)
     $lowActions = New-WtStack Horizontal
     [System.Windows.Controls.Grid]::SetColumn($lowActions, 2)
@@ -20066,20 +20095,31 @@ function New-WtMemoFindBar($Ed) {
     $one.Add_Click({ param($s, $e) Invoke-WtMemoReplace $s.Tag })
     $one.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
     $all.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
-    foreach ($c in $one, $all) { [void](Add-WtChild $lowActions $c) }
-    $replaceBox = New-WtSearchBox '바꿀 글'
-    $rep = $replaceBox.Box
-    $replaceBox.Root.Tag = $Ed
+    foreach ($c in $one, $all) {
+        [void](Add-WtChild $lowActions $c)
+        [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($c, $true)
+    }
+    $replaceRoot = [System.Windows.Controls.Grid]::new()
+    $replaceRoot.Tag = $Ed
+    $rep = [System.Windows.Controls.TextBox]::new()
+    Set-WtStyle $rep 'Input'
+    $hint = New-WtText '바꿀 글' 'Input.Hint'
+    $rep.Tag = $hint
+    $rep.Add_TextChanged({ param($s, $e) $s.Tag.Visibility = if ($s.Text) { 'Collapsed' } else { 'Visible' } })
+    [void]$replaceRoot.Children.Add($rep)
+    [void]$replaceRoot.Children.Add($hint)
     $rep.ToolTip = '바꿀 글'
     $rep.Add_PreviewKeyDown({ param($s, $e) if ($e.Key -eq 'Return') { $e.Handled = $true; Invoke-WtMemoReplace $s.Parent.Tag } })
-    [void]$low.Children.Add($replaceBox.Root)
+    [void]$low.Children.Add($replaceRoot)
     [void](Add-WtChild $rows $low)
     $bar.Child = $rows
     $validation = [System.Windows.Data.Binding]::new('Value')
     $validation.Source = [pscustomobject]@{ Value = '' }
     $Ed.Find = @{ Bar = $bar; Query = $sb.Box; Count = $count; ReplaceRow = $low; Replace = $rep; ReadIndex = -1
         Case = $case; Regex = $regex; One = $one; All = $all; Error = ''; LastMatch = $null; KeepFocus = $false
+        Total = 0; ReplaceTips = @($one.ToolTip, $all.ToolTip)
         Validation = $sb.Box.SetBinding([System.Windows.FrameworkElement]::UidProperty, $validation) }
+    Update-WtMemoReplaceButtons $Ed
     $bar
 }
 
@@ -20099,18 +20139,41 @@ function New-WtMemoFindOption($Ed, [string]$Option, [string]$Text, [string]$Name
 function Set-WtMemoFindError($Ed, [string]$Reason = '') {
     $f = $Ed.Find
     $f.Error = $Reason
-    $f.One.IsEnabled = $f.All.IsEnabled = -not [bool]$Reason
+    Update-WtMemoReplaceButtons $Ed
+    Set-WtStyle $f.Count $(if ($Reason) { 'T.Error' } else { 'T.Sub' })
     if ($Reason) {
         [System.Windows.Controls.Validation]::MarkInvalid($f.Validation,
             [System.Windows.Controls.ValidationError]::new([System.Windows.Controls.ExceptionValidationRule]::new(), $f.Validation, $Reason, $null))
         $f.Query.Padding = [System.Windows.Thickness]::new(32, 0, 32, 0)
-        $f.Count.Text = if ($Reason -ceq '식이 너무 오래 걸립니다') { $Reason } else { '식 오류' }
+        $f.Count.Text = '식 오류'
         $f.Count.ToolTip = $Reason
     } else {
         [System.Windows.Controls.Validation]::ClearInvalid($f.Validation)
         $f.Query.Padding = [System.Windows.Thickness]::new(32, 0, 10, 0)
         $f.Count.ToolTip = $null
     }
+}
+
+function Update-WtMemoReplaceButtons($Ed) {
+    $f = $Ed.Find
+    $reason = if ($f.Error) { '찾기 식을 고치면 바꿀 수 있습니다.' } elseif ($f.Total -le 0) { '찾은 것이 없습니다.' } else { $null }
+    $i = 0
+    foreach ($button in $f.One, $f.All) {
+        $button.IsEnabled = -not [bool]$reason
+        $button.ToolTip = if ($reason) { $reason } else { $f.ReplaceTips[$i] }
+        $i++
+    }
+}
+
+function Format-WtMemoRegexError([System.Text.RegularExpressions.RegexParseException]$ParseError) {
+    switch ([string]$ParseError.Error) {
+        'InsufficientClosingParentheses' { return '닫는 괄호 )가 모자랍니다.' }
+        'InsufficientOpeningParentheses' { return '여는 괄호 (가 모자랍니다.' }
+        'UnterminatedBracket' { return '[ ]의 닫는 ]가 없습니다.' }
+        'QuantifierAfterNothing' { return '반복(* + ? {})할 글자가 앞에 없습니다.' }
+        'UnescapedEndingBackslash' { return '끝의 \가 혼자 있습니다.' }
+    }
+    '정규식을 확인하세요. ({0}번째 글자 근처)' -f $ParseError.Offset
 }
 
 function Open-WtMemoFind($Ed, [switch]$Replace) {
@@ -20169,13 +20232,15 @@ function Get-WtMemoFindHits($Ed, [string]$Text, [switch]$Read) {
         $hits = if ($Read) { Get-WtMemoReadMatches $Ed $f.Query.Text } else {
             Get-WtMemoMatches $Text $f.Query.Text -CaseSensitive:($f.Case.IsChecked -eq $true) -RegexMode:($f.Regex.IsChecked -eq $true)
         }
+        $f.Total = $hits.Count
         Set-WtMemoFindError $Ed
         return , $hits
     } catch {
         $error = $_.Exception
         while ($error.InnerException) { $error = $error.InnerException }
-        if ($error -is [System.Text.RegularExpressions.RegexMatchTimeoutException]) { Set-WtMemoFindError $Ed '식이 너무 오래 걸립니다' }
-        elseif ($error -is [ArgumentException]) { Set-WtMemoFindError $Ed $error.Message }
+        $f.Total = 0
+        if ($error -is [System.Text.RegularExpressions.RegexMatchTimeoutException]) { Set-WtMemoFindError $Ed '식이 너무 오래 걸립니다. 식을 좁히세요.' }
+        elseif ($error -is [System.Text.RegularExpressions.RegexParseException]) { Set-WtMemoFindError $Ed (Format-WtMemoRegexError $error) }
         else { throw }
         return $null
     }
@@ -20267,12 +20332,14 @@ function Select-WtMemoTextRange($Ed, [string]$Text, [int]$Offset, [int]$Length, 
 
 function Update-WtMemoFindCount($Ed, [int]$Current = -1, [int]$Total = -1) {
     $f = $Ed.Find
-    if (-not $f.Query.Text) { Set-WtMemoFindError $Ed; $f.Count.Text = ''; $f.LastMatch = $null; return }
+    if (-not $f.Query.Text) { $f.Total = 0; Set-WtMemoFindError $Ed; $f.Count.Text = ''; $f.LastMatch = $null; return }
     if ($Total -lt 0) {
         $hits = Get-WtMemoFindHits $Ed ((Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")) -Read:($Ed.Mode -eq 'read')
         if ($f.Error) { return }
         $Total = $hits.Count
     }
+    $f.Total = $Total
+    Update-WtMemoReplaceButtons $Ed
     $f.Count.Text = if (-not $Total) { '0개' } elseif ($Current -ge 0) { "$($Current + 1)/$Total" } else { "${Total}개" }
 }
 

@@ -104,7 +104,7 @@ function Format-WtMemoListTime([string]$Stamp) {
     if (-not [datetime]::TryParse($Stamp, [ref]$t)) { return $Stamp }
     if ($t.Date -eq [datetime]::Today) { return Format-WtDate $t 'HH:mm' }
     if ($t.Year -eq [datetime]::Today.Year) { return Format-WtDate $t "M'/'d" }
-    Format-WtDate $t "yyyy'/'M'/'d"
+    Format-WtDate $t "yy'/'M'/'d"
 }
 
 function Open-WtMemoRowToolTip($Element) {
