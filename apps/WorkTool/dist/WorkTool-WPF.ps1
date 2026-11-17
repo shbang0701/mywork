@@ -3568,20 +3568,10 @@ $script:stylesXaml = @'
   </Style>
 
   <!-- 편집 칸: 카드 안을 채우는 테두리 없는 여러 줄 입력 (메모 본문 등) -->
-  <!-- 강조선은 안쪽에 겹쳐 그려 섬 열기/닫기의 글 배치와 높이를 유지한다. -->
-  <ControlTemplate x:Key="Memo.EditorTemplate" TargetType="TextBox">
-    <Grid>
-      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
-        <ScrollViewer x:Name="PART_ContentHost" Focusable="False" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
-      </Border>
-      <Border x:Name="FocusBorder" BorderBrush="{DynamicResource B.Accent}" BorderThickness="2" CornerRadius="{DynamicResource F.Radius.Control}" Visibility="Collapsed" IsHitTestVisible="False"/>
-    </Grid>
-    <ControlTemplate.Triggers><Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="FocusBorder" Property="Visibility" Value="Visible"/></Trigger></ControlTemplate.Triggers>
-  </ControlTemplate>
+  <!-- 문서처럼 이어 쓰는 면이라 포커스 테두리 · 강조선을 그리지 않는다(커서가 표시). 11-17 승호: 줄 둘레 파란 네모가 어색 -->
   <Style x:Key="Editor" TargetType="TextBox" BasedOn="{StaticResource Input}">
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
-    <Setter Property="Template" Value="{StaticResource Memo.EditorTemplate}"/>
     <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
     <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.Body.LineHeight}"/>
     <Setter Property="BorderThickness" Value="0"/>
@@ -4399,7 +4389,6 @@ $script:stylesXaml = @'
     <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
     <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
-    <Setter Property="Template" Value="{StaticResource Memo.EditorTemplate}"/>
     <Setter Property="HorizontalAlignment" Value="Stretch"/>
   </Style>
   <Style x:Key="Memo.IslandH1" TargetType="TextBox" BasedOn="{StaticResource Memo.Island}">

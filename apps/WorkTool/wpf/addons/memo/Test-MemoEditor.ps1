@@ -572,24 +572,26 @@ try {
         Open-EdAt $ed 0 0
         $seen = [System.Collections.Generic.List[string]]::new()
         $ok = $true
-        for ($n = 0; $n -lt 19; $n++) {
+        for ($n = 0; $n -lt $sample.Count; $n++) {
             Send-EdKey $ed Down
             $seen.Add((Get-EdCaret $ed).Split(':')[0])
             if ($ok) { $ok = Test-EdContract $ed "아래로 $n" }
         }
-        Assert-Ed '편집기 ↓: 제목 · 문단 · 목록 · 안쪽 목록 · 코드 · 표 · 콜아웃 · 할 일을 차례로 한 줄씩' (($seen -join ',') -eq '2,3,5,6,7,8,9,11,12,13,15,16,17,19,20,22,23,25,25') ($seen -join ',')
+        Assert-Ed '편집기 ↓: 제목 · 문단 · 목록 · 안쪽 목록 · 코드 · 표 · 콜아웃 · 할 일 · 빈 줄을 차례로 한 줄씩' (($seen -join ',') -eq ((@(1..25) + 25) -join ',')) ($seen -join ',')
         $seen.Clear()
-        for ($n = 0; $n -lt 19; $n++) {
+        for ($n = 0; $n -lt $sample.Count; $n++) {
             Send-EdKey $ed Up
             $seen.Add((Get-EdCaret $ed).Split(':')[0])
             if ($ok) { $ok = Test-EdContract $ed "위로 $n" }
         }
-        Assert-Ed '편집기 ↑: 거꾸로 한 줄씩, 맨 위에서는 멈춘다' (($seen -join ',') -eq '23,22,20,19,17,16,15,13,12,11,9,8,7,6,5,3,2,0,0') ($seen -join ',')
+        Assert-Ed '편집기 ↑: 빈 줄 포함 거꾸로 한 줄씩, 맨 위에서는 멈춘다' (($seen -join ',') -eq ((@(24..0) + 0) -join ',')) ($seen -join ',')
         Assert-Ed '편집기 이동: 옮겨 다니기만 하면 글 · OnChanged 그대로' ((Get-EdText $ed) -ceq $sampleText -and $ed.TestChanged -eq 0) "$($ed.TestChanged)"
 
         Set-EdCaret $ed 0 4
         Send-EdKey $ed Down
-        Assert-Ed '편집기 ↓: 칸을 지킨다' ((Get-EdCaret $ed) -eq '2:4') (Get-EdCaret $ed)
+        Assert-Ed '편집기 ↓: 바로 아래 빈 줄은 0칸' ((Get-EdCaret $ed) -eq '1:0') (Get-EdCaret $ed)
+        Open-EdAt $ed 5 4; Send-EdKey $ed Down
+        Assert-Ed '편집기 ↓: 빈 줄 없는 이웃 단위에서는 칸을 지킨다' ((Get-EdCaret $ed) -eq '6:4') (Get-EdCaret $ed)
         $style = $null
         Open-EdAt $ed 12 0
         $style = $ed.IslandBox.Style
@@ -599,7 +601,11 @@ try {
 
         Open-EdAt $ed 5 0
         Send-EdKey $ed Left
-        Assert-Ed '편집기 ←: 단위 처음에서 앞 단위의 끝으로' ((Get-EdCaret $ed) -eq "3:$($sample[3].Length)") (Get-EdCaret $ed)
+        Assert-Ed '편집기 ←: 단위 처음에서 바로 앞 빈 줄로' ((Get-EdCaret $ed) -eq '4:0') (Get-EdCaret $ed)
+        Send-EdKey $ed Left
+        Assert-Ed '편집기 ←: 빈 줄에서 앞 단위의 끝으로' ((Get-EdCaret $ed) -eq "3:$($sample[3].Length)") (Get-EdCaret $ed)
+        Send-EdKey $ed Right
+        Assert-Ed '편집기 →: 단위 끝에서 바로 뒤 빈 줄로' ((Get-EdCaret $ed) -eq '4:0') (Get-EdCaret $ed)
         Send-EdKey $ed Right
         Assert-Ed '편집기 →: 단위 끝에서 다음 단위의 처음으로' ((Get-EdCaret $ed) -eq '5:0') (Get-EdCaret $ed)
         Invoke-EdCommand $ed 'Ctrl+End'
@@ -1300,6 +1306,167 @@ try {
             (Get-EdText $ed) -ceq "> [!note] Fresh Callout`n> Callout line content`nNext paragraph text") "글=$((Get-EdText $ed).Replace("`n", '¶'))"
         Assert-EdContract $ed 'Callout-NewMemoKeepsFocus: 문서 약속'
     }
+    Invoke-EdCase 'BlankCaret-EnterUpType' {
+        foreach ($block in @(@('```ps', 'Get-Service', 'Get-Process', '```'), @('middle line'), @('## Heading'))) {
+            $ed = New-EdEditor
+            $initial = (@('intro line', '') + $block + @('', 'after line')) -join "`n"
+            Set-EdText $ed $initial
+            Open-EdAt $ed 2 0
+            Send-EdKey $ed Return
+            $afterEnter = (@('intro line', '', '') + $block + @('', 'after line')) -join "`n"
+            Assert-Ed "BlankCaret-EnterUpType: $($block[0]) Enter는 블록 앞에 빈 줄 · 블록 커서 유지" (
+                (Get-EdText $ed) -ceq $afterEnter -and (Get-EdCaret $ed) -ceq '3:0')
+            Send-EdKey $ed Up
+            Assert-Ed "BlankCaret-EnterUpType: $($block[0]) 바로 위 빈 줄 섬" (
+                (Get-EdCaret $ed) -ceq '2:0' -and $ed.IslandBox.Text -ceq '' -and $ed.Island.Last -lt $ed.Island.First)
+            Send-EdText $ed 'new text'
+            $expected = (@('intro line', '', 'new text') + $block + @('', 'after line')) -join "`n"
+            Assert-Ed "BlankCaret-EnterUpType: $($block[0]) 사이에 입력 · 원문 일치" ((Get-EdText $ed) -ceq $expected)
+            Invoke-EdCommand $ed 'Ctrl+Z'
+            Assert-Ed "BlankCaret-EnterUpType: $($block[0]) 입력 한 번 실행 취소" ((Get-EdText $ed) -ceq $afterEnter)
+            Invoke-EdCommand $ed 'Ctrl+Z'
+            Assert-Ed "BlankCaret-EnterUpType: $($block[0]) Enter 한 번 실행 취소" ((Get-EdText $ed) -ceq $initial)
+            Invoke-EdCommand $ed 'Ctrl+Y'; Invoke-EdCommand $ed 'Ctrl+Y'
+            Set-WtMemoEditorMode $ed source
+            Assert-Ed "BlankCaret-EnterUpType: $($block[0]) 다시 실행 · 저장용 본문 · 원문 보기 일치" (
+                (Get-EdText $ed) -ceq $expected -and $ed.Source.Text.Replace("`r`n", "`n") -ceq $expected)
+            Set-WtMemoEditorMode $ed live
+            Assert-EdContract $ed "BlankCaret-EnterUpType: $($block[0]) 문서 약속"
+        }
+    }
+    Invoke-EdCase 'BlankCaret-Arrows' {
+        $ed = New-EdEditor
+        Set-EdText $ed (@('intro line', '', '', '```ps', 'Get-Service', 'Get-Process', '```', '', '', 'after line') -join "`n")
+        Open-EdAt $ed 0 10
+        foreach ($line in 1, 2, 3) {
+            Send-EdKey $ed Down
+            Assert-Ed "BlankCaret-Arrows: 아래로 $line 줄" ((Get-EdCaret $ed) -ceq "${line}:0")
+        }
+        Set-EdCaret $ed 6 3
+        foreach ($line in 7, 8, 9) {
+            Send-EdKey $ed Down
+            Assert-Ed "BlankCaret-Arrows: 코드 아래 $line 줄" ((Get-EdCaret $ed) -ceq "${line}:0")
+        }
+        foreach ($line in 8, 7, 6) {
+            Send-EdKey $ed Up
+            Assert-Ed "BlankCaret-Arrows: 위로 $line 줄" ((Get-EdCaret $ed) -ceq "${line}:0")
+        }
+        Open-EdAt $ed 3 0
+        foreach ($line in 2, 1) { Send-EdKey $ed Left; Assert-Ed "BlankCaret-Arrows: 왼쪽 빈 줄 $line" ((Get-EdCaret $ed) -ceq "${line}:0") }
+        Send-EdKey $ed Left
+        Assert-Ed 'BlankCaret-Arrows: 왼쪽 앞 블록 줄 끝' ((Get-EdCaret $ed) -ceq '0:10')
+        foreach ($line in 1, 2, 3) { Send-EdKey $ed Right; Assert-Ed "BlankCaret-Arrows: 오른쪽 $line" ((Get-EdCaret $ed) -ceq "${line}:0") }
+        foreach ($key in 'Up', 'Left', 'Down', 'Right') {
+            $line = if ($key -in 'Up', 'Left') { 3 } else { 0 }
+            $col = if ($key -eq 'Right') { 10 } else { 0 }
+            Open-EdAt $ed $line $col; Close-Ed $ed
+            [void]$ed.Live.Focus(); Sync-EdUi; Wait-EdModifiers
+            $a = [Windows.Input.KeyEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $testSource, 0, [Windows.Input.Key]$key)
+            $a.RoutedEvent = [Windows.Input.Keyboard]::PreviewKeyDownEvent
+            $ed.Live.RaiseEvent($a); Sync-EdUi
+            $want = if ($line) { '2:0' } else { '1:0' }
+            Assert-Ed "BlankCaret-Arrows: 그린 보기 $key 빈 줄" ((Get-EdCaret $ed) -ceq $want -and $ed.IslandBox.Text -ceq '')
+        }
+        Assert-EdContract $ed 'BlankCaret-Arrows: 문서 약속'
+    }
+    Invoke-EdCase 'BlankCaret-ClickHeight' {
+        foreach ($block in @(@('```ps', 'Get-Service', 'Get-Process', '```'), @('middle line'), @('## Heading'))) {
+            $ed = New-EdEditor
+            Set-EdText $ed ((@('intro line', '', '', '') + $block + @('', 'after line')) -join "`n")
+            $h = [double]$ed.Live.FindResource('F.Memo.Body.LineHeight')
+            $top = (Get-EdPoint $ed.Live 'intro line').Y + $h / 2
+            $sec = $ed.Sections[1]
+            $bottom = $sec.ContentStart.GetCharacterRect('Forward').Top
+            if ($sec.Tag.Kind -eq 'code') { $bottom -= $sec.Blocks.FirstBlock.BorderThickness.Top }
+            foreach ($line in 1..3) {
+                $y = if ($line -eq 1) { ($top + $bottom - 2 * $h) / 2 } else { $bottom - (3.5 - $line) * $h }
+                $p = [Windows.Point]::new(4, $y)
+                $mouse = [pscustomobject]@{ OriginalSource = $ed.Live; Point = $p; Handled = $false }
+                $mouse | Add-Member ScriptMethod GetPosition { param($el) $this.Point }
+                & $em { param($s, $e) Invoke-WtMemoLiveMouseDown $s $e } $ed.Live $mouse
+                & $em { param($s, $e) Invoke-WtMemoLiveMouseUp $s $e } $ed.Live $mouse
+                Sync-EdUi
+                Assert-Ed "BlankCaret-ClickHeight: $($block[0]) 높이별 빈 줄 $line" (
+                    $mouse.Handled -and (Get-EdCaret $ed) -ceq "${line}:0" -and $ed.IslandBox.Text -ceq '' -and $ed.Island.Last -lt $ed.Island.First)
+                Close-Ed $ed; $ed.Live.UpdateLayout()
+            }
+            # 섬을 열어 둔 상태에서도 남은 여백을 다른 빈 줄로 고른다.
+            Open-EdAt $ed 1 0; $ed.Live.UpdateLayout()
+            $p = [Windows.Point]::new(4, $bottom - $h / 2)
+            $hit = & $em { param($x, $p) Find-WtMemoLiveHit $x $p } $ed $p
+            Assert-Ed "BlankCaret-ClickHeight: $($block[0]) 빈 섬 뒤 남은 간격" ($hit.Line -eq 3 -and $hit.Col -eq 0)
+            Close-Ed $ed
+            Assert-EdContract $ed "BlankCaret-ClickHeight: $($block[0]) 문서 약속"
+        }
+    }
+    Invoke-EdCase 'BlankCaret-DeleteLine' {
+        foreach ($key in 'Back', 'Delete') {
+            foreach ($line in 1..3) {
+                $ed = New-EdEditor
+                $initial = "intro line`n`n`n`n## Heading`n`nafter line"
+                Set-EdText $ed $initial; Open-EdAt $ed $line 0
+                Send-EdKey $ed $key
+                Assert-Ed "BlankCaret-DeleteLine: $key 빈 줄 $line 한 줄만 삭제" (
+                    (Get-EdText $ed) -ceq "intro line`n`n`n## Heading`n`nafter line")
+                Assert-EdContract $ed "BlankCaret-DeleteLine: $key $line 문서 약속"
+                Invoke-EdCommand $ed 'Ctrl+Z'
+                Assert-Ed "BlankCaret-DeleteLine: $key $line 한 번 실행 취소" ((Get-EdText $ed) -ceq $initial -and (Get-EdCaret $ed) -ceq "${line}:0")
+            }
+        }
+        foreach ($block in @(@('```ps', 'Get-Service', 'Get-Process', '```'), @('middle line'), @('## Heading'))) {
+            $ed = New-EdEditor
+            $initial = (@('intro line', '') + $block + @('', 'after line')) -join "`n"
+            Set-EdText $ed $initial; Open-EdAt $ed 2 0
+            Send-EdKey $ed Back
+            Assert-Ed "BlankCaret-DeleteLine: $($block[0]) 앞 빈 줄만 삭제 · 블록 커서 유지" (
+                (Get-EdText $ed) -ceq ((@('intro line') + $block + @('', 'after line')) -join "`n") -and (Get-EdCaret $ed) -ceq '1:0')
+            Assert-EdContract $ed "BlankCaret-DeleteLine: $($block[0]) 문서 약속"
+            Invoke-EdCommand $ed 'Ctrl+Z'
+            Assert-Ed "BlankCaret-DeleteLine: $($block[0]) 블록 지우기 한 번 실행 취소" ((Get-EdText $ed) -ceq $initial)
+        }
+    }
+    Invoke-EdCase 'BlankCaret-StableHeight' {
+        foreach ($block in @(@('```ps', 'Get-Service', 'Get-Process', '```'), @('middle line'), @('## Heading'))) {
+            foreach ($count in 1..3) {
+                $ed = New-EdEditor
+                Set-EdText $ed ((@('intro line') + @('') * $count + $block + @('', 'after line')) -join "`n")
+                $y = (Get-EdPoint $ed.Live 'after line').Y
+                foreach ($line in 1..$count) {
+                    Open-EdAt $ed $line 0
+                    $openY = (Get-EdPoint $ed.Live 'after line').Y
+                    Close-Ed $ed
+                    $closeY = (Get-EdPoint $ed.Live 'after line').Y
+                    Assert-Ed "BlankCaret-StableHeight: $($block[0]) 빈 줄 $line/$count 열고 닫기" (
+                        [Math]::Abs($openY - $y) -lt 2 -and [Math]::Abs($closeY - $y) -lt 2) "닫힘=$y 열림=$openY 다시닫힘=$closeY"
+                }
+            }
+        }
+    }
+    Invoke-EdCase 'BlankCaret-RemainingLines' {
+        foreach ($insert in 'new text', '## New heading', '- new item') {
+            $ed = New-EdEditor
+            Set-EdText $ed "intro line`r`n`r`n`r`n`r`n`r`n## Heading`r`n`r`nafter line"
+            Open-EdAt $ed 2 0; Send-EdText $ed $insert; Close-Ed $ed
+            $expected = "intro line`r`n`r`n$insert`r`n`r`n`r`n## Heading`r`n`r`nafter line"
+            Assert-Ed "BlankCaret-RemainingLines: $insert 입력한 블록 · 위아래 남은 빈 줄 · 줄바꿈 유지" (
+                (Get-WtMemoEditorText $ed) -ceq $expected -and $ed.Units.Count -eq 4 -and $ed.Units[1].Text -ceq $insert -and
+                $ed.Units[1].Start -eq 2 -and $ed.Units[2].Start -eq 5)
+            Assert-EdContract $ed "BlankCaret-RemainingLines: $insert 문서 약속"
+        }
+        foreach ($initial in "`n`n", "`n## Heading", "## Heading`n", '') {
+            foreach ($key in 'Back', 'Delete') {
+                $ed = New-EdEditor; Set-EdText $ed $initial
+                $line = if ($initial.StartsWith('##')) { 1 } else { 0 }
+                Open-EdAt $ed $line 0; Send-EdKey $ed $key
+                $expected = if ($initial.Contains("`n")) { $initial.Remove($initial.IndexOf("`n"), 1) } else { '' }
+                Assert-Ed "BlankCaret-RemainingLines: $key 처음 · 끝 · 빈 글에서 한 줄 삭제" ((Get-EdText $ed) -ceq $expected)
+                Assert-EdContract $ed "BlankCaret-RemainingLines: $key 가장자리 문서 약속"
+            }
+        }
+        $ed = New-EdEditor; Set-EdText $ed "`n`n"
+        Open-EdAt $ed 2 0; Send-EdKey $ed Down; Send-EdKey $ed Right
+        Assert-Ed 'BlankCaret-RemainingLines: 빈 글 끝에서 이동해도 같은 줄' ((Get-EdCaret $ed) -ceq '2:0')
+    }
     Invoke-EdCase 'BlankSpacing-DefaultSeparator' {
         foreach ($blank in 0, 1, 3) {
             $ed = New-EdEditor
@@ -1819,16 +1986,15 @@ try {
             Set-WtMemoEditorMode $ed $mode
             if ($mode -eq 'live') { Open-EdAt $ed 0 0 }
             $win.UpdateLayout(); $box = Get-EdBox $ed; [void]$box.Focus(); Sync-EdUi
-            $border = $box.Template.FindName('FocusBorder', $box)
-            $ok = $ok -and $null -eq $box.FocusVisualStyle -and $border.Visibility -eq 'Visible' -and
-                $border.BorderThickness.Equals([Windows.Thickness]::new(2)) -and
-                $border.BorderBrush.Color -eq $ed.Root.FindResource('B.Accent').Color
+            # 메모 원문 · 섬은 문서 면이라 포커스가 있어도 테두리 · 강조선이 없다(11-17 승호: 줄 둘레 파란 네모가 어색)
+            $ok = $ok -and $null -eq $box.FocusVisualStyle -and $null -eq $box.Template.FindName('FocusBorder', $box) -and
+                $box.BorderThickness.Equals([Windows.Thickness]::new(0))
         }
         foreach ($key in 'Btn', 'Row', 'Check') {
             $focus = @((Get-WtStyleDictionary)[$key].Setters | Where-Object { $_.Property.Name -ceq 'FocusVisualStyle' })
             $ok = $ok -and $focus.Count -eq 1 -and $null -ne $focus[0].Value
         }
-        Assert-Ed 'InputFocus-SingleOutline: Input · 원문 · 섬 바깥 포커스 없음 · 안쪽 2 Accent · 단추/행/체크 포커스 유지' $ok
+        Assert-Ed 'InputFocus-SingleOutline: Input은 2 Accent 하나 · 원문 · 섬은 테두리 없음 · 단추/행/체크 포커스 유지' $ok
     }
     Invoke-EdCase 'FindHint-HidesWhileTyping' {
         $ed = New-EdEditor
