@@ -1114,8 +1114,8 @@ function Initialize-WtMemoViewFactories {
         $values = @((New-WtMemoFieldExpression $item 'id' -String), (New-WtMemoFieldExpression $item 'title' -String),
             (New-WtMemoFieldExpression $item 'updated' -String), $e::Constant($null, [object]),
             (New-WtMemoFieldExpression $item $bodyField -String), $e::Constant($null, [object]),
-            $e::Condition($pinned, $e::Constant('Visible'), $e::Constant('Collapsed')), $e::Property($null, [datetime].GetProperty('Today')))
-        $newRow = New-WtMemoObjectExpression @('Id', 'Title', 'Updated', 'StampValue', 'SnippetSource', 'SnippetValue', 'PinShown', 'Day') $values
+            $e::Condition($pinned, $e::Constant('Visible'), $e::Constant('Collapsed')), $e::Property($null, [datetime].GetProperty('Today')), $e::Constant($bodyField -eq 'Snippet'))
+        $newRow = New-WtMemoObjectExpression @('Id', 'Title', 'Updated', 'StampValue', 'SnippetSource', 'SnippetValue', 'PinShown', 'Day', 'IsSearch') $values
         $steps = [Collections.Generic.List[Linq.Expressions.Expression]]::new()
         $steps.Add($e::Assign($row, $e::Convert($newRow, [Management.Automation.PSObject])))
         $propCtor = [Management.Automation.PSScriptProperty].GetConstructor([type[]]@([string], [Management.Automation.ScriptBlock]))
