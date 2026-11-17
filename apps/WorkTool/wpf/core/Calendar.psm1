@@ -16,6 +16,8 @@ $script:holidaySchema = 1
 $script:holidayKinds = @('public', 'company', 'personal')
 $script:holidayCache = $null
 $script:calendarSources = [System.Collections.Generic.List[object]]::new()
+$script:calendarStoreVersion = 0L
+$script:calendarStores = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)   # 출처의 저장소 선언. 자료나 계산 결과는 보관하지 않는다.
 Register-WtSettingDefault 'holidays.auto' $true   # 공휴일 자동 채우기
 
 # 항목 하나를 계산용으로 읽는다. State: ok · readonly(새 버전 값) · broken(고칠 항목) · deleted
@@ -40,19 +42,7 @@ function ConvertFrom-WtHolidayItem($Item) {
 못 읽어도 예외를 올리지 않는다(부르는 탭의 화면 · 계산이 멈추지 않게). 그때 핸들은 저장을 거부한다
 #>
 function Get-WtHolidayData {
-    $stamp = Get-WtStoreStamp 'holidays'
-    if ($script:holidayCache -and $script:holidayCache.Stamp -ceq $stamp) { return $script:holidayCache }
-    $store = Open-WtStore -Name 'holidays' -Schema $script:holidaySchema
-    $err = $store.Error
-    $items = $store.Items
-    $entries = @(foreach ($i in $items) { ConvertFrom-WtHolidayItem $i })
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($e in $entries) {
-        if (-not $e.Id) { continue }
-        if (-not $seen.Add($e.Id) -and $e.State -ne 'deleted') { $e.State = 'broken'; $e.Problem = "id가 앞 항목과 겹칩니다: '$($e.Id)'" }
-    }
-    $script:holidayCache = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $items; Entries = $entries; Error = $err }
-    $script:holidayCache
+    Get-WtConvertedStore -Name 'holidays' -Schema $script:holidaySchema -Convert ${function:ConvertFrom-WtHolidayItem} -Cache ([ref]$script:holidayCache)
 }
 
 # 계산에 쓰는 휴무일 날짜 모음 (yyyy-MM-dd, 읽을 수 있고 아는 종류만). -From · -To를 주면 그 사이(그날 포함)만
@@ -273,6 +263,7 @@ function Get-WtHolidayCalendarItems([datetime]$From, [datetime]$To) {
 # 코어 · 탭의 공용 달력 출처. null이면 해제, 같은 Id는 바꿔 끼운다.
 function Register-WtCalendarSource([string]$Id, [scriptblock]$CalendarItems, [string]$Page = '') {
     if (-not $Id) { throw '달력 출처 id가 필요합니다.' }
+    [void]$script:calendarStores.Remove($Id)
     for ($i = $script:calendarSources.Count - 1; $i -ge 0; $i--) {
         if ($script:calendarSources[$i].Id -ceq $Id) { $script:calendarSources.RemoveAt($i) }
     }
@@ -281,8 +272,18 @@ function Register-WtCalendarSource([string]$Id, [scriptblock]$CalendarItems, [st
 
 function Get-WtCalendarSource { $script:calendarSources.ToArray() }
 
-Register-WtCalendarSource -Id 'holidays' -CalendarItems { param([datetime]$From, [datetime]$To) Get-WtHolidayCalendarItems $From $To }
+# 출처를 바꿔 등록하면 선언도 지운다. 선언이 없는 출처는 기존 자료 조회로 변경을 확인한다.
+function Register-WtCalendarStores([string]$Id, [string[]]$Names) {
+    $script:calendarStoreVersion++
+    $script:calendarStores[$Id] = @{ Names = @($Names); Version = $script:calendarStoreVersion }
+}
+function Get-WtCalendarStoreRegistration([string]$Id) {
+    if ($script:calendarStores.ContainsKey($Id)) { $script:calendarStores[$Id] }
+}
 
-Export-ModuleMember -Function ConvertFrom-WtHolidayItem, Get-WtHolidayData, Get-WtHolidayDates, Save-WtHolidayItems,
+Register-WtCalendarSource -Id 'holidays' -CalendarItems { param([datetime]$From, [datetime]$To) Get-WtHolidayCalendarItems $From $To }
+Register-WtCalendarStores -Id 'holidays' -Names @('holidays')
+
+Export-ModuleMember -Function Register-WtCalendarStores, Get-WtCalendarStoreRegistration, ConvertFrom-WtHolidayItem, Get-WtHolidayData, Get-WtHolidayDates, Save-WtHolidayItems,
     Set-WtHolidayDate, ConvertFrom-WtHolidayPaste, Import-WtHolidayPaste, Get-WtHolidayCalendarItems, Register-WtCalendarSource, Get-WtCalendarSource,
     ConvertFrom-WtLunarDate, Get-WtKoreanHolidays, Update-WtAutoHolidays

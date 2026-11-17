@@ -71,19 +71,7 @@ function Save-WtAttendanceItems($Store, [object[]]$Items) {
 
 # 화면 · 홈 카드가 같이 쓰는 읽은 결과 @{ Stamp; Store; Items; Entries; Error }. 못 읽어도 예외를 올리지 않는다 (ScheduleData.psm1과 같은 약속)
 function Get-WtAttendanceData {
-    $stamp = Get-WtStoreStamp 'attendance'
-    if ($script:cache -and $script:cache.Stamp -ceq $stamp) { return $script:cache }
-    $store = Open-WtAttendanceStore
-    $err = $store.Error
-    $items = $store.Items
-    $entries = @(foreach ($i in $items) { ConvertFrom-WtAttendanceItem $i })
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($e in $entries) {
-        if (-not $e.Id) { continue }
-        if (-not $seen.Add($e.Id) -and $e.State -ne 'deleted') { $e.State = 'broken'; $e.Problem = "id가 앞 항목과 겹칩니다: '$($e.Id)'" }
-    }
-    $script:cache = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $items; Entries = $entries; Error = $err }
-    $script:cache
+    Get-WtConvertedStore -Name 'attendance' -Schema $script:schema -Convert ${function:ConvertFrom-WtAttendanceItem} -Cache ([ref]$script:cache) -Migrate ${function:Update-WtAttendanceSchema}
 }
 
 # ---- 항목 하나 읽기 ---------------------------------------------------------------------------

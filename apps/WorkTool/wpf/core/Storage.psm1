@@ -18,6 +18,20 @@
 
 $ErrorActionPreference = 'Stop'
 
+# 중첩된 화면 갱신은 한 동작의 읽은 자료만 공유한다. 끝나거나 실패하면 참조를 모두 놓는다.
+$script:readAction = $null
+function Invoke-WtReadAction([scriptblock]$Action) {
+    $owner = $null -eq $script:readAction
+    if ($owner) { $script:readAction = [Collections.Generic.Dictionary[object, object]]::new() }
+    try { & $Action }
+    finally { if ($owner) { $script:readAction = $null } }
+}
+function Get-WtReadValue([object]$Key, [scriptblock]$Read) {
+    if ($null -eq $script:readAction) { & $Read; return }
+    if (-not $script:readAction.ContainsKey($Key)) { $script:readAction[$Key] = @(& $Read) }
+    $script:readAction[$Key]
+}
+
 $script:appRoot = $null
 $script:dataRoot = $null
 $script:storeSession = 0       # 같은 경로로 다시 시작해도 이전 세션의 데이터 캐시·핸들은 다시 읽는다
@@ -107,6 +121,7 @@ function Invoke-WtDataCall {
 
 # 진입 스크립트가 자기 위치를 알려 준다. 묶음 파일이든 원본 폴더든 같은 방식으로 쓴다.
 function Set-WtAppRoot([string]$Path) {
+    if ($null -ne $script:readAction) { $script:readAction.Clear() }
     foreach ($preparation in $script:storePreparations.Values) { if ($preparation.Work) { Stop-WtWork $preparation.Work } }
     $script:appRoot = $Path
     $script:dataRoot = $null
@@ -385,6 +400,7 @@ function Get-WtDataFileRecord([string]$Path) {
 # 쓰기 하나를 통로에 넣는다. 넣는 순간 받아들인 버전이 된다.
 # 같은 파일의 아직 시작하지 않은 쓰기는 새 내용으로 바꾼다 (새 내용이 앞 내용을 담고 있다)
 function Submit-WtDataWrite([string]$Path, [string]$Json, $Document = $null) {
+    if ($null -ne $script:readAction) { $script:readAction.Clear() }
     $rec = Get-WtDataFileRecord $Path
     for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) {
         if ($script:writeQueue[$i].Path -ieq $Path) { $script:writeQueue[$i].State = 'superseded'; $script:writeQueue.RemoveAt($i) }
@@ -533,6 +549,7 @@ function Test-WtDataWriting { [bool]($script:writeCurrent -or $script:writeQueue
 # 사용자가 「저장하지 않고 끝내기」를 골랐을 때만 셸이 부른다. 남은 쓰기와 쓰지 못한 내용을 버린다
 # (임시 파일에 쓰는 중이면 원래 파일은 그대로다)
 function Stop-WtDataWrites {
+    if ($null -ne $script:readAction) { $script:readAction.Clear() }
     foreach ($e in $script:writeQueue) { $e.State = 'dropped' }
     $script:writeQueue.Clear()
     if ($script:writeCurrent) {
@@ -587,7 +604,7 @@ $script:storeGeneration = 0
 
 function Get-WtStorePath {
     param([Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$Name)
-    Join-Path (Get-WtDataRoot) "$Name.json"
+    [IO.Path]::Combine((Get-WtDataRoot), "$Name.json")
 }
 
 function Test-WtStore([string]$Name) {
@@ -813,6 +830,22 @@ function Open-WtStore {
     New-WtStoreHandle $Name $path $Schema $state $err $doc $list $(if ($read) { $read.Generation } else { 0 })
 }
 
+# 저장소의 읽기·변환 외피. 캐시 슬롯은 호출자가 소유하며 항목의 뜻과 변환은 넘긴 함수가 정한다.
+function Get-WtConvertedStore {
+    param([string]$Name, [int]$Schema, [scriptblock]$Convert, [ref]$Cache, [scriptblock]$Migrate)
+    $stamp = Get-WtStoreStamp $Name
+    if ($Cache.Value -and $Cache.Value.Stamp -ceq $stamp) { return $Cache.Value }
+    $store = Open-WtStore -Name $Name -Schema $Schema -Migrate $Migrate
+    $entries = @(foreach ($item in $store.Items) { & $Convert $item })
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($entry in $entries) {
+        if (-not $entry.Id) { continue }
+        if (-not $seen.Add($entry.Id) -and $entry.State -ne 'deleted') { $entry.State = 'broken'; $entry.Problem = "id가 앞 항목과 겹칩니다: '$($entry.Id)'" }
+    }
+    $Cache.Value = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $store.Items; Entries = $entries; Error = $store.Error }
+    $Cache.Value
+}
+
 # 핸들 하나. 저장 모듈은 만든 핸들을 다시 고치지 않는다(저장하면 새 핸들을 만든다). 부르는 쪽도 고치지 않는다
 function New-WtStoreHandle([string]$Name, [string]$Path, [int]$Schema, [string]$State, $ErrorText, $Doc, [AllowNull()][object[]]$List, [long]$Version) {
     [pscustomobject][ordered]@{ Name = $Name; Path = $Path; Schema = $Schema; State = $State; Error = $ErrorText; Doc = $Doc; Items = $List; Version = $Version }
@@ -870,7 +903,7 @@ function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
     , $r.Rows
 }
 
-Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
+Export-ModuleMember -Function Get-WtConvertedStore, Invoke-WtReadAction, Get-WtReadValue, Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
     Register-WtStorePreparation, Get-WtStorePreparation, Read-WtCacheFile, Write-WtCacheFile, Invoke-WtQueuedStoreWrite,
     Test-WtDataWriting, Get-WtDataWriteState, Get-WtDataWriteStatus, Get-WtDataUnsaved, Resume-WtDataWrites, Register-WtDataWriteHandler, Stop-WtDataWrites,
     Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, Open-WtStore, Save-WtStore, New-WtId,

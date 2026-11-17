@@ -830,6 +830,41 @@ try {
         if ($held) { $held.Dispose() }
         [AppDomain]::CurrentDomain.SetData('WtTestHeld', $null)
     }
+    # 실제 콘솔 창은 열지 않는다. 종료한 프로세스의 속성과 Dispose만 가짜로 제공한다.
+    $consoleFailure = & $mod {
+        $save = ${function:Save-WtFlowRun}
+        $process = [pscustomobject]@{ HasExited=$true; Disposed=0 }
+        $process | Add-Member ScriptMethod Dispose { $this.Disposed++ }
+        $console = @{ Process=$process; Record=@{id='console-failure';ended=''} }
+        function script:Save-WtFlowRun { param($Record) throw '가짜 기록 읽기 실패' }
+        try {
+            [void]$script:consoles.Add($console)
+            Update-WtFlowRunState
+            $console.SaveError -ceq '가짜 기록 읽기 실패' -and
+                $script:ui.Note.Text -ceq '실행 기록을 저장하지 못했습니다: 가짜 기록 읽기 실패' -and
+                $console.Record.ended -and $process.Disposed -eq 1 -and $script:consoles.Count -eq 0
+        } finally { Set-Item Function:script:Save-WtFlowRun $save }
+    }
+    Assert-WtTest '콘솔 기록 실패: SaveError와 앱 안 실행의 안내를 남기고 종료한 프로세스만 정리' $consoleFailure
+    $held = $null
+    try {
+        $consoleRecord = New-WtFlowRecord $sleepInfo @{} 'console' $false '콘솔 끝 기록'
+        $consoleProcess = [pscustomobject]@{HasExited=$true;Disposed=0}
+        $consoleProcess | Add-Member ScriptMethod Dispose { $this.Disposed++ }
+        $console = @{Process=$consoleProcess;Record=$consoleRecord}
+        $held = [IO.File]::Open($runsPath,'Open','Read','Read')
+        [AppDomain]::CurrentDomain.SetData('WtTestHeld',$held)
+        & $mod { param($c) [void]$script:consoles.Add($c); Update-WtFlowRunState } $console
+        $kept = @(Get-WtFlowRuns | Where-Object { $_.id -ceq $consoleRecord.id -and $_.ended }).Count
+        $unsaved = @(Get-WtDataUnsaved).Name -contains 'workflow-runs.json'
+        $asked = & $shellModule { $script:testAsked=@(); $script:writingDropped=$false; [void](Confirm-WtDataWrites -NoCancel); $script:testAsked -join ',' }
+        $saved = [IO.File]::ReadAllText($runsPath) -match '콘솔 끝 기록'
+        Assert-WtTest '콘솔 기록 재시도: 종료 뒤 쓰기 실패도 기록을 보유하고 기존 재시도로 디스크 저장' (
+            $kept -eq 1 -and $unsaved -and $asked -ceq 'exit' -and $saved -and $consoleProcess.Disposed -eq 1 -and -not @(Get-WtDataUnsaved).Count)
+    } finally {
+        if ($held) { $held.Dispose() }
+        [AppDomain]::CurrentDomain.SetData('WtTestHeld',$null)
+    }
 } finally {
     foreach ($r in $running) { try { if ($r.Process -and -not $r.Process.HasExited) { $r.Process.Kill($true) } } catch { } }
     & $mod { if ($script:timer) { $script:timer.Stop() } }

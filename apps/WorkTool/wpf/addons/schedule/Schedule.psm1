@@ -404,7 +404,8 @@ function Update-WtScheduleTable {
     $result = $null; $problem = ''; $title = ''; $count = ''
     try {
         if ($mode -ceq 'due') {
-            $result = Get-WtScheduleDueRows
+            # 찾기 조건은 화면의 결과에만 적용한다. 같은 동작의 집계가 보는 원래 행은 남긴다.
+            $result = (Get-WtScheduleDueRows).PSObject.Copy()
             if ($query) {
                 $parsed = ConvertFrom-WtScheduleQuery $query
                 if ($parsed.Success) { $result.Rows = @($result.Rows | Where-Object { Test-WtScheduleRowMatch $parsed.Root $_ }) } else { $result = [pscustomobject]@{ Success = $false; Error = $parsed.Error } }
@@ -469,16 +470,18 @@ function Open-WtScheduleTableItem($Item) {
 
 # 표 · 할 일의 체크: 일정 회차는 event-log, 루틴 차례는 routine-log에 남긴다
 function Set-WtScheduleTableCheck($Item, [bool]$Done) {
-    if (-not (Test-WtScheduleTableItem $Item) -or $Item.IsHead) { return }
-    $row = $Item.Row
-    try {
-        $result = if ($row.Kind -ceq 'event') { Set-WtEventCheck -Event $row.Occurrence.Entry.Id -Date (ConvertTo-WtDateText $row.Occurrence.Original) -Done $Done }
-        else { Set-WtRoutineCheck -Routine $row.RoutineId -Slot $row.Slot -Done $Done }
-        if (-not $result.Success) { throw $result.Reason }
-    } catch { $script:view.TableNote.Text = "체크를 저장하지 못했습니다. $($_.Exception.Message)"; $script:view.TableNote.Visibility = 'Visible' }
-    $script:focusKey = $row.Key
-    Update-WtScheduleView
-    if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
+    Invoke-WtReadAction {
+        if (-not (Test-WtScheduleTableItem $Item) -or $Item.IsHead) { return }
+        $row = $Item.Row
+        try {
+            $result = if ($row.Kind -ceq 'event') { Set-WtEventCheck -Event $row.Occurrence.Entry.Id -Date (ConvertTo-WtDateText $row.Occurrence.Original) -Done $Done }
+            else { Set-WtRoutineCheck -Routine $row.RoutineId -Slot $row.Slot -Done $Done }
+            if (-not $result.Success) { throw $result.Reason }
+        } catch { $script:view.TableNote.Text = "체크를 저장하지 못했습니다. $($_.Exception.Message)"; $script:view.TableNote.Visibility = 'Visible' }
+        $script:focusKey = $row.Key
+        Update-WtScheduleView
+        if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
+    }
 }
 
 # 루틴 규칙 글: 매일 · 평일 · 월 · 수 · 금 · 2시간마다 · 09:00 ~ 17:00 (+ 근무 요일만)
@@ -655,25 +658,27 @@ function Set-WtChipText($TextBlock, [string]$Text, [bool]$Done) {
 }
 # 보이는 보기만 다시 그린다(달력 · 표 · 할 일 · 루틴). 오른쪽 사이드바는 어느 보기든 고른 날 목록 또는 편집 폼
 function Update-WtScheduleView {
-    if (-not $script:view) { return }
-    # 고른 날 · 보는 달은 화면 상태다. 어떤 길로든 비면 오늘로 되돌려, 오류가 탭을 열 때마다 남지 않게 한다
-    if ($script:selected -isnot [datetime]) { $script:selected = [datetime]::Today; $script:form = $null }
-    if ($script:month -isnot [datetime]) { $script:month = [datetime]::new($script:selected.Year, $script:selected.Month, 1) }
-    $v = $script:view; $mode = $script:viewMode
-    $v.CalendarHost.Visibility = if ($mode -ceq 'calendar') { 'Visible' } else { 'Collapsed' }
-    $v.TableHost.Visibility = if ($mode -cin 'due', 'table') { 'Visible' } else { 'Collapsed' }
-    $v.RoutineHost.Visibility = if ($mode -ceq 'routines') { 'Visible' } else { 'Collapsed' }
-    $data = Get-WtScheduleData
-    $v.Month.Text = $script:month.ToString('yyyy년 M월', $script:inv)
-    [Windows.Automation.AutomationProperties]::SetName($v.MonthButton, "$($v.Month.Text), 해 · 달 고르기")
-    switch ($mode) {
-        'calendar' { Update-WtScheduleHeader '' ''; Update-WtScheduleCalendar $data }
-        'routines' { Update-WtScheduleRoutineView }
-        default { Update-WtScheduleTable }
+    Invoke-WtReadAction {
+        if (-not $script:view) { return }
+        # 고른 날 · 보는 달은 화면 상태다. 어떤 길로든 비면 오늘로 되돌려, 오류가 탭을 열 때마다 남지 않게 한다
+        if ($script:selected -isnot [datetime]) { $script:selected = [datetime]::Today; $script:form = $null }
+        if ($script:month -isnot [datetime]) { $script:month = [datetime]::new($script:selected.Year, $script:selected.Month, 1) }
+        $v = $script:view; $mode = $script:viewMode
+        $v.CalendarHost.Visibility = if ($mode -ceq 'calendar') { 'Visible' } else { 'Collapsed' }
+        $v.TableHost.Visibility = if ($mode -cin 'due', 'table') { 'Visible' } else { 'Collapsed' }
+        $v.RoutineHost.Visibility = if ($mode -ceq 'routines') { 'Visible' } else { 'Collapsed' }
+        $data = Get-WtScheduleData
+        $v.Month.Text = $script:month.ToString('yyyy년 M월', $script:inv)
+        [Windows.Automation.AutomationProperties]::SetName($v.MonthButton, "$($v.Month.Text), 해 · 달 고르기")
+        switch ($mode) {
+            'calendar' { Update-WtScheduleHeader '' ''; Update-WtScheduleCalendar $data }
+            'routines' { Update-WtScheduleRoutineView }
+            default { Update-WtScheduleTable }
+        }
+        $script:side.Title.Text = Format-WtDate $script:selected 'M월 d일 dddd'
+        $script:side.Add.IsEnabled = -not [bool]$data.Error; $script:side.Add.ToolTip = if ($data.Error) { $data.Error } else { '새로 만들기' }
+        if (-not $script:form) { Show-WtScheduleDay }
     }
-    $script:side.Title.Text = Format-WtDate $script:selected 'M월 d일 dddd'
-    $script:side.Add.IsEnabled = -not [bool]$data.Error; $script:side.Add.ToolTip = if ($data.Error) { $data.Error } else { '새로 만들기' }
-    if (-not $script:form) { Show-WtScheduleDay }
 }
 # 달력 보기: 42칸 · 칩 · 여러 날 막대
 function Update-WtScheduleCalendar($data) {
@@ -682,9 +687,9 @@ function Update-WtScheduleCalendar($data) {
     if ($count -lt 35) { $count = 35 }
     $rows = $count / 7
     $script:view.Days.Rows = $rows
-    $days = Get-WtScheduleDays $data.Entries $start 42
+    $occurrences = @(Get-WtScheduleOccurrences $data.Entries $start $start.AddDays(41))
+    $days = Get-WtScheduleDays $data.Entries $start 42 -Occurrences $occurrences
     $doneKeys = try { Get-WtEventDone } catch { $null }
-    $occurrences = @(Get-WtScheduleOccurrences $data.Entries $start $start.AddDays($count - 1))
     $segments = @(Get-WtScheduleLanes $occurrences $start $rows)
     $calendar = Get-WtCalendarItems $start $start.AddDays(41) -Exclude @('schedule')
     for ($i = 0; $i -lt 42; $i++) {
@@ -811,8 +816,10 @@ function New-WtRoutineList([datetime]$Date) {
                 try {
                     $result = Set-WtRoutineCheck -Routine $s.Tag.Slot.Routine.Id -Slot $s.Tag.Slot.Slot -Done ([bool]$s.IsChecked)
                     if (-not $result.Success) { throw $result.Reason }
-                    Update-WtRoutineList $s.Tag.List $s.Tag.Date
-                    Update-WtScheduleAfterRoutineCheck
+                    Invoke-WtReadAction {
+                        Update-WtRoutineList $s.Tag.List $s.Tag.Date
+                        Update-WtScheduleAfterRoutineCheck
+                    }
                 } catch {
                     $s.Tag.Updating = $true
                     try { $s.IsChecked = -not $s.IsChecked; $s.ToolTip = $_.Exception.Message } finally { $s.Tag.Updating = $false }
@@ -935,17 +942,19 @@ function New-WtEventRow($Occ, [datetime]$Day, $DoneKeys) {
     $row
 }
 function Set-WtScheduleCheck($Check) {
-    if ($Check.Tag.Updating) { return }
-    $occ = $Check.Tag.Occ
-    try {
-        $result = Set-WtEventCheck -Event $occ.Entry.Id -Date (ConvertTo-WtDateText $occ.Original) -Done ([bool]$Check.IsChecked)
-        if (-not $result.Success) { throw $result.Reason }
-        $script:focusKey = $occ.Key
-        Update-WtScheduleView
-        if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
-    } catch {
-        $Check.Tag.Updating = $true
-        try { $Check.IsChecked = -not $Check.IsChecked; $Check.ToolTip = $_.Exception.Message } finally { $Check.Tag.Updating = $false }
+    Invoke-WtReadAction {
+        if ($Check.Tag.Updating) { return }
+        $occ = $Check.Tag.Occ
+        try {
+            $result = Set-WtEventCheck -Event $occ.Entry.Id -Date (ConvertTo-WtDateText $occ.Original) -Done ([bool]$Check.IsChecked)
+            if (-not $result.Success) { throw $result.Reason }
+            $script:focusKey = $occ.Key
+            Update-WtScheduleView
+            if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
+        } catch {
+            $Check.Tag.Updating = $true
+            try { $Check.IsChecked = -not $Check.IsChecked; $Check.ToolTip = $_.Exception.Message } finally { $Check.Tag.Updating = $false }
+        }
     }
 }
 
@@ -1333,20 +1342,22 @@ function Remove-WtScheduleForm {
 
 # 홈 「오늘 일정」 · 다음 일정 줄. 끝낸 회차는 제목 앞에 ✓를 붙이고(Done), 다음 일정 줄 · 메뉴 개수에서는 뺀다
 function Get-WtScheduleHomeItems {
-    $data = Get-WtScheduleData
-    $today = [datetime]::Today
-    $doneKeys = try { Get-WtEventDone } catch { $null }
-    @(foreach ($occurrence in @(Get-WtScheduleOccurrences $data.Entries $today $today)) {
-        $done = $null -ne $doneKeys -and $doneKeys.Contains($occurrence.Key)
-        $when = if ($occurrence.AllDay) { '하루 종일' } else { $occurrence.Start.ToString('HH:mm', $script:inv) + '–' + $(if ($occurrence.End) { $occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) }
-        $details = @($occurrence.Title, $when)
-        $repeatText = Get-WtRepeatLabel $occurrence.Entry.Repeat
-        if ($repeatText) { $details += $repeatText }
-        foreach ($alarm in @($occurrence.Alarms)) { $details += Format-WtAlarm $alarm }
-        if ($done) { $details += '끝냄' }
-        [pscustomobject]@{ Id = $occurrence.Entry.Id; Title = $(if ($done) { '✓ ' + $occurrence.Title } else { $occurrence.Title }); Start = $occurrence.Start; End = $occurrence.End
-            AllDay = $occurrence.AllDay; Alarm = @($occurrence.Alarms).Count -gt 0; ToolTip = (@($details | Where-Object { $_ }) -join "`n"); Done = $done }
-    })
+    Get-WtReadValue ('schedule:home:' + [datetime]::Today.Ticks) {
+        $data = Get-WtScheduleData
+        $today = [datetime]::Today
+        $doneKeys = try { Get-WtEventDone } catch { $null }
+        @(foreach ($occurrence in @(Get-WtScheduleOccurrences $data.Entries $today $today)) {
+            $done = $null -ne $doneKeys -and $doneKeys.Contains($occurrence.Key)
+            $when = if ($occurrence.AllDay) { '하루 종일' } else { $occurrence.Start.ToString('HH:mm', $script:inv) + '–' + $(if ($occurrence.End) { $occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) }
+            $details = @($occurrence.Title, $when)
+            $repeatText = Get-WtRepeatLabel $occurrence.Entry.Repeat
+            if ($repeatText) { $details += $repeatText }
+            foreach ($alarm in @($occurrence.Alarms)) { $details += Format-WtAlarm $alarm }
+            if ($done) { $details += '끝냄' }
+            [pscustomobject]@{ Id = $occurrence.Entry.Id; Title = $(if ($done) { '✓ ' + $occurrence.Title } else { $occurrence.Title }); Start = $occurrence.Start; End = $occurrence.End
+                AllDay = $occurrence.AllDay; Alarm = @($occurrence.Alarms).Count -gt 0; ToolTip = (@($details | Where-Object { $_ }) -join "`n"); Done = $done }
+        })
+    }
 }
 function New-WtNextEventHomeLine {
     $script:homeNext = New-WtNextEventLine @(Get-WtScheduleHomeItems | Where-Object { -not $_.Done })
@@ -1365,14 +1376,8 @@ function Get-WtScheduleStatusItems([datetime]$Now = (Get-Date)) {
     } catch { }
     try {
         $stamp = Get-WtStamp $Now
-        $count = Get-WtScheduleDueCount -Now $stamp
-        $rows = @((Get-WtScheduleDueRows -Now $stamp).Rows)
-        $counts = @{}
-        foreach ($group in 'overdue','today','soon') {
-            $groupRows = @($rows | Where-Object { $_.Group -ceq $group })
-            $counts[$group] = @($groupRows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count +
-                @($groupRows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count
-        }
+        $summary = Get-WtScheduleDueSummary -Now $stamp
+        $count = $summary.Count; $counts = $summary.Counts
         @{ Key = 'due'; Icon = 0xE73E; Text = $(if ($count) { "남은 일 $count" } else { '남은 일 없음' })
             ToolTip = "기한 지남 $($counts.overdue) · 오늘 $($counts.today) · 마감 임박 $($counts.soon)"
             Side = 'right'; Open = @{ Id = 'schedule'; Args = @{ Date = $Now.Date; View = 'due' } } }

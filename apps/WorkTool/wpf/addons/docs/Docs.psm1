@@ -788,20 +788,6 @@ function Update-WtDocsView {
     else { Show-WtDocFolder $first -SelectTree }
 }
 
-# 홈: 즐겨찾기 바로 열기
-function New-WtDocsHomeCard {
-    $pins = @(Get-WtSetting 'docs.pins')
-    if (-not $pins.Count) { return }
-    $card = New-WtCard
-    $col = New-WtStack Vertical
-    [void](Add-WtChild $col (New-WtCardHeader '즐겨찾기 문서' "$($pins.Count)" '문서 열기' 'docs'))
-    [void](Add-WtChild $col (New-WtText '불러오는 중…' 'T.Sub'))
-    $card.Child = $col
-    [void](Start-WtDocRequest 'home' 'pins' '' $col)
-    Wait-WtDocJob 'home'
-    $card
-}
-
 Register-WtAddon -Id 'docs' -Title '문서' -Icon 0xE8B7 -Group '작업' -Order 50 -WarmUp View `
     -NewView { New-WtDocsView } `
     -Refresh { param($view) Update-WtDocsView } `

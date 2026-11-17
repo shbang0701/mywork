@@ -33,6 +33,16 @@ $test = New-WtTestData 'core'
 $wpf = Test-WtTestWpf
 
 try {
+    $readProbe = @{ Calls=0 }
+    $sameRead = Invoke-WtReadAction {
+        $first = @(Get-WtReadValue 'probe' { $readProbe.Calls++; 1; 2 })
+        $second = @(Invoke-WtReadAction { Get-WtReadValue 'probe' { $readProbe.Calls++; 3 } })
+        ($first -join ',') -ceq '1,2' -and ($second -join ',') -ceq '1,2' -and $readProbe.Calls -eq 1
+    }
+    $nextRead = @(Invoke-WtReadAction { Get-WtReadValue 'probe' { $readProbe.Calls++; 3 } })
+    try { Invoke-WtReadAction { [void](Get-WtReadValue 'probe' { 4 }); throw '동작 실패' } } catch { }
+    $released = & (Get-Module Storage) { $null -eq $script:readAction }
+    Assert-Wt '동작 자료: 중첩 갱신은 한 번, 다음 동작은 새 계산, 실패 뒤 참조 해제' ($sameRead -and $readProbe.Calls -eq 2 -and $nextRead[0] -eq 3 -and $released)
     # ---- 코드 검사 ----
     # PowerShell 변수는 대소문자를 가리지 않는다. 함수 안에서 $title과 [string]$Title처럼 대소문자만 다른 이름을 쓰면 같은 변수가 된다
     $clash = foreach ($f in (Get-ChildItem $root -Recurse -Include *.psm1, *.ps1)) {

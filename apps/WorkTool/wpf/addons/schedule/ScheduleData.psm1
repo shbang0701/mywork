@@ -73,19 +73,7 @@ function Save-WtScheduleItems($Store, [object[]]$Items) {
    Entries = 항목마다 ConvertFrom-WtScheduleItem (Items와 같은 순서); Error = 못 읽은 이유 | $null }
 #>
 function Get-WtScheduleData {
-    $stamp = Get-WtStoreStamp 'schedule'
-    if ($script:cache -and $script:cache.Stamp -ceq $stamp) { return $script:cache }
-    $store = Open-WtScheduleStore
-    $err = $store.Error
-    $items = $store.Items
-    $entries = @(foreach ($i in $items) { ConvertFrom-WtScheduleItem $i })
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($e in $entries) {
-        if (-not $e.Id) { continue }
-        if (-not $seen.Add($e.Id) -and $e.State -ne 'deleted') { $e.State = 'broken'; $e.Problem = "id가 앞 항목과 겹칩니다: '$($e.Id)'" }
-    }
-    $script:cache = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $items; Entries = $entries; Error = $err }
-    $script:cache
+    Get-WtConvertedStore -Name 'schedule' -Schema $script:schema -Convert ${function:ConvertFrom-WtScheduleItem} -Cache ([ref]$script:cache) -Migrate ${function:Update-WtScheduleSchema}
 }
 
 # ---- 항목 하나 읽기 ---------------------------------------------------------------------------
@@ -423,47 +411,50 @@ $From ~ $To(날짜, 그날 포함)와 겹치는 회차들. 계산할 수 있는 
 여러 날에 걸친 회차는 시작이 범위 앞이어도 범위에 걸치면 들어간다. 다른 날로 옮긴 회차(changes)는 옮긴 날로 들어간다
 #>
 function Get-WtScheduleOccurrences([object[]]$Entries, [datetime]$From, [datetime]$To) {
-    $lo = $From.Date
-    $hi = $To.Date
-    $list = [System.Collections.Generic.List[object]]::new()
-    foreach ($e in @($Entries)) {
-        if ($null -eq $e -or $e.State -ne 'ok') { continue }
-        if (-not $e.Repeat) {
-            if ($e.Start.Date -le $hi -and $e.LastDay -ge $lo) { $list.Add((New-WtSchOccurrence $e $e.Start.Date $null)) }
-            continue
+    Get-WtReadValue ([Tuple]::Create('occurrences', [object]$Entries, $From.Date, $To.Date)) {
+        $lo = $From.Date
+        $hi = $To.Date
+        $list = [System.Collections.Generic.List[object]]::new()
+        foreach ($e in @($Entries)) {
+            if ($null -eq $e -or $e.State -ne 'ok') { continue }
+            if (-not $e.Repeat) {
+                if ($e.Start.Date -le $hi -and $e.LastDay -ge $lo) { $list.Add((New-WtSchOccurrence $e $e.Start.Date $null)) }
+                continue
+            }
+            $rule = $e.Repeat
+            $span = ($e.LastDay - $e.Start.Date).Days
+            $done = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($d in (Get-WtRepeatDates $rule $e.Start $lo.AddDays(-$span) $hi)) {
+                $key = ConvertTo-WtDateText $d
+                [void]$done.Add($key)
+                if ($rule.Skip.Contains($key)) { continue }
+                $o = New-WtSchOccurrence $e $d $rule.Changes[$key]
+                if ($o.Start.Date -le $hi -and $o.LastDay -ge $lo) { $list.Add($o) }
+            }
+            # 범위 밖의 회차를 이 범위 안으로 옮긴 경우. 반복에 없는 날짜의 바꿈은 쓰지 않는다
+            foreach ($key in @($rule.Changes.Keys)) {
+                if ($done.Contains($key) -or $rule.Skip.Contains($key)) { continue }
+                $c = $rule.Changes[$key]
+                if (-not $c.Timing -or $c.Timing.Start.Date -gt $hi -or $c.Timing.LastDay -lt $lo) { continue }
+                $d = ConvertFrom-WtDateText $key
+                if (-not (Get-WtRepeatDates $rule $e.Start $d $d).Count) { continue }
+                $list.Add((New-WtSchOccurrence $e $d $c))
+            }
         }
-        $rule = $e.Repeat
-        $span = ($e.LastDay - $e.Start.Date).Days
-        $done = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-        foreach ($d in (Get-WtRepeatDates $rule $e.Start $lo.AddDays(-$span) $hi)) {
-            $key = ConvertTo-WtDateText $d
-            [void]$done.Add($key)
-            if ($rule.Skip.Contains($key)) { continue }
-            $o = New-WtSchOccurrence $e $d $rule.Changes[$key]
-            if ($o.Start.Date -le $hi -and $o.LastDay -ge $lo) { $list.Add($o) }
-        }
-        # 범위 밖의 회차를 이 범위 안으로 옮긴 경우. 반복에 없는 날짜의 바꿈은 쓰지 않는다
-        foreach ($key in @($rule.Changes.Keys)) {
-            if ($done.Contains($key) -or $rule.Skip.Contains($key)) { continue }
-            $c = $rule.Changes[$key]
-            if (-not $c.Timing -or $c.Timing.Start.Date -gt $hi -or $c.Timing.LastDay -lt $lo) { continue }
-            $d = ConvertFrom-WtDateText $key
-            if (-not (Get-WtRepeatDates $rule $e.Start $d $d).Count) { continue }
-            $list.Add((New-WtSchOccurrence $e $d $c))
-        }
+        @($list | Sort-Object -Culture 'ko-KR' -Property @{ Expression = { $_.Start } }, @{ Expression = { -not $_.AllDay } }, @{ Expression = { $_.Title } }, @{ Expression = { $_.Key } })
     }
-    @($list | Sort-Object -Culture 'ko-KR' -Property @{ Expression = { $_.Start } }, @{ Expression = { -not $_.AllDay } }, @{ Expression = { $_.Title } }, @{ Expression = { $_.Key } })
 }
 
 <#
 $From부터 $Count일 동안 날마다의 회차 목록(목록의 목록). 여러 날에 걸친 회차는 걸친 날마다 들어간다.
 하루 안에서는 하루 종일 · 앞날부터 이어진 것 → 시각 → 제목 순서
 #>
-function Get-WtScheduleDays([object[]]$Entries, [datetime]$From, [int]$Count) {
+function Get-WtScheduleDays([object[]]$Entries, [datetime]$From, [int]$Count, [object[]]$Occurrences) {
     $lo = $From.Date
     $buckets = [System.Collections.Generic.List[object]]::new()
     for ($i = 0; $i -lt $Count; $i++) { $buckets.Add([System.Collections.Generic.List[object]]::new()) }
-    foreach ($o in (Get-WtScheduleOccurrences $Entries $lo $lo.AddDays($Count - 1))) {
+    if (-not $PSBoundParameters.ContainsKey('Occurrences')) { $Occurrences = @(Get-WtScheduleOccurrences $Entries $lo $lo.AddDays($Count - 1)) }
+    foreach ($o in $Occurrences) {
         $a = [Math]::Max(0, ($o.Start.Date - $lo).Days)
         $b = [Math]::Min($Count - 1, ($o.LastDay - $lo).Days)
         for ($i = $a; $i -le $b; $i++) { $buckets[$i].Add($o) }
@@ -1171,37 +1162,39 @@ function Test-WtRoutineLogItem($Item) {
 
 # Date는 yyyy-MM-dd 또는 datetime. Now는 시험/화면의 같은 시각을 고정할 때만 넘긴다.
 function Get-WtRoutineSlots($Date, [string]$Now = (Get-WtStamp)) {
-    $day = ConvertFrom-WtRoutineDate $Date; $stamp = Get-WtRoutineStamp $Now
-    if (-not $day -or -not $stamp) { throw '날짜 · 앱 시각을 확인하세요' }
-    $entries = @(Get-WtRoutineEntries (Get-WtScheduleData).Store)
-    $log = Open-WtStore -Name 'routine-log' -Schema 1
-    if ($log.State -notin 'ok', 'missing') { throw "routine-log.json은 읽지 못했습니다. ($($log.Error))" }
-    $nowDate = (ConvertFrom-WtStamp $stamp).DateTime
-    $dayOff = if ($entries.Count) { Test-WtRoutineDayOff $day } else { $false }
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    $done = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-    foreach ($item in $log.Items) {
-        $id = [string](Get-WtField $item 'id')
-        if (-not $id -or -not $seen.Add($id) -or (Test-WtDeleted $item) -or -not (Test-WtRoutineLogItem $item)) { continue }
-        # 글 길이를 앞에 써서 id 안의 구분 글자와 충돌하지 않는다.
-        $key = $item.routine.Length.ToString($script:inv) + ':' + $item.routine + $item.slot
-        if (-not $done.ContainsKey($key)) { $done.Add($key, $item) }
-    }
-    foreach ($entry in $entries) {
-        $nextFound = $false
-        foreach ($slot in @(Get-WtRoutineSlotKeys $entry $day $dayOff)) {
-            $key = $entry.Id.Length.ToString($script:inv) + ':' + $entry.Id + $slot
-            $record = if ($done.ContainsKey($key)) { $done[$key] } else { $null }
-            $isNext = $false
-            if ($entry.Freq -ceq 'hourly' -and -not $nextFound) {
-                $time = ConvertFrom-WtTimeText $slot.Substring(11)
-                if ($day.Add($time) -gt $nowDate) { $isNext = $true; $nextFound = $true }
+    Get-WtReadValue ("schedule:slots:$Date/" + ($Now -replace ':\d{2}(?=[+-])', '')) {
+        $day = ConvertFrom-WtRoutineDate $Date; $stamp = Get-WtRoutineStamp $Now
+        if (-not $day -or -not $stamp) { throw '날짜 · 앱 시각을 확인하세요' }
+        $entries = @(Get-WtRoutineEntries (Get-WtScheduleData).Store)
+        $log = Open-WtStore -Name 'routine-log' -Schema 1
+        if ($log.State -notin 'ok', 'missing') { throw "routine-log.json은 읽지 못했습니다. ($($log.Error))" }
+        $nowDate = (ConvertFrom-WtStamp $stamp).DateTime
+        $dayOff = if ($entries.Count) { Test-WtRoutineDayOff $day } else { $false }
+        $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $done = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+        foreach ($item in $log.Items) {
+            $id = [string](Get-WtField $item 'id')
+            if (-not $id -or -not $seen.Add($id) -or (Test-WtDeleted $item) -or -not (Test-WtRoutineLogItem $item)) { continue }
+            # 글 길이를 앞에 써서 id 안의 구분 글자와 충돌하지 않는다.
+            $key = $item.routine.Length.ToString($script:inv) + ':' + $item.routine + $item.slot
+            if (-not $done.ContainsKey($key)) { $done.Add($key, $item) }
+        }
+        foreach ($entry in $entries) {
+            $nextFound = $false
+            foreach ($slot in @(Get-WtRoutineSlotKeys $entry $day $dayOff)) {
+                $key = $entry.Id.Length.ToString($script:inv) + ':' + $entry.Id + $slot
+                $record = if ($done.ContainsKey($key)) { $done[$key] } else { $null }
+                $isNext = $false
+                if ($entry.Freq -ceq 'hourly' -and -not $nextFound) {
+                    $time = ConvertFrom-WtTimeText $slot.Substring(11)
+                    if ($day.Add($time) -gt $nowDate) { $isNext = $true; $nextFound = $true }
+                }
+                # Time: 매일 · 요일 루틴의 시각(HH:mm, 설계 14.2) 또는 $null. 시간마다 루틴은 차례 키에 시각이 있다
+                # Links: 루틴의 관련 항목(13.1). 줄 끝 개수가 이것을 읽는다(전에는 빠져 있어 루틴 줄에 개수가 안 보였다)
+                $routineTime = if ($null -ne $entry.Time) { $entry.Time.ToString('hh\:mm', $script:inv) } else { $null }
+                [pscustomobject]@{ Routine = [pscustomobject]@{ Id = $entry.Id; Title = $entry.Title; Freq = $entry.Freq; Time = $routineTime; Links = @($entry.Links) }; Slot = $slot
+                    Done = $null -ne $record; DoneAt = $(if ($record) { $record.at } else { $null }); Next = $isNext }
             }
-            # Time: 매일 · 요일 루틴의 시각(HH:mm, 설계 14.2) 또는 $null. 시간마다 루틴은 차례 키에 시각이 있다
-            # Links: 루틴의 관련 항목(13.1). 줄 끝 개수가 이것을 읽는다(전에는 빠져 있어 루틴 줄에 개수가 안 보였다)
-            $routineTime = if ($null -ne $entry.Time) { $entry.Time.ToString('hh\:mm', $script:inv) } else { $null }
-            [pscustomobject]@{ Routine = [pscustomobject]@{ Id = $entry.Id; Title = $entry.Title; Freq = $entry.Freq; Time = $routineTime; Links = @($entry.Links) }; Slot = $slot
-                Done = $null -ne $record; DoneAt = $(if ($record) { $record.at } else { $null }); Next = $isNext }
         }
     }
 }
@@ -1508,41 +1501,60 @@ function Get-WtScheduleMonthRows([datetime]$Month, [string]$Now = (Get-WtStamp))
 
 # 할 일: 기한 지남 → 오늘 → 마감 임박(설계 14.5). 줄마다 Group(overdue · today · soon)을 붙인다
 function Get-WtScheduleDueRows([string]$Now = (Get-WtStamp)) {
-    $today = (ConvertFrom-WtStamp $Now).Date
-    $data = Get-WtScheduleData
-    if ($data.Error) { throw $data.Error }
-    $problems = @(); $doneKeys = try { Get-WtEventDone } catch { $problems += $_.Exception.Message; $null }
-    $rows = [System.Collections.Generic.List[object]]::new()
-    foreach ($occ in @(Get-WtScheduleOccurrences $data.Entries $today.AddDays(-$script:dueOverdueDays) $today.AddDays($script:dueSoonDays))) {
-        $row = New-WtScheduleEventRow $occ $doneKeys
-        if ($row.Start.Date -le $today -and $row.LastDay -ge $today) { $row.Group = 'today'; $row.Date = $today }
-        elseif (-not $row.Done -and $row.DueDate -lt $today -and $row.DueDate -ge $today.AddDays(-$script:dueOverdueDays)) { $row.Group = 'overdue' }
-        elseif (-not $row.Done -and $row.AllDay -and $row.Multi -and $row.Start.Date -gt $today -and $row.LastDay -le $today.AddDays($script:dueSoonDays)) { $row.Group = 'soon' }
-        else { continue }
-        $rows.Add($row)
+    Get-WtReadValue ("schedule:due:" + ($Now -replace ':\d{2}(?=[+-])', '')) {
+        $today = (ConvertFrom-WtStamp $Now).Date
+        $data = Get-WtScheduleData
+        if ($data.Error) { throw $data.Error }
+        $problems = @(); $doneKeys = try { Get-WtEventDone } catch { $problems += $_.Exception.Message; $null }
+        $rows = [System.Collections.Generic.List[object]]::new()
+        foreach ($occ in @(Get-WtScheduleOccurrences $data.Entries $today.AddDays(-$script:dueOverdueDays) $today.AddDays($script:dueSoonDays))) {
+            $row = New-WtScheduleEventRow $occ $doneKeys
+            if ($row.Start.Date -le $today -and $row.LastDay -ge $today) { $row.Group = 'today'; $row.Date = $today }
+            elseif (-not $row.Done -and $row.DueDate -lt $today -and $row.DueDate -ge $today.AddDays(-$script:dueOverdueDays)) { $row.Group = 'overdue' }
+            elseif (-not $row.Done -and $row.AllDay -and $row.Multi -and $row.Start.Date -gt $today -and $row.LastDay -le $today.AddDays($script:dueSoonDays)) { $row.Group = 'soon' }
+            else { continue }
+            $rows.Add($row)
+        }
+        try { foreach ($r in @(Get-WtScheduleRoutineRows $today -Now $Now)) { $r.Group = 'today'; $rows.Add($r) } } catch { $problems += $_.Exception.Message }
+        $order = @{ overdue = 0; today = 1; soon = 2 }
+        $result = New-WtScheduleRowResult $rows.ToArray() $problems $today.AddDays(-$script:dueOverdueDays) $today.AddDays($script:dueSoonDays)
+        # 묶음 안: 기한 지남은 기준일 · 날 순, 오늘은 2.4 순서, 마감 임박은 끝나는 날 순
+        $result.Rows = @($result.Rows | Sort-Object -Stable -Property @{ Expression = { $order[$_.Group] } }, @{ Expression = { if ($_.Group -ceq 'soon') { $_.LastDay } else { [datetime]::MinValue } } })
+        $result
     }
-    try { foreach ($r in @(Get-WtScheduleRoutineRows $today -Now $Now)) { $r.Group = 'today'; $rows.Add($r) } } catch { $problems += $_.Exception.Message }
-    $order = @{ overdue = 0; today = 1; soon = 2 }
-    $result = New-WtScheduleRowResult $rows.ToArray() $problems $today.AddDays(-$script:dueOverdueDays) $today.AddDays($script:dueSoonDays)
-    # 묶음 안: 기한 지남은 기준일 · 날 순, 오늘은 2.4 순서, 마감 임박은 끝나는 날 순
-    $result.Rows = @($result.Rows | Sort-Object -Stable -Property @{ Expression = { $order[$_.Group] } }, @{ Expression = { if ($_.Group -ceq 'soon') { $_.LastDay } else { [datetime]::MinValue } } })
-    $result
 }
 
 # 할 일 수: 끝내지 않은 일정 줄 + 오늘 차례를 다 끝내지 않은 루틴(시간마다는 루틴 하나로 센다). 보기 단추 · 메뉴 개수가 같이 쓴다.
 # 달력에서 날짜를 누를 때마다 불리므로, 같은 날 · 같은 일정 · 체크 · 휴무일 파일이면 60초 동안 다시 세지 않는다
-# (휴가는 다른 탭의 달력 출처라 표식이 없어 60초 안에 따라온다. 메뉴 개수는 1분마다 다시 센다)
+# 다른 달력 출처의 오늘 자료도 비교해 휴가 변경을 바로 반영한다. 메뉴 개수는 1분마다 다시 센다.
 $script:dueCountCache = $null
 function Get-WtScheduleDueCount([string]$Now = (Get-WtStamp)) {
-    $stamp = ConvertFrom-WtStamp $Now
-    $key = @((ConvertTo-WtDateText $stamp.Date), (Get-WtStoreStamp 'schedule'), (Get-WtStoreStamp 'event-log'), (Get-WtStoreStamp 'routine-log'),
-        (Get-WtStoreStamp 'holidays'), (ConvertTo-Json -Compress -Depth 5 -InputObject @((Get-WtSetting 'work.days'), (Get-WtSetting 'work.periods')))) -join '#'
-    $cache = $script:dueCountCache
-    if ($cache -and $cache.Key -ceq $key -and [math]::Abs(($stamp - $cache.At).TotalSeconds) -lt 60) { return $cache.Count }
-    $rows = @((Get-WtScheduleDueRows -Now $Now).Rows)
-    $count = @($rows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count + @($rows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count
-    $script:dueCountCache = [pscustomobject]@{ Key = $key; At = $stamp; Count = $count }
-    $count
+    (Get-WtScheduleDueSummary -Now $Now).Count
+}
+
+# 배지와 상태 줄은 같은 집계를 쓴다. 행은 보관하지 않고 개수만 기존 60초 캐시에 둔다.
+function Get-WtScheduleDueSummary([string]$Now = (Get-WtStamp)) {
+    Get-WtReadValue ("schedule:summary:" + ($Now -replace ':\d{2}(?=[+-])', '')) {
+        $stamp = ConvertFrom-WtStamp $Now
+        $stores = Get-WtCalendarStores -Exclude @('schedule')
+        $names = [Collections.Generic.HashSet[string]]::new([string[]]@('schedule','event-log','routine-log','holidays'), [StringComparer]::Ordinal)
+        $calendarKey = if ($stores.Complete) { foreach ($name in $stores.Names) { [void]$names.Add($name) }; $stores.Key }
+            else { ConvertTo-Json -Compress -Depth 5 -InputObject (Get-WtCalendarItems $stamp.Date $stamp.Date -Exclude @('schedule')) }
+        $stamps = @(foreach ($name in $names) { Get-WtStoreStamp $name })
+        $key = @((ConvertTo-WtDateText $stamp.Date), ($stamps -join '#'), $calendarKey,
+            (ConvertTo-Json -Compress -Depth 5 -InputObject @((Get-WtSetting 'work.days'), (Get-WtSetting 'work.periods')))) -join '#'
+        $cache = $script:dueCountCache
+        if ($cache -and $cache.Key -ceq $key -and [math]::Abs(($stamp - $cache.At).TotalSeconds) -lt 60) { return $cache }
+        $rows = @((Get-WtScheduleDueRows -Now $Now).Rows)
+        $counts = @{}
+        foreach ($group in 'overdue','today','soon') {
+            $groupRows = @($rows | Where-Object { $_.Group -ceq $group })
+            $counts[$group] = @($groupRows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count +
+                @($groupRows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count
+        }
+        $script:dueCountCache = [pscustomobject]@{ Key = $key; At = $stamp; Count = $counts.overdue + $counts.today + $counts.soon; Counts = $counts }
+        $script:dueCountCache
+    }
 }
 
 # 찾기: 오늘 앞뒤 365일(식 속 날짜가 밖이면 넓힘)의 회차 + 오늘 루틴(식에 is:routine이 있으면 기간 안 날마다), 맞는 것만 Limit줄까지
@@ -1582,4 +1594,4 @@ Export-ModuleMember -Function Open-WtScheduleStore, Save-WtScheduleItems, Get-Wt
     New-WtRoutine, Save-WtRoutine, Set-WtRoutineDeleted, Get-WtRoutineSlots, Set-WtRoutineCheck, Get-WtRoutineHistory,
     Get-WtEventDone, Set-WtEventCheck, Get-WtScheduleLanes, Get-WtScheduleLinks, Get-WtScheduleItemLinks, Add-WtScheduleLink, Remove-WtScheduleLink,
     ConvertFrom-WtScheduleTagText, ConvertFrom-WtScheduleQuery, Test-WtScheduleRowMatch, Get-WtScheduleDue, Get-WtScheduleRoutineRows,
-    Get-WtScheduleMonthRows, Get-WtScheduleDueRows, Get-WtScheduleDueCount, Find-WtScheduleRows, Get-WtRoutineEntries, ConvertFrom-WtRoutineItem
+    Get-WtScheduleMonthRows, Get-WtScheduleDueRows, Get-WtScheduleDueCount, Get-WtScheduleDueSummary, Find-WtScheduleRows, Get-WtRoutineEntries, ConvertFrom-WtRoutineItem

@@ -475,7 +475,7 @@ function Complete-WtFlowRun($Run) {
     Stop-WtWork $Run.Pump
     foreach ($r in $Run.Readers) { try { $r.Dispose() } catch { } }
     try { $Run.Process.Dispose() } catch { }
-    try { Save-WtFlowRun $rec } catch { $Run | Add-Member -NotePropertyName SaveError -NotePropertyValue $_.Exception.Message -Force }
+    Save-WtFlowRunResult $Run
     $status
 }
 
@@ -524,6 +524,12 @@ function Save-WtFlowRun($Record) {
     $rest = @(Get-WtFlowRuns | Where-Object { $_.id -ne $Record.id })
     $all = @(@($Record) + $rest | Sort-Object { [string]$_.started } -Descending | Select-Object -First $script:maxRuns)
     Write-WtStore -Name 'workflow-runs' -Schema $script:schema -Items $all
+}
+
+# 앱 안 실행과 콘솔 종료가 같은 실패 안내를 쓴다. 받아들인 쓰기의 재시도는 저장 통로가 맡는다.
+function Save-WtFlowRunResult($Run) {
+    try { Save-WtFlowRun $Run.Record }
+    catch { $Run | Add-Member -NotePropertyName SaveError -NotePropertyValue $_.Exception.Message -Force }
 }
 
 # 실행 기록 하나. 넘긴 값만 남긴다 (스위치는 기본값과 다를 때만). 업무는 이름이 아니라 id로 가리킨다
@@ -1465,7 +1471,8 @@ function Update-WtFlowRunState {
             try { $exited = $c.Process.HasExited } catch { }
             if (-not $exited) { continue }
             $c.Record.ended = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-            try { Save-WtFlowRun $c.Record } catch { }
+            Save-WtFlowRunResult $c
+            if ($u.Count -and $c.PSObject.Properties['SaveError']) { Set-WtFlowNote "실행 기록을 저장하지 못했습니다: $($c.SaveError)" }
             try { $c.Process.Dispose() } catch { }
             [void]$script:consoles.Remove($c)
             if ($u.Count) { Update-WtFlowHelp }
@@ -1999,30 +2006,6 @@ function New-WtFlowsView {
 function Update-WtFlowsView {
     Update-WtFlowTree
     Update-WtFlowCommands
-}
-
-# 홈: 저장한 업무와 그 업무의 마지막 결과
-function New-WtFlowsHomeCard {
-    $flows = @(Get-WtFlows | Select-Object -First 4)
-    if (-not $flows.Count) { return }
-    $runs = @(Get-WtFlowRuns)
-    $card = New-WtCard
-    $col = New-WtStack Vertical
-    [void](Add-WtChild $col (New-WtCardHeader '업무' '' '업무 열기' 'workflows'))
-    foreach ($f in $flows) {
-        $last = $runs | Where-Object { $_.flowId -eq $f.id } | Select-Object -First 1
-        $name = New-WtButton ([string]$f.title) -Kind Link
-        $name.Tag = [string]$f.id
-        $name.HorizontalAlignment = 'Left'
-        $name.Add_Click({ param($s, $e) $script:pendingFlow = [string]$s.Tag; Select-WtPage 'workflows' })
-        $state = if ($last) {
-            $look = Get-WtFlowStatusLook ([string]$last.status) ([bool]$last.whatIf)
-            New-WtTag $look.Text $look.Bg $look.Fg $look.Icon
-        } else { New-WtText '아직 실행 안 함' 'T.Sub' }
-        [void](Add-WtChild $col (New-WtListRow @($state, $name)))
-    }
-    $card.Child = $col
-    $card
 }
 
 # 앱을 끄면 앱 안 실행은 멈춘다 (창 없는 프로세스를 남기지 않는다). 콘솔 창은 따로 도는 창이라 그대로 둔다

@@ -1566,11 +1566,6 @@ function Invoke-WtMemoAction([string]$Action, [string]$Id, $Value) {
 
 # ---- 목록: 그리기 -------------------------------------------------------------------------------
 
-# 줄 하나를 Find-WtMemo 결과 줄에서 만든다. 행 캐시는 메모 객체와 같은 이름을 쓴다
-function ConvertTo-WtMemoListItem($Row) {
-    New-WtMemoListItem ([pscustomobject]@{ id = $Row.Id; title = $Row.Title; body = [string]$Row.Snippet; updated = $Row.Updated; pinned = $Row.Pinned })
-}
-
 function Get-WtMemoListResult {
     $query = Get-WtMemoFilterText
     $firstList = $script:firstMemoList
@@ -2150,33 +2145,6 @@ function Test-WtMemoShortcut([string]$Key) {
         $script:shortcutStamp = $stamp
     }
     $script:shortcutIds.Contains($Key)
-}
-
-function New-WtMemoHomeCard {
-    $key = @((Get-WtStoreStamp 'memo'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
-    if ($script:homeKey -ceq $key -and $script:homeCard -and -not $script:homeCard.Parent) { return $script:homeCard }
-    $items = @(Get-WtMemoSorted (Get-WtMemoItems))
-    $recent = @($items | Select-Object -First 3)
-    $card = New-WtCard
-    $col = New-WtStack Vertical
-    [void](Add-WtChild $col (New-WtCardHeader '최근 메모' '' '메모 열기' 'memo'))
-    foreach ($m in $recent) {
-        $t = New-WtStack Vertical 2
-        $name = New-WtText $m.title 'T.Strong'
-        $name.TextTrimming = 'CharacterEllipsis'
-        $name.TextWrapping = 'NoWrap'
-        [void](Add-WtChild $t $name)
-        $snip = New-WtText (Get-WtMarkdownSnippet ([string]$m.body)) 'T.Sub'
-        $snip.TextTrimming = 'CharacterEllipsis'
-        $snip.TextWrapping = 'NoWrap'
-        [void](Add-WtChild $t $snip)
-        $when = New-WtText (Format-WtMemoTime $m.updated) 'T.Sub'
-        [void](Add-WtChild $col (New-WtListRow @($when, $t)))
-    }
-    if (-not $items.Count) { [void](Add-WtChild $col (New-WtText '메모가 없습니다.' 'T.Sub')) }
-    $card.Child = $col
-    $script:homeCard = $card; $script:homeKey = $key
-    $card
 }
 
 # ---- 다른 탭과 잇기 (일정 2단계, 설계 13.5). 코어 등록 목록 -Related로만 불린다 ----------------------

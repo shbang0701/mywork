@@ -213,6 +213,28 @@ function Get-WtAddon {
     $list | Where-Object { $_.Required -or $disabled -notcontains $_.Id }
 }
 
+# 표시 자료와 변경 확인은 같은 활성 출처 목록을 쓴다.
+function Get-WtActiveCalendarSources([string[]]$Exclude = @()) {
+    foreach ($source in @(Get-WtCalendarSource)) {
+        if ($source.Id -cin $Exclude -or ($source.Page -and $source.Page -cin $Exclude)) { continue }
+        if ($source.Page) {
+            $addon = Get-WtAddon -Id $source.Page
+            if (-not $addon -or $addon.Id -cne $source.Page) { continue }
+        }
+        $source
+    }
+}
+function Get-WtCalendarStores([string[]]$Exclude = @()) {
+    $names = [Collections.Generic.List[string]]::new()
+    $keys = [Collections.Generic.List[string]]::new()
+    foreach ($source in @(Get-WtActiveCalendarSources $Exclude)) {
+        $declared = Get-WtCalendarStoreRegistration $source.Id
+        if ($null -eq $declared) { return @{ Complete = $false } }
+        foreach ($name in $declared.Names) { $names.Add($name) }
+        $keys.Add($declared.Version.ToString([Globalization.CultureInfo]::InvariantCulture))
+    }
+    @{ Complete = $true; Names = $names.ToArray(); Key = ($keys -join '|') }
+}
 # From ~ To(그날 포함). 한 출처의 실패는 Errors에 남기고 나머지는 계속 모은다.
 function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude = @()) {
     $items = [System.Collections.Generic.List[object]]::new()
@@ -221,10 +243,7 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
     if ($From.Date -gt $To.Date -or -not (ConvertFrom-WtDateText (ConvertTo-WtDateText $From)) -or -not (ConvertFrom-WtDateText (ConvertTo-WtDateText $To))) {
         return [pscustomobject]@{ Success = $false; Reason = '날짜 범위를 확인하세요'; Items = @(); Days = @(); Errors = @() }
     }
-    $enabled = @(Get-WtAddon | ForEach-Object Id)
-    foreach ($source in @(Get-WtCalendarSource)) {
-        if ($source.Page -and ($source.Page -cnotin $enabled -or $source.Page -cin $Exclude)) { continue }
-        if ($source.Id -cin $Exclude) { continue }
+    foreach ($source in @(Get-WtActiveCalendarSources $Exclude)) {
         try {
             $batch = @(& $source.CalendarItems $From.Date $To.Date)
             $accepted = [System.Collections.Generic.List[object]]::new()
@@ -257,5 +276,5 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
         Items = $sorted; Days = $days.ToArray(); Errors = $errors.ToArray() }
 }
 
-Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource,
+Export-ModuleMember -Function Get-WtCalendarStores, Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource,
     Get-WtDateMenuItems, Test-WtCalendarPartDay

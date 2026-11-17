@@ -148,6 +148,29 @@ try {
     Assert-WtTest '일정 v2: 다른 날로 옮긴 회차는 옮긴 날에, 바꾼 칸만 바뀐다' ($moved.Count -eq 1 -and $moved[0].Key -eq 's1@2026-11-05' -and $moved[0].Changed -and
         $moved[0].Start -eq (& $d '2026-11-06').AddHours(10) -and $moved[0].Note -eq '목요일 휴무로 금요일에' -and $moved[0].Title -eq '주간 회의' -and
         -not @(Get-WtScheduleOccurrences @($byId.s1) (& $d '2026-11-05') (& $d '2026-11-05')).Count)
+    $sharedOccurrences = Invoke-WtReadAction {
+        $from = [datetime]'2026-10-25'; $to = $from.AddDays(41)
+        $first = @(Get-WtScheduleOccurrences $data.Entries $from $to)
+        $same = @(Get-WtScheduleOccurrences $data.Entries $from $to)
+        $entry = $first[0].Entry.PSObject.Copy(); $entry.Title = '별도 배열'; $entry.Repeat = $null
+        $entry.Start = $first[0].Start; $entry.End = $first[0].End; $entry.LastDay = $first[0].LastDay
+        $other = @(Get-WtScheduleOccurrences @($entry) $from $to)
+        $first.Count -gt 0 -and [object]::ReferenceEquals($first[0],$same[0]) -and
+            -not [object]::ReferenceEquals($first[0],$other[0]) -and $other[0].Title -ceq '별도 배열'
+    }
+    Assert-WtTest '동작 회차: 같은 배열·범위는 한 번 전개, 같은 ID의 별도 배열은 독립 계산' $sharedOccurrences
+    foreach ($count in 35,42) {
+        $from = [datetime]'2026-10-25'
+        $occ = @(Get-WtScheduleOccurrences $data.Entries $from $from.AddDays(41))
+        $expected = Get-WtScheduleDays $data.Entries $from 42
+        $shared = Get-WtScheduleDays $data.Entries $from 42 -Occurrences $occ
+        $last = @(Get-WtScheduleOccurrences $data.Entries $from $from.AddDays($count - 1))
+        Assert-WtTest "달력 회차 공유: $count 칸의 날짜 묶음·막대·끝날·옮긴 회차 순서 유지" (
+            (Get-WtTestJson $shared) -ceq (Get-WtTestJson $expected) -and
+            (Get-WtTestJson @(Get-WtScheduleLanes $occ $from ($count / 7))) -ceq (Get-WtTestJson @(Get-WtScheduleLanes $last $from ($count / 7))))
+    }
+    $emptyDays = Get-WtScheduleDays $data.Entries ([datetime]'2026-10-25') 42 -Occurrences @()
+    Assert-WtTest '달력 회차 공유: 빈 전개 결과도 다시 전개하지 않는다' (@($emptyDays | ForEach-Object { $_ }).Count -eq 0 -and $emptyDays.Count -eq 42)
     $days = Get-WtScheduleDays $data.Entries (& $d '2026-10-30') 3
     $daysText = (@($days | ForEach-Object { (@($_) | ForEach-Object { $_.Entry.Id.Substring(0, 2) }) -join '+' }) -join ' | ')
     Assert-WtTest '일정 v2: 날마다 목록 (자정을 넘긴 일정은 다음 날에도, 하루 종일 · 이어진 일정이 먼저)' ($daysText -eq 'c6 | c1+c6+c3 | ') $daysText
@@ -758,10 +781,90 @@ try {
     $farFind = Find-WtScheduleRows '2024-03-01' -Now $now
     Assert-WtTest '일정 찾기: 식 속 날짜가 앞뒤 1년 밖이면 찾는 기간을 그 날짜까지 넓힌다' ($farFind.Success -and $farFind.From -le [datetime]'2024-03-01') "$($farFind.From)"
 
+    # 집계는 행을 한 번만 전개하고, 만료·날짜·저장·외부 변경은 다음 조회에 반영한다.
+    $summaryChecks = & (Get-Module ScheduleData) {
+        param($Now, $Event)
+        $original = ${function:Get-WtScheduleDueRows}
+        $script:summaryRowsOriginal = $original; $script:summaryRowsCalls = 0; $script:dueCountCache = $null
+        function script:Get-WtScheduleDueRows { param($Now) $script:summaryRowsCalls++; & $script:summaryRowsOriginal -Now $Now }
+        try {
+            $count = Get-WtScheduleDueCount -Now $Now
+            $summary = Get-WtScheduleDueSummary -Now $Now
+            $once = $script:summaryRowsCalls -eq 1 -and $summary.Count -eq $count -and $count -eq 6
+            [void](Get-WtScheduleDueSummary -Now '2026-11-05T12:01:00+09:00')
+            $expired = $script:summaryRowsCalls -eq 2
+            [void](Get-WtScheduleDueSummary -Now '2026-11-06T00:00:00+09:00')
+            $dateChanged = $script:summaryRowsCalls -eq 3
+            [void](Get-WtScheduleDueSummary -Now $Now)
+            [void](Set-WtEventCheck -Event $Event -Date '2026-11-05' -Done $true -At $Now)
+            $saved = (Get-WtScheduleDueSummary -Now $Now).Count -eq 5 -and $script:summaryRowsCalls -eq 5
+            Wait-WtTestWrites
+            $path = Get-WtStorePath 'schedule'; $at = [IO.File]::GetLastWriteTimeUtc($path)
+            $raw = [IO.File]::ReadAllText($path)
+            [IO.File]::WriteAllText($path, $raw.Replace('오늘 일','오늘 건'), [Text.UTF8Encoding]::new($false))
+            [IO.File]::SetLastWriteTimeUtc($path, $at)
+            [void](Get-WtScheduleDueSummary -Now $Now)
+            $external = $script:summaryRowsCalls -eq 6
+            $signal = @{ Text = '가짜 휴가' }
+            Register-WtCalendarSource -Id 'test-summary' -CalendarItems ({ param($From,$To)
+                @{Date=$From;Kind='leave';Text=$signal.Text;Style='leave';Id='fake';AllDay=$true;Time=$null}
+            }.GetNewClosure())
+            [void](Get-WtScheduleDueSummary -Now $Now)
+            $signal.Text = '바뀐 휴가'
+            [void](Get-WtScheduleDueSummary -Now $Now)
+            @{ Once=$once; Expired=$expired; Date=$dateChanged; Saved=$saved; External=$external; Calendar=$script:summaryRowsCalls -eq 8 }
+        } finally {
+            Set-Item Function:script:Get-WtScheduleDueRows $original
+            Register-WtCalendarSource -Id 'test-summary' -CalendarItems $null
+            Remove-Variable summaryRowsOriginal, summaryRowsCalls -Scope Script
+        }
+    } $now $todayOne
+    Assert-WtTest '상태 집계: 배지·상태가 할 일 전개 한 번을 공유' $summaryChecks.Once
+    Assert-WtTest '상태 집계: 1분 만료·날짜 넘김에 다시 계산' ($summaryChecks.Expired -and $summaryChecks.Date)
+    Assert-WtTest '상태 집계: 체크 저장·같은 크기/시각 외부 변경·다른 달력 출처 변경 즉시 반영' ($summaryChecks.Saved -and $summaryChecks.External -and $summaryChecks.Calendar)
+    # 저장소를 선언한 출처는 캐시 적중 때 표시 자료를 만들지 않는다. SHA-256은 다음 조회에도 확인한다.
+    $calendarProbe = @{ Calls=0 }
+    $calendarPath = Get-WtStorePath 'calendar-probe'
+    [IO.File]::WriteAllText($calendarPath, '{"schema":1,"items":[{"off":1}]}', [Text.UTF8Encoding]::new($false))
+    Register-WtCalendarSource -Id 'test-store-calendar' -CalendarItems ({
+        param($From,$To)
+        $calendarProbe.Calls++
+        if ((Open-WtStore 'calendar-probe').Items[0].off -eq 1) {
+            @{ Date=$From;Kind='leave';Text='가짜 휴가';Style='leave';Id='probe';AllDay=$true;Time=$null }
+        }
+    }.GetNewClosure())
+    Register-WtCalendarStores -Id 'test-store-calendar' -Names @('calendar-probe')
+    try {
+        $firstCount = Get-WtScheduleDueCount -Now $now
+        $againCount = Get-WtScheduleDueCount -Now $now
+        Assert-WtTest '상태 키: 선언한 저장소가 같으면 달력 자료는 한 번만 조회' ($calendarProbe.Calls -eq 1 -and $firstCount -eq $againCount) $calendarProbe.Calls
+        $at = [IO.File]::GetLastWriteTimeUtc($calendarPath)
+        [IO.File]::WriteAllText($calendarPath, '{"schema":1,"items":[{"off":0}]}', [Text.UTF8Encoding]::new($false))
+        [IO.File]::SetLastWriteTimeUtc($calendarPath,$at)
+        $changedCount = Get-WtScheduleDueCount -Now $now
+        Assert-WtTest '상태 키: 선언한 출처의 같은 크기·시각 외부 변경도 즉시 반영' ($calendarProbe.Calls -eq 2 -and $changedCount -eq $firstCount+1) "$firstCount/$changedCount"
+        Register-WtCalendarSource -Id 'test-store-calendar' -CalendarItems { param($From,$To) }
+        Assert-WtTest '상태 키: 출처를 바꿔 등록하면 옛 저장소 선언은 지워져 일반 조회로 복귀' (-not (Get-WtCalendarStores -Exclude @('schedule')).Complete)
+    } finally { Register-WtCalendarSource -Id 'test-store-calendar' -CalendarItems $null }
+    Register-WtCalendarSource -Id 'case-probe' -CalendarItems { }
+    Register-WtCalendarStores -Id 'case-probe' -Names @('calendar-probe')
+    Register-WtCalendarSource -Id 'CASE-PROBE' -CalendarItems { }
+    try {
+        Assert-WtTest '상태 키: 대소문자가 다른 출처의 선언을 섞지 않는다' (-not (Get-WtCalendarStores -Exclude @('schedule')).Complete)
+        Register-WtCalendarStores -Id 'CASE-PROBE' -Names @('calendar-probe')
+        $beforeKey = (Get-WtCalendarStores -Exclude @('schedule')).Key
+        Register-WtCalendarSource -Id 'case-probe' -CalendarItems { }
+        Register-WtCalendarStores -Id 'case-probe' -Names @('calendar-probe')
+        $afterKey = (Get-WtCalendarStores -Exclude @('schedule')).Key
+        $shape = @((Get-WtCalendarSource | Where-Object Id -ceq 'case-probe').PSObject.Properties.Name) -join ','
+        Assert-WtTest '상태 키: 같은 저장소로 출처를 재등록해도 키를 바꾸며 공개 출처 모양은 유지' ($beforeKey -cne $afterKey -and $shape -ceq 'Id,Page,CalendarItems') $shape
+    } finally {
+        Register-WtCalendarSource -Id 'case-probe' -CalendarItems $null
+        Register-WtCalendarSource -Id 'CASE-PROBE' -CalendarItems $null
+    }
     $statusTextChecks = & (Get-Module Schedule) {
         $homeItemsFunction = ${function:Get-WtScheduleHomeItems}
-        $dueCountFunction = (Get-Command Get-WtScheduleDueCount).ScriptBlock
-        $dueRowsFunction = (Get-Command Get-WtScheduleDueRows).ScriptBlock
+        $dueSummaryFunction = (Get-Command Get-WtScheduleDueSummary).ScriptBlock
         try {
             $day=[datetime]::Today
             $script:statusTestDay=$day
@@ -773,20 +876,15 @@ try {
                     [pscustomobject]@{ Title='점검';Start=$script:statusTestDay.AddHours(14);End=$script:statusTestDay.AddHours(15);Done=$false;AllDay=$false;ToolTip="점검`n14:00–15:00`n매일`n10분 전" }
                 )
             }
-            function script:Get-WtScheduleDueCount { param($Now) $script:statusTestCount }
-            function script:Get-WtScheduleDueRows {
+            function script:Get-WtScheduleDueSummary {
                 param($Now)
-                @{ Rows=@(
-                    @{Kind='event';Group='overdue';Done=$false}, @{Kind='event';Group='today';Done=$false},
-                    @{Kind='routine';Group='today';RoutineId='r';RoutineDone=$false}, @{Kind='routine';Group='today';RoutineId='r';RoutineDone=$false},
-                    @{Kind='event';Group='soon';Done=$true}) }
+                @{ Count=$script:statusTestCount; Counts=$(if ($script:statusTestCount) { @{overdue=1;today=2;soon=0} } else { @{overdue=0;today=0;soon=0} }) }
             }
             $script:statusTestCount=3
             $next=@(Get-WtScheduleStatusItems ($day.AddHours(12)))
             $running=@(Get-WtScheduleStatusItems ($day.AddHours(14.5)))
             $none=@(Get-WtScheduleStatusItems ($day.AddHours(16)))
             $script:statusTestCount=0
-            function script:Get-WtScheduleDueRows { param($Now) @{Rows=@()} }
             $zero=@(Get-WtScheduleStatusItems ($day.AddHours(16)))
             @{ Next=$next[0].Text -ceq '다음 14:00 점검' -and $next[0].ToolTip -ceq "점검`n14:00–15:00`n매일`n10분 전" -and $next[0].Open.Args.Date -eq $day -and $next[0].Open.Args.View -ceq 'calendar'
                 Icons=$next[0].Icon -eq 0xE787 -and $running[0].Icon -eq 0xE787 -and $next[1].Icon -eq 0xE73E -and $zero[0].Icon -eq 0xE73E
@@ -795,8 +893,7 @@ try {
                     $zero.Count -eq 1 -and $zero[0].Text -ceq '남은 일 없음' -and $zero[0].ToolTip -ceq '기한 지남 0 · 오늘 0 · 마감 임박 0' }
         } finally {
             Set-Item Function:script:Get-WtScheduleHomeItems $homeItemsFunction
-            Set-Item Function:script:Get-WtScheduleDueCount $dueCountFunction
-            Set-Item Function:script:Get-WtScheduleDueRows $dueRowsFunction
+            Set-Item Function:script:Get-WtScheduleDueSummary $dueSummaryFunction
         }
     }
     Assert-WtTest '일정 상태 줄: 홈과 같은 다음 일정·툴팁·오늘 달력 인자' $statusTextChecks.Next
@@ -805,6 +902,31 @@ try {
     Assert-WtTest '일정 상태 줄 아이콘: next E787 · due E73E를 탭이 등록' $statusTextChecks.Icons
 
     if (Test-WtTestWpf) {
+        $homeProbe = @{ Occurrences=0; Routines=0 }
+        & (Get-Module Schedule) {
+            param($Probe)
+            $script:homeProbe = $Probe; $script:homeOccOriginal = Get-Command Get-WtScheduleOccurrences
+            function script:Get-WtScheduleOccurrences { param($Entries,$From,$To) $script:homeProbe.Occurrences++; & $script:homeOccOriginal $Entries $From $To }
+        } $homeProbe
+        $homeReads = & (Get-Module ScheduleData) {
+            param($Probe)
+            $routines = ${function:Get-WtRoutineEntries}; $script:homeProbe = $Probe; $script:homeRoutineOriginal = $routines
+            function script:Get-WtRoutineEntries { param($Store) $script:homeProbe.Routines++; & $script:homeRoutineOriginal $Store }
+            try {
+                foreach ($i in 1,2) {
+                    Invoke-WtReadAction {
+                        & (Get-Module Schedule) { [void](New-WtNextEventHomeLine); [void](New-WtScheduleHomeCards); [void](New-WtRoutineHomeCard) }
+                    }
+                    if ($Probe.Occurrences -ne $i -or $Probe.Routines -ne $i) { return $false }
+                }
+                $true
+            } finally {
+                Set-Item Function:script:Get-WtRoutineEntries $routines
+                Remove-Variable homeRoutineOriginal, homeProbe -Scope Script
+                & (Get-Module Schedule) { Set-Item Function:script:Get-WtScheduleOccurrences $script:homeOccOriginal.ScriptBlock; Remove-Variable homeOccOriginal, homeProbe -Scope Script }
+            }
+        } $homeProbe
+        Assert-WtTest '홈 자료: 다음 일정·시간 막대의 전개 한 번, 오늘 루틴의 변환 한 번, 다음 갱신은 다시 계산' $homeReads ($homeProbe | ConvertTo-Json -Compress)
         $test = New-WtTestData 'schedule-view'; $tests.Add($test)
         $module = Get-Module Schedule
         $dateText = '2026-10-26'
@@ -1157,6 +1279,16 @@ try {
         Assert-WtTest '할 일 보기: 묶음 머리(기한 지남 · 오늘 · 마감 임박) + 줄, 제목과 보기 단추에 할 일 수' (
             $dueShape3 -ceq '[기한 지남 1],늦은 일,[오늘 5],가 루틴,다 루틴,나 루틴,매주 회의,오늘 점검,[마감 임박 1],곧 끝남' -and
             $dueHeader -ceq '할 일 7|7' -and (Get-WtScheduleDueCount) -eq 7) "$dueShape3 / $dueHeader"
+        $filterShared = Invoke-WtReadAction {
+            $before = Get-WtScheduleDueRows
+            & $module { $script:search.Box.Text = 'title:오늘'; $script:searchTimer.Stop(); Update-WtScheduleTable }
+            $after = Get-WtScheduleDueRows
+            $filtered = @(& $module { $script:tableItems } | Where-Object { -not $_.IsHead })
+            $ok = [object]::ReferenceEquals($before,$after) -and $after.Rows.Count -eq 7 -and $filtered.Count -eq 1 -and $filtered[0].Title -ceq '오늘 점검'
+            & $module { $script:search.Box.Text = ''; $script:searchTimer.Stop(); Update-WtScheduleTable }
+            $ok
+        }
+        Assert-WtTest '할 일 검색: 공유한 원래 행을 고치지 않고 화면 결과만 거른다' $filterShared
         $statusOpen = & $module {
             $script:search.Box.Text='찾지 못할 가짜 조건'
             Open-WtScheduleArgs @{ Date=[datetime]::Today; View='calendar' }
@@ -1184,7 +1316,23 @@ try {
         Assert-WtTest '할 일 묶음 머리를 누르면 접고, 다시 누르면 편다' ($folded -ceq '[기한 지남],늦은 일,[오늘],[마감 임박],곧 끝남' -and @(& $module { $script:tableItems }).Count -eq $dueItems.Count) $folded
         $lateItem = @(& $module { $script:tableItems } | Where-Object { $_.Title -ceq '늦은 일' })[0]
         Assert-WtTest '할 일 줄: 기한 지남은 경고 아이콘 + 「2일 지남」, 날짜 · 시각 · 태그 칸' ($lateItem.DueText -ceq '2일 지남' -and $lateItem.DueWarn -ceq 'Visible' -and $lateItem.TimeText -ceq '10:00' -and ($lateItem.Tags -join ',') -ceq '#작업' -and $lateItem.DateText)
-        & $module { param($i) Set-WtScheduleTableCheck $i $true } $lateItem
+        $checkReads = & (Get-Module ScheduleData) {
+            param($Item)
+            $rows = ${function:New-WtScheduleRowResult}; $routines = ${function:Get-WtRoutineEntries}
+            $script:checkRowsOriginal = $rows; $script:checkRoutineOriginal = $routines
+            $script:checkRowCalls = 0; $script:checkRoutineCalls = 0
+            function script:New-WtScheduleRowResult { param($Rows,$Problems,$From,$To,$Limit=0) $script:checkRowCalls++; & $script:checkRowsOriginal $Rows $Problems $From $To $Limit }
+            function script:Get-WtRoutineEntries { param($Store) $script:checkRoutineCalls++; & $script:checkRoutineOriginal $Store }
+            try {
+                & (Get-Module Schedule) { param($i) Set-WtScheduleTableCheck $i $true } $Item
+                @{ Rows=$script:checkRowCalls; Routines=$script:checkRoutineCalls }
+            } finally {
+                Set-Item Function:script:New-WtScheduleRowResult $rows
+                Set-Item Function:script:Get-WtRoutineEntries $routines
+                Remove-Variable checkRowsOriginal, checkRoutineOriginal, checkRowCalls, checkRoutineCalls -Scope Script
+            }
+        } $lateItem
+        Assert-WtTest '체크 동작: 표·사이드바·배지·상태가 할 일 결과와 오늘 루틴 계산을 한 번씩 공유' ($checkReads.Rows -eq 1 -and $checkReads.Routines -eq 1) ($checkReads | ConvertTo-Json -Compress)
         $afterCheck = @(& $module { $script:tableItems } | ForEach-Object Title)
         Assert-WtTest '표 체크: 회차 기록을 남기고 다시 그린다(끝낸 기한 지남은 할 일에서 빠짐)' ((Get-WtEventDone).Contains("$late3@$(& $dt -2)") -and $afterCheck -notcontains '늦은 일') ($afterCheck -join ',')
         # 화면 읽기 도구(UIA Toggle)로 표의 상자를 바꿔도 저장된다. 다시 그려 같은 값이 들어올 때는 저장하지 않는다

@@ -405,4 +405,5 @@ Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -
     -CalendarItems { param([datetime]$From, [datetime]$To) $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }; Get-WtAttendanceCalendarItems $From $To $data.Entries } `
     -ImportLegacy { param($folder) Import-WtAttendanceLegacy $folder } `
     -Help @('월별 출퇴근 기록과 초과근무를 확인합니다.', '휴가는 종류(연차 · 오전 반차 · 오후 반차 · 대휴 등)를 고릅니다. 반차는 설정 → 업무시간의 반차 나누는 시각을 따르고, 그날만 다르면 폼에서 시각을 고칩니다.', '대휴는 「대휴 발생」 기록으로 생긴 일수를 넣으면 사이드바에 남은 일수가 보입니다. 일정 달력 날짜를 우클릭해 휴가를 바로 넣을 수도 있습니다.')
+Register-WtCalendarStores -Id 'addon:attendance' -Names @('attendance')
 Export-ModuleMember -Function Format-WtHours, Format-WtDays, Test-WtAttInMonth

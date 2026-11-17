@@ -161,7 +161,6 @@ function Invoke-WtPageSelection([string]$Id) {
         if (-not $page) { return $false }
         if ($page.Addon -and $page.Addon.Refresh) { [void](& $page.Addon.Refresh $page.View) }
         $script:ui.PageHost.Content = $page.View
-        foreach ($k in @($script:navButtons.Keys)) { $script:navButtons[$k].Button.IsChecked = ($k -eq $Id) }
         $script:current = $Id
         Update-WtCurrentSidePanels
         Update-WtNavBadges
@@ -309,66 +308,70 @@ function Update-WtNav {
 
 # 한 출처가 실패해도 다른 배지·상태 항목은 계속 계산한다.
 function Update-WtNavBadges {
-    foreach ($item in $script:navButtons.Values) {
-        if (-not $item.Addon -or -not $item.IconDot) { continue }
-        $value = $null
-        $state = ''
-        if ($item.Addon.Badge) {
-            try {
-                $result = & $item.Addon.Badge
-                if ($result -is [string] -and $result -ceq 'dot') { $value = 'dot' }
-                elseif ($null -ne $result -and [Type]::GetTypeCode($result.GetType()) -in @('Byte','SByte','Int16','UInt16','Int32','UInt32','Int64','UInt64','Single','Double','Decimal')) {
-                    $value = $result.ToString([System.Globalization.CultureInfo]::InvariantCulture)
-                }
-                if ($value -eq 'dot' -or ($null -ne $value -and [double]$value -gt 0)) {
-                    $state = $item.Addon.BadgeToolTip -f $value
-                }
-            } catch { $value = $null; $state = '' }
+    Invoke-WtReadAction {
+        foreach ($item in $script:navButtons.Values) {
+            if (-not $item.Addon -or -not $item.IconDot) { continue }
+            $value = $null
+            $state = ''
+            if ($item.Addon.Badge) {
+                try {
+                    $result = & $item.Addon.Badge
+                    if ($result -is [string] -and $result -ceq 'dot') { $value = 'dot' }
+                    elseif ($null -ne $result -and [Type]::GetTypeCode($result.GetType()) -in @('Byte','SByte','Int16','UInt16','Int32','UInt32','Int64','UInt64','Single','Double','Decimal')) {
+                        $value = $result.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+                    }
+                    if ($value -eq 'dot' -or ($null -ne $value -and [double]$value -gt 0)) {
+                        $state = $item.Addon.BadgeToolTip -f $value
+                    }
+                } catch { $value = $null; $state = '' }
+            }
+            $item.Value = $value
+            Set-WtNavToolTip $item.Button $(if ($state) { "$($item.Addon.Title) · $state" } else { $item.Addon.Title })
+            # 화면 읽기 이름은 탭 이름 그대로 두고(매크로 · 보조 기술이 늘 같은 이름으로 찾게), 상태는 도움말 글로 준다
+            [System.Windows.Automation.AutomationProperties]::SetName($item.Button, [string]$item.Addon.Title)
+            [System.Windows.Automation.AutomationProperties]::SetHelpText($item.Button, [string]$state)
+            $dot = ($item.Addon.BadgeKind -eq 'dot' -and $value -eq 'dot') -or
+                ($item.Addon.BadgeKind -eq 'active' -and $null -ne $value -and $value -ne 'dot' -and [double]$value -ge 1)
+            Set-WtNavBadge $item $dot
         }
-        $item.Value = $value
-        Set-WtNavToolTip $item.Button $(if ($state) { "$($item.Addon.Title) · $state" } else { $item.Addon.Title })
-        # 화면 읽기 이름은 탭 이름 그대로 두고(매크로 · 보조 기술이 늘 같은 이름으로 찾게), 상태는 도움말 글로 준다
-        [System.Windows.Automation.AutomationProperties]::SetName($item.Button, [string]$item.Addon.Title)
-        [System.Windows.Automation.AutomationProperties]::SetHelpText($item.Button, [string]$state)
-        $dot = ($item.Addon.BadgeKind -eq 'dot' -and $value -eq 'dot') -or
-            ($item.Addon.BadgeKind -eq 'active' -and $null -ne $value -and $value -ne 'dot' -and [double]$value -ge 1)
-        Set-WtNavBadge $item $dot
+        Update-WtStatusBar
     }
-    Update-WtStatusBar
 }
 
 function Update-WtStatusBar {
-    if (-not $script:ui -or -not $script:ui.StatusLeft) { return }
-    $script:ui.StatusLeft.Children.Clear()
-    $script:ui.StatusLeft.ColumnDefinitions.Clear()
-    $script:ui.StatusRight.Children.Clear()
-    foreach ($addon in @(Get-WtAddon)) {
-        if (-not $addon.StatusItems) { continue }
-        try { $items = @(& $addon.StatusItems) } catch { continue }
-        $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-        foreach ($item in $items) {
-            try {
-                if (-not $item.Key -or $item.Key -cnotmatch '^[a-z0-9-]+$' -or -not $item.Text -or $item.Side -cnotin 'left','right' -or
-                    -not $item.Open -or $item.Open.Id -cne $addon.Id -or ($null -ne $item.Open.Args -and $item.Open.Args -isnot [hashtable]) -or
-                    -not $keys.Add([string]$item.Key)) { continue }
-                $button = New-WtStatusButton ([string]$item.Text) -Icon ([int]$item.Icon)
-                $button.ToolTip = if ($item.ToolTip) { [string]$item.ToolTip } else { [string]$item.Text }
-                $button.Tag = @{ Id = $addon.Id; Args = $(if ($item.Open.Args) { $item.Open.Args } else { @{} }) }
-                [System.Windows.Automation.AutomationProperties]::SetAutomationId($button, "Status-$($addon.Id)-$($item.Key)")
-                [System.Windows.Automation.AutomationProperties]::SetName($button, [string]$item.Text)
-                $button.Add_Click({ param($s, $e) Open-WtPage -Id $s.Tag.Id -Args $s.Tag.Args })
-                if ($item.Side -ceq 'right') { [void]$script:ui.StatusRight.Children.Add($button) }
-                else {
-                    $column = [System.Windows.Controls.ColumnDefinition]::new()
-                    $column.Width = [System.Windows.GridLength]::Auto
-                    [System.Windows.Controls.Grid]::SetColumn($button, $script:ui.StatusLeft.Children.Count)
-                    $script:ui.StatusLeft.ColumnDefinitions.Add($column)
-                    [void]$script:ui.StatusLeft.Children.Add($button)
-                }
-            } catch { continue }
+    Invoke-WtReadAction {
+        if (-not $script:ui -or -not $script:ui.StatusLeft) { return }
+        $script:ui.StatusLeft.Children.Clear()
+        $script:ui.StatusLeft.ColumnDefinitions.Clear()
+        $script:ui.StatusRight.Children.Clear()
+        foreach ($addon in @(Get-WtAddon)) {
+            if (-not $addon.StatusItems) { continue }
+            try { $items = @(& $addon.StatusItems) } catch { continue }
+            $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($item in $items) {
+                try {
+                    if (-not $item.Key -or $item.Key -cnotmatch '^[a-z0-9-]+$' -or -not $item.Text -or $item.Side -cnotin 'left','right' -or
+                        -not $item.Open -or $item.Open.Id -cne $addon.Id -or ($null -ne $item.Open.Args -and $item.Open.Args -isnot [hashtable]) -or
+                        -not $keys.Add([string]$item.Key)) { continue }
+                    $button = New-WtStatusButton ([string]$item.Text) -Icon ([int]$item.Icon)
+                    $button.ToolTip = if ($item.ToolTip) { [string]$item.ToolTip } else { [string]$item.Text }
+                    $button.Tag = @{ Id = $addon.Id; Args = $(if ($item.Open.Args) { $item.Open.Args } else { @{} }) }
+                    [System.Windows.Automation.AutomationProperties]::SetAutomationId($button, "Status-$($addon.Id)-$($item.Key)")
+                    [System.Windows.Automation.AutomationProperties]::SetName($button, [string]$item.Text)
+                    $button.Add_Click({ param($s, $e) Open-WtPage -Id $s.Tag.Id -Args $s.Tag.Args })
+                    if ($item.Side -ceq 'right') { [void]$script:ui.StatusRight.Children.Add($button) }
+                    else {
+                        $column = [System.Windows.Controls.ColumnDefinition]::new()
+                        $column.Width = [System.Windows.GridLength]::Auto
+                        [System.Windows.Controls.Grid]::SetColumn($button, $script:ui.StatusLeft.Children.Count)
+                        $script:ui.StatusLeft.ColumnDefinitions.Add($column)
+                        [void]$script:ui.StatusLeft.Children.Add($button)
+                    }
+                } catch { continue }
+            }
         }
+        Set-WtStatusLayout $script:ui.StatusLeft
     }
-    Set-WtStatusLayout $script:ui.StatusLeft
 }
 function Start-WtNavBadgeTimer {
     if ($script:badgeTimer) { $script:badgeTimer.Stop() }
