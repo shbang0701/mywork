@@ -5,8 +5,8 @@
 # 화면: 왼쪽 목록 카드, 가운데 칸(pane) 1~2개, 오른쪽 목차 카드. 칸마다 탭 줄 · 제목 · 편집기(MemoEditor.psm1). 탭 하나 = 메모 하나.
 #   목록은 검색창 + 조건 칩 + 보기 고르기 + 정렬이다. 칩과 검색창의 글을 합친 글 하나를 MemoData.psm1의 Find-WtMemo로 찾는다.
 #   목록 클릭은 지금 탭에서, Ctrl+클릭 · 가운데 클릭은 새 탭에서 연다. [[메모 제목]]은 그 메모로(없으면 만든다), #태그는 그 태그 검색으로 간다.
-# 설정: memo.mode (새 탭의 보기. live 편집 · source 원문 · read 읽기. 예전 값 edit → live, preview → read)
-#       memo.tabs (열린 탭 · 탭마다 보기 · 칸 · 지금 탭 · 나눔 비율)
+# 설정: memo.mode (예전 보기 값 읽기 호환. edit → live, preview → read)
+#       memo.tabs (열린 탭 · 탭마다 보기 · 마지막 보기 · 칸 · 지금 탭 · 나눔 비율)
 # 단축키(메모 화면 안)는 맨 아래 Register-WtAddon -Shortcuts. 편집 단축키(Ctrl+B · I · K · F 등)는 편집기가 처리한다.
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +19,7 @@ $script:active = 0           # 포커스가 있는 칸 번호
 $script:ratio = 0.5          # 두 칸일 때 왼쪽 칸 비율
 $script:closed = [System.Collections.Generic.List[hashtable]]::new()  # 닫은 탭 (Ctrl+Shift+T)
 $script:mode = 'live'        # 포커스가 있는 칸의 보기: live · source · read. 보기는 탭마다 기억한다
+$script:lastMode = 'live'    # 새 탭에 쓸 마지막 보기. 기존 탭을 고르는 것으로는 바꾸지 않는다
 $script:editMode = 'live'    # 읽기에서 새 메모로 돌아갈 편집 보기
 $script:restored = $false    # 설정에 남은 탭을 불러왔는지
 $script:lastDeleted = $null  # 실행 취소용
@@ -177,6 +178,8 @@ function Import-WtMemoLegacy([string]$Folder) {
 
 # 설정의 모드 값. 예전 값(edit · preview)도 읽는다
 function Get-WtMemoModeSetting {
+    $lastMode = [string](Get-WtField (Get-WtSetting 'memo.tabs') 'mode')
+    if ($lastMode -cin 'live', 'source', 'read') { return $lastMode }
     switch ([string](Get-WtSetting 'memo.mode')) {
         'source' { return 'source' }
         'read' { return 'read' }
@@ -222,7 +225,7 @@ function Get-WtMemoTitle([string]$Id) {
 }
 
 function New-WtMemoTab([string]$Id) {
-    @{ Id = $Id; Mode = $script:mode; Back = [System.Collections.Generic.List[string]]::new(); Forward = [System.Collections.Generic.List[string]]::new(); State = $null; Button = $null; Text = $null; Style = $null }
+    @{ Id = $Id; Mode = $script:lastMode; Back = [System.Collections.Generic.List[string]]::new(); Forward = [System.Collections.Generic.List[string]]::new(); State = $null; Button = $null; Text = $null; Style = $null }
 }
 
 # 칸의 지금 탭에 편집기 커서 · 스크롤을 기억해 둔다 (탭을 바꾸기 전)
@@ -234,6 +237,7 @@ function Save-WtMemoPaneState($Pane) {
 function Save-WtMemoTabs {
     if (-not $script:restored) { return }
     $value = [ordered]@{
+        mode   = $script:lastMode
         panes  = @(foreach ($p in $script:panes) {
                 [ordered]@{ tabs = @(foreach ($t in $p.Tabs) { [string]$t.Id }); modes = @(foreach ($t in $p.Tabs) { [string]$t.Mode }); current = [int]$p.Tabs.IndexOf($p.Current) }
             })
@@ -1058,7 +1062,7 @@ function Set-WtMemoMode([string]$Mode) {
     if ($Mode -ne $script:mode -and -not (Save-WtMemoNow)) { return }
     if ($Mode -ne 'read') { $script:editMode = $Mode }
     $script:mode = $Mode
-    if ([string](Get-WtSetting 'memo.mode') -cne $Mode) { try { $null = Set-WtSetting 'memo.mode' $Mode } catch { } }
+    $script:lastMode = $Mode
     if ($pane) {
         if ($pane.Current) { $pane.Current.Mode = $Mode }
         Update-WtMemoPaneMode $pane
@@ -1794,6 +1798,7 @@ function New-WtMemoView {
     $script:panes = [System.Collections.Generic.List[hashtable]]::new()
     $script:closed = [System.Collections.Generic.List[hashtable]]::new()
     $script:mode = Get-WtMemoModeSetting
+    $script:lastMode = $script:mode
     if ($script:mode -ne 'read') { $script:editMode = $script:mode }
     $script:ui = @{}
     if (-not $script:saveTimer) {

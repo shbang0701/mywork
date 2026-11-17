@@ -651,6 +651,11 @@ function New-WtMarkdownView {
     }
     for ($i = $script:views.Count - 1; $i -ge 0; $i--) { if (-not $script:views[$i].IsAlive) { $script:views.RemoveAt($i) } }
     $script:views.Add([System.WeakReference]::new($v))
+    $v.Add_SizeChanged({ param($s, $e) if ($e.WidthChanged) { Set-WtDocumentTablesLayout $s } })
+    $v.AddHandler([System.Windows.Controls.ScrollViewer]::ScrollChangedEvent, [System.Windows.Controls.ScrollChangedEventHandler]{
+        param($s, $e)
+        if ($e.ViewportWidthChange -ne 0) { Set-WtDocumentTablesLayout $s }
+    })
     $v
 }
 
@@ -987,8 +992,9 @@ function New-WtMdInline($X, $St) {
 }
 
 function New-WtMdTaskBox([bool]$Checked) {
-    $r = New-WtMdIconRun $(if ($Checked) { 0xE73A } else { 0xE739 })
-    Set-WtResource $r 'Foreground' $(if ($Checked) { 'B.Accent' } else { 'B.SubText' })
+    # 컨트롤 대신 아이콘 글자: 줄마다 CheckBox를 만들면 긴 체크 목록 그리기가 느려지고(300줄 +27%) 감싼 링크가 실제 클릭을 못 받는다(11-17 실제 화면)
+    $r = New-WtMdIconRun $(if ($Checked) { 0xE73D } else { 0xE739 })
+    Set-WtMdStyle $r $(if ($Checked) { 'Md.TaskBox.Done' } else { 'Md.TaskBox' })
     $r
 }
 
@@ -1171,12 +1177,11 @@ function New-WtMdList($B, $St, [bool]$Nested) {
             if (-not $li.Blocks.Count) { $li.Blocks.Add((New-WtMdPara 'Md.PTight')) }
             $p = $li.Blocks.FirstBlock
             if ($null -ne $it.Task -and $p -is [System.Windows.Documents.Paragraph]) {
-                # 할 일: 앞에 체크 표시. 끝낸 일은 글만 흐리게 + 취소선 (Obsidian과 같음)
+                # 체크 상자는 공통 부품, 끝낸 일은 글만 흐리게 표시한다.
                 $text = [System.Windows.Documents.Span]::new()
                 foreach ($x in @($p.Inlines)) { [void]$p.Inlines.Remove($x); $text.Inlines.Add($x) }
                 if ($it.Task) {
-                    Set-WtResource $text 'Foreground' 'B.SubText'
-                    $text.TextDecorations = [System.Windows.TextDecorations]::Strikethrough
+                    Set-WtMdStyle $text 'Md.TaskDone'
                 }
                 $box = New-WtMdTaskBox $it.Task
                 if ($St.OnTask) { $box = New-WtMdTaskLink $box $it.Line $St }
@@ -1360,6 +1365,8 @@ function New-WtMdTable($B, $St) {
         $g.Rows.Add($tr)
     }
     $t.RowGroups.Add($g)
+    $t.Tag = @{ Weights = @($t.Columns | ForEach-Object { $_.Width.Value }) }
+    $t.Add_Loaded({ param($s, $e) Set-WtDocumentTableWidths $s })
     $t
 }
 

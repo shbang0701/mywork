@@ -434,6 +434,18 @@ try {
     $addon = Get-WtAddon -Id 'workflows'
     $view = New-WtTestView 'workflows'
     [void](& $addon.Refresh $view)
+    $helpLook = & $mod {
+        $card = $script:ui.HelpHost.Children[1]
+        $head = $card.Child.Children[0]; $button = $head.Children[0]
+        @{ Button = $button; Head = $head; Card = $card; Texts = @(Get-WtTestTexts $script:ui.HelpPanel) }
+    }
+    Assert-WtTest '업무 사이드바: 왼쪽 28×28 공통 접기 단추 · E76C · 글자 없음 · 툴팁 · 사용법 줄 없음' (
+        $helpLook.Button.Style -eq (Get-WtStyleDictionary)['Sidebar.Collapse'] -and
+        $helpLook.Button.Width -eq 28 -and $helpLook.Button.Height -eq 28 -and
+        [Windows.Controls.DockPanel]::GetDock($helpLook.Button) -eq 'Left' -and
+        (@(Get-WtTestTexts $helpLook.Button) -join '') -ceq [string][char]0xE76C -and $helpLook.Button.ToolTip -ceq '설명 접기' -and
+        [Windows.Automation.AutomationProperties]::GetName($helpLook.Button) -ceq '설명 접기' -and
+        -not @($helpLook.Texts | Where-Object { $_ -like '스크립트를 고르면*' }).Count -and $helpLook.Card.CornerRadius.TopLeft -eq 8)
     $top = & $mod { @($script:ui.Tree.Items | ForEach-Object { $_.Header.Children[1].Text }) }
     Assert-WtTest 'WPF 업무: 목록은 저장한 업무 · 스크립트 폴더 · 없는 폴더 표시' ($top.Count -eq 3 -and $top[0] -eq '저장한 업무' -and $top[1] -eq '스크립트 폴더' -and $top[2] -eq '없는 폴더 · 폴더 없음') ($top -join ' / ')
     & $mod { $script:testHelp = $script:ui.HelpPanel.Children[0]; Update-WtFlowsView }

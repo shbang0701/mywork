@@ -3004,6 +3004,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:ns = 'xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'
 $script:targetRows = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
+$script:tableHeads = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
 
 # 스타일 모음. 색은 Style.Triggers에서 바꾼다 (템플릿 트리거로 바꾸면 BasedOn 스타일에서 덮어쓸 수 없어서).
 $script:stylesXaml = @'
@@ -3244,6 +3245,11 @@ $script:stylesXaml = @'
       </Trigger>
     </Style.Triggers>
   </Style>
+  <Style x:Key="Sidebar.Collapse" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Workflows.HelpCard" TargetType="Border" BasedOn="{StaticResource Card}"><Setter Property="Padding" Value="0"/></Style>
+  <Style x:Key="Workflows.HelpHeader" TargetType="DockPanel"><Setter Property="Height" Value="40"/><Setter Property="Margin" Value="8,0"/></Style>
+  <Style x:Key="Workflows.HelpTitle" TargetType="TextBlock" BasedOn="{StaticResource T.H2}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="4,0,0,0"/></Style>
+  <Style x:Key="Workflows.HelpBody" TargetType="StackPanel"><Setter Property="Margin" Value="16,0,16,12"/></Style>
   <Style x:Key="Btn.Chrome" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
     <Setter Property="Width" Value="46"/>
     <Setter Property="Height" Value="{DynamicResource F.Height.Control}"/>
@@ -3346,7 +3352,7 @@ $script:stylesXaml = @'
       <Border x:Name="Expanded" Background="{DynamicResource B.Bg.Surface}" BorderBrush="{DynamicResource B.Border.Default}" CornerRadius="{DynamicResource F.Radius.Card}">
         <DockPanel>
           <DockPanel x:Name="Header" DockPanel.Dock="Top" Height="{DynamicResource F.Height.Header}" LastChildFill="True" Margin="8,0,8,0">
-            <Button x:Name="Collapse" DockPanel.Dock="Left" Style="{DynamicResource Btn.Icon}" VerticalAlignment="Center">
+            <Button x:Name="Collapse" DockPanel.Dock="Left" Style="{DynamicResource Sidebar.Collapse}">
               <TextBlock x:Name="CollapseGlyph" Style="{DynamicResource T.Icon}"/>
             </Button>
             <TextBlock x:Name="Title" Style="{DynamicResource T.Dialog}" Margin="4,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
@@ -4347,6 +4353,16 @@ $script:stylesXaml = @'
       </Trigger>
     </Style.Triggers>
   </Style>
+  <!-- 문서 안 체크 상자: 7절 체크리스트 상자를 아이콘 글자 하나로 그린다(컨트롤을 줄마다 만들지 않아 긴 목록도 가볍고, 감싼 링크가 누름을 받는다).
+       미완료 = 빈 상자 E739 B.Border.Control, 완료 = 채운 상자 + 비운 체크 E73D B.Accent(체크는 바탕색으로 보임) -->
+  <Style x:Key="Md.TaskBox" TargetType="Run">
+    <Setter Property="FontSize" Value="16"/><Setter Property="BaselineAlignment" Value="Center"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Border.Control}"/>
+  </Style>
+  <Style x:Key="Md.TaskBox.Done" TargetType="Run" BasedOn="{StaticResource Md.TaskBox}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Accent}"/>
+  </Style>
+  <Style x:Key="Md.TaskDone" TargetType="Span"><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/></Style>
   <Style x:Key="Md.Hr" TargetType="BlockUIContainer">
     <Setter Property="Margin" Value="0,8,0,20"/>
   </Style>
@@ -4851,6 +4867,8 @@ $script:stylesXaml = @'
   <Style x:Key="Attendance.Note" TargetType="TextBox" BasedOn="{StaticResource Input}"><Setter Property="AcceptsReturn" Value="True"/><Setter Property="TextWrapping" Value="Wrap"/><Setter Property="VerticalScrollBarVisibility" Value="Auto"/></Style>
   <Style x:Key="Attendance.CellText" TargetType="TextBlock" BasedOn="{StaticResource Task.Text}"/>
   <Style x:Key="Attendance.Number" TargetType="TextBlock" BasedOn="{StaticResource Attendance.CellText}"><Setter Property="TextAlignment" Value="Right"/></Style>
+  <Style x:Key="Attendance.NoteCell" TargetType="DataGridCell" BasedOn="{StaticResource Task.Cell}"><Setter Property="Padding" Value="0,0,12,0"/></Style>
+  <Style x:Key="Attendance.NoteHead" TargetType="DataGridColumnHeader" BasedOn="{StaticResource Task.Header}"><Setter Property="Padding" Value="0,0,12,0"/></Style>
   <Style x:Key="Attendance.Row" TargetType="DataGridRow">
     <Setter Property="AutomationProperties.Name" Value="{Binding Note}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="DataGridRow">
@@ -4883,7 +4901,7 @@ $script:stylesXaml = @'
         <DataGridTextColumn Header="장소" Binding="{Binding Place}" Width="72" ElementStyle="{StaticResource Attendance.CellText}"/>
         <DataGridTextColumn Header="이동" Binding="{Binding Travel}" Width="56" HeaderStyle="{StaticResource Task.HeaderRight}" ElementStyle="{StaticResource Attendance.Number}"/>
         <DataGridTextColumn Header="시간" Binding="{Binding Duration}" Width="64" HeaderStyle="{StaticResource Task.HeaderRight}" ElementStyle="{StaticResource Attendance.Number}"/>
-        <DataGridTextColumn Header="메모" Binding="{Binding Note}" Width="*" ElementStyle="{StaticResource Attendance.CellText}"/>
+        <DataGridTextColumn Header="메모" Binding="{Binding Note}" Width="*" CellStyle="{StaticResource Attendance.NoteCell}" HeaderStyle="{StaticResource Attendance.NoteHead}" ElementStyle="{StaticResource Attendance.CellText}"/>
       </DataGrid.Columns>
     </DataGrid>
   </DataTemplate>
@@ -5043,7 +5061,7 @@ $script:stylesXaml = @'
   </Style>
   <Style x:Key="Schedule.ViewTabText" TargetType="RadioButton" BasedOn="{StaticResource Schedule.ViewTab}"><Setter Property="Padding" Value="12,0"/><Setter Property="Margin" Value="0"/></Style>
   <Style x:Key="Schedule.ViewTabIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="Width" Value="28"/><Setter Property="TextAlignment" Value="Center"/></Style>
-  <Style x:Key="Schedule.TableHead" TargetType="Border" BasedOn="{StaticResource Table.Head}"><Setter Property="Padding" Value="0,0,12,0"/></Style>
+  <Style x:Key="Schedule.TableHead" TargetType="Border" BasedOn="{StaticResource Table.Head}"/>
   <Style x:Key="Schedule.TableCheck" TargetType="CheckBox" BasedOn="{StaticResource Check}"><Setter Property="Margin" Value="12,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Background" Value="Transparent"/></Style>
   <Style x:Key="Schedule.TableRoutineIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="0,0,6,0"/></Style>
   <Style x:Key="Schedule.TableMemoIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="{DynamicResource F.Caption}"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="8,0,4,0"/></Style>
@@ -6099,7 +6117,7 @@ function Set-WtTimelineLayout($Timeline) {
         $line = if ($captionX -ge $captionEnds[0]) { 0 } elseif ($captionX -ge $captionEnds[1]) { 1 } else { -1 }
         $event.Caption.Visibility = if ($line -lt 0) { 'Collapsed' } else { 'Visible' }
         if ($line -ge 0) {
-            $captionEnds[$line] = $captionX + $captionWidth + 8
+            $captionEnds[$line] = $captionX + $captionWidth + 12
             [System.Windows.Controls.Canvas]::SetLeft($event.Caption, $captionX); [System.Windows.Controls.Canvas]::SetTop($event.Caption, 70 + $line * 18)
         }
     }
@@ -6115,6 +6133,108 @@ function Set-WtTimelineLayout($Timeline) {
         $state.Label.Text = '지금 ' + $state.Now.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture)
     }
 }
+
+# 표 머리와 목록은 같은 폭을 쓴다. 실제 세로 막대가 보이는 동안만 그 폭을 뺀다.
+function Register-WtTableHead($Head, $List) {
+    $script:tableHeads.Remove($List) | Out-Null
+    $script:tableHeads.Add($List, @{ Head = $Head; Padding = $Head.Padding })
+    $List.AddHandler([System.Windows.Controls.ScrollViewer]::ScrollChangedEvent, [System.Windows.Controls.ScrollChangedEventHandler]{
+        param($s, $e)
+        Update-WtTableHead $s
+    })
+    $List.Add_Loaded({ param($s, $e) Update-WtTableHead $s })
+    Update-WtTableHead $List
+}
+function Update-WtTableHead($List) {
+    $state = $null
+    if (-not $script:tableHeads.TryGetValue($List, [ref]$state)) { return }
+    $scroll = Get-WtVisualChild $List ([System.Windows.Controls.ScrollViewer])
+    $width = 0
+    if ($scroll -and $scroll.ComputedVerticalScrollBarVisibility -eq 'Visible') {
+        $bar = $scroll.Template.FindName('PART_VerticalScrollBar', $scroll)
+        if ($bar) { $width = $bar.ActualWidth; if ($width -le 0) { $width = $bar.Width } }
+    }
+    $p = $state.Padding
+    $state.Head.Padding = [System.Windows.Thickness]::new($p.Left, $p.Top, $p.Right + $width, $p.Bottom)
+}
+
+# 본문 표의 열 비율을 유지하되, 들어갈 수 있으면 각 열의 가장 긴 낱말 폭부터 확보한다.
+function Set-WtDocumentTableWidths($Table) {
+    if (-not $Table.Tag -or -not $Table.Tag.Weights) { return }
+    $parent = $Table.Parent
+    $inset = $Table.Margin.Left + $Table.Margin.Right + $Table.BorderThickness.Left + $Table.BorderThickness.Right
+    while ($parent -and $parent -isnot [System.Windows.Controls.RichTextBox]) {
+        if ($parent -is [System.Windows.Documents.Block]) {
+            $inset += $parent.Padding.Left + $parent.Padding.Right + $parent.Margin.Left + $parent.Margin.Right
+        } elseif ($parent -is [System.Windows.Documents.FlowDocument]) {
+            # 리치 텍스트 상자는 문서에 PagePadding 5,0,5,0을 넣는다(상자 Padding -5로 상쇄해 ViewportWidth에는 들어 있다)
+            $pad = $parent.PagePadding
+            if (-not [double]::IsNaN($pad.Left)) { $inset += $pad.Left + $pad.Right }
+        }
+        $parent = $parent.Parent
+    }
+    if (-not $parent -or $parent.ViewportWidth -le 0) { return }
+    # 1: 반올림 여유. 계산한 폭은 비율(Star)로 넣어 WPF가 실제 폭에 맞추므로 표가 넘쳐 잘리지 않는다
+    $available = $parent.ViewportWidth - $inset - 1
+    if ($available -le 0) { return }
+    $n = $Table.Columns.Count
+    $minimum = [double[]]::new($n)
+    $measure = [System.Windows.Controls.TextBlock]::new()
+    $infinite = [System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)
+    foreach ($group in $Table.RowGroups) {
+        foreach ($row in $group.Rows) {
+            for ($i = 0; $i -lt $n; $i++) {
+                $cell = $row.Cells[$i]
+                $measure.FontFamily = $cell.FontFamily; $measure.FontSize = $cell.FontSize; $measure.FontWeight = $cell.FontWeight
+                $text = [System.Windows.Documents.TextRange]::new($cell.ContentStart, $cell.ContentEnd).Text
+                foreach ($word in [regex]::Matches($text, '\S+')) {
+                    $measure.Text = $word.Value; $measure.Measure($infinite)
+                    $minimum[$i] = [Math]::Max($minimum[$i], [Math]::Ceiling($measure.DesiredSize.Width) + $cell.Padding.Left + $cell.Padding.Right + $cell.BorderThickness.Left + $cell.BorderThickness.Right)
+                }
+            }
+        }
+    }
+    $widths = [double[]]::new($n)
+    $weights = $Table.Tag.Weights
+    $totalWeight = ($weights | Measure-Object -Sum).Sum
+    if (($minimum | Measure-Object -Sum).Sum -gt $available) {
+        for ($i = 0; $i -lt $n; $i++) { $widths[$i] = $available * $weights[$i] / $totalWeight }
+    } else {
+        $pending = [System.Collections.Generic.List[int]]::new()
+        for ($i = 0; $i -lt $n; $i++) { $pending.Add($i) }
+        $remaining = $available
+        while ($pending.Count) {
+            $weight = 0.0; foreach ($i in $pending) { $weight += $weights[$i] }
+            $small = @($pending | Where-Object { $remaining * $weights[$_] / $weight -lt $minimum[$_] })
+            if (-not $small.Count) {
+                foreach ($i in $pending) { $widths[$i] = $remaining * $weights[$i] / $weight }
+                break
+            }
+            foreach ($i in $small) { $widths[$i] = $minimum[$i]; $remaining -= $minimum[$i]; [void]$pending.Remove($i) }
+        }
+    }
+    # 비율 값은 합 10으로 맞춘다: 문서 표는 Star 값이 크면(100 안팎부터) 첫 열이 폭을 다 가져가 배치가 깨진다(11-17 실제 화면)
+    $sum = ($widths | Measure-Object -Sum).Sum
+    for ($i = 0; $i -lt $n; $i++) {
+        $star = 10 * $widths[$i] / $sum
+        if ([Math]::Abs($Table.Columns[$i].Width.Value - $star) -gt 0.0001 -or -not $Table.Columns[$i].Width.IsStar) {
+            $Table.Columns[$i].Width = [System.Windows.GridLength]::new($star, 'Star')
+        }
+    }
+}
+function Set-WtDocumentTablesLayout($View) {
+    function Update-DocumentBlocks($Blocks) {
+        foreach ($block in $Blocks) {
+            if ($block -is [System.Windows.Documents.Table]) {
+                Set-WtDocumentTableWidths $block
+                foreach ($group in $block.RowGroups) { foreach ($row in $group.Rows) { foreach ($cell in $row.Cells) { Update-DocumentBlocks $cell.Blocks } } }
+            } elseif ($block -is [System.Windows.Documents.Section]) { Update-DocumentBlocks $block.Blocks }
+            elseif ($block -is [System.Windows.Documents.List]) { foreach ($item in $block.ListItems) { Update-DocumentBlocks $item.Blocks } }
+        }
+    }
+    Update-DocumentBlocks $View.Document.Blocks
+}
+Export-ModuleMember -Function Register-WtTableHead, Update-WtTableHead, Set-WtDocumentTableWidths, Set-WtDocumentTablesLayout
 
 # 지난 일정은 흐리게, 다음 일정은 진하게, 그 뒤는 옅게 칠한다.
 function Update-WtTimelineNow($Timeline, [datetime]$Now = (Get-Date)) {
@@ -7182,6 +7302,11 @@ function New-WtMarkdownView {
     }
     for ($i = $script:views.Count - 1; $i -ge 0; $i--) { if (-not $script:views[$i].IsAlive) { $script:views.RemoveAt($i) } }
     $script:views.Add([System.WeakReference]::new($v))
+    $v.Add_SizeChanged({ param($s, $e) if ($e.WidthChanged) { Set-WtDocumentTablesLayout $s } })
+    $v.AddHandler([System.Windows.Controls.ScrollViewer]::ScrollChangedEvent, [System.Windows.Controls.ScrollChangedEventHandler]{
+        param($s, $e)
+        if ($e.ViewportWidthChange -ne 0) { Set-WtDocumentTablesLayout $s }
+    })
     $v
 }
 
@@ -7518,8 +7643,9 @@ function New-WtMdInline($X, $St) {
 }
 
 function New-WtMdTaskBox([bool]$Checked) {
-    $r = New-WtMdIconRun $(if ($Checked) { 0xE73A } else { 0xE739 })
-    Set-WtResource $r 'Foreground' $(if ($Checked) { 'B.Accent' } else { 'B.SubText' })
+    # 컨트롤 대신 아이콘 글자: 줄마다 CheckBox를 만들면 긴 체크 목록 그리기가 느려지고(300줄 +27%) 감싼 링크가 실제 클릭을 못 받는다(11-17 실제 화면)
+    $r = New-WtMdIconRun $(if ($Checked) { 0xE73D } else { 0xE739 })
+    Set-WtMdStyle $r $(if ($Checked) { 'Md.TaskBox.Done' } else { 'Md.TaskBox' })
     $r
 }
 
@@ -7702,12 +7828,11 @@ function New-WtMdList($B, $St, [bool]$Nested) {
             if (-not $li.Blocks.Count) { $li.Blocks.Add((New-WtMdPara 'Md.PTight')) }
             $p = $li.Blocks.FirstBlock
             if ($null -ne $it.Task -and $p -is [System.Windows.Documents.Paragraph]) {
-                # 할 일: 앞에 체크 표시. 끝낸 일은 글만 흐리게 + 취소선 (Obsidian과 같음)
+                # 체크 상자는 공통 부품, 끝낸 일은 글만 흐리게 표시한다.
                 $text = [System.Windows.Documents.Span]::new()
                 foreach ($x in @($p.Inlines)) { [void]$p.Inlines.Remove($x); $text.Inlines.Add($x) }
                 if ($it.Task) {
-                    Set-WtResource $text 'Foreground' 'B.SubText'
-                    $text.TextDecorations = [System.Windows.TextDecorations]::Strikethrough
+                    Set-WtMdStyle $text 'Md.TaskDone'
                 }
                 $box = New-WtMdTaskBox $it.Task
                 if ($St.OnTask) { $box = New-WtMdTaskLink $box $it.Line $St }
@@ -7891,6 +8016,8 @@ function New-WtMdTable($B, $St) {
         $g.Rows.Add($tr)
     }
     $t.RowGroups.Add($g)
+    $t.Tag = @{ Weights = @($t.Columns | ForEach-Object { $_.Width.Value }) }
+    $t.Add_Loaded({ param($s, $e) Set-WtDocumentTableWidths $s })
     $t
 }
 
@@ -13996,8 +14123,8 @@ New-Module -Name 'WorkTool.addon.memo.Memo' -ScriptBlock {
 # 화면: 왼쪽 목록 카드, 가운데 칸(pane) 1~2개, 오른쪽 목차 카드. 칸마다 탭 줄 · 제목 · 편집기(MemoEditor.psm1). 탭 하나 = 메모 하나.
 #   목록은 검색창 + 조건 칩 + 보기 고르기 + 정렬이다. 칩과 검색창의 글을 합친 글 하나를 MemoData.psm1의 Find-WtMemo로 찾는다.
 #   목록 클릭은 지금 탭에서, Ctrl+클릭 · 가운데 클릭은 새 탭에서 연다. [[메모 제목]]은 그 메모로(없으면 만든다), #태그는 그 태그 검색으로 간다.
-# 설정: memo.mode (새 탭의 보기. live 편집 · source 원문 · read 읽기. 예전 값 edit → live, preview → read)
-#       memo.tabs (열린 탭 · 탭마다 보기 · 칸 · 지금 탭 · 나눔 비율)
+# 설정: memo.mode (예전 보기 값 읽기 호환. edit → live, preview → read)
+#       memo.tabs (열린 탭 · 탭마다 보기 · 마지막 보기 · 칸 · 지금 탭 · 나눔 비율)
 # 단축키(메모 화면 안)는 맨 아래 Register-WtAddon -Shortcuts. 편집 단축키(Ctrl+B · I · K · F 등)는 편집기가 처리한다.
 
 $ErrorActionPreference = 'Stop'
@@ -14010,6 +14137,7 @@ $script:active = 0           # 포커스가 있는 칸 번호
 $script:ratio = 0.5          # 두 칸일 때 왼쪽 칸 비율
 $script:closed = [System.Collections.Generic.List[hashtable]]::new()  # 닫은 탭 (Ctrl+Shift+T)
 $script:mode = 'live'        # 포커스가 있는 칸의 보기: live · source · read. 보기는 탭마다 기억한다
+$script:lastMode = 'live'    # 새 탭에 쓸 마지막 보기. 기존 탭을 고르는 것으로는 바꾸지 않는다
 $script:editMode = 'live'    # 읽기에서 새 메모로 돌아갈 편집 보기
 $script:restored = $false    # 설정에 남은 탭을 불러왔는지
 $script:lastDeleted = $null  # 실행 취소용
@@ -14168,6 +14296,8 @@ function Import-WtMemoLegacy([string]$Folder) {
 
 # 설정의 모드 값. 예전 값(edit · preview)도 읽는다
 function Get-WtMemoModeSetting {
+    $lastMode = [string](Get-WtField (Get-WtSetting 'memo.tabs') 'mode')
+    if ($lastMode -cin 'live', 'source', 'read') { return $lastMode }
     switch ([string](Get-WtSetting 'memo.mode')) {
         'source' { return 'source' }
         'read' { return 'read' }
@@ -14213,7 +14343,7 @@ function Get-WtMemoTitle([string]$Id) {
 }
 
 function New-WtMemoTab([string]$Id) {
-    @{ Id = $Id; Mode = $script:mode; Back = [System.Collections.Generic.List[string]]::new(); Forward = [System.Collections.Generic.List[string]]::new(); State = $null; Button = $null; Text = $null; Style = $null }
+    @{ Id = $Id; Mode = $script:lastMode; Back = [System.Collections.Generic.List[string]]::new(); Forward = [System.Collections.Generic.List[string]]::new(); State = $null; Button = $null; Text = $null; Style = $null }
 }
 
 # 칸의 지금 탭에 편집기 커서 · 스크롤을 기억해 둔다 (탭을 바꾸기 전)
@@ -14225,6 +14355,7 @@ function Save-WtMemoPaneState($Pane) {
 function Save-WtMemoTabs {
     if (-not $script:restored) { return }
     $value = [ordered]@{
+        mode   = $script:lastMode
         panes  = @(foreach ($p in $script:panes) {
                 [ordered]@{ tabs = @(foreach ($t in $p.Tabs) { [string]$t.Id }); modes = @(foreach ($t in $p.Tabs) { [string]$t.Mode }); current = [int]$p.Tabs.IndexOf($p.Current) }
             })
@@ -15049,7 +15180,7 @@ function Set-WtMemoMode([string]$Mode) {
     if ($Mode -ne $script:mode -and -not (Save-WtMemoNow)) { return }
     if ($Mode -ne 'read') { $script:editMode = $Mode }
     $script:mode = $Mode
-    if ([string](Get-WtSetting 'memo.mode') -cne $Mode) { try { $null = Set-WtSetting 'memo.mode' $Mode } catch { } }
+    $script:lastMode = $Mode
     if ($pane) {
         if ($pane.Current) { $pane.Current.Mode = $Mode }
         Update-WtMemoPaneMode $pane
@@ -15785,6 +15916,7 @@ function New-WtMemoView {
     $script:panes = [System.Collections.Generic.List[hashtable]]::new()
     $script:closed = [System.Collections.Generic.List[hashtable]]::new()
     $script:mode = Get-WtMemoModeSetting
+    $script:lastMode = $script:mode
     if ($script:mode -ne 'read') { $script:editMode = $script:mode }
     $script:ui = @{}
     if (-not $script:saveTimer) {
@@ -21569,6 +21701,8 @@ function Initialize-WtScheduleLists {
         [void]$routineHead.Children.Add($text); $i++
     }
     $v.RoutineHead.Child = $routineHead
+    Register-WtTableHead $v.TableHead $v.TableList
+    Register-WtTableHead $v.RoutineHead $v.RoutineList
     [Windows.Automation.AutomationProperties]::SetName($v.TableList, '일정 표'); [Windows.Automation.AutomationProperties]::SetName($v.RoutineList, '루틴 목록')
     $list = $v.TableList
     # 체크 상자: 누른 줄의 회차 · 차례만 바꾸고 다시 그린다. 마우스 · Space · 화면 읽기(UIA Toggle) 모두 Checked/Unchecked로 온다.
@@ -26003,11 +26137,7 @@ function Update-WtFlowHelp {
     $panel.Children.Clear()
     $script:helpKey = $null; $script:helpList = $null
     $info = $script:info
-    if (-not $info) {
-        $t = New-WtText '스크립트를 고르면 그 스크립트의 도움말과 최근 실행 기록이 여기에 보입니다.' 'T.Sub'
-        $t.TextWrapping = 'Wrap'
-        [void](Add-WtChild $panel $t)
-    } else {
+    if ($info) {
         $file = New-WtText $info.Path 'T.Sub'
         Set-WtResource $file 'FontFamily' 'Font.Mono'
         $file.TextWrapping = 'Wrap'
@@ -26310,17 +26440,17 @@ function New-WtFlowsView {
     # 오른쪽: 설명 · 최근 실행. 머리글의 [접기]는 늘 같은 자리에 둔다.
     # 창이 좁으면 가운데 위에 겹쳐 연다 (Update-WtFlowHelp). 그때만 뒤에 그림자를 깐다
     $right = New-WtCard
-    $right.Padding = [System.Windows.Thickness]::new(16, 12, 16, 12)
+    Set-WtStyle $right 'Workflows.HelpCard'
     $rdock = [System.Windows.Controls.DockPanel]::new()
     $rhead = [System.Windows.Controls.DockPanel]::new()
-    $rhead.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
-    $helpClose = New-WtButton '접기' -Kind Link -Icon 0xE76C
-    $helpClose.ToolTip = '설명을 접어 폼을 넓게 씁니다'
+    Set-WtStyle $rhead 'Workflows.HelpHeader'
+    $helpClose = New-WtButton '' -Kind Icon -Icon 0xE76C -ToolTip '설명 접기'
+    Set-WtStyle $helpClose 'Sidebar.Collapse'
+    [System.Windows.Automation.AutomationProperties]::SetName($helpClose, '설명 접기')
     $helpClose.Add_Click({ Close-WtFlowHelp })
-    [System.Windows.Controls.DockPanel]::SetDock($helpClose, 'Right')
+    [System.Windows.Controls.DockPanel]::SetDock($helpClose, 'Left')
     [void]$rhead.Children.Add($helpClose)
-    $rtitle = New-WtText '설명' 'T.H2'
-    $rtitle.VerticalAlignment = 'Center'
+    $rtitle = New-WtText '설명' 'Workflows.HelpTitle'
     [void]$rhead.Children.Add($rtitle)
     [System.Windows.Controls.DockPanel]::SetDock($rhead, 'Top')
     [void]$rdock.Children.Add($rhead)
@@ -26329,6 +26459,7 @@ function New-WtFlowsView {
     $helpScroll.HorizontalScrollBarVisibility = 'Disabled'
     $helpScroll.Focusable = $false
     $helpPanel = New-WtStack Vertical 12
+    Set-WtStyle $helpPanel 'Workflows.HelpBody'
     $helpScroll.Content = $helpPanel
     [void]$rdock.Children.Add($helpScroll)
     $right.Child = $rdock

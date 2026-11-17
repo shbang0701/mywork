@@ -434,9 +434,34 @@ try {
         $view = New-WtTestView 'attendance'
         $view.Measure([Windows.Size]::new(1080,616)); $view.Arrange([Windows.Rect]::new(0,0,1080,616)); $view.UpdateLayout()
         & $module { Update-WtAttendanceView; $script:testFirst = $script:table.ItemsSource; Update-WtAttendanceView }
+        $view.UpdateLayout()
         # 열은 시각 트리 밖이라 DynamicResource로 준 스타일이 조용히 안 먹는다
         $columns = & $module { $c = $script:table.Columns; @{ Text = $null -ne $c[0].ElementStyle; Right = [string](@($c[6].ElementStyle.Setters; $c[6].ElementStyle.BasedOn.Setters) | Where-Object { $_.Property.Name -eq 'TextAlignment' } | Select-Object -First 1).Value; Head = [string](@($c[6].HeaderStyle.Setters) | Where-Object { $_.Property.Name -eq 'HorizontalContentAlignment' } | Select-Object -First 1).Value } }
         Assert-WtTest '근태 표: 열 스타일이 들어가고 이동 · 시간은 머리까지 오른쪽 맞춤' ($columns.Text -and $columns.Right -ceq 'Right' -and $columns.Head -ceq 'Right') "$($columns.Text)/$($columns.Right)/$($columns.Head)"
+        $numberLayout = & $module {
+            function Find-NumberVisuals($node, [type]$type) {
+                if ($node -is $type) { $node }
+                for ($i = 0; $i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($node); $i++) { Find-NumberVisuals ([Windows.Media.VisualTreeHelper]::GetChild($node,$i)) $type }
+            }
+            $headers = @(Find-NumberVisuals $script:table ([Windows.Controls.Primitives.DataGridColumnHeader]) | Where-Object { $_.Content -in '이동','시간' })
+            $ok = $headers.Count -eq 2
+            foreach ($header in $headers) {
+                $content = Get-WtVisualChild $header ([Windows.Controls.ContentPresenter])
+                $offset = $content.TranslatePoint([Windows.Point]::new($content.ActualWidth,0), $header).X
+                $ok = $ok -and $header.HorizontalContentAlignment -eq 'Right' -and $content.HorizontalAlignment -eq 'Right' -and [Math]::Abs($offset - ($header.ActualWidth - $header.Padding.Right)) -lt 0.1
+            }
+            $row = @(Find-NumberVisuals $script:table ([Windows.Controls.DataGridRow]))[0]
+            $cells = @(Find-NumberVisuals $row ([Windows.Controls.DataGridCell]) | Sort-Object { $_.Column.DisplayIndex })
+            foreach ($header in $headers) {
+                $cell = $cells[$header.Column.DisplayIndex]; $text = Get-WtVisualChild $cell ([Windows.Controls.TextBlock])
+                $content = Get-WtVisualChild $header ([Windows.Controls.ContentPresenter])
+                $ok = $ok -and $text.TextAlignment -eq 'Right' -and [Math]::Abs($text.TranslatePoint([Windows.Point]::new($text.ActualWidth,0),$script:table).X - $content.TranslatePoint([Windows.Point]::new($content.ActualWidth,0),$script:table).X) -lt 0.1
+            }
+            $duration = Get-WtVisualChild $cells[6] ([Windows.Controls.TextBlock]); $note = Get-WtVisualChild $cells[7] ([Windows.Controls.TextBlock])
+            $gap = $note.TranslatePoint([Windows.Point]::new(0,0),$script:table).X - $duration.TranslatePoint([Windows.Point]::new($duration.ActualWidth,0),$script:table).X
+            @{ Right = $ok; Gap = $gap; NoteHead = $script:table.Columns[7].HeaderStyle }
+        }
+        Assert-WtTest '근태 숫자 열: 실제 머리 글자 끝 오른쪽 정렬 · 메모 열 사이 12' ($numberLayout.Right -and $numberLayout.Gap -eq 12 -and $numberLayout.NoteHead -eq (Get-WtStyleDictionary)['Attendance.NoteHead'])
         Assert-WtTest '근태 화면: 같은 월과 데이터는 표 재사용' (& $module { [object]::ReferenceEquals($script:testFirst, $script:table.ItemsSource) })
         Assert-WtTest '근태 표: 날짜순 8열·U14 폭·행 32·— 장소' (& $module {
             ($script:table.Columns | ForEach-Object Header) -join ',' -ceq '날짜,종류,시작,끝,장소,이동,시간,메모' -and

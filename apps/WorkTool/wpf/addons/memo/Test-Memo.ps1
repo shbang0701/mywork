@@ -225,6 +225,12 @@ try {
     # ---- 설정 · 빠른 이동 찾기 (WPF 없이) ----
     $modes = foreach ($v in 'edit', 'preview', 'source', 'read', 'live', 'nope') { Set-WtSetting 'memo.mode' $v; & $memoModule { Get-WtMemoModeSetting } }
     Assert-WtTest '메모 설정: 예전 memo.mode(edit · preview)도 읽는다' (($modes -join ',') -eq 'live,read,source,read,live,live') ($modes -join ',')
+    foreach ($mode in 'live', 'source', 'read') {
+        Set-WtSetting 'memo.tabs' @{ mode = $mode }
+        Initialize-WtSettings
+        Assert-WtTest "메모 설정: 재시작 뒤 마지막 보기 $mode 는 탭 설정을 우선한다" ((& $memoModule { Get-WtMemoModeSetting }) -ceq $mode)
+    }
+    Set-WtSetting 'memo.tabs' $null
     $qa = [pscustomobject]@{ id = 'q1'; title = '서버 점검'; body = '디스크' }
     $qb = [pscustomobject]@{ id = 'q2'; title = '회의'; body = '서버 점검 결과' }
     $qc = [pscustomobject]@{ id = 'q3'; title = '점심'; body = '없음' }
@@ -1029,8 +1035,33 @@ try {
     [void](Send-TestKey E Control)
     $srcOk = $srcOk -and (& $memoModule { $script:mode -eq 'live' })
     [void](Send-TestKey Oem2 Control)
-    Assert-WtTest 'WPF 메모 보기: Ctrl+E 편집 → 원문 → 읽기 → 편집, Ctrl+/ 원문, 설정에 live · source · read로 남긴다' ($readOk -and $srcOk -and (& $memoModule { $script:mode }) -eq 'source' -and (Get-WtSetting 'memo.mode') -eq 'source')
+    Assert-WtTest 'WPF 메모 보기: Ctrl+E 편집 → 원문 → 읽기 → 편집, Ctrl+/ 원문, 탭 설정에 보기를 함께 남긴다' ($readOk -and $srcOk -and (& $memoModule { $script:mode }) -eq 'source' -and (Get-WtSetting 'memo.tabs').mode -eq 'source')
     [void](Send-TestKey Oem2 Control)
+    & $memoModule {
+        $script:testSettingWrites = [System.Collections.Generic.List[string]]::new()
+        function script:Set-WtSetting {
+            param($Key, $Value)
+            $script:testSettingWrites.Add($Key)
+            & (Get-Module Settings) { param($k, $v) Set-WtSetting $k $v } $Key $Value
+        }
+    }
+    try {
+        foreach ($mode in 'source', 'read', 'live') {
+            & $memoModule { $script:testSettingWrites.Clear() }
+            [void](Send-TestKey E Control)
+            Wait-WtTestWrites
+            $writes = @(& $memoModule { $script:testSettingWrites.ToArray() })
+            Assert-WtTest "메모 보기 한 번 = 설정 쓰기 최대 1번 ($mode)" ($writes.Count -eq 1 -and $writes[0] -ceq 'memo.tabs' -and (Get-WtSetting 'memo.tabs').mode -ceq $mode -and (& $memoModule { (Get-WtMemoActivePane).Current.Mode }) -ceq $mode) ($writes -join ',')
+        }
+        $remembered = Get-WtSetting 'memo.tabs'
+        $remembered.mode = 'read'
+        Set-WtSetting 'memo.tabs' $remembered
+        Initialize-WtSettings
+        Show-TestView
+        $restoredModes = & $memoModule { @((New-WtMemoTab 'new-after-restart').Mode, (((Get-WtMemoActivePane).Tabs | ForEach-Object Mode) -join ',')) }
+        Assert-WtTest '메모 보기: 재시작 뒤 새 탭 기본 보기와 기존 탭별 보기를 따로 기억' ($restoredModes[0] -ceq 'read' -and $restoredModes[1] -clike '*live*') ($restoredModes -join ' / ')
+        & $memoModule { Set-WtMemoMode 'live' }
+    } finally { & $memoModule { Remove-Item function:script:Set-WtSetting } }
 
     # ---- 새 메모 → 입력 → 저장 → 삭제 → 실행 취소 · 끝낼 때 저장 ----
     & $memoModule { $p = $script:panes[1]; foreach ($t in @($p.Tabs)) { [void](Close-WtMemoTab $p $t) } }   # 둘째 칸을 닫아 첫 칸만 쓴다

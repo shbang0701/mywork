@@ -67,6 +67,36 @@ try {
     Update-WtTimelineNow $timeline.Timeline $date.AddHours(12).AddMinutes(20)
     $weights = @($timeline.Timeline.Tag.Events | ForEach-Object { [string]$_.Caption.FontWeight }) -join ','
     Assert-WtTest '시간 막대: 다음 일정 하나만 굵게' ($weights -ceq 'Normal,SemiBold,Normal') $weights
+    $spacingItems = @(9,11 | ForEach-Object { [pscustomobject]@{ Id = "gap-$_"; Title = '점검'; Start = $date.AddHours($_); End = $date.AddHours($_).AddMinutes(10); AllDay = $false; Alarm = $false; ToolTip = '점검 상세' } })
+    $spacing = (New-WtTimeline $spacingItems $date test-before).Timeline
+    $spacing.Measure([Windows.Size]::new(600,116)); $spacing.Arrange([Windows.Rect]::new(0,0,600,116)); $spacing.UpdateLayout()
+    $state = $spacing.Tag; $first = $state.Events[0]; $second = $state.Events[1]
+    $first.Caption.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
+    $firstRight = [Windows.Controls.Canvas]::GetLeft($first.Caption) + $first.Caption.DesiredSize.Width
+    foreach ($gap in 11.5,12.5) {
+        $second.Start = $state.Start + ($firstRight + $gap) / 600 * ($state.End - $state.Start); $second.End = $second.Start + 10
+        Set-WtTimelineLayout $spacing
+        Assert-WtTest "시간 막대 이름 최소 간격 12: 간격 $gap 의 줄 배치" ($second.Caption.Visibility -eq 'Visible' -and [Windows.Controls.Canvas]::GetTop($second.Caption) -eq $(if ($gap -lt 12) { 88 } else { 70 }))
+    }
+    $captionItems = @(
+        @('14:05','14:50','백업 로그 일일 점검'), @('15:20','16:10','SRV-01 펌웨어 적용 및 서비스 확인'),
+        @('16:35','17:15','방화벽 정책 변경 검토'), @('17:45','18:25','주간 인프라 운영 보고')
+    ) | ForEach-Object { [pscustomobject]@{ Id = $_[0]; Title = $_[2]; Start = $date.Add([timespan]::Parse($_[0])); End = $date.Add([timespan]::Parse($_[1])); AllDay = $false; Alarm = $false; ToolTip = $_[2] } }
+    $captions = (New-WtTimeline $captionItems $date test-before).Timeline
+    $captions.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $captions.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    foreach ($width in 600,856) {
+        $captions.Measure([Windows.Size]::new($width,116)); $captions.Arrange([Windows.Rect]::new(0,0,$width,116)); $captions.UpdateLayout()
+        Update-WtTimelineNow $captions $date.AddHours(15).AddMinutes(35)
+        $gapOk = $true
+        foreach ($top in 70,88) {
+            $visible = @($captions.Tag.Events | Where-Object { $_.Caption.Visibility -eq 'Visible' -and [Windows.Controls.Canvas]::GetTop($_.Caption) -eq $top } | Sort-Object { [Windows.Controls.Canvas]::GetLeft($_.Caption) })
+            for ($i = 1; $i -lt $visible.Count; $i++) {
+                $left = $visible[$i-1].Caption; $right = $visible[$i].Caption
+                $gapOk = $gapOk -and [Windows.Controls.Canvas]::GetLeft($right) - [Windows.Controls.Canvas]::GetLeft($left) - $left.DesiredSize.Width -ge 12
+            }
+        }
+        Assert-WtTest "시간 막대 이름: 폭 $width 에서 같은 줄 간격 12 이상 · 넓은 창 마지막 이름 생략 유지" ($gapOk -and ($width -ne 856 -or $captions.Tag.Events[3].Caption.Visibility -eq 'Collapsed'))
+    }
     $next = New-WtNextEventLine $day
     Update-WtNextEventLine $next $date.AddHours(12).AddMinutes(20)
     $soon = "$($next.Tag.Pill.Child.Text)|$($next.Tag.Title.Text)"

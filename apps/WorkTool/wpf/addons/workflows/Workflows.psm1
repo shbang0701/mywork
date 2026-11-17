@@ -1638,11 +1638,7 @@ function Update-WtFlowHelp {
     $panel.Children.Clear()
     $script:helpKey = $null; $script:helpList = $null
     $info = $script:info
-    if (-not $info) {
-        $t = New-WtText '스크립트를 고르면 그 스크립트의 도움말과 최근 실행 기록이 여기에 보입니다.' 'T.Sub'
-        $t.TextWrapping = 'Wrap'
-        [void](Add-WtChild $panel $t)
-    } else {
+    if ($info) {
         $file = New-WtText $info.Path 'T.Sub'
         Set-WtResource $file 'FontFamily' 'Font.Mono'
         $file.TextWrapping = 'Wrap'
@@ -1945,17 +1941,17 @@ function New-WtFlowsView {
     # 오른쪽: 설명 · 최근 실행. 머리글의 [접기]는 늘 같은 자리에 둔다.
     # 창이 좁으면 가운데 위에 겹쳐 연다 (Update-WtFlowHelp). 그때만 뒤에 그림자를 깐다
     $right = New-WtCard
-    $right.Padding = [System.Windows.Thickness]::new(16, 12, 16, 12)
+    Set-WtStyle $right 'Workflows.HelpCard'
     $rdock = [System.Windows.Controls.DockPanel]::new()
     $rhead = [System.Windows.Controls.DockPanel]::new()
-    $rhead.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
-    $helpClose = New-WtButton '접기' -Kind Link -Icon 0xE76C
-    $helpClose.ToolTip = '설명을 접어 폼을 넓게 씁니다'
+    Set-WtStyle $rhead 'Workflows.HelpHeader'
+    $helpClose = New-WtButton '' -Kind Icon -Icon 0xE76C -ToolTip '설명 접기'
+    Set-WtStyle $helpClose 'Sidebar.Collapse'
+    [System.Windows.Automation.AutomationProperties]::SetName($helpClose, '설명 접기')
     $helpClose.Add_Click({ Close-WtFlowHelp })
-    [System.Windows.Controls.DockPanel]::SetDock($helpClose, 'Right')
+    [System.Windows.Controls.DockPanel]::SetDock($helpClose, 'Left')
     [void]$rhead.Children.Add($helpClose)
-    $rtitle = New-WtText '설명' 'T.H2'
-    $rtitle.VerticalAlignment = 'Center'
+    $rtitle = New-WtText '설명' 'Workflows.HelpTitle'
     [void]$rhead.Children.Add($rtitle)
     [System.Windows.Controls.DockPanel]::SetDock($rhead, 'Top')
     [void]$rdock.Children.Add($rhead)
@@ -1964,6 +1960,7 @@ function New-WtFlowsView {
     $helpScroll.HorizontalScrollBarVisibility = 'Disabled'
     $helpScroll.Focusable = $false
     $helpPanel = New-WtStack Vertical 12
+    Set-WtStyle $helpPanel 'Workflows.HelpBody'
     $helpScroll.Content = $helpPanel
     [void]$rdock.Children.Add($helpScroll)
     $right.Child = $rdock

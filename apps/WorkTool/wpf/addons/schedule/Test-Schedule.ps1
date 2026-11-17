@@ -1407,6 +1407,24 @@ try {
         Assert-WtTest '루틴 폼 시각: HH:mm만 받고 저장, 시간마다로 고르면 시각 칸을 숨긴다' ($timeError -clike '시각을 확인하세요*' -and $savedTime -ceq '07:30' -and $timeHidden -ceq 'Collapsed') "$timeError / $savedTime / $timeHidden"
         & $module { Set-WtScheduleViewMode 'calendar' }
 
+        foreach ($mode in 'due', 'routines') {
+            & $module { param($m) Set-WtScheduleViewMode $m } $mode
+            $parts = & $module { param($m) if ($m -eq 'routines') { @($script:view.RoutineList, $script:view.RoutineHead) } else { @($script:view.TableList, $script:view.TableHead) } } $mode
+            $list = $parts[0]; $head = $parts[1]; $oldItems = $list.ItemsSource
+            try {
+                $row = @($oldItems)[0]
+                foreach ($case in @(@(2,744,$false), @(100,744,$true), @(100,4000,$false), @(100,240,$true), @(2,744,$false))) {
+                    $list.ItemsSource = @(@($row) * $case[0])
+                    $view.Measure([Windows.Size]::new(1080,$case[1])); $view.Arrange([Windows.Rect]::new(0,0,1080,$case[1])); $view.UpdateLayout()
+                    [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
+                    $view.UpdateLayout()
+                    $scroll = Get-WtVisualChild $list ([Windows.Controls.ScrollViewer])
+                    Assert-WtTest "일정 머리 열 맞춤: $mode · $($case[0])줄/높이$($case[1]) · 막대=$($case[2])" (
+                        ($scroll.ComputedVerticalScrollBarVisibility -eq 'Visible') -eq $case[2] -and $head.Padding.Right -eq $(if ($case[2]) { 12 } else { 0 })) "$($scroll.ComputedVerticalScrollBarVisibility) / $($head.Padding.Right)"
+                }
+            } finally { $list.ItemsSource = $oldItems }
+        }
+        & $module { Set-WtScheduleViewMode 'calendar' }
         [IO.File]::WriteAllText((Get-WtStorePath 'schedule'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))
         & $module { Update-WtScheduleView }
         Assert-WtTest '일정 화면: 못 읽는 파일은 이유 표시 · 새로 만들기 비활성' ((Get-WtTestTexts $view | Where-Object { $_ -like '*더 새 버전*' }).Count -gt 0 -and -not (& $module { $script:side.Add.IsEnabled }))

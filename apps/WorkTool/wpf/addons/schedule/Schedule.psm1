@@ -236,6 +236,8 @@ function Initialize-WtScheduleLists {
         [void]$routineHead.Children.Add($text); $i++
     }
     $v.RoutineHead.Child = $routineHead
+    Register-WtTableHead $v.TableHead $v.TableList
+    Register-WtTableHead $v.RoutineHead $v.RoutineList
     [Windows.Automation.AutomationProperties]::SetName($v.TableList, '일정 표'); [Windows.Automation.AutomationProperties]::SetName($v.RoutineList, '루틴 목록')
     $list = $v.TableList
     # 체크 상자: 누른 줄의 회차 · 차례만 바꾸고 다시 그린다. 마우스 · Space · 화면 읽기(UIA Toggle) 모두 Checked/Unchecked로 온다.
