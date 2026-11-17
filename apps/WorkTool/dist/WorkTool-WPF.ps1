@@ -1285,6 +1285,20 @@ New-Module -Name 'WorkTool.Storage' -ScriptBlock {
 
 $ErrorActionPreference = 'Stop'
 
+# 중첩된 화면 갱신은 한 동작의 읽은 자료만 공유한다. 끝나거나 실패하면 참조를 모두 놓는다.
+$script:readAction = $null
+function Invoke-WtReadAction([scriptblock]$Action) {
+    $owner = $null -eq $script:readAction
+    if ($owner) { $script:readAction = [Collections.Generic.Dictionary[object, object]]::new() }
+    try { & $Action }
+    finally { if ($owner) { $script:readAction = $null } }
+}
+function Get-WtReadValue([object]$Key, [scriptblock]$Read) {
+    if ($null -eq $script:readAction) { & $Read; return }
+    if (-not $script:readAction.ContainsKey($Key)) { $script:readAction[$Key] = @(& $Read) }
+    $script:readAction[$Key]
+}
+
 $script:appRoot = $null
 $script:dataRoot = $null
 $script:storeSession = 0       # 같은 경로로 다시 시작해도 이전 세션의 데이터 캐시·핸들은 다시 읽는다
@@ -1374,6 +1388,7 @@ function Invoke-WtDataCall {
 
 # 진입 스크립트가 자기 위치를 알려 준다. 묶음 파일이든 원본 폴더든 같은 방식으로 쓴다.
 function Set-WtAppRoot([string]$Path) {
+    if ($null -ne $script:readAction) { $script:readAction.Clear() }
     foreach ($preparation in $script:storePreparations.Values) { if ($preparation.Work) { Stop-WtWork $preparation.Work } }
     $script:appRoot = $Path
     $script:dataRoot = $null
@@ -1652,6 +1667,7 @@ function Get-WtDataFileRecord([string]$Path) {
 # 쓰기 하나를 통로에 넣는다. 넣는 순간 받아들인 버전이 된다.
 # 같은 파일의 아직 시작하지 않은 쓰기는 새 내용으로 바꾼다 (새 내용이 앞 내용을 담고 있다)
 function Submit-WtDataWrite([string]$Path, [string]$Json, $Document = $null) {
+    if ($null -ne $script:readAction) { $script:readAction.Clear() }
     $rec = Get-WtDataFileRecord $Path
     for ($i = $script:writeQueue.Count - 1; $i -ge 0; $i--) {
         if ($script:writeQueue[$i].Path -ieq $Path) { $script:writeQueue[$i].State = 'superseded'; $script:writeQueue.RemoveAt($i) }
@@ -1800,6 +1816,7 @@ function Test-WtDataWriting { [bool]($script:writeCurrent -or $script:writeQueue
 # 사용자가 「저장하지 않고 끝내기」를 골랐을 때만 셸이 부른다. 남은 쓰기와 쓰지 못한 내용을 버린다
 # (임시 파일에 쓰는 중이면 원래 파일은 그대로다)
 function Stop-WtDataWrites {
+    if ($null -ne $script:readAction) { $script:readAction.Clear() }
     foreach ($e in $script:writeQueue) { $e.State = 'dropped' }
     $script:writeQueue.Clear()
     if ($script:writeCurrent) {
@@ -1854,7 +1871,7 @@ $script:storeGeneration = 0
 
 function Get-WtStorePath {
     param([Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$Name)
-    Join-Path (Get-WtDataRoot) "$Name.json"
+    [IO.Path]::Combine((Get-WtDataRoot), "$Name.json")
 }
 
 function Test-WtStore([string]$Name) {
@@ -2080,6 +2097,22 @@ function Open-WtStore {
     New-WtStoreHandle $Name $path $Schema $state $err $doc $list $(if ($read) { $read.Generation } else { 0 })
 }
 
+# 저장소의 읽기·변환 외피. 캐시 슬롯은 호출자가 소유하며 항목의 뜻과 변환은 넘긴 함수가 정한다.
+function Get-WtConvertedStore {
+    param([string]$Name, [int]$Schema, [scriptblock]$Convert, [ref]$Cache, [scriptblock]$Migrate)
+    $stamp = Get-WtStoreStamp $Name
+    if ($Cache.Value -and $Cache.Value.Stamp -ceq $stamp) { return $Cache.Value }
+    $store = Open-WtStore -Name $Name -Schema $Schema -Migrate $Migrate
+    $entries = @(foreach ($item in $store.Items) { & $Convert $item })
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($entry in $entries) {
+        if (-not $entry.Id) { continue }
+        if (-not $seen.Add($entry.Id) -and $entry.State -ne 'deleted') { $entry.State = 'broken'; $entry.Problem = "id가 앞 항목과 겹칩니다: '$($entry.Id)'" }
+    }
+    $Cache.Value = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $store.Items; Entries = $entries; Error = $store.Error }
+    $Cache.Value
+}
+
 # 핸들 하나. 저장 모듈은 만든 핸들을 다시 고치지 않는다(저장하면 새 핸들을 만든다). 부르는 쪽도 고치지 않는다
 function New-WtStoreHandle([string]$Name, [string]$Path, [int]$Schema, [string]$State, $ErrorText, $Doc, [AllowNull()][object[]]$List, [long]$Version) {
     [pscustomobject][ordered]@{ Name = $Name; Path = $Path; Schema = $Schema; State = $State; Error = $ErrorText; Doc = $Doc; Items = $List; Version = $Version }
@@ -2137,7 +2170,7 @@ function Import-WtLegacyCsv([string]$Folder, [string]$Name) {
     , $r.Rows
 }
 
-Export-ModuleMember -Function Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
+Export-ModuleMember -Function Get-WtConvertedStore, Invoke-WtReadAction, Get-WtReadValue, Set-WtAppRoot, Get-WtAppRoot, Get-WtDataRoot, Open-WtDataLock, Close-WtDataLock, Read-WtJsonFile, Write-WtJsonFile,
     Register-WtStorePreparation, Get-WtStorePreparation, Read-WtCacheFile, Write-WtCacheFile, Invoke-WtQueuedStoreWrite,
     Test-WtDataWriting, Get-WtDataWriteState, Get-WtDataWriteStatus, Get-WtDataUnsaved, Resume-WtDataWrites, Register-WtDataWriteHandler, Stop-WtDataWrites,
     Get-WtStorePath, Test-WtStore, Get-WtDataFolder, Get-WtStoreStamp, Read-WtStore, Get-WtStoreItems, Write-WtStore, Open-WtStore, Save-WtStore, New-WtId,
@@ -2455,6 +2488,8 @@ $script:holidaySchema = 1
 $script:holidayKinds = @('public', 'company', 'personal')
 $script:holidayCache = $null
 $script:calendarSources = [System.Collections.Generic.List[object]]::new()
+$script:calendarStoreVersion = 0L
+$script:calendarStores = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)   # 출처의 저장소 선언. 자료나 계산 결과는 보관하지 않는다.
 Register-WtSettingDefault 'holidays.auto' $true   # 공휴일 자동 채우기
 
 # 항목 하나를 계산용으로 읽는다. State: ok · readonly(새 버전 값) · broken(고칠 항목) · deleted
@@ -2479,19 +2514,7 @@ function ConvertFrom-WtHolidayItem($Item) {
 못 읽어도 예외를 올리지 않는다(부르는 탭의 화면 · 계산이 멈추지 않게). 그때 핸들은 저장을 거부한다
 #>
 function Get-WtHolidayData {
-    $stamp = Get-WtStoreStamp 'holidays'
-    if ($script:holidayCache -and $script:holidayCache.Stamp -ceq $stamp) { return $script:holidayCache }
-    $store = Open-WtStore -Name 'holidays' -Schema $script:holidaySchema
-    $err = $store.Error
-    $items = $store.Items
-    $entries = @(foreach ($i in $items) { ConvertFrom-WtHolidayItem $i })
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($e in $entries) {
-        if (-not $e.Id) { continue }
-        if (-not $seen.Add($e.Id) -and $e.State -ne 'deleted') { $e.State = 'broken'; $e.Problem = "id가 앞 항목과 겹칩니다: '$($e.Id)'" }
-    }
-    $script:holidayCache = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $items; Entries = $entries; Error = $err }
-    $script:holidayCache
+    Get-WtConvertedStore -Name 'holidays' -Schema $script:holidaySchema -Convert ${function:ConvertFrom-WtHolidayItem} -Cache ([ref]$script:holidayCache)
 }
 
 # 계산에 쓰는 휴무일 날짜 모음 (yyyy-MM-dd, 읽을 수 있고 아는 종류만). -From · -To를 주면 그 사이(그날 포함)만
@@ -2712,6 +2735,7 @@ function Get-WtHolidayCalendarItems([datetime]$From, [datetime]$To) {
 # 코어 · 탭의 공용 달력 출처. null이면 해제, 같은 Id는 바꿔 끼운다.
 function Register-WtCalendarSource([string]$Id, [scriptblock]$CalendarItems, [string]$Page = '') {
     if (-not $Id) { throw '달력 출처 id가 필요합니다.' }
+    [void]$script:calendarStores.Remove($Id)
     for ($i = $script:calendarSources.Count - 1; $i -ge 0; $i--) {
         if ($script:calendarSources[$i].Id -ceq $Id) { $script:calendarSources.RemoveAt($i) }
     }
@@ -2720,9 +2744,19 @@ function Register-WtCalendarSource([string]$Id, [scriptblock]$CalendarItems, [st
 
 function Get-WtCalendarSource { $script:calendarSources.ToArray() }
 
-Register-WtCalendarSource -Id 'holidays' -CalendarItems { param([datetime]$From, [datetime]$To) Get-WtHolidayCalendarItems $From $To }
+# 출처를 바꿔 등록하면 선언도 지운다. 선언이 없는 출처는 기존 자료 조회로 변경을 확인한다.
+function Register-WtCalendarStores([string]$Id, [string[]]$Names) {
+    $script:calendarStoreVersion++
+    $script:calendarStores[$Id] = @{ Names = @($Names); Version = $script:calendarStoreVersion }
+}
+function Get-WtCalendarStoreRegistration([string]$Id) {
+    if ($script:calendarStores.ContainsKey($Id)) { $script:calendarStores[$Id] }
+}
 
-Export-ModuleMember -Function ConvertFrom-WtHolidayItem, Get-WtHolidayData, Get-WtHolidayDates, Save-WtHolidayItems,
+Register-WtCalendarSource -Id 'holidays' -CalendarItems { param([datetime]$From, [datetime]$To) Get-WtHolidayCalendarItems $From $To }
+Register-WtCalendarStores -Id 'holidays' -Names @('holidays')
+
+Export-ModuleMember -Function Register-WtCalendarStores, Get-WtCalendarStoreRegistration, ConvertFrom-WtHolidayItem, Get-WtHolidayData, Get-WtHolidayDates, Save-WtHolidayItems,
     Set-WtHolidayDate, ConvertFrom-WtHolidayPaste, Import-WtHolidayPaste, Get-WtHolidayCalendarItems, Register-WtCalendarSource, Get-WtCalendarSource,
     ConvertFrom-WtLunarDate, Get-WtKoreanHolidays, Update-WtAutoHolidays
 } | Import-Module -Force -DisableNameChecking
@@ -9463,6 +9497,28 @@ function Get-WtAddon {
     $list | Where-Object { $_.Required -or $disabled -notcontains $_.Id }
 }
 
+# 표시 자료와 변경 확인은 같은 활성 출처 목록을 쓴다.
+function Get-WtActiveCalendarSources([string[]]$Exclude = @()) {
+    foreach ($source in @(Get-WtCalendarSource)) {
+        if ($source.Id -cin $Exclude -or ($source.Page -and $source.Page -cin $Exclude)) { continue }
+        if ($source.Page) {
+            $addon = Get-WtAddon -Id $source.Page
+            if (-not $addon -or $addon.Id -cne $source.Page) { continue }
+        }
+        $source
+    }
+}
+function Get-WtCalendarStores([string[]]$Exclude = @()) {
+    $names = [Collections.Generic.List[string]]::new()
+    $keys = [Collections.Generic.List[string]]::new()
+    foreach ($source in @(Get-WtActiveCalendarSources $Exclude)) {
+        $declared = Get-WtCalendarStoreRegistration $source.Id
+        if ($null -eq $declared) { return @{ Complete = $false } }
+        foreach ($name in $declared.Names) { $names.Add($name) }
+        $keys.Add($declared.Version.ToString([Globalization.CultureInfo]::InvariantCulture))
+    }
+    @{ Complete = $true; Names = $names.ToArray(); Key = ($keys -join '|') }
+}
 # From ~ To(그날 포함). 한 출처의 실패는 Errors에 남기고 나머지는 계속 모은다.
 function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude = @()) {
     $items = [System.Collections.Generic.List[object]]::new()
@@ -9471,10 +9527,7 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
     if ($From.Date -gt $To.Date -or -not (ConvertFrom-WtDateText (ConvertTo-WtDateText $From)) -or -not (ConvertFrom-WtDateText (ConvertTo-WtDateText $To))) {
         return [pscustomobject]@{ Success = $false; Reason = '날짜 범위를 확인하세요'; Items = @(); Days = @(); Errors = @() }
     }
-    $enabled = @(Get-WtAddon | ForEach-Object Id)
-    foreach ($source in @(Get-WtCalendarSource)) {
-        if ($source.Page -and ($source.Page -cnotin $enabled -or $source.Page -cin $Exclude)) { continue }
-        if ($source.Id -cin $Exclude) { continue }
+    foreach ($source in @(Get-WtActiveCalendarSources $Exclude)) {
         try {
             $batch = @(& $source.CalendarItems $From.Date $To.Date)
             $accepted = [System.Collections.Generic.List[object]]::new()
@@ -9507,7 +9560,7 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
         Items = $sorted; Days = $days.ToArray(); Errors = $errors.ToArray() }
 }
 
-Export-ModuleMember -Function Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource,
+Export-ModuleMember -Function Get-WtCalendarStores, Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource,
     Get-WtDateMenuItems, Test-WtCalendarPartDay
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Addons.psm1 끝 ----
@@ -10550,7 +10603,6 @@ function Invoke-WtPageSelection([string]$Id) {
         if (-not $page) { return $false }
         if ($page.Addon -and $page.Addon.Refresh) { [void](& $page.Addon.Refresh $page.View) }
         $script:ui.PageHost.Content = $page.View
-        foreach ($k in @($script:navButtons.Keys)) { $script:navButtons[$k].Button.IsChecked = ($k -eq $Id) }
         $script:current = $Id
         Update-WtCurrentSidePanels
         Update-WtNavBadges
@@ -10698,66 +10750,70 @@ function Update-WtNav {
 
 # 한 출처가 실패해도 다른 배지·상태 항목은 계속 계산한다.
 function Update-WtNavBadges {
-    foreach ($item in $script:navButtons.Values) {
-        if (-not $item.Addon -or -not $item.IconDot) { continue }
-        $value = $null
-        $state = ''
-        if ($item.Addon.Badge) {
-            try {
-                $result = & $item.Addon.Badge
-                if ($result -is [string] -and $result -ceq 'dot') { $value = 'dot' }
-                elseif ($null -ne $result -and [Type]::GetTypeCode($result.GetType()) -in @('Byte','SByte','Int16','UInt16','Int32','UInt32','Int64','UInt64','Single','Double','Decimal')) {
-                    $value = $result.ToString([System.Globalization.CultureInfo]::InvariantCulture)
-                }
-                if ($value -eq 'dot' -or ($null -ne $value -and [double]$value -gt 0)) {
-                    $state = $item.Addon.BadgeToolTip -f $value
-                }
-            } catch { $value = $null; $state = '' }
+    Invoke-WtReadAction {
+        foreach ($item in $script:navButtons.Values) {
+            if (-not $item.Addon -or -not $item.IconDot) { continue }
+            $value = $null
+            $state = ''
+            if ($item.Addon.Badge) {
+                try {
+                    $result = & $item.Addon.Badge
+                    if ($result -is [string] -and $result -ceq 'dot') { $value = 'dot' }
+                    elseif ($null -ne $result -and [Type]::GetTypeCode($result.GetType()) -in @('Byte','SByte','Int16','UInt16','Int32','UInt32','Int64','UInt64','Single','Double','Decimal')) {
+                        $value = $result.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+                    }
+                    if ($value -eq 'dot' -or ($null -ne $value -and [double]$value -gt 0)) {
+                        $state = $item.Addon.BadgeToolTip -f $value
+                    }
+                } catch { $value = $null; $state = '' }
+            }
+            $item.Value = $value
+            Set-WtNavToolTip $item.Button $(if ($state) { "$($item.Addon.Title) · $state" } else { $item.Addon.Title })
+            # 화면 읽기 이름은 탭 이름 그대로 두고(매크로 · 보조 기술이 늘 같은 이름으로 찾게), 상태는 도움말 글로 준다
+            [System.Windows.Automation.AutomationProperties]::SetName($item.Button, [string]$item.Addon.Title)
+            [System.Windows.Automation.AutomationProperties]::SetHelpText($item.Button, [string]$state)
+            $dot = ($item.Addon.BadgeKind -eq 'dot' -and $value -eq 'dot') -or
+                ($item.Addon.BadgeKind -eq 'active' -and $null -ne $value -and $value -ne 'dot' -and [double]$value -ge 1)
+            Set-WtNavBadge $item $dot
         }
-        $item.Value = $value
-        Set-WtNavToolTip $item.Button $(if ($state) { "$($item.Addon.Title) · $state" } else { $item.Addon.Title })
-        # 화면 읽기 이름은 탭 이름 그대로 두고(매크로 · 보조 기술이 늘 같은 이름으로 찾게), 상태는 도움말 글로 준다
-        [System.Windows.Automation.AutomationProperties]::SetName($item.Button, [string]$item.Addon.Title)
-        [System.Windows.Automation.AutomationProperties]::SetHelpText($item.Button, [string]$state)
-        $dot = ($item.Addon.BadgeKind -eq 'dot' -and $value -eq 'dot') -or
-            ($item.Addon.BadgeKind -eq 'active' -and $null -ne $value -and $value -ne 'dot' -and [double]$value -ge 1)
-        Set-WtNavBadge $item $dot
+        Update-WtStatusBar
     }
-    Update-WtStatusBar
 }
 
 function Update-WtStatusBar {
-    if (-not $script:ui -or -not $script:ui.StatusLeft) { return }
-    $script:ui.StatusLeft.Children.Clear()
-    $script:ui.StatusLeft.ColumnDefinitions.Clear()
-    $script:ui.StatusRight.Children.Clear()
-    foreach ($addon in @(Get-WtAddon)) {
-        if (-not $addon.StatusItems) { continue }
-        try { $items = @(& $addon.StatusItems) } catch { continue }
-        $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-        foreach ($item in $items) {
-            try {
-                if (-not $item.Key -or $item.Key -cnotmatch '^[a-z0-9-]+$' -or -not $item.Text -or $item.Side -cnotin 'left','right' -or
-                    -not $item.Open -or $item.Open.Id -cne $addon.Id -or ($null -ne $item.Open.Args -and $item.Open.Args -isnot [hashtable]) -or
-                    -not $keys.Add([string]$item.Key)) { continue }
-                $button = New-WtStatusButton ([string]$item.Text) -Icon ([int]$item.Icon)
-                $button.ToolTip = if ($item.ToolTip) { [string]$item.ToolTip } else { [string]$item.Text }
-                $button.Tag = @{ Id = $addon.Id; Args = $(if ($item.Open.Args) { $item.Open.Args } else { @{} }) }
-                [System.Windows.Automation.AutomationProperties]::SetAutomationId($button, "Status-$($addon.Id)-$($item.Key)")
-                [System.Windows.Automation.AutomationProperties]::SetName($button, [string]$item.Text)
-                $button.Add_Click({ param($s, $e) Open-WtPage -Id $s.Tag.Id -Args $s.Tag.Args })
-                if ($item.Side -ceq 'right') { [void]$script:ui.StatusRight.Children.Add($button) }
-                else {
-                    $column = [System.Windows.Controls.ColumnDefinition]::new()
-                    $column.Width = [System.Windows.GridLength]::Auto
-                    [System.Windows.Controls.Grid]::SetColumn($button, $script:ui.StatusLeft.Children.Count)
-                    $script:ui.StatusLeft.ColumnDefinitions.Add($column)
-                    [void]$script:ui.StatusLeft.Children.Add($button)
-                }
-            } catch { continue }
+    Invoke-WtReadAction {
+        if (-not $script:ui -or -not $script:ui.StatusLeft) { return }
+        $script:ui.StatusLeft.Children.Clear()
+        $script:ui.StatusLeft.ColumnDefinitions.Clear()
+        $script:ui.StatusRight.Children.Clear()
+        foreach ($addon in @(Get-WtAddon)) {
+            if (-not $addon.StatusItems) { continue }
+            try { $items = @(& $addon.StatusItems) } catch { continue }
+            $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($item in $items) {
+                try {
+                    if (-not $item.Key -or $item.Key -cnotmatch '^[a-z0-9-]+$' -or -not $item.Text -or $item.Side -cnotin 'left','right' -or
+                        -not $item.Open -or $item.Open.Id -cne $addon.Id -or ($null -ne $item.Open.Args -and $item.Open.Args -isnot [hashtable]) -or
+                        -not $keys.Add([string]$item.Key)) { continue }
+                    $button = New-WtStatusButton ([string]$item.Text) -Icon ([int]$item.Icon)
+                    $button.ToolTip = if ($item.ToolTip) { [string]$item.ToolTip } else { [string]$item.Text }
+                    $button.Tag = @{ Id = $addon.Id; Args = $(if ($item.Open.Args) { $item.Open.Args } else { @{} }) }
+                    [System.Windows.Automation.AutomationProperties]::SetAutomationId($button, "Status-$($addon.Id)-$($item.Key)")
+                    [System.Windows.Automation.AutomationProperties]::SetName($button, [string]$item.Text)
+                    $button.Add_Click({ param($s, $e) Open-WtPage -Id $s.Tag.Id -Args $s.Tag.Args })
+                    if ($item.Side -ceq 'right') { [void]$script:ui.StatusRight.Children.Add($button) }
+                    else {
+                        $column = [System.Windows.Controls.ColumnDefinition]::new()
+                        $column.Width = [System.Windows.GridLength]::Auto
+                        [System.Windows.Controls.Grid]::SetColumn($button, $script:ui.StatusLeft.Children.Count)
+                        $script:ui.StatusLeft.ColumnDefinitions.Add($column)
+                        [void]$script:ui.StatusLeft.Children.Add($button)
+                    }
+                } catch { continue }
+            }
         }
+        Set-WtStatusLayout $script:ui.StatusLeft
     }
-    Set-WtStatusLayout $script:ui.StatusLeft
 }
 function Start-WtNavBadgeTimer {
     if ($script:badgeTimer) { $script:badgeTimer.Stop() }
@@ -12434,6 +12490,7 @@ Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -
     -CalendarItems { param([datetime]$From, [datetime]$To) $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }; Get-WtAttendanceCalendarItems $From $To $data.Entries } `
     -ImportLegacy { param($folder) Import-WtAttendanceLegacy $folder } `
     -Help @('월별 출퇴근 기록과 초과근무를 확인합니다.', '휴가는 종류(연차 · 오전 반차 · 오후 반차 · 대휴 등)를 고릅니다. 반차는 설정 → 업무시간의 반차 나누는 시각을 따르고, 그날만 다르면 폼에서 시각을 고칩니다.', '대휴는 「대휴 발생」 기록으로 생긴 일수를 넣으면 사이드바에 남은 일수가 보입니다. 일정 달력 날짜를 우클릭해 휴가를 바로 넣을 수도 있습니다.')
+Register-WtCalendarStores -Id 'addon:attendance' -Names @('attendance')
 Export-ModuleMember -Function Format-WtHours, Format-WtDays, Test-WtAttInMonth
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\attendance\Attendance.psm1 끝 ----
@@ -12513,19 +12570,7 @@ function Save-WtAttendanceItems($Store, [object[]]$Items) {
 
 # 화면 · 홈 카드가 같이 쓰는 읽은 결과 @{ Stamp; Store; Items; Entries; Error }. 못 읽어도 예외를 올리지 않는다 (ScheduleData.psm1과 같은 약속)
 function Get-WtAttendanceData {
-    $stamp = Get-WtStoreStamp 'attendance'
-    if ($script:cache -and $script:cache.Stamp -ceq $stamp) { return $script:cache }
-    $store = Open-WtAttendanceStore
-    $err = $store.Error
-    $items = $store.Items
-    $entries = @(foreach ($i in $items) { ConvertFrom-WtAttendanceItem $i })
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($e in $entries) {
-        if (-not $e.Id) { continue }
-        if (-not $seen.Add($e.Id) -and $e.State -ne 'deleted') { $e.State = 'broken'; $e.Problem = "id가 앞 항목과 겹칩니다: '$($e.Id)'" }
-    }
-    $script:cache = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $items; Entries = $entries; Error = $err }
-    $script:cache
+    Get-WtConvertedStore -Name 'attendance' -Schema $script:schema -Convert ${function:ConvertFrom-WtAttendanceItem} -Cache ([ref]$script:cache) -Migrate ${function:Update-WtAttendanceSchema}
 }
 
 # ---- 항목 하나 읽기 ---------------------------------------------------------------------------
@@ -13875,20 +13920,6 @@ function Update-WtDocsView {
     else { Show-WtDocFolder $first -SelectTree }
 }
 
-# 홈: 즐겨찾기 바로 열기
-function New-WtDocsHomeCard {
-    $pins = @(Get-WtSetting 'docs.pins')
-    if (-not $pins.Count) { return }
-    $card = New-WtCard
-    $col = New-WtStack Vertical
-    [void](Add-WtChild $col (New-WtCardHeader '즐겨찾기 문서' "$($pins.Count)" '문서 열기' 'docs'))
-    [void](Add-WtChild $col (New-WtText '불러오는 중…' 'T.Sub'))
-    $card.Child = $col
-    [void](Start-WtDocRequest 'home' 'pins' '' $col)
-    Wait-WtDocJob 'home'
-    $card
-}
-
 Register-WtAddon -Id 'docs' -Title '문서' -Icon 0xE8B7 -Group '작업' -Order 50 -WarmUp View `
     -NewView { New-WtDocsView } `
     -Refresh { param($view) Update-WtDocsView } `
@@ -13927,22 +13958,24 @@ function New-WtHomeCalendar {
 }
 
 function Update-WtHomeView {
-    $script:layout.Title.Text = Format-WtDate ([datetime]::Today) 'M월 d일 dddd'
-    $script:layout.Head.Children.Clear(); $script:layout.Main.Children.Clear(); $script:layout.Side.Children.Clear()
-    $cards = @(
-        [pscustomobject]@{ Id = 'home-shortcuts'; HomeSlot = 'main'; HomeOrder = 20; HomeCard = { New-WtShortcutCard @(Get-WtShortcuts) -OnChange { Update-WtHomeView } } }
-        [pscustomobject]@{ Id = 'home-calendar'; HomeSlot = 'side'; HomeOrder = 10; HomeCard = { New-WtHomeCalendar } }
-    ) + @(Get-WtHomeCards)
-    foreach ($card in @($cards | Sort-Object HomeSlot, HomeOrder, Id)) {
-        $column = switch ($card.HomeSlot) { 'head' { $script:layout.Head } 'side' { $script:layout.Side } default { $script:layout.Main } }
-        try {
-            foreach ($element in @(& $card.HomeCard)) {
-                if ($element -is [System.Windows.UIElement]) {
-                    [System.Windows.Controls.DockPanel]::SetDock($element, 'Top')
-                    [void](Add-WtChild $column $element)
+    Invoke-WtReadAction {
+        $script:layout.Title.Text = Format-WtDate ([datetime]::Today) 'M월 d일 dddd'
+        $script:layout.Head.Children.Clear(); $script:layout.Main.Children.Clear(); $script:layout.Side.Children.Clear()
+        $cards = @(
+            [pscustomobject]@{ Id = 'home-shortcuts'; HomeSlot = 'main'; HomeOrder = 20; HomeCard = { New-WtShortcutCard @(Get-WtShortcuts) -OnChange { Update-WtHomeView } } }
+            [pscustomobject]@{ Id = 'home-calendar'; HomeSlot = 'side'; HomeOrder = 10; HomeCard = { New-WtHomeCalendar } }
+        ) + @(Get-WtHomeCards)
+        foreach ($card in @($cards | Sort-Object HomeSlot, HomeOrder, Id)) {
+            $column = switch ($card.HomeSlot) { 'head' { $script:layout.Head } 'side' { $script:layout.Side } default { $script:layout.Main } }
+            try {
+                foreach ($element in @(& $card.HomeCard)) {
+                    if ($element -is [System.Windows.UIElement]) {
+                        [System.Windows.Controls.DockPanel]::SetDock($element, 'Top')
+                        [void](Add-WtChild $column $element)
+                    }
                 }
-            }
-        } catch { Write-Warning "홈 카드: $($_.Exception.Message)" }
+            } catch { Write-Warning "홈 카드: $($_.Exception.Message)" }
+        }
     }
 }
 
@@ -15524,11 +15557,6 @@ function Invoke-WtMemoAction([string]$Action, [string]$Id, $Value) {
 
 # ---- 목록: 그리기 -------------------------------------------------------------------------------
 
-# 줄 하나를 Find-WtMemo 결과 줄에서 만든다. 행 캐시는 메모 객체와 같은 이름을 쓴다
-function ConvertTo-WtMemoListItem($Row) {
-    New-WtMemoListItem ([pscustomobject]@{ id = $Row.Id; title = $Row.Title; body = [string]$Row.Snippet; updated = $Row.Updated; pinned = $Row.Pinned })
-}
-
 function Get-WtMemoListResult {
     $query = Get-WtMemoFilterText
     $firstList = $script:firstMemoList
@@ -16108,33 +16136,6 @@ function Test-WtMemoShortcut([string]$Key) {
         $script:shortcutStamp = $stamp
     }
     $script:shortcutIds.Contains($Key)
-}
-
-function New-WtMemoHomeCard {
-    $key = @((Get-WtStoreStamp 'memo'), [datetime]::Today.Ticks, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale')) -join '|'
-    if ($script:homeKey -ceq $key -and $script:homeCard -and -not $script:homeCard.Parent) { return $script:homeCard }
-    $items = @(Get-WtMemoSorted (Get-WtMemoItems))
-    $recent = @($items | Select-Object -First 3)
-    $card = New-WtCard
-    $col = New-WtStack Vertical
-    [void](Add-WtChild $col (New-WtCardHeader '최근 메모' '' '메모 열기' 'memo'))
-    foreach ($m in $recent) {
-        $t = New-WtStack Vertical 2
-        $name = New-WtText $m.title 'T.Strong'
-        $name.TextTrimming = 'CharacterEllipsis'
-        $name.TextWrapping = 'NoWrap'
-        [void](Add-WtChild $t $name)
-        $snip = New-WtText (Get-WtMarkdownSnippet ([string]$m.body)) 'T.Sub'
-        $snip.TextTrimming = 'CharacterEllipsis'
-        $snip.TextWrapping = 'NoWrap'
-        [void](Add-WtChild $t $snip)
-        $when = New-WtText (Format-WtMemoTime $m.updated) 'T.Sub'
-        [void](Add-WtChild $col (New-WtListRow @($when, $t)))
-    }
-    if (-not $items.Count) { [void](Add-WtChild $col (New-WtText '메모가 없습니다.' 'T.Sub')) }
-    $card.Child = $col
-    $script:homeCard = $card; $script:homeKey = $key
-    $card
 }
 
 # ---- 다른 탭과 잇기 (일정 2단계, 설계 13.5). 코어 등록 목록 -Related로만 불린다 ----------------------
@@ -21736,7 +21737,8 @@ function Update-WtScheduleTable {
     $result = $null; $problem = ''; $title = ''; $count = ''
     try {
         if ($mode -ceq 'due') {
-            $result = Get-WtScheduleDueRows
+            # 찾기 조건은 화면의 결과에만 적용한다. 같은 동작의 집계가 보는 원래 행은 남긴다.
+            $result = (Get-WtScheduleDueRows).PSObject.Copy()
             if ($query) {
                 $parsed = ConvertFrom-WtScheduleQuery $query
                 if ($parsed.Success) { $result.Rows = @($result.Rows | Where-Object { Test-WtScheduleRowMatch $parsed.Root $_ }) } else { $result = [pscustomobject]@{ Success = $false; Error = $parsed.Error } }
@@ -21801,16 +21803,18 @@ function Open-WtScheduleTableItem($Item) {
 
 # 표 · 할 일의 체크: 일정 회차는 event-log, 루틴 차례는 routine-log에 남긴다
 function Set-WtScheduleTableCheck($Item, [bool]$Done) {
-    if (-not (Test-WtScheduleTableItem $Item) -or $Item.IsHead) { return }
-    $row = $Item.Row
-    try {
-        $result = if ($row.Kind -ceq 'event') { Set-WtEventCheck -Event $row.Occurrence.Entry.Id -Date (ConvertTo-WtDateText $row.Occurrence.Original) -Done $Done }
-        else { Set-WtRoutineCheck -Routine $row.RoutineId -Slot $row.Slot -Done $Done }
-        if (-not $result.Success) { throw $result.Reason }
-    } catch { $script:view.TableNote.Text = "체크를 저장하지 못했습니다. $($_.Exception.Message)"; $script:view.TableNote.Visibility = 'Visible' }
-    $script:focusKey = $row.Key
-    Update-WtScheduleView
-    if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
+    Invoke-WtReadAction {
+        if (-not (Test-WtScheduleTableItem $Item) -or $Item.IsHead) { return }
+        $row = $Item.Row
+        try {
+            $result = if ($row.Kind -ceq 'event') { Set-WtEventCheck -Event $row.Occurrence.Entry.Id -Date (ConvertTo-WtDateText $row.Occurrence.Original) -Done $Done }
+            else { Set-WtRoutineCheck -Routine $row.RoutineId -Slot $row.Slot -Done $Done }
+            if (-not $result.Success) { throw $result.Reason }
+        } catch { $script:view.TableNote.Text = "체크를 저장하지 못했습니다. $($_.Exception.Message)"; $script:view.TableNote.Visibility = 'Visible' }
+        $script:focusKey = $row.Key
+        Update-WtScheduleView
+        if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
+    }
 }
 
 # 루틴 규칙 글: 매일 · 평일 · 월 · 수 · 금 · 2시간마다 · 09:00 ~ 17:00 (+ 근무 요일만)
@@ -21987,25 +21991,27 @@ function Set-WtChipText($TextBlock, [string]$Text, [bool]$Done) {
 }
 # 보이는 보기만 다시 그린다(달력 · 표 · 할 일 · 루틴). 오른쪽 사이드바는 어느 보기든 고른 날 목록 또는 편집 폼
 function Update-WtScheduleView {
-    if (-not $script:view) { return }
-    # 고른 날 · 보는 달은 화면 상태다. 어떤 길로든 비면 오늘로 되돌려, 오류가 탭을 열 때마다 남지 않게 한다
-    if ($script:selected -isnot [datetime]) { $script:selected = [datetime]::Today; $script:form = $null }
-    if ($script:month -isnot [datetime]) { $script:month = [datetime]::new($script:selected.Year, $script:selected.Month, 1) }
-    $v = $script:view; $mode = $script:viewMode
-    $v.CalendarHost.Visibility = if ($mode -ceq 'calendar') { 'Visible' } else { 'Collapsed' }
-    $v.TableHost.Visibility = if ($mode -cin 'due', 'table') { 'Visible' } else { 'Collapsed' }
-    $v.RoutineHost.Visibility = if ($mode -ceq 'routines') { 'Visible' } else { 'Collapsed' }
-    $data = Get-WtScheduleData
-    $v.Month.Text = $script:month.ToString('yyyy년 M월', $script:inv)
-    [Windows.Automation.AutomationProperties]::SetName($v.MonthButton, "$($v.Month.Text), 해 · 달 고르기")
-    switch ($mode) {
-        'calendar' { Update-WtScheduleHeader '' ''; Update-WtScheduleCalendar $data }
-        'routines' { Update-WtScheduleRoutineView }
-        default { Update-WtScheduleTable }
+    Invoke-WtReadAction {
+        if (-not $script:view) { return }
+        # 고른 날 · 보는 달은 화면 상태다. 어떤 길로든 비면 오늘로 되돌려, 오류가 탭을 열 때마다 남지 않게 한다
+        if ($script:selected -isnot [datetime]) { $script:selected = [datetime]::Today; $script:form = $null }
+        if ($script:month -isnot [datetime]) { $script:month = [datetime]::new($script:selected.Year, $script:selected.Month, 1) }
+        $v = $script:view; $mode = $script:viewMode
+        $v.CalendarHost.Visibility = if ($mode -ceq 'calendar') { 'Visible' } else { 'Collapsed' }
+        $v.TableHost.Visibility = if ($mode -cin 'due', 'table') { 'Visible' } else { 'Collapsed' }
+        $v.RoutineHost.Visibility = if ($mode -ceq 'routines') { 'Visible' } else { 'Collapsed' }
+        $data = Get-WtScheduleData
+        $v.Month.Text = $script:month.ToString('yyyy년 M월', $script:inv)
+        [Windows.Automation.AutomationProperties]::SetName($v.MonthButton, "$($v.Month.Text), 해 · 달 고르기")
+        switch ($mode) {
+            'calendar' { Update-WtScheduleHeader '' ''; Update-WtScheduleCalendar $data }
+            'routines' { Update-WtScheduleRoutineView }
+            default { Update-WtScheduleTable }
+        }
+        $script:side.Title.Text = Format-WtDate $script:selected 'M월 d일 dddd'
+        $script:side.Add.IsEnabled = -not [bool]$data.Error; $script:side.Add.ToolTip = if ($data.Error) { $data.Error } else { '새로 만들기' }
+        if (-not $script:form) { Show-WtScheduleDay }
     }
-    $script:side.Title.Text = Format-WtDate $script:selected 'M월 d일 dddd'
-    $script:side.Add.IsEnabled = -not [bool]$data.Error; $script:side.Add.ToolTip = if ($data.Error) { $data.Error } else { '새로 만들기' }
-    if (-not $script:form) { Show-WtScheduleDay }
 }
 # 달력 보기: 42칸 · 칩 · 여러 날 막대
 function Update-WtScheduleCalendar($data) {
@@ -22014,9 +22020,9 @@ function Update-WtScheduleCalendar($data) {
     if ($count -lt 35) { $count = 35 }
     $rows = $count / 7
     $script:view.Days.Rows = $rows
-    $days = Get-WtScheduleDays $data.Entries $start 42
+    $occurrences = @(Get-WtScheduleOccurrences $data.Entries $start $start.AddDays(41))
+    $days = Get-WtScheduleDays $data.Entries $start 42 -Occurrences $occurrences
     $doneKeys = try { Get-WtEventDone } catch { $null }
-    $occurrences = @(Get-WtScheduleOccurrences $data.Entries $start $start.AddDays($count - 1))
     $segments = @(Get-WtScheduleLanes $occurrences $start $rows)
     $calendar = Get-WtCalendarItems $start $start.AddDays(41) -Exclude @('schedule')
     for ($i = 0; $i -lt 42; $i++) {
@@ -22143,8 +22149,10 @@ function New-WtRoutineList([datetime]$Date) {
                 try {
                     $result = Set-WtRoutineCheck -Routine $s.Tag.Slot.Routine.Id -Slot $s.Tag.Slot.Slot -Done ([bool]$s.IsChecked)
                     if (-not $result.Success) { throw $result.Reason }
-                    Update-WtRoutineList $s.Tag.List $s.Tag.Date
-                    Update-WtScheduleAfterRoutineCheck
+                    Invoke-WtReadAction {
+                        Update-WtRoutineList $s.Tag.List $s.Tag.Date
+                        Update-WtScheduleAfterRoutineCheck
+                    }
                 } catch {
                     $s.Tag.Updating = $true
                     try { $s.IsChecked = -not $s.IsChecked; $s.ToolTip = $_.Exception.Message } finally { $s.Tag.Updating = $false }
@@ -22267,17 +22275,19 @@ function New-WtEventRow($Occ, [datetime]$Day, $DoneKeys) {
     $row
 }
 function Set-WtScheduleCheck($Check) {
-    if ($Check.Tag.Updating) { return }
-    $occ = $Check.Tag.Occ
-    try {
-        $result = Set-WtEventCheck -Event $occ.Entry.Id -Date (ConvertTo-WtDateText $occ.Original) -Done ([bool]$Check.IsChecked)
-        if (-not $result.Success) { throw $result.Reason }
-        $script:focusKey = $occ.Key
-        Update-WtScheduleView
-        if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
-    } catch {
-        $Check.Tag.Updating = $true
-        try { $Check.IsChecked = -not $Check.IsChecked; $Check.ToolTip = $_.Exception.Message } finally { $Check.Tag.Updating = $false }
+    Invoke-WtReadAction {
+        if ($Check.Tag.Updating) { return }
+        $occ = $Check.Tag.Occ
+        try {
+            $result = Set-WtEventCheck -Event $occ.Entry.Id -Date (ConvertTo-WtDateText $occ.Original) -Done ([bool]$Check.IsChecked)
+            if (-not $result.Success) { throw $result.Reason }
+            $script:focusKey = $occ.Key
+            Update-WtScheduleView
+            if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
+        } catch {
+            $Check.Tag.Updating = $true
+            try { $Check.IsChecked = -not $Check.IsChecked; $Check.ToolTip = $_.Exception.Message } finally { $Check.Tag.Updating = $false }
+        }
     }
 }
 
@@ -22665,20 +22675,22 @@ function Remove-WtScheduleForm {
 
 # 홈 「오늘 일정」 · 다음 일정 줄. 끝낸 회차는 제목 앞에 ✓를 붙이고(Done), 다음 일정 줄 · 메뉴 개수에서는 뺀다
 function Get-WtScheduleHomeItems {
-    $data = Get-WtScheduleData
-    $today = [datetime]::Today
-    $doneKeys = try { Get-WtEventDone } catch { $null }
-    @(foreach ($occurrence in @(Get-WtScheduleOccurrences $data.Entries $today $today)) {
-        $done = $null -ne $doneKeys -and $doneKeys.Contains($occurrence.Key)
-        $when = if ($occurrence.AllDay) { '하루 종일' } else { $occurrence.Start.ToString('HH:mm', $script:inv) + '–' + $(if ($occurrence.End) { $occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) }
-        $details = @($occurrence.Title, $when)
-        $repeatText = Get-WtRepeatLabel $occurrence.Entry.Repeat
-        if ($repeatText) { $details += $repeatText }
-        foreach ($alarm in @($occurrence.Alarms)) { $details += Format-WtAlarm $alarm }
-        if ($done) { $details += '끝냄' }
-        [pscustomobject]@{ Id = $occurrence.Entry.Id; Title = $(if ($done) { '✓ ' + $occurrence.Title } else { $occurrence.Title }); Start = $occurrence.Start; End = $occurrence.End
-            AllDay = $occurrence.AllDay; Alarm = @($occurrence.Alarms).Count -gt 0; ToolTip = (@($details | Where-Object { $_ }) -join "`n"); Done = $done }
-    })
+    Get-WtReadValue ('schedule:home:' + [datetime]::Today.Ticks) {
+        $data = Get-WtScheduleData
+        $today = [datetime]::Today
+        $doneKeys = try { Get-WtEventDone } catch { $null }
+        @(foreach ($occurrence in @(Get-WtScheduleOccurrences $data.Entries $today $today)) {
+            $done = $null -ne $doneKeys -and $doneKeys.Contains($occurrence.Key)
+            $when = if ($occurrence.AllDay) { '하루 종일' } else { $occurrence.Start.ToString('HH:mm', $script:inv) + '–' + $(if ($occurrence.End) { $occurrence.End.ToString('HH:mm', $script:inv) } else { '' }) }
+            $details = @($occurrence.Title, $when)
+            $repeatText = Get-WtRepeatLabel $occurrence.Entry.Repeat
+            if ($repeatText) { $details += $repeatText }
+            foreach ($alarm in @($occurrence.Alarms)) { $details += Format-WtAlarm $alarm }
+            if ($done) { $details += '끝냄' }
+            [pscustomobject]@{ Id = $occurrence.Entry.Id; Title = $(if ($done) { '✓ ' + $occurrence.Title } else { $occurrence.Title }); Start = $occurrence.Start; End = $occurrence.End
+                AllDay = $occurrence.AllDay; Alarm = @($occurrence.Alarms).Count -gt 0; ToolTip = (@($details | Where-Object { $_ }) -join "`n"); Done = $done }
+        })
+    }
 }
 function New-WtNextEventHomeLine {
     $script:homeNext = New-WtNextEventLine @(Get-WtScheduleHomeItems | Where-Object { -not $_.Done })
@@ -22697,14 +22709,8 @@ function Get-WtScheduleStatusItems([datetime]$Now = (Get-Date)) {
     } catch { }
     try {
         $stamp = Get-WtStamp $Now
-        $count = Get-WtScheduleDueCount -Now $stamp
-        $rows = @((Get-WtScheduleDueRows -Now $stamp).Rows)
-        $counts = @{}
-        foreach ($group in 'overdue','today','soon') {
-            $groupRows = @($rows | Where-Object { $_.Group -ceq $group })
-            $counts[$group] = @($groupRows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count +
-                @($groupRows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count
-        }
+        $summary = Get-WtScheduleDueSummary -Now $stamp
+        $count = $summary.Count; $counts = $summary.Counts
         @{ Key = 'due'; Icon = 0xE73E; Text = $(if ($count) { "남은 일 $count" } else { '남은 일 없음' })
             ToolTip = "기한 지남 $($counts.overdue) · 오늘 $($counts.today) · 마감 임박 $($counts.soon)"
             Side = 'right'; Open = @{ Id = 'schedule'; Args = @{ Date = $Now.Date; View = 'due' } } }
@@ -22830,19 +22836,7 @@ function Save-WtScheduleItems($Store, [object[]]$Items) {
    Entries = 항목마다 ConvertFrom-WtScheduleItem (Items와 같은 순서); Error = 못 읽은 이유 | $null }
 #>
 function Get-WtScheduleData {
-    $stamp = Get-WtStoreStamp 'schedule'
-    if ($script:cache -and $script:cache.Stamp -ceq $stamp) { return $script:cache }
-    $store = Open-WtScheduleStore
-    $err = $store.Error
-    $items = $store.Items
-    $entries = @(foreach ($i in $items) { ConvertFrom-WtScheduleItem $i })
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($e in $entries) {
-        if (-not $e.Id) { continue }
-        if (-not $seen.Add($e.Id) -and $e.State -ne 'deleted') { $e.State = 'broken'; $e.Problem = "id가 앞 항목과 겹칩니다: '$($e.Id)'" }
-    }
-    $script:cache = [pscustomobject]@{ Stamp = $stamp; Store = $store; Items = $items; Entries = $entries; Error = $err }
-    $script:cache
+    Get-WtConvertedStore -Name 'schedule' -Schema $script:schema -Convert ${function:ConvertFrom-WtScheduleItem} -Cache ([ref]$script:cache) -Migrate ${function:Update-WtScheduleSchema}
 }
 
 # ---- 항목 하나 읽기 ---------------------------------------------------------------------------
@@ -23180,47 +23174,50 @@ $From ~ $To(날짜, 그날 포함)와 겹치는 회차들. 계산할 수 있는 
 여러 날에 걸친 회차는 시작이 범위 앞이어도 범위에 걸치면 들어간다. 다른 날로 옮긴 회차(changes)는 옮긴 날로 들어간다
 #>
 function Get-WtScheduleOccurrences([object[]]$Entries, [datetime]$From, [datetime]$To) {
-    $lo = $From.Date
-    $hi = $To.Date
-    $list = [System.Collections.Generic.List[object]]::new()
-    foreach ($e in @($Entries)) {
-        if ($null -eq $e -or $e.State -ne 'ok') { continue }
-        if (-not $e.Repeat) {
-            if ($e.Start.Date -le $hi -and $e.LastDay -ge $lo) { $list.Add((New-WtSchOccurrence $e $e.Start.Date $null)) }
-            continue
+    Get-WtReadValue ([Tuple]::Create('occurrences', [object]$Entries, $From.Date, $To.Date)) {
+        $lo = $From.Date
+        $hi = $To.Date
+        $list = [System.Collections.Generic.List[object]]::new()
+        foreach ($e in @($Entries)) {
+            if ($null -eq $e -or $e.State -ne 'ok') { continue }
+            if (-not $e.Repeat) {
+                if ($e.Start.Date -le $hi -and $e.LastDay -ge $lo) { $list.Add((New-WtSchOccurrence $e $e.Start.Date $null)) }
+                continue
+            }
+            $rule = $e.Repeat
+            $span = ($e.LastDay - $e.Start.Date).Days
+            $done = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+            foreach ($d in (Get-WtRepeatDates $rule $e.Start $lo.AddDays(-$span) $hi)) {
+                $key = ConvertTo-WtDateText $d
+                [void]$done.Add($key)
+                if ($rule.Skip.Contains($key)) { continue }
+                $o = New-WtSchOccurrence $e $d $rule.Changes[$key]
+                if ($o.Start.Date -le $hi -and $o.LastDay -ge $lo) { $list.Add($o) }
+            }
+            # 범위 밖의 회차를 이 범위 안으로 옮긴 경우. 반복에 없는 날짜의 바꿈은 쓰지 않는다
+            foreach ($key in @($rule.Changes.Keys)) {
+                if ($done.Contains($key) -or $rule.Skip.Contains($key)) { continue }
+                $c = $rule.Changes[$key]
+                if (-not $c.Timing -or $c.Timing.Start.Date -gt $hi -or $c.Timing.LastDay -lt $lo) { continue }
+                $d = ConvertFrom-WtDateText $key
+                if (-not (Get-WtRepeatDates $rule $e.Start $d $d).Count) { continue }
+                $list.Add((New-WtSchOccurrence $e $d $c))
+            }
         }
-        $rule = $e.Repeat
-        $span = ($e.LastDay - $e.Start.Date).Days
-        $done = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-        foreach ($d in (Get-WtRepeatDates $rule $e.Start $lo.AddDays(-$span) $hi)) {
-            $key = ConvertTo-WtDateText $d
-            [void]$done.Add($key)
-            if ($rule.Skip.Contains($key)) { continue }
-            $o = New-WtSchOccurrence $e $d $rule.Changes[$key]
-            if ($o.Start.Date -le $hi -and $o.LastDay -ge $lo) { $list.Add($o) }
-        }
-        # 범위 밖의 회차를 이 범위 안으로 옮긴 경우. 반복에 없는 날짜의 바꿈은 쓰지 않는다
-        foreach ($key in @($rule.Changes.Keys)) {
-            if ($done.Contains($key) -or $rule.Skip.Contains($key)) { continue }
-            $c = $rule.Changes[$key]
-            if (-not $c.Timing -or $c.Timing.Start.Date -gt $hi -or $c.Timing.LastDay -lt $lo) { continue }
-            $d = ConvertFrom-WtDateText $key
-            if (-not (Get-WtRepeatDates $rule $e.Start $d $d).Count) { continue }
-            $list.Add((New-WtSchOccurrence $e $d $c))
-        }
+        @($list | Sort-Object -Culture 'ko-KR' -Property @{ Expression = { $_.Start } }, @{ Expression = { -not $_.AllDay } }, @{ Expression = { $_.Title } }, @{ Expression = { $_.Key } })
     }
-    @($list | Sort-Object -Culture 'ko-KR' -Property @{ Expression = { $_.Start } }, @{ Expression = { -not $_.AllDay } }, @{ Expression = { $_.Title } }, @{ Expression = { $_.Key } })
 }
 
 <#
 $From부터 $Count일 동안 날마다의 회차 목록(목록의 목록). 여러 날에 걸친 회차는 걸친 날마다 들어간다.
 하루 안에서는 하루 종일 · 앞날부터 이어진 것 → 시각 → 제목 순서
 #>
-function Get-WtScheduleDays([object[]]$Entries, [datetime]$From, [int]$Count) {
+function Get-WtScheduleDays([object[]]$Entries, [datetime]$From, [int]$Count, [object[]]$Occurrences) {
     $lo = $From.Date
     $buckets = [System.Collections.Generic.List[object]]::new()
     for ($i = 0; $i -lt $Count; $i++) { $buckets.Add([System.Collections.Generic.List[object]]::new()) }
-    foreach ($o in (Get-WtScheduleOccurrences $Entries $lo $lo.AddDays($Count - 1))) {
+    if (-not $PSBoundParameters.ContainsKey('Occurrences')) { $Occurrences = @(Get-WtScheduleOccurrences $Entries $lo $lo.AddDays($Count - 1)) }
+    foreach ($o in $Occurrences) {
         $a = [Math]::Max(0, ($o.Start.Date - $lo).Days)
         $b = [Math]::Min($Count - 1, ($o.LastDay - $lo).Days)
         for ($i = $a; $i -le $b; $i++) { $buckets[$i].Add($o) }
@@ -23928,37 +23925,39 @@ function Test-WtRoutineLogItem($Item) {
 
 # Date는 yyyy-MM-dd 또는 datetime. Now는 시험/화면의 같은 시각을 고정할 때만 넘긴다.
 function Get-WtRoutineSlots($Date, [string]$Now = (Get-WtStamp)) {
-    $day = ConvertFrom-WtRoutineDate $Date; $stamp = Get-WtRoutineStamp $Now
-    if (-not $day -or -not $stamp) { throw '날짜 · 앱 시각을 확인하세요' }
-    $entries = @(Get-WtRoutineEntries (Get-WtScheduleData).Store)
-    $log = Open-WtStore -Name 'routine-log' -Schema 1
-    if ($log.State -notin 'ok', 'missing') { throw "routine-log.json은 읽지 못했습니다. ($($log.Error))" }
-    $nowDate = (ConvertFrom-WtStamp $stamp).DateTime
-    $dayOff = if ($entries.Count) { Test-WtRoutineDayOff $day } else { $false }
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    $done = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-    foreach ($item in $log.Items) {
-        $id = [string](Get-WtField $item 'id')
-        if (-not $id -or -not $seen.Add($id) -or (Test-WtDeleted $item) -or -not (Test-WtRoutineLogItem $item)) { continue }
-        # 글 길이를 앞에 써서 id 안의 구분 글자와 충돌하지 않는다.
-        $key = $item.routine.Length.ToString($script:inv) + ':' + $item.routine + $item.slot
-        if (-not $done.ContainsKey($key)) { $done.Add($key, $item) }
-    }
-    foreach ($entry in $entries) {
-        $nextFound = $false
-        foreach ($slot in @(Get-WtRoutineSlotKeys $entry $day $dayOff)) {
-            $key = $entry.Id.Length.ToString($script:inv) + ':' + $entry.Id + $slot
-            $record = if ($done.ContainsKey($key)) { $done[$key] } else { $null }
-            $isNext = $false
-            if ($entry.Freq -ceq 'hourly' -and -not $nextFound) {
-                $time = ConvertFrom-WtTimeText $slot.Substring(11)
-                if ($day.Add($time) -gt $nowDate) { $isNext = $true; $nextFound = $true }
+    Get-WtReadValue ("schedule:slots:$Date/" + ($Now -replace ':\d{2}(?=[+-])', '')) {
+        $day = ConvertFrom-WtRoutineDate $Date; $stamp = Get-WtRoutineStamp $Now
+        if (-not $day -or -not $stamp) { throw '날짜 · 앱 시각을 확인하세요' }
+        $entries = @(Get-WtRoutineEntries (Get-WtScheduleData).Store)
+        $log = Open-WtStore -Name 'routine-log' -Schema 1
+        if ($log.State -notin 'ok', 'missing') { throw "routine-log.json은 읽지 못했습니다. ($($log.Error))" }
+        $nowDate = (ConvertFrom-WtStamp $stamp).DateTime
+        $dayOff = if ($entries.Count) { Test-WtRoutineDayOff $day } else { $false }
+        $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $done = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+        foreach ($item in $log.Items) {
+            $id = [string](Get-WtField $item 'id')
+            if (-not $id -or -not $seen.Add($id) -or (Test-WtDeleted $item) -or -not (Test-WtRoutineLogItem $item)) { continue }
+            # 글 길이를 앞에 써서 id 안의 구분 글자와 충돌하지 않는다.
+            $key = $item.routine.Length.ToString($script:inv) + ':' + $item.routine + $item.slot
+            if (-not $done.ContainsKey($key)) { $done.Add($key, $item) }
+        }
+        foreach ($entry in $entries) {
+            $nextFound = $false
+            foreach ($slot in @(Get-WtRoutineSlotKeys $entry $day $dayOff)) {
+                $key = $entry.Id.Length.ToString($script:inv) + ':' + $entry.Id + $slot
+                $record = if ($done.ContainsKey($key)) { $done[$key] } else { $null }
+                $isNext = $false
+                if ($entry.Freq -ceq 'hourly' -and -not $nextFound) {
+                    $time = ConvertFrom-WtTimeText $slot.Substring(11)
+                    if ($day.Add($time) -gt $nowDate) { $isNext = $true; $nextFound = $true }
+                }
+                # Time: 매일 · 요일 루틴의 시각(HH:mm, 설계 14.2) 또는 $null. 시간마다 루틴은 차례 키에 시각이 있다
+                # Links: 루틴의 관련 항목(13.1). 줄 끝 개수가 이것을 읽는다(전에는 빠져 있어 루틴 줄에 개수가 안 보였다)
+                $routineTime = if ($null -ne $entry.Time) { $entry.Time.ToString('hh\:mm', $script:inv) } else { $null }
+                [pscustomobject]@{ Routine = [pscustomobject]@{ Id = $entry.Id; Title = $entry.Title; Freq = $entry.Freq; Time = $routineTime; Links = @($entry.Links) }; Slot = $slot
+                    Done = $null -ne $record; DoneAt = $(if ($record) { $record.at } else { $null }); Next = $isNext }
             }
-            # Time: 매일 · 요일 루틴의 시각(HH:mm, 설계 14.2) 또는 $null. 시간마다 루틴은 차례 키에 시각이 있다
-            # Links: 루틴의 관련 항목(13.1). 줄 끝 개수가 이것을 읽는다(전에는 빠져 있어 루틴 줄에 개수가 안 보였다)
-            $routineTime = if ($null -ne $entry.Time) { $entry.Time.ToString('hh\:mm', $script:inv) } else { $null }
-            [pscustomobject]@{ Routine = [pscustomobject]@{ Id = $entry.Id; Title = $entry.Title; Freq = $entry.Freq; Time = $routineTime; Links = @($entry.Links) }; Slot = $slot
-                Done = $null -ne $record; DoneAt = $(if ($record) { $record.at } else { $null }); Next = $isNext }
         }
     }
 }
@@ -24265,41 +24264,60 @@ function Get-WtScheduleMonthRows([datetime]$Month, [string]$Now = (Get-WtStamp))
 
 # 할 일: 기한 지남 → 오늘 → 마감 임박(설계 14.5). 줄마다 Group(overdue · today · soon)을 붙인다
 function Get-WtScheduleDueRows([string]$Now = (Get-WtStamp)) {
-    $today = (ConvertFrom-WtStamp $Now).Date
-    $data = Get-WtScheduleData
-    if ($data.Error) { throw $data.Error }
-    $problems = @(); $doneKeys = try { Get-WtEventDone } catch { $problems += $_.Exception.Message; $null }
-    $rows = [System.Collections.Generic.List[object]]::new()
-    foreach ($occ in @(Get-WtScheduleOccurrences $data.Entries $today.AddDays(-$script:dueOverdueDays) $today.AddDays($script:dueSoonDays))) {
-        $row = New-WtScheduleEventRow $occ $doneKeys
-        if ($row.Start.Date -le $today -and $row.LastDay -ge $today) { $row.Group = 'today'; $row.Date = $today }
-        elseif (-not $row.Done -and $row.DueDate -lt $today -and $row.DueDate -ge $today.AddDays(-$script:dueOverdueDays)) { $row.Group = 'overdue' }
-        elseif (-not $row.Done -and $row.AllDay -and $row.Multi -and $row.Start.Date -gt $today -and $row.LastDay -le $today.AddDays($script:dueSoonDays)) { $row.Group = 'soon' }
-        else { continue }
-        $rows.Add($row)
+    Get-WtReadValue ("schedule:due:" + ($Now -replace ':\d{2}(?=[+-])', '')) {
+        $today = (ConvertFrom-WtStamp $Now).Date
+        $data = Get-WtScheduleData
+        if ($data.Error) { throw $data.Error }
+        $problems = @(); $doneKeys = try { Get-WtEventDone } catch { $problems += $_.Exception.Message; $null }
+        $rows = [System.Collections.Generic.List[object]]::new()
+        foreach ($occ in @(Get-WtScheduleOccurrences $data.Entries $today.AddDays(-$script:dueOverdueDays) $today.AddDays($script:dueSoonDays))) {
+            $row = New-WtScheduleEventRow $occ $doneKeys
+            if ($row.Start.Date -le $today -and $row.LastDay -ge $today) { $row.Group = 'today'; $row.Date = $today }
+            elseif (-not $row.Done -and $row.DueDate -lt $today -and $row.DueDate -ge $today.AddDays(-$script:dueOverdueDays)) { $row.Group = 'overdue' }
+            elseif (-not $row.Done -and $row.AllDay -and $row.Multi -and $row.Start.Date -gt $today -and $row.LastDay -le $today.AddDays($script:dueSoonDays)) { $row.Group = 'soon' }
+            else { continue }
+            $rows.Add($row)
+        }
+        try { foreach ($r in @(Get-WtScheduleRoutineRows $today -Now $Now)) { $r.Group = 'today'; $rows.Add($r) } } catch { $problems += $_.Exception.Message }
+        $order = @{ overdue = 0; today = 1; soon = 2 }
+        $result = New-WtScheduleRowResult $rows.ToArray() $problems $today.AddDays(-$script:dueOverdueDays) $today.AddDays($script:dueSoonDays)
+        # 묶음 안: 기한 지남은 기준일 · 날 순, 오늘은 2.4 순서, 마감 임박은 끝나는 날 순
+        $result.Rows = @($result.Rows | Sort-Object -Stable -Property @{ Expression = { $order[$_.Group] } }, @{ Expression = { if ($_.Group -ceq 'soon') { $_.LastDay } else { [datetime]::MinValue } } })
+        $result
     }
-    try { foreach ($r in @(Get-WtScheduleRoutineRows $today -Now $Now)) { $r.Group = 'today'; $rows.Add($r) } } catch { $problems += $_.Exception.Message }
-    $order = @{ overdue = 0; today = 1; soon = 2 }
-    $result = New-WtScheduleRowResult $rows.ToArray() $problems $today.AddDays(-$script:dueOverdueDays) $today.AddDays($script:dueSoonDays)
-    # 묶음 안: 기한 지남은 기준일 · 날 순, 오늘은 2.4 순서, 마감 임박은 끝나는 날 순
-    $result.Rows = @($result.Rows | Sort-Object -Stable -Property @{ Expression = { $order[$_.Group] } }, @{ Expression = { if ($_.Group -ceq 'soon') { $_.LastDay } else { [datetime]::MinValue } } })
-    $result
 }
 
 # 할 일 수: 끝내지 않은 일정 줄 + 오늘 차례를 다 끝내지 않은 루틴(시간마다는 루틴 하나로 센다). 보기 단추 · 메뉴 개수가 같이 쓴다.
 # 달력에서 날짜를 누를 때마다 불리므로, 같은 날 · 같은 일정 · 체크 · 휴무일 파일이면 60초 동안 다시 세지 않는다
-# (휴가는 다른 탭의 달력 출처라 표식이 없어 60초 안에 따라온다. 메뉴 개수는 1분마다 다시 센다)
+# 다른 달력 출처의 오늘 자료도 비교해 휴가 변경을 바로 반영한다. 메뉴 개수는 1분마다 다시 센다.
 $script:dueCountCache = $null
 function Get-WtScheduleDueCount([string]$Now = (Get-WtStamp)) {
-    $stamp = ConvertFrom-WtStamp $Now
-    $key = @((ConvertTo-WtDateText $stamp.Date), (Get-WtStoreStamp 'schedule'), (Get-WtStoreStamp 'event-log'), (Get-WtStoreStamp 'routine-log'),
-        (Get-WtStoreStamp 'holidays'), (ConvertTo-Json -Compress -Depth 5 -InputObject @((Get-WtSetting 'work.days'), (Get-WtSetting 'work.periods')))) -join '#'
-    $cache = $script:dueCountCache
-    if ($cache -and $cache.Key -ceq $key -and [math]::Abs(($stamp - $cache.At).TotalSeconds) -lt 60) { return $cache.Count }
-    $rows = @((Get-WtScheduleDueRows -Now $Now).Rows)
-    $count = @($rows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count + @($rows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count
-    $script:dueCountCache = [pscustomobject]@{ Key = $key; At = $stamp; Count = $count }
-    $count
+    (Get-WtScheduleDueSummary -Now $Now).Count
+}
+
+# 배지와 상태 줄은 같은 집계를 쓴다. 행은 보관하지 않고 개수만 기존 60초 캐시에 둔다.
+function Get-WtScheduleDueSummary([string]$Now = (Get-WtStamp)) {
+    Get-WtReadValue ("schedule:summary:" + ($Now -replace ':\d{2}(?=[+-])', '')) {
+        $stamp = ConvertFrom-WtStamp $Now
+        $stores = Get-WtCalendarStores -Exclude @('schedule')
+        $names = [Collections.Generic.HashSet[string]]::new([string[]]@('schedule','event-log','routine-log','holidays'), [StringComparer]::Ordinal)
+        $calendarKey = if ($stores.Complete) { foreach ($name in $stores.Names) { [void]$names.Add($name) }; $stores.Key }
+            else { ConvertTo-Json -Compress -Depth 5 -InputObject (Get-WtCalendarItems $stamp.Date $stamp.Date -Exclude @('schedule')) }
+        $stamps = @(foreach ($name in $names) { Get-WtStoreStamp $name })
+        $key = @((ConvertTo-WtDateText $stamp.Date), ($stamps -join '#'), $calendarKey,
+            (ConvertTo-Json -Compress -Depth 5 -InputObject @((Get-WtSetting 'work.days'), (Get-WtSetting 'work.periods')))) -join '#'
+        $cache = $script:dueCountCache
+        if ($cache -and $cache.Key -ceq $key -and [math]::Abs(($stamp - $cache.At).TotalSeconds) -lt 60) { return $cache }
+        $rows = @((Get-WtScheduleDueRows -Now $Now).Rows)
+        $counts = @{}
+        foreach ($group in 'overdue','today','soon') {
+            $groupRows = @($rows | Where-Object { $_.Group -ceq $group })
+            $counts[$group] = @($groupRows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count +
+                @($groupRows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count
+        }
+        $script:dueCountCache = [pscustomobject]@{ Key = $key; At = $stamp; Count = $counts.overdue + $counts.today + $counts.soon; Counts = $counts }
+        $script:dueCountCache
+    }
 }
 
 # 찾기: 오늘 앞뒤 365일(식 속 날짜가 밖이면 넓힘)의 회차 + 오늘 루틴(식에 is:routine이 있으면 기간 안 날마다), 맞는 것만 Limit줄까지
@@ -24339,7 +24357,7 @@ Export-ModuleMember -Function Open-WtScheduleStore, Save-WtScheduleItems, Get-Wt
     New-WtRoutine, Save-WtRoutine, Set-WtRoutineDeleted, Get-WtRoutineSlots, Set-WtRoutineCheck, Get-WtRoutineHistory,
     Get-WtEventDone, Set-WtEventCheck, Get-WtScheduleLanes, Get-WtScheduleLinks, Get-WtScheduleItemLinks, Add-WtScheduleLink, Remove-WtScheduleLink,
     ConvertFrom-WtScheduleTagText, ConvertFrom-WtScheduleQuery, Test-WtScheduleRowMatch, Get-WtScheduleDue, Get-WtScheduleRoutineRows,
-    Get-WtScheduleMonthRows, Get-WtScheduleDueRows, Get-WtScheduleDueCount, Find-WtScheduleRows, Get-WtRoutineEntries, ConvertFrom-WtRoutineItem
+    Get-WtScheduleMonthRows, Get-WtScheduleDueRows, Get-WtScheduleDueCount, Get-WtScheduleDueSummary, Find-WtScheduleRows, Get-WtRoutineEntries, ConvertFrom-WtRoutineItem
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\schedule\ScheduleData.psm1 끝 ----
 
@@ -24822,7 +24840,7 @@ function Complete-WtFlowRun($Run) {
     Stop-WtWork $Run.Pump
     foreach ($r in $Run.Readers) { try { $r.Dispose() } catch { } }
     try { $Run.Process.Dispose() } catch { }
-    try { Save-WtFlowRun $rec } catch { $Run | Add-Member -NotePropertyName SaveError -NotePropertyValue $_.Exception.Message -Force }
+    Save-WtFlowRunResult $Run
     $status
 }
 
@@ -24871,6 +24889,12 @@ function Save-WtFlowRun($Record) {
     $rest = @(Get-WtFlowRuns | Where-Object { $_.id -ne $Record.id })
     $all = @(@($Record) + $rest | Sort-Object { [string]$_.started } -Descending | Select-Object -First $script:maxRuns)
     Write-WtStore -Name 'workflow-runs' -Schema $script:schema -Items $all
+}
+
+# 앱 안 실행과 콘솔 종료가 같은 실패 안내를 쓴다. 받아들인 쓰기의 재시도는 저장 통로가 맡는다.
+function Save-WtFlowRunResult($Run) {
+    try { Save-WtFlowRun $Run.Record }
+    catch { $Run | Add-Member -NotePropertyName SaveError -NotePropertyValue $_.Exception.Message -Force }
 }
 
 # 실행 기록 하나. 넘긴 값만 남긴다 (스위치는 기본값과 다를 때만). 업무는 이름이 아니라 id로 가리킨다
@@ -25812,7 +25836,8 @@ function Update-WtFlowRunState {
             try { $exited = $c.Process.HasExited } catch { }
             if (-not $exited) { continue }
             $c.Record.ended = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-            try { Save-WtFlowRun $c.Record } catch { }
+            Save-WtFlowRunResult $c
+            if ($u.Count -and $c.PSObject.Properties['SaveError']) { Set-WtFlowNote "실행 기록을 저장하지 못했습니다: $($c.SaveError)" }
             try { $c.Process.Dispose() } catch { }
             [void]$script:consoles.Remove($c)
             if ($u.Count) { Update-WtFlowHelp }
@@ -26346,30 +26371,6 @@ function New-WtFlowsView {
 function Update-WtFlowsView {
     Update-WtFlowTree
     Update-WtFlowCommands
-}
-
-# 홈: 저장한 업무와 그 업무의 마지막 결과
-function New-WtFlowsHomeCard {
-    $flows = @(Get-WtFlows | Select-Object -First 4)
-    if (-not $flows.Count) { return }
-    $runs = @(Get-WtFlowRuns)
-    $card = New-WtCard
-    $col = New-WtStack Vertical
-    [void](Add-WtChild $col (New-WtCardHeader '업무' '' '업무 열기' 'workflows'))
-    foreach ($f in $flows) {
-        $last = $runs | Where-Object { $_.flowId -eq $f.id } | Select-Object -First 1
-        $name = New-WtButton ([string]$f.title) -Kind Link
-        $name.Tag = [string]$f.id
-        $name.HorizontalAlignment = 'Left'
-        $name.Add_Click({ param($s, $e) $script:pendingFlow = [string]$s.Tag; Select-WtPage 'workflows' })
-        $state = if ($last) {
-            $look = Get-WtFlowStatusLook ([string]$last.status) ([bool]$last.whatIf)
-            New-WtTag $look.Text $look.Bg $look.Fg $look.Icon
-        } else { New-WtText '아직 실행 안 함' 'T.Sub' }
-        [void](Add-WtChild $col (New-WtListRow @($state, $name)))
-    }
-    $card.Child = $col
-    $card
 }
 
 # 앱을 끄면 앱 안 실행은 멈춘다 (창 없는 프로세스를 남기지 않는다). 콘솔 창은 따로 도는 창이라 그대로 둔다
