@@ -1819,16 +1819,15 @@ try {
             Set-WtMemoEditorMode $ed $mode
             if ($mode -eq 'live') { Open-EdAt $ed 0 0 }
             $win.UpdateLayout(); $box = Get-EdBox $ed; [void]$box.Focus(); Sync-EdUi
-            $border = $box.Template.FindName('FocusBorder', $box)
-            $ok = $ok -and $null -eq $box.FocusVisualStyle -and $border.Visibility -eq 'Visible' -and
-                $border.BorderThickness.Equals([Windows.Thickness]::new(2)) -and
-                $border.BorderBrush.Color -eq $ed.Root.FindResource('B.Accent').Color
+            # 메모 원문 · 섬은 문서 면이라 포커스가 있어도 테두리 · 강조선이 없다(11-17 승호: 줄 둘레 파란 네모가 어색)
+            $ok = $ok -and $null -eq $box.FocusVisualStyle -and $null -eq $box.Template.FindName('FocusBorder', $box) -and
+                $box.BorderThickness.Equals([Windows.Thickness]::new(0))
         }
         foreach ($key in 'Btn', 'Row', 'Check') {
             $focus = @((Get-WtStyleDictionary)[$key].Setters | Where-Object { $_.Property.Name -ceq 'FocusVisualStyle' })
             $ok = $ok -and $focus.Count -eq 1 -and $null -ne $focus[0].Value
         }
-        Assert-Ed 'InputFocus-SingleOutline: Input · 원문 · 섬 바깥 포커스 없음 · 안쪽 2 Accent · 단추/행/체크 포커스 유지' $ok
+        Assert-Ed 'InputFocus-SingleOutline: Input은 2 Accent 하나 · 원문 · 섬은 테두리 없음 · 단추/행/체크 포커스 유지' $ok
     }
     Invoke-EdCase 'FindHint-HidesWhileTyping' {
         $ed = New-EdEditor
