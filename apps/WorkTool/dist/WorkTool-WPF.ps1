@@ -19726,10 +19726,22 @@ function Get-WtMemoSourceOffset([string]$Rendered, [string]$Source) {
 }
 
 function Test-WtMemoClickThrough($El, $Stop) {
-    while ($El -and $El -ne $Stop) {
-        if ($El -is [System.Windows.Controls.Primitives.ButtonBase] -or $El -is [System.Windows.Documents.Hyperlink] -or
-            $El -is [System.Windows.Controls.Primitives.ScrollBar] -or $El -is [System.Windows.Controls.TextBox]) { return $true }
-        $El = Get-WtMemoParent $El
+    # 문서 안 그림은 시각 트리의 UIElementIsland와 논리 트리의 Hyperlink에 함께 속한다.
+    # 시각 부모만 택하면 링크를 잃으므로 이 판정에서만 두 부모 경로를 모두 확인한다.
+    $pending = [System.Collections.Generic.Queue[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[System.Windows.DependencyObject]]::new()
+    if ($El) { $pending.Enqueue($El) }
+    while ($pending.Count) {
+        $node = $pending.Dequeue()
+        if ([object]::ReferenceEquals($node, $Stop) -or -not $seen.Add($node)) { continue }
+        if ($node -is [System.Windows.Controls.Primitives.ButtonBase] -or $node -is [System.Windows.Documents.Hyperlink] -or
+            $node -is [System.Windows.Controls.Primitives.ScrollBar] -or $node -is [System.Windows.Controls.TextBox]) { return $true }
+        $logical = [System.Windows.LogicalTreeHelper]::GetParent($node)
+        if ($logical) { $pending.Enqueue($logical) }
+        if ($node -is [System.Windows.Media.Visual] -or $node -is [System.Windows.Media.Media3D.Visual3D]) {
+            $visual = [System.Windows.Media.VisualTreeHelper]::GetParent($node)
+            if ($visual) { $pending.Enqueue($visual) }
+        }
     }
     $false
 }

@@ -8,27 +8,34 @@
 .PARAMETER OutputPath
     결과 JSON을 보관할 새 폴더. 생략하면 시스템 임시 폴더를 만든다.
 .PARAMETER MaxCpuSeconds
-    자식의 전체 CPU 시간 예산. 기본 3초이며 0.5~5초 범위다.
+    자식의 전체 CPU 안전 한도(0.5~15초). 기본 화면은 3초, checklist는 준비를 포함해 12초다. 구조 합격 기준은 아니다.
 .PARAMETER MaxWallSeconds
     자식 실행의 벽시계 제한. 기본 45초이며 10~60초 범위다.
 .PARAMETER MaxSystemCpuPercent
     선택적인 시작 전 전체 CPU 부하 한도. 기본 100%로 기존 부하에 따른 실행 제한은 두지 않는다.
+.PARAMETER Scenario
+    pages는 기존 화면 구성 확인, checklist는 숨김 호스트의 300줄 체크 목록만 확인한다.
+    checklist의 시간은 기록만 하며 템플릿 12개·시각 노드 1200개 이하를 예산으로 쓴다.
 .EXAMPLE
     pwsh -NoProfile -STA -File ./Measure-WtPerformance.ps1 -OutputPath ./.work/perf-light-new
+.EXAMPLE
+    pwsh -NoProfile -STA -File ./Measure-WtPerformance.ps1 -Scenario checklist -OutputPath ./.work/perf-checklist-new
 #>
 #Requires -Version 7.0
 [CmdletBinding()]
 param(
     [string]$OutputPath,
-    [ValidateRange(.5,5)][double]$MaxCpuSeconds = 3,
+    [ValidateRange(.5,15)][double]$MaxCpuSeconds = 3,
     [ValidateRange(10,60)][int]$MaxWallSeconds = 45,
     [ValidateRange(1,100)][int]$MaxSystemCpuPercent = 100,
+    [ValidateSet('pages','checklist')][string]$Scenario = 'pages',
     [switch]$LightWorker,
     [string]$AppRoot
 )
 
 # ===== 고정 확인 조건 =====
 $Config = @{ ContentWidth = 1046; ContentHeight = 630; PauseMilliseconds = 150 }
+if ($Scenario -eq 'checklist' -and -not $PSBoundParameters.ContainsKey('MaxCpuSeconds')) { $MaxCpuSeconds = 12 }
 $ErrorActionPreference = 'Stop'
 $script:source = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'TestKit.ps1')
@@ -97,6 +104,51 @@ flowchart LR
     Set-WtSetting 'workflows.roots' @($scripts)
 }
 
+function Measure-PerfChecklist($HostView) {
+    $parameters = [Windows.Interop.HwndSourceParameters]::new('checklist budget')
+    $parameters.WindowStyle = 0; $parameters.Width = $Config.ContentWidth; $parameters.Height = $Config.ContentHeight
+    $sourceHost = [Windows.Interop.HwndSource]::new($parameters)
+    try {
+        $sourceHost.RootVisual = $HostView
+        $text = "# 점검표`n`n" + ((1..300 | ForEach-Object { "- [$(if ($_ % 3) { ' ' } else { 'x' })] 가짜 항목 $_ 확인" }) -join "`n")
+        $process = [Diagnostics.Process]::GetCurrentProcess(); $cpu = $process.TotalProcessorTime.TotalMilliseconds
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $view = New-WtMarkdownView -Scroll -OnTask { param($line,$element) }
+        $HostView.Content = $view; Set-WtMarkdownText $view $text
+        if ($view.Tag.Error) { throw $view.Tag.Error }
+        $buildMs = $watch.Elapsed.TotalMilliseconds
+        $layout = [Diagnostics.Stopwatch]::StartNew()
+        $HostView.Measure([Windows.Size]::new($Config.ContentWidth,$Config.ContentHeight))
+        $HostView.Arrange([Windows.Rect]::new(0,0,$Config.ContentWidth,$Config.ContentHeight)); $HostView.UpdateLayout()
+        [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{},[Windows.Threading.DispatcherPriority]::ApplicationIdle)
+        $HostView.UpdateLayout(); $layout.Stop()
+        $taskCount = 0; $pointer = $view.Document.ContentStart
+        while ($pointer) {
+            if ($pointer.GetPointerContext('Forward') -eq 'ElementStart') {
+                $element = $pointer.GetAdjacentElement('Forward')
+                if ($element -is [Windows.Documents.Hyperlink] -and $element.Tag -is [hashtable] -and $element.Tag.ContainsKey('State') -and $element.Tag.ContainsKey('Line')) { $taskCount++ }
+            }
+            $pointer = $pointer.GetNextContextPosition('Forward')
+        }
+        $visualCount = 0; $templateCount = 0
+        $queue = [Collections.Generic.Queue[Windows.Media.Visual]]::new(); $queue.Enqueue($view)
+        while ($queue.Count) {
+            $visual = $queue.Dequeue(); $visualCount++
+            $children = [Windows.Media.VisualTreeHelper]::GetChildrenCount($visual)
+            if ($visual -is [Windows.Controls.Control] -and $visual.Template -and $children -gt 0) { $templateCount++ }
+            for ($i=0; $i -lt $children; $i++) {
+                $child = [Windows.Media.VisualTreeHelper]::GetChild($visual,$i)
+                if ($child -is [Windows.Media.Visual]) { $queue.Enqueue($child) }
+            }
+        }
+        $process.Refresh()
+        [pscustomobject]@{ Phase='checklist'; Page='document'; Scope='300줄 만들기·숨김 배치·구조 예산'
+            WallMs=$watch.Elapsed.TotalMilliseconds; CpuMs=($process.TotalProcessorTime.TotalMilliseconds-$cpu)
+            BuildMs=$buildMs; LayoutMs=$layout.Elapsed.TotalMilliseconds; TemplateCount=$templateCount; VisualNodeCount=$visualCount
+            TaskCount=$taskCount; MaxTemplates=12; MaxVisualNodes=1200; BudgetPassed=($taskCount -eq 300 -and $templateCount -le 12 -and $visualCount -le 1200) }
+    } finally { $sourceHost.Dispose() }
+}
+
 if ($MyInvocation.InvocationName -eq '.') { return }
 
 if ($LightWorker) {
@@ -118,10 +170,12 @@ if ($LightWorker) {
         if (-not (Test-WtTestWpf)) { throw 'Windows STA에서 실행하세요.' }
         Import-WtTestCore
         Set-WtAppRoot $safeApp; Initialize-WtSettings
-        foreach ($file in Get-ChildItem (Join-Path $script:source 'addons') -Filter '*.psm1' -Recurse | Sort-Object FullName) {
-            Import-Module $file.FullName -Force -DisableNameChecking
+        if ($Scenario -eq 'pages') {
+            foreach ($file in Get-ChildItem (Join-Path $script:source 'addons') -Filter '*.psm1' -Recurse | Sort-Object FullName) {
+                Import-Module $file.FullName -Force -DisableNameChecking
+            }
+            Initialize-PerfFixture ([pscustomobject]@{Root=$safeRoot; App=$safeApp; Data=$expectedData})
         }
-        Initialize-PerfFixture ([pscustomobject]@{Root=$safeRoot; App=$safeApp; Data=$expectedData})
         $shellModule = Get-Module Shell
         $hostView = [Windows.Controls.ContentControl]::new()
         $hostView.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
@@ -129,9 +183,12 @@ if ($LightWorker) {
         Set-WtResource $hostView FontFamily 'Font.UI'
         Set-WtResource $hostView FontSize 'F.Body'
         Set-WtResource $hostView Foreground 'B.Text'
-        # Window나 HwndSource를 만들지 않는다. 오류도 대화상자로 표시하지 않는다.
+        # 기본 화면 확인은 호스트 창 없이, 체크 목록만 WindowStyle=0의 숨김 호스트로 본다.
         & $shellModule { function script:Show-WtError { param($ErrorRecord,$Action) throw $ErrorRecord } }
-        foreach ($phase in 'construct','reuse') {
+        if ($Scenario -eq 'checklist') {
+            $row = Measure-PerfChecklist $hostView; $rows.Add($row)
+            if (-not $row.BudgetPassed) { throw "체크 목록 구조 예산 초과: 템플릿 $($row.TemplateCount)/12 · 시각 노드 $($row.VisualNodeCount)/1200" }
+        } else { foreach ($phase in 'construct','reuse') {
             foreach ($id in @('home','schedule','attendance','memo','workflows','_settings','_help','docs','active-tasks')) {
                 $process.Refresh()
                 if ($process.TotalProcessorTime.TotalSeconds -ge $MaxCpuSeconds -or $watch.Elapsed.TotalSeconds -ge $MaxWallSeconds) {
@@ -154,7 +211,7 @@ if ($LightWorker) {
                 [Threading.Thread]::Sleep($Config.PauseMilliseconds)
             }
             if ($reason -ne '완료') { break }
-        }
+        } }
     } catch { $failure = $_.Exception.Message; $reason = '오류' }
     finally {
         if (Get-Command Get-WtAddon -ErrorAction SilentlyContinue) {
@@ -164,7 +221,7 @@ if ($LightWorker) {
         }
     }
     $process.Refresh()
-    Write-PerfLightResult ([ordered]@{ Mode='offscreen-light'; Reason=$reason; Failure=$failure; ComparableToAH=$false; Rows=@($rows.ToArray()); CpuSeconds=$process.TotalProcessorTime.TotalSeconds; WallSeconds=$watch.Elapsed.TotalSeconds })
+    Write-PerfLightResult ([ordered]@{ Mode='offscreen-light'; Scenario=$Scenario; Reason=$reason; Failure=$failure; ComparableToAH=$false; Rows=@($rows.ToArray()); CpuSeconds=$process.TotalProcessorTime.TotalSeconds; WallSeconds=$watch.Elapsed.TotalSeconds })
     if ($failure) { exit 1 }
     exit 0
 }
@@ -176,7 +233,7 @@ if (Test-Path -LiteralPath $OutputPath) { throw '결과를 덮어쓰지 않도�
 [void][IO.Directory]::CreateDirectory($OutputPath)
 $load = Get-PerfLoad
 if ($MaxSystemCpuPercent -lt 100 -and ($null -eq $load -or $load -gt $MaxSystemCpuPercent)) {
-    Write-PerfLightResult ([ordered]@{ Mode='offscreen-light'; Reason='시스템 부하로 생략'; LoadBefore=$load; MaxSystemCpuPercent=$MaxSystemCpuPercent; ComparableToAH=$false; Rows=@() })
+    Write-PerfLightResult ([ordered]@{ Mode='offscreen-light'; Scenario=$Scenario; Reason='시스템 부하로 생략'; LoadBefore=$load; MaxSystemCpuPercent=$MaxSystemCpuPercent; ComparableToAH=$false; Rows=@() })
     Write-Host "경량 확인 생략: 전체 CPU $load% (한도 $MaxSystemCpuPercent%)"
     return
 }
@@ -193,8 +250,9 @@ try {
     $info.FileName = Join-Path $PSHOME 'pwsh.exe'
     $info.UseShellExecute = $false; $info.CreateNoWindow = $true
     $info.RedirectStandardInput = $true; $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
-    $info.Environment['DOTNET_TieredCompilation'] = '0'
-    foreach ($arg in @('-NoLogo','-NoProfile','-STA','-File',$PSCommandPath,'-LightWorker','-AppRoot',$test.App,'-OutputPath',$OutputPath,'-MaxCpuSeconds',"$MaxCpuSeconds",'-MaxWallSeconds',"$MaxWallSeconds")) { $info.ArgumentList.Add($arg) }
+    # 체크 목록은 시간 대신 구조로 판정한다. 준비 단계의 전체 즉시 컴파일 비용은 더하지 않는다.
+    if ($Scenario -eq 'pages') { $info.Environment['DOTNET_TieredCompilation'] = '0' }
+    foreach ($arg in @('-NoLogo','-NoProfile','-STA','-File',$PSCommandPath,'-LightWorker','-AppRoot',$test.App,'-OutputPath',$OutputPath,'-Scenario',$Scenario,'-MaxCpuSeconds',"$MaxCpuSeconds",'-MaxWallSeconds',"$MaxWallSeconds")) { $info.ArgumentList.Add($arg) }
     $child = [Diagnostics.Process]::Start($info)
     $child.StandardInput.Close()
     $outTask = $child.StandardOutput.ReadToEndAsync(); $errorTask = $child.StandardError.ReadToEndAsync()
@@ -214,13 +272,18 @@ try {
         catch { if (-not $stopReason) { throw } }
     }
     # 예산 중단이 자식의 JSON 쓰기와 겹쳐도 중단 사유는 온전히 남긴다.
-    if (-not $result) { $result = [ordered]@{ Mode='offscreen-light'; Reason=$(if ($stopReason) { $stopReason } else { '자식 종료 시 결과 없음' }); ComparableToAH=$false; Rows=@() } }
+    if (-not $result) { $result = [ordered]@{ Mode='offscreen-light'; Scenario=$Scenario; Reason=$(if ($stopReason) { $stopReason } else { '자식 종료 시 결과 없음' }); ComparableToAH=$false; Rows=@() } }
     $result.LoadBefore=$load; $result.LoadSamples=@($loads.ToArray())
     $result.CpuSeconds=$child.TotalProcessorTime.TotalSeconds; $result.WallSeconds=$parentWatch.Elapsed.TotalSeconds
     if ($stopReason) { $result.Reason=$stopReason }
     $result.ExitCode=$child.ExitCode
     Write-PerfLightResult $result
     Write-Host "경량 확인: $($result.Reason), CPU $([Math]::Round($result.CpuSeconds,2))초, 벽시계 $([Math]::Round($result.WallSeconds,2))초, 창 표시 없음"
+    if ($Scenario -eq 'checklist') {
+        $result.Rows | ForEach-Object { [pscustomobject]$_ } | Format-Table Phase,TaskCount,@{n='BuildMs';e={[math]::Round($_.BuildMs,1)}},@{n='LayoutMs';e={[math]::Round($_.LayoutMs,1)}},TemplateCount,VisualNodeCount,BudgetPassed -AutoSize
+        if ($result.ExitCode -eq 0 -and $result.Reason -eq '완료' -and @($result.Rows | Where-Object BudgetPassed).Count -eq 1) { Write-Host 'PASS 체크 목록 300줄 구조 예산 · 시간은 기록만' }
+        else { throw "FAIL 체크 목록 300줄 구조 예산: $($result.Reason) $($result.Failure)" }
+    }
 } finally {
     if ($child) { if (-not $child.HasExited) { $child.Kill($true); [void]$child.WaitForExit(5000) }; $child.Dispose() }
     Remove-WtTestData $test

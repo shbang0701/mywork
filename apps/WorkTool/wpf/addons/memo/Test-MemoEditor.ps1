@@ -400,6 +400,7 @@ function Find-EdTaskLink($View, [int]$Line) {
 function Invoke-EdTaskClick($View, [int]$Line) {
     $h = Find-EdTaskLink $View $Line
     if (-not $h) { throw "할 일 체크 표시를 찾지 못했습니다 (줄 $Line)" }
+    Assert-EdInputPath $View $h.Inlines.FirstInline $h "체크 줄 $Line"
     $h.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Documents.Hyperlink]::ClickEvent, $h))
 }
 # 실시간 보기에서 원문이 $UnitText인 단위의 할 일 체크 표시를 누른다 (그릴 때 줄 번호와 상관없이)
@@ -411,6 +412,7 @@ function Invoke-EdTaskClickOf($Ed, [string]$UnitText) {
         if ($tp.GetPointerContext('Forward') -eq 'ElementStart') {
             $el = $tp.GetAdjacentElement('Forward')
             if ($el -is [System.Windows.Documents.Hyperlink] -and $el.Tag -is [hashtable] -and $el.Tag.ContainsKey('State')) {
+                Assert-EdInputPath $Ed.Live $el.Inlines.FirstInline $el '다시 그린 체크 줄'
                 $el.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Documents.Hyperlink]::ClickEvent, $el))
                 return
             }
@@ -418,6 +420,14 @@ function Invoke-EdTaskClickOf($Ed, [string]$UnitText) {
         $tp = $tp.GetNextContextPosition('Forward')
     }
     throw "할 일 체크 표시를 찾지 못했습니다 ($UnitText)"
+}
+
+function Assert-EdInputPath($View, $Element, $Target, [string]$Name) {
+    $route = Test-WtTestInputPath -View $View -Element $Element -Target $Target -BringIntoView -ClickThrough {
+        param($hit, $view)
+        & $script:em { param($el, $stop) Test-WtMemoClickThrough $el $stop } $hit $view
+    }
+    Assert-Ed "숨김 좌표 경로: $Name" $route.Ok $route.Path
 }
 
 # ---- 검사 글 ---------------------------------------------------------------------------------------
@@ -894,17 +904,97 @@ try {
         }
     }
 
-    # ---- 할 일 누르기 ----
+    Invoke-EdCase '입력경로' {
+        $picturePath = Join-Path $test.Root 'input-path.png'
+        $pixels = [byte[]]::new(32 * 16 * 4)
+        for ($i=3; $i -lt $pixels.Length; $i+=4) { $pixels[$i] = 255 }
+        $bitmap = [Windows.Media.Imaging.BitmapSource]::Create(32,16,96,96,[Windows.Media.PixelFormats]::Bgra32,$null,$pixels,32*4)
+        $encoder = [Windows.Media.Imaging.PngBitmapEncoder]::new(); $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
+        $stream = [IO.File]::Create($picturePath); try { $encoder.Save($stream) } finally { $stream.Dispose() }
+        $picture = $picturePath.Replace('\','/'); $missing = (Join-Path $test.Root 'missing-input.png').Replace('\','/')
+        $body = @('[일반 링크](https://example.invalid/plain)', '', '[[시험 문서]]', '',
+            "[![성공 그림](<$picture>)](https://example.invalid/image)", '',
+            "[![실패 그림](<$missing>)](https://example.invalid/missing)", '',
+            '| 열 | 그림 |', '|---|---|', "| 예 | [![표 그림](<$picture>)](https://example.invalid/table) |", '',
+            '```text', 'callback sample', '```', '', '> [!note]+ 접기 제목', '> 접는 본문', '', '일반 본문') -join "`n"
+        foreach ($mode in 'live','read') {
+            $ed = New-EdEditor; $ed.TestLinks = [Collections.Generic.List[string]]::new()
+            $ed.OnLink = { param($editor,$link,$how) $editor.TestLinks.Add($link.Kind); $true }
+            Set-EdText $ed $body; $null = Set-WtMemoEditorMode $ed $mode
+            $view = if ($mode -eq 'live') { $ed.Live } else { $ed.View }
+            $links = [Collections.Generic.List[object]]::new(); $plain = $null
+            $pointer = $view.Document.ContentStart
+            while ($pointer) {
+                if ($pointer.GetPointerContext('Forward') -eq 'ElementStart') {
+                    $element = $pointer.GetAdjacentElement('Forward')
+                    if ($element -is [Windows.Documents.Hyperlink]) { $links.Add($element) }
+                    if ($element -is [Windows.Documents.Run] -and $element.Text -ceq '일반 본문') { $plain = $element }
+                }
+                $pointer = $pointer.GetNextContextPosition('Forward')
+            }
+            Assert-Ed "숨김 입력 경로 준비: $mode · 링크 6개" ($links.Count -eq 6)
+            foreach ($link in $links) {
+                $inline = $link.Inlines.FirstInline
+                $element = if ($inline -is [Windows.Documents.InlineUIContainer]) { $inline.Child } else { $inline }
+                if ($inline -is [Windows.Documents.InlineUIContainer]) {
+                    $wait = [Diagnostics.Stopwatch]::StartNew()
+                    while ($element.Tag.Work -and -not $element.Tag.Work.Finished -and $wait.ElapsedMilliseconds -lt 2000) { Update-WtWork; Wait-EdUi 10 }
+                    $wanted = if ($link.Tag.Link.Target -like '*/missing') { [Windows.Controls.TextBlock] } else { [Windows.Controls.Image] }
+                    Assert-Ed "이미지 링크 상태: $mode · $($link.Tag.Link.Target)" ($element.Child -is $wanted)
+                    if ($mode -eq 'live') {
+                        # 수정 전 판정 그대로: 시각 부모를 먼저 택해 논리 Hyperlink를 잃는다.
+                        $old = Test-WtTestInputPath -View $view -Element $element -Target $link -BringIntoView -ClickThrough {
+                            param($hit,$stop)
+                            & $script:em {
+                                param($node,$end)
+                                while ($node -and $node -ne $end) {
+                                    if ($node -is [Windows.Controls.Primitives.ButtonBase] -or $node -is [Windows.Documents.Hyperlink] -or $node -is [Windows.Controls.Primitives.ScrollBar] -or $node -is [Windows.Controls.TextBox]) { return $true }
+                                    $node = Get-WtMemoParent $node
+                                }
+                                $false
+                            } $hit $stop
+                        }
+                        Assert-Ed "이미지 링크 고장 대조군: $($link.Tag.Link.Target) · 이전 click-through=False" ($old.Reached -and $old.ClickThrough -eq $false -and -not $old.Ok) $old.Path
+                    }
+                }
+                Assert-EdInputPath $view $element $link "$mode · $($link.ToolTip)"
+                if ($link.ToolTip -ceq '접기 / 펼치기') {
+                    $open = $link.Tag.Open; $link.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Documents.Hyperlink]::ClickEvent))
+                    Assert-Ed "콜아웃 콜백: $mode · 접기" ($link.Tag.Open -ne $open)
+                } else {
+                    $count = $ed.TestLinks.Count; $link.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Documents.Hyperlink]::ClickEvent))
+                    Assert-Ed "링크 콜백: $mode · $($link.Tag.Link.Kind)" ($ed.TestLinks.Count -eq $count + 1)
+                }
+            }
+            $copy = Get-WtVisualChild $view ([Windows.Controls.Button])
+            Assert-Ed "코드 복사 단추 준비: $mode" ($copy -and $copy.ToolTip -ceq '코드 복사')
+            Assert-EdInputPath $view $copy $copy "$mode · 코드 복사"
+            $markdown = Get-Module Markdown
+            $originalCopy = & $markdown { (Get-Command Copy-WtMdCode).ScriptBlock }
+            try {
+                & $markdown { $script:inputTestCopied = ''; function script:Copy-WtMdCode($button) { $script:inputTestCopied = [string]$button.Tag } }
+                $copy.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+                Assert-Ed "코드 복사 콜백: $mode · 클립보드 통로는 대역" ((& $markdown { $script:inputTestCopied }) -clike '*callback sample*')
+            } finally { & $markdown { param($original) Set-Item function:script:Copy-WtMdCode $original } $originalCopy }
+            if ($mode -eq 'live') {
+                $route = Test-WtTestInputPath -View $view -Element $plain -Target $plain -BringIntoView -ClickThrough { param($hit,$stop) & $script:em { param($el,$end) Test-WtMemoClickThrough $el $end } $hit $stop }
+                Assert-Ed '일반 본문: 좌표 도달 · click-through=False 유지' ($route.Reached -and $route.ClickThrough -eq $false) $route.Path
+            }
+            Assert-Ed "입력 경로 확인: $mode · 본문·섬 그대로" ((Get-EdText $ed) -ceq $body -and -not $ed.Island)
+        }
+    }
+
+    # ---- 할 일 콜백 + 숨김 좌표 경로 ----
     Invoke-EdCase '할 일' {
         $ed = New-EdEditor
         Set-EdText $ed $sampleText
         Invoke-EdTaskClick $ed.Live 23
         $want = $sample.Clone(); $want[22] = '- [x] 할 일'
-        Assert-Ed '편집기 할 일(실시간): 누르면 [ ] → [x], 섬은 닫힘, OnChanged' ((Get-EdText $ed) -ceq (Join-EdLines $want) -and -not $ed.Island -and $ed.TestChanged -eq 1) "$($ed.TestChanged)"
+        Assert-Ed '편집기 할 일 콜백(실시간): [ ] → [x], 섬은 닫힘, OnChanged' ((Get-EdText $ed) -ceq (Join-EdLines $want) -and -not $ed.Island -and $ed.TestChanged -eq 1) "$($ed.TestChanged)"
         [void](Test-EdContract $ed '할 일 누름')
         Invoke-EdTaskClick $ed.Live 24
         $want[23] = '- [ ] 끝난 일'
-        Assert-Ed '편집기 할 일(실시간): [x] → [ ]' ((Get-EdText $ed) -ceq (Join-EdLines $want))
+        Assert-Ed '편집기 할 일 콜백(실시간): [x] → [ ]' ((Get-EdText $ed) -ceq (Join-EdLines $want))
         [void](Test-EdContract $ed '할 일 해제')
         Invoke-EdCommand $ed 'Ctrl+Z'
         $want[23] = '- [x] 끝난 일'
@@ -918,7 +1008,7 @@ try {
         Send-EdText $ed '덧줄'
         Invoke-EdTaskClick $ed.Live 23
         $want = [System.Collections.Generic.List[string]]$sample; $want[22] = '- [x] 할 일'; $want.Insert(4, '덧줄')
-        Assert-Ed '편집기 할 일(실시간): 위쪽 섬에서 줄을 늘린 채로 눌러도 그 항목' ((Get-EdText $ed) -ceq (Join-EdLines $want)) (((Get-EdLines $ed)[22..24]) -join ' / ')
+        Assert-Ed '편집기 할 일 콜백(실시간): 위쪽 섬에서 줄을 늘려도 같은 항목' ((Get-EdText $ed) -ceq (Join-EdLines $want)) (((Get-EdLines $ed)[22..24]) -join ' / ')
         [void](Test-EdContract $ed '섬 연 채로 할 일')
 
         # 읽기 모드
@@ -927,9 +1017,9 @@ try {
         $changed = $ed.TestChanged
         Invoke-EdTaskClick $ed.View 23
         $want = $sample.Clone(); $want[22] = '- [x] 할 일'
-        Assert-Ed '편집기 할 일(읽기): 누르면 [x], 보기를 다시 그리고 OnChanged' ((Get-EdText $ed) -ceq (Join-EdLines $want) -and $ed.TestChanged -eq $changed + 1 -and $ed.View.Tag.Text -ceq (Join-EdLines $want))
+        Assert-Ed '편집기 할 일 콜백(읽기): [x], 보기를 다시 그리고 OnChanged' ((Get-EdText $ed) -ceq (Join-EdLines $want) -and $ed.TestChanged -eq $changed + 1 -and $ed.View.Tag.Text -ceq (Join-EdLines $want))
         Invoke-EdTaskClick $ed.View 23
-        Assert-Ed '편집기 할 일(읽기): 다시 누르면 [ ]' ((Get-EdText $ed) -ceq $sampleText)
+        Assert-Ed '편집기 할 일 콜백(읽기): 다시 호출하면 [ ]' ((Get-EdText $ed) -ceq $sampleText)
         $null = Set-WtMemoEditorMode $ed 'live'
     }
 
@@ -941,7 +1031,7 @@ try {
         Send-EdText $ed 'n'
         Close-Ed $ed
         Invoke-EdTaskClickOf $ed '- [ ] c'
-        Assert-Ed '편집기 할 일(실시간): 위쪽에 항목을 더해 다시 그린 뒤 눌러도 그 항목 (다시 쓴 Section의 줄 번호)' ((Get-EdText $ed) -ceq "- [ ] a`n- [ ] n`n- [ ] b`n- [x] c") ((Get-EdText $ed).Replace("`n", '¶'))
+        Assert-Ed '편집기 할 일 콜백(실시간): 위쪽 항목 추가 뒤에도 같은 항목 (다시 쓴 Section의 줄 번호)' ((Get-EdText $ed) -ceq "- [ ] a`n- [ ] n`n- [ ] b`n- [x] c") ((Get-EdText $ed).Replace("`n", '¶'))
         [void](Test-EdContract $ed '위쪽에 항목 더한 뒤 할 일')
     }
 

@@ -1516,11 +1516,31 @@ pie
         }
         & $walkDoc $taskView.Document.Blocks
         foreach ($h in $taskLinks) { $h.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Documents.Hyperlink]::ClickEvent)) }
-        Assert-Wt 'WPF: 할 일 체크 표시를 누르면 원문 줄 번호로 부른다 (손 모양 커서)' (($global:taskLines -join ',') -eq '3,4,5' -and $taskLinks[0].Cursor -eq [System.Windows.Input.Cursors]::Hand) ($global:taskLines -join ',')
+        Assert-Wt 'WPF 할 일 콜백: 원문 줄 번호와 손 모양 커서' (($global:taskLines -join ',') -eq '3,4,5' -and $taskLinks[0].Cursor -eq [System.Windows.Input.Cursors]::Hand) ($global:taskLines -join ',')
         $plainTask = New-WtMarkdownView
         Set-WtMarkdownText $plainTask '- [ ] 하나'
         $firstInline = $plainTask.Document.Blocks.FirstBlock.ListItems.FirstListItem.Blocks.FirstBlock.Inlines.FirstInline
-        Assert-Wt 'WPF: -OnTask가 없으면 체크 표시는 누를 수 없다' ($firstInline -is [System.Windows.Documents.Run] -and $firstInline.Text -eq [string][char]0xE739)
+        Assert-Wt 'WPF OnTask 없음: 부착 전 표시 Run · 링크·포커스 없음' ($firstInline -is [System.Windows.Documents.Run] -and $firstInline.Text -eq [string][char]0xE739 -and $firstInline.Parent -isnot [Windows.Documents.Hyperlink] -and -not $firstInline.Focusable)
+        $taskHost = [Windows.Controls.Border]::new(); $taskHost.Width = 480; $taskHost.Height = 240
+        $taskHost.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $taskHost.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+        $taskParameters = [Windows.Interop.HwndSourceParameters]::new('task path test'); $taskParameters.WindowStyle = 0; $taskParameters.Width = 480; $taskParameters.Height = 240
+        $taskSource = [Windows.Interop.HwndSource]::new($taskParameters)
+        try {
+            $taskSource.RootVisual = $taskHost; $taskHost.Child = $taskView
+            $taskHost.Measure([Windows.Size]::new(480,240)); $taskHost.Arrange([Windows.Rect]::new(0,0,480,240)); $taskHost.UpdateLayout()
+            foreach ($link in $taskLinks) {
+                $route = Test-WtTestInputPath -View $taskView -Element $link.Inlines.FirstInline -Target $link -BringIntoView
+                Assert-Wt 'WPF 할 일 숨김 좌표 경로: Run → Hyperlink' $route.Ok $route.Path
+            }
+            $broken = [Windows.Controls.CheckBox]::new(); Set-WtStyle $broken 'Check'
+            $broken.Width = 16; $broken.Height = 16; $broken.IsHitTestVisible = $false; $broken.Focusable = $false
+            $taskLinks[0].Inlines.Clear(); $taskLinks[0].Inlines.Add([Windows.Documents.InlineUIContainer]::new($broken))
+            $route = Test-WtTestInputPath -View $taskView -Element $broken -Target $taskLinks[0] -BringIntoView
+            Assert-Wt 'WPF 할 일 고장 대조군: CheckBox 숨김 좌표 경로=False' ($route.Point -and $route.Hit -and -not $route.Ok -and -not $route.Reached) $route.Path
+            $taskHost.Child = $plainTask; $taskHost.UpdateLayout()
+            $route = Test-WtTestInputPath -View $plainTask -Element $firstInline -Target $firstInline
+            Assert-Wt 'WPF OnTask 없음: 부착 뒤 표시 Run 도달 · 링크·포커스 없음' ($route.Ok -and $firstInline.Parent -isnot [Windows.Documents.Hyperlink] -and -not $firstInline.Focusable) $route.Path
+        } finally { $taskSource.Dispose() }
 
         # 파일 · 폴더 열기 (core\Work.psm1 Open-WtPath): 있는지 · 폴더인지 확인과 셸 열기 모두 화면 밖에서 한다.
         # 속성 읽기와 셸 호출 두 곳만 가짜로 바꾼다 (실제로 열지 않고 할 일만 기록). 여는 작업 · 취소 확인 · 넘김 표시는 그대로 돈다.

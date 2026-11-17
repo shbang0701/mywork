@@ -9,6 +9,7 @@
     - Assert-WtTest: 맞으면 PASS를 찍고, 틀리면 그 자리에서 멈춘다.
     - New-WtTestGate · Remove-WtTestGate · $wtTestHang: 응답 없는 공유 폴더를 흉내 낸다 (돌아오지 않는 화면 밖 작업).
     - Test-WtTestWpf · New-WtTestView · Get-WtTestTexts: WPF 화면 검사(Windows · STA에서만)를 준비하고, 탭 화면을 창 없이 만들고, 화면에 실린 글을 모은다.
+    - Test-WtTestInputPath: 숨김 호스트의 실제 배치 좌표에서 입력 대상과 논리/시각 부모 경로를 확인한다. OS 입력·누름/뗌·캡처·DPI 검사는 아니다.
 
 .EXAMPLE
     . (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'tests/TestKit.ps1')
@@ -122,4 +123,71 @@ function New-WtTestView([string]$Id) {
     $view.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
     $view.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
     $view
+}
+
+<#
+.SYNOPSIS
+    배치된 요소의 중심 좌표에서 목표까지 입력 경로가 이어지는지 확인한다.
+.DESCRIPTION
+    호출자가 WindowStyle=0인 숨김 호스트에 보기를 붙이고 배치한다. ContentElement는
+    IContentHost의 실제 사각형을 보기 좌표로 옮기며, UIElement는 RenderSize를 쓴다.
+    InputHitTest 결과의 논리/시각 부모를 모두 확인한다. ClickThrough는 선택적인
+    편집기 판정 { param($Hit, $View) ... }이다. Ok·Reached·ClickThrough·Path·Bounds를 돌려준다.
+    이 검사는 OS 입력, 누름/뗌, 마우스 캡처, 실제 화면, DPI/IME를 보증하지 않는다.
+    BringIntoView는 숨김 보기 안에서 스크롤만 조정하며 창 표시나 입력을 만들지 않는다.
+#>
+function Test-WtTestInputPath {
+    param([Parameter(Mandatory)]$View, [Parameter(Mandatory)]$Element,
+        [Parameter(Mandatory)]$Target, [scriptblock]$ClickThrough, [switch]$BringIntoView)
+    if ($BringIntoView -and $Element -is [Windows.FrameworkContentElement]) { $Element.BringIntoView() }
+    elseif ($BringIntoView -and $Element -is [Windows.FrameworkElement]) { $Element.BringIntoView() }
+    $View.UpdateLayout()
+    [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
+    $View.UpdateLayout()
+    $rectangles = [Collections.Generic.List[Windows.Rect]]::new()
+    if ($Element -is [Windows.UIElement]) {
+        try { $rectangles.Add($Element.TransformToAncestor($View).TransformBounds([Windows.Rect]::new([Windows.Point]::new(0,0), $Element.RenderSize))) } catch { }
+    } elseif ($Element -is [Windows.ContentElement]) {
+        # Get-WtVisualChild는 첫 형식 일치만 돌려주므로, 여러 문서 페이지/조각을 여기서 모은다.
+        $visuals = [Collections.Generic.Queue[Windows.Media.Visual]]::new(); $visuals.Enqueue($View)
+        while ($visuals.Count) {
+            $visual = $visuals.Dequeue()
+            if ($visual -is [Windows.IContentHost]) {
+                try {
+                    $found = [Windows.IContentHost].GetMethod('GetRectangles').Invoke($visual, @($Element))
+                    foreach ($rect in $found) { if (-not $rect.IsEmpty) { $rectangles.Add($visual.TransformToAncestor($View).TransformBounds($rect)) } }
+                } catch { }
+            }
+            for ($i = 0; $i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($visual); $i++) {
+                $child = [Windows.Media.VisualTreeHelper]::GetChild($visual, $i)
+                if ($child -is [Windows.Media.Visual]) { $visuals.Enqueue($child) }
+            }
+        }
+    }
+    $bounds = [Windows.Rect]::Empty
+    foreach ($rect in $rectangles) { $bounds.Union($rect) }
+    $point = $null; $hit = $null; $reached = $false; $path = '배치 전이거나 실제 사각형이 없음'
+    $walk = [Collections.Generic.Queue[object]]::new(); $seen = [Collections.Generic.HashSet[Windows.DependencyObject]]::new()
+    $visited = [Collections.Generic.List[string]]::new()
+    $rect = @($rectangles | Where-Object { $_.Width -gt 0 -and $_.Height -gt 0 }) | Select-Object -First 1
+    if ($rect) {
+        $point = [Windows.Point]::new($rect.X + $rect.Width / 2, $rect.Y + $rect.Height / 2)
+        $hit = $View.InputHitTest($point)
+        if ($hit) { $walk.Enqueue(@{ Node = $hit; Path = $hit.GetType().Name }) }
+        while ($walk.Count) {
+            $item = $walk.Dequeue(); $node = $item.Node
+            if (-not $seen.Add($node)) { continue }
+            $visited.Add($item.Path)
+            if ([object]::ReferenceEquals($node, $Target)) { $reached = $true; $path = $item.Path; break }
+            if ([object]::ReferenceEquals($node, $View)) { continue }
+            $parents = @([Windows.LogicalTreeHelper]::GetParent($node))
+            if ($node -is [Windows.Media.Visual] -or $node -is [Windows.Media.Media3D.Visual3D]) { $parents += [Windows.Media.VisualTreeHelper]::GetParent($node) }
+            foreach ($parent in $parents) { if ($parent) { $walk.Enqueue(@{ Node = $parent; Path = "$($item.Path) > $($parent.GetType().Name)" }) } }
+        }
+        if (-not $reached) { $path = "목표 $($Target.GetType().Name) 없음: $($visited -join ' | ')" }
+    }
+    $through = $null
+    if ($ClickThrough -and $hit) { $through = [bool](& $ClickThrough $hit $View) }
+    [pscustomobject]@{ Ok = $reached -and ($null -eq $through -or $through); Reached = $reached; ClickThrough = $through;
+        Path = $path; Bounds = $bounds; Rectangles = $rectangles.ToArray(); Point = $point; Hit = $hit }
 }
