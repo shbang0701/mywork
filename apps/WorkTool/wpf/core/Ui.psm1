@@ -5,7 +5,6 @@
 $ErrorActionPreference = 'Stop'
 
 $script:ns = 'xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'
-$script:targetRows = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
 $script:tableHeads = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
 
 # 스타일 모음. 색은 Style.Triggers에서 바꾼다 (템플릿 트리거로 바꾸면 BasedOn 스타일에서 덮어쓸 수 없어서).
@@ -87,12 +86,6 @@ $script:stylesXaml = @'
     <Setter Property="LineHeight" Value="{DynamicResource F.BodyStrong.LineHeight}"/>
 
   </Style>
-  <Style x:Key="T.Number" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
-    <Setter Property="FontSize" Value="{DynamicResource F.Title}"/>
-    <Setter Property="FontWeight" Value="{DynamicResource F.Title.Weight}"/>
-    <Setter Property="LineHeight" Value="{DynamicResource F.Title.LineHeight}"/>
-
-  </Style>
   <Style x:Key="T.Dialog" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
     <Setter Property="FontSize" Value="{DynamicResource F.Subtitle}"/>
     <Setter Property="FontWeight" Value="{DynamicResource F.Subtitle.Weight}"/>
@@ -119,12 +112,6 @@ $script:stylesXaml = @'
   </Style>
   <Style x:Key="Panel.Surface" TargetType="Border" BasedOn="{StaticResource Card}">
     <Setter Property="Padding" Value="0"/>
-  </Style>
-  <Style x:Key="Tile" TargetType="Border">
-    <Setter Property="Background" Value="{DynamicResource B.Bg.Subtle}"/>
-    <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Control}"/>
-    <Setter Property="Padding" Value="{DynamicResource F.Padding.Panel}"/>
-
   </Style>
   <Style x:Key="Divider" TargetType="Border">
     <Setter Property="BorderBrush" Value="{DynamicResource B.Divider}"/>
@@ -2544,30 +2531,6 @@ function New-WtFilterChip([string]$Text) {
     @{ Root = $root; Remove = $remove }
 }
 
-# 숫자 칸: 이름(점 색) + 큰 숫자 + 단위
-function New-WtStatTile([string]$Label, [string]$Value, [string]$Unit, [string]$DotKey = 'Accent') {
-    $tile = [System.Windows.Controls.Border]::new()
-    Set-WtStyle $tile 'Tile'
-    $col = New-WtStack Vertical 2
-    $head = New-WtStack Horizontal 6
-    $dot = [System.Windows.Shapes.Ellipse]::new()
-    $dot.Width = 8; $dot.Height = 8
-    $dot.VerticalAlignment = 'Center'
-    Set-WtResource $dot 'Fill' "B.$DotKey"
-    [void](Add-WtChild $head $dot)
-    [void](Add-WtChild $head (New-WtText $Label 'T.Sub'))
-    [void](Add-WtChild $col $head)
-    $num = New-WtText $Value 'T.Number'
-    $run = [System.Windows.Documents.Run]::new(" $Unit")
-    $run.SetResourceReference([System.Windows.Documents.TextElement]::FontSizeProperty, 'F.Small')
-    $run.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'B.SubText')
-    $run.FontWeight = 'Normal'
-    $num.Inlines.Add($run)
-    [void](Add-WtChild $col $num)
-    $tile.Child = $col
-    $tile
-}
-
 # 화면 맨 위: 작은 설명(선택) + 큰 제목 + 오른쪽 요소(선택)
 function New-WtPageHeader([string]$Title, [string]$Sub, $Right) {
     $d = [System.Windows.Controls.DockPanel]::new()
@@ -2600,27 +2563,6 @@ function New-WtPage([switch]$Fill) {
     $panel = New-WtStack Vertical 8
     $sv.Content = $panel
     @{ Root = $sv; Panel = $panel }
-}
-
-# 카드 안 한 줄: 구분선 위에 왼쪽부터 요소들을 차례로 놓는다. 마지막 요소가 남는 폭을 채운다.
-function New-WtListRow([object[]]$Parts, [double]$Gap = 14) {
-    $b = [System.Windows.Controls.Border]::new()
-    Set-WtStyle $b 'Divider'
-    $b.Padding = [System.Windows.Thickness]::new(0, 10, 0, 10)
-    $d = [System.Windows.Controls.DockPanel]::new()
-    $d.LastChildFill = $true
-    for ($i = 0; $i -lt $Parts.Count; $i++) {
-        $p = $Parts[$i]
-        if ($null -eq $p) { continue }
-        if ($i -lt $Parts.Count - 1) {
-            [System.Windows.Controls.DockPanel]::SetDock($p, 'Left')
-            $p.Margin = [System.Windows.Thickness]::new(0, 0, $Gap, 0)
-        }
-        $p.VerticalAlignment = 'Center'
-        [void]$d.Children.Add($p)
-    }
-    $b.Child = $d
-    $b
 }
 
 $script:ko = [System.Globalization.CultureInfo]::GetCultureInfo('ko-KR')
@@ -2837,7 +2779,7 @@ Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMo
 Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, New-WtMinuteInput, New-WtContextMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
-    New-WtStatTile, New-WtPageHeader, New-WtPage, New-WtListRow, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
+    New-WtPageHeader, New-WtPage, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
 
 # 상태에 따른 치수·배치만 바꾼다. 저장·단축키 판단은 Shell이 한다.
 function Set-WtNavBadge($Item, [bool]$Visible) {
@@ -3355,35 +3297,13 @@ function Get-WtNextEventItem([object[]]$Items, [datetime]$Now = (Get-Date)) {
 }
 Export-ModuleMember -Function Get-WtNextEventItem
 
-function Set-WtTargetRowSelected($Row, [bool]$Selected) {
-    $state = $null
-    if (-not $script:targetRows.TryGetValue($Row, [ref]$state)) {
-        $content = $Row.Child; $titleText = $content.Children[$content.Children.Count - 1]
-        $Row.Child = $null
-        $grid = [System.Windows.Controls.Grid]::new(); [void]$grid.Children.Add($content)
-        $marker = [System.Windows.Controls.Border]::new(); $marker.Width = 3; $marker.Height = 16; $marker.CornerRadius = 1.5
-        $marker.HorizontalAlignment = 'Left'; $marker.VerticalAlignment = 'Center'; $marker.IsHitTestVisible = $false
-        # 기존 줄의 글자 위치를 바꾸지 않고, 막대 3 + 간격 1을 카드의 안쪽 여백에 놓는다.
-        $marker.Margin = [System.Windows.Thickness]::new(-(3 + 1), 0, 0, 0)
-        Set-WtResource $marker Background 'B.Accent'; [void]$grid.Children.Add($marker)
-        $Row.Child = $grid
-        $state = @{ Title = $titleText; Marker = $marker }; $script:targetRows.Add($Row, $state)
-    }
-    [System.Windows.Automation.AutomationProperties]::SetItemStatus($state.Title, $(if ($Selected) { '선택됨' } else { '' }))
-    $state.Marker.Visibility = if ($Selected) { 'Visible' } else { 'Collapsed' }
-    if ($Selected) { Set-WtResource $Row Background 'B.Bg.Selected' }
-    else { $Row.ClearValue([System.Windows.Controls.Border]::BackgroundProperty) }
-    Set-WtResource $Row BorderBrush 'B.Border.Muted'
-    $Row.BorderThickness = [System.Windows.Thickness]::new(0, 0, 0, 1)
-}
-
 function New-WtHomePinContextMenu {
     $menu = New-WtContextMenu
     Set-WtStyle $menu 'Home.PinMenu'
     $menu
 }
 
-Export-ModuleMember -Function New-WtHomeLayout, New-WtHomePinContextMenu, New-WtHomePinMenuItem, New-WtShortcutCard, New-WtMiniCalendar, New-WtTimeline, Set-WtTimelineLayout, New-WtNextEventLine, Update-WtNextEventLine, Update-WtTimelineNow, Set-WtTargetRowSelected
+Export-ModuleMember -Function New-WtHomeLayout, New-WtHomePinContextMenu, New-WtHomePinMenuItem, New-WtShortcutCard, New-WtMiniCalendar, New-WtTimeline, Set-WtTimelineLayout, New-WtNextEventLine, Update-WtNextEventLine, Update-WtTimelineNow
 
 # ---- 따로 뜨는 창 (일정 2단계: 메모 새 창) -----------------------------------------------------------
 # 앱 창과 같은 32 제목 줄(표식 · 제목 · 최대화 · 닫기) + 도구 줄 40 + 흰 카드 본문. 모양은 여기서만 정하고, 내용은 부르는 탭이 채운다.

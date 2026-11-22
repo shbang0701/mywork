@@ -11,7 +11,6 @@
 
 $ErrorActionPreference = 'Stop'
 
-$script:schema = 1
 $script:memoStore = $null   # 읽은 원자료/버전. 저장 뒤에는 새 핸들로 바꾼다 (MemoData.psm1).
 $script:items = @()
 $script:panes = [System.Collections.Generic.List[hashtable]]::new()   # 칸. 칸 = @{ Tabs; Current; Dirty; Loading; Editor; 화면 요소 … }
@@ -55,7 +54,6 @@ $script:listDir = ''
 $script:listResult = $null   # 지금 목록의 결과: @{ Count; Items | Find }
 $script:listRows = $null     # 화면에 만든 줄
 $script:tocKey = ''
-$script:tocJump = $false
 $script:openedStore = $null
 $script:openedAt = @{}
 $script:shortcutIds = $null   # 바로 가기 확인용 메모 id. memo.json 표식이 같으면 다시 읽지 않는다
