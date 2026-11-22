@@ -176,7 +176,9 @@ try {
     $a = Show-WtNotice @{ Key = 'a'; Title = '첫 알람'; Detail = '14:00 · 10분 뒤'; Sound = $true } $t0
     $again = Show-WtNotice @{ Key = 'a'; Title = '첫 알람 바뀜'; Detail = '14:00 · 9분 뒤' } $t0
     $b = Show-WtNotice @{ Key = 'b'; Title = '둘째 알람'; Detail = '하루 종일'; Snooze = 15 } $t0
-    $placed = $a.Place.X -eq 1544 -and $a.Place.Y -eq 875 -and $b.Place.Y -eq 718 -and $a.Window.Topmost -and -not $a.Window.ShowActivated -and -not $a.Window.ShowInTaskbar -and $null -eq $a.Window.Owner
+    # 높이는 화면 픽셀 반올림(배율)에 따라 1~2 차이가 난다(11-22 노트북 150%: 874 · 716). 위치 식은 ±2로 본다
+    $near = { param($v, $want) [Math]::Abs($v - $want) -le 2 }
+    $placed = (& $near $a.Place.X 1544) -and (& $near $a.Place.Y 875) -and (& $near $b.Place.Y 718) -and ($a.Place.Y - $b.Place.Y) -gt 100 -and $a.Window.Topmost -and -not $a.Window.ShowActivated -and -not $a.Window.ShowInTaskbar -and $null -eq $a.Window.Owner
     Assert-WtTest '알림 띄우기: 창 하나씩(같은 키는 글만 바꿈) · 소리는 Sound일 때만 · 맨 위 · 포커스 안 뺏음 · 작업 표시줄 없음 · 앱 창에 안 붙음 · 위로 쌓기' (
         [object]::ReferenceEquals($a, $again) -and $a.Parts.TitleText.Text -ceq '첫 알람 바뀜' -and $global:wtNoticeProbe.Shown -eq $shownBefore + 2 -and
         $player.Plays -eq $playsBefore + 1 -and @(Get-WtNotices).Count -eq 2 -and $placed) "$($a.Place) / $($b.Place) / $($global:wtNoticeProbe.Shown - $shownBefore) / $($player.Plays - $playsBefore)"
