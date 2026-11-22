@@ -449,11 +449,12 @@ try {
                 $helpView.Measure([Windows.Size]::new(1224, 736)); $helpView.Arrange([Windows.Rect]::new(0, 0, 1224, 736)); $helpView.UpdateLayout()
                 [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
             }
-            $card = $ui.HelpHost.Children[1]; $first = $ui.HelpPanel.Children[0]
+            # 설명은 공용 보조 칸이다: 카드 = 펼친 면(Expanded), 머리 = Header
+            $card = $ui.HelpSide.FindName('Expanded'); $first = $ui.HelpPanel.Children[0]
             $box = { param($e) $e.TransformToAncestor($card).TransformBounds([Windows.Rect]::new(0, 0, $e.ActualWidth, $e.ActualHeight)) }
             $recent = @($ui.HelpPanel.Children | Where-Object { $_ -is [Windows.Controls.TextBlock] -and $_.Text -ceq '최근 실행' })[0]
             # 스타일은 DynamicResource라 패널에서 빠진 뒤에는 풀리지 않는다: 놓여 있을 때 읽어 둔다
-            @{ First = $first; Visible = $first.IsVisible; At = (& $box $first); Head = (& $box $card.Child.Children[0]); Width = $card.ActualWidth
+            @{ First = $first; Visible = $first.IsVisible; At = (& $box $first); Head = (& $box $ui.HelpSide.FindName('Header')); Width = $card.ActualWidth
                 Recent = $(if ($recent) { & $box $recent }); Texts = @(Get-WtTestTexts $ui.HelpPanel)
                 Sub = $first.Style -eq (Get-WtStyleDictionary)['T.Sub']; LineHeight = $first.LineHeight; Wrap = "$($first.TextWrapping)"; Trim = "$($first.TextTrimming)"; Tip = $first.ToolTip }
         }
@@ -475,10 +476,15 @@ try {
     $view = New-WtTestView 'workflows'
     [void](& $addon.Refresh $view)
     $helpLook = & $mod {
-        $card = $script:ui.HelpHost.Children[1]
-        $head = $card.Child.Children[0]; $button = $head.Children[0]
-        @{ Button = $button; Head = $head; Card = $card; Texts = @(Get-WtTestTexts $script:ui.HelpPanel) }
+        $side = $script:ui.HelpSide
+        $card = $side.FindName('Expanded'); $head = $side.FindName('Header'); $button = $head.Children[0]
+        $panels = @(& (Get-Module Shell) { param($r) Get-WtSidePanels $r } $script:ui.PageGrid)
+        @{ Button = $button; Head = $head; Card = $card; Texts = @(Get-WtTestTexts $script:ui.HelpPanel); Panels = $panels }
     }
+    # 일정 · 근태 · 메모와 같은 공용 보조 칸 하나(코어가 창 폭 · Ctrl+Shift+B로 접고 편다)이고, 키는 workflows.sidebar.collapsed
+    Assert-WtTest '업무 사이드바: 공용 보조 칸(폭 280 · 제목 「설명」 · 접힘 키 workflows.sidebar.collapsed)' (
+        $helpLook.Panels.Count -eq 1 -and $helpLook.Panels[0].Width -eq 280 -and $helpLook.Panels[0].Key -ceq 'workflows.sidebar.collapsed' -and
+        $helpLook.Panels[0].Title.Text -ceq '설명' -and -not $helpLook.Panels[0].Independent) "$($helpLook.Panels.Count) $($helpLook.Panels[0].Width) $($helpLook.Panels[0].Key)"
     Assert-WtTest '업무 사이드바: 왼쪽 28×28 공통 접기 단추 · E76C · 글자 없음 · 툴팁 · 사용법 줄 없음' (
         $helpLook.Button.Style -eq (Get-WtStyleDictionary)['Sidebar.Collapse'] -and
         $helpLook.Button.Width -eq 28 -and $helpLook.Button.Height -eq 28 -and
@@ -498,6 +504,21 @@ try {
     & $mod { param($p) Select-WtFlowNode @{ Kind = 'script'; Path = $p } } $sample
     $state = & $mod { @{ Fields = $script:fields.Count; Mode = (Get-WtFlowMode); Run = $script:ui.RunButton.IsEnabled; Preview = $script:ui.Preview.IsEnabled; Cancel = $script:ui.Cancel.IsEnabled; Title = $script:ui.Title.Text } }
     Assert-WtTest 'WPF 업무: 스크립트를 고르면 칸 · 실행 방식(콘솔) · 명령이 맞춰진다' ($state.Fields -eq 10 -and $state.Mode -eq 'console' -and $state.Run -and $state.Preview -and -not $state.Cancel -and $state.Title -eq 'Check-Sample')
+    # 위험 단추 · 실행 명령 모양(11-22 실사용 보고 19 · 22): [업무 삭제]는 다른 탭의 삭제 · 닫기와 같은 Btn.Danger(본문 14 · 빨간 글자 · 선 없음).
+    # [실행] · [미리보기] · [취소]는 실제 배치 높이가 32(F.Height.Control)로, 더 높은 실행 방식 묶음(36)이 있는 줄에서도 늘어나지 않는다. [취소] 아이콘은 Stop E71A
+    $commandLook = & $mod {
+        param($v)
+        $v.Measure([System.Windows.Size]::new(1224, 736)); $v.Arrange([System.Windows.Rect]::new(0, 0, 1224, 736)); $v.UpdateLayout()
+        $u = $script:ui; $styles = Get-WtStyleDictionary
+        @{ Danger = $u.DeleteFlow.Style -eq $styles['Btn.Danger']; Fg = [string]$u.DeleteFlow.Foreground.Color; Red = [string]$v.FindResource('B.Status.Error.Text').Color
+            Size = $u.DeleteFlow.FontSize; Body = $v.FindResource('F.Body'); Line = [string]$u.DeleteFlow.BorderBrush.Color
+            Heights = @(foreach ($b in $u.RunButton, $u.Preview, $u.Cancel) { $b.ActualHeight }); Mode = $u.Commands.Children[3].ActualHeight
+            Icon = @(Get-WtTestTexts $u.Cancel)[0]; Control = $v.FindResource('F.Height.Control') }
+    } $view
+    Assert-WtTest 'WPF 업무 숨김 배치: [업무 삭제]는 Btn.Danger(14 · 빨간 글자 · 선 없음), [실행] · [미리보기] · [취소] 높이 32 · [취소] 아이콘 E71A' (
+        $commandLook.Danger -and $commandLook.Fg -ceq $commandLook.Red -and $commandLook.Size -eq $commandLook.Body -and $commandLook.Line -ceq '#00FFFFFF' -and
+        $commandLook.Mode -gt $commandLook.Control -and -not @($commandLook.Heights | Where-Object { [Math]::Abs($_ - $commandLook.Control) -gt 0.5 }).Count -and
+        $commandLook.Icon -ceq [string][char]0xE71A) "삭제 $($commandLook.Danger) $($commandLook.Fg)/$($commandLook.Red) $($commandLook.Size) · 높이 $($commandLook.Heights -join ',') (줄 $($commandLook.Mode)) · 아이콘 $(if ($commandLook.Icon) { '{0:X4}' -f [int]$commandLook.Icon[0] })"
     & $mod { Invoke-WtFlowRun }
     $err = & $mod { ($script:fields | Where-Object { $_.Field.Name -eq 'Target' }).Error }
     Assert-WtTest 'WPF 업무: 필수 칸을 비우고 실행하면 칸 아래에 알리고 실행하지 않는다' ($err.Visibility -eq 'Visible' -and $err.Text -eq '값을 넣으세요.' -and -not (& $mod { $script:run }))
@@ -566,28 +587,106 @@ try {
         $r
     } $view $sample (Join-Path $scriptsRoot 'NoHelp-Script.ps1')
     Assert-WtTest 'WPF 업무: 칸이 많으면 폼만 스크롤하고 출력 칸에 높이를 남기며, 칸이 적으면 폼은 칸 높이만큼만 쓴다' ($heights.Max -lt 10000 -and $heights.Form -le $heights.Max + 1 -and $heights.Extent -gt $heights.Form -and $heights.Out -ge 120 -and $heights.FewForm -lt $heights.FewMax) ($heights | ConvertTo-Json -Compress)
+    # 글자 「크게」(배율 1.12)에서도 세 칸 폼(대상 · 포트 · 대기 시간)의 마지막 칸이 잘리지 않는다(11-22 실사용 보고 14): 폼 전체가 출력 칸 120을 남기고
+    # 들어가면 스크롤 없이 다 보인다. 1280 × 764 창의 내용(1224 × 700)에 실행 결과 줄이 보이는 상태(실사용 화면과 같음)로 실제 배치를 잰다.
+    # 이 높이에서 폼은 「남는 높이의 60% · 출력 240」 한도보다 크고 「출력 120」 한도 안이다(조건이 깨지면 검사 자료부터 본다)
+    $threeRoot = Join-Path $test.Root '세 칸 폼'
+    [void][System.IO.Directory]::CreateDirectory($threeRoot)
+    $three = Join-Path $threeRoot 'Test-ThreeFields.ps1'
+    [System.IO.File]::WriteAllText($three, @'
+<#
+.SYNOPSIS
+    세 칸 폼 검사용 가짜 스크립트.
+.PARAMETER Targets
+    점검 대상 호스트 목록
+.PARAMETER Ports
+    확인할 TCP 포트 목록
+.PARAMETER TimeoutMs
+    대기 시간(ms)
+#>
+param(
+    [Parameter(Mandatory)][string]$Targets,
+    [string]$Ports = '443',
+    [ValidateRange(100, 60000)][int]$TimeoutMs = 1500
+)
+"$Targets $Ports $TimeoutMs"
+'@, [System.Text.UTF8Encoding]::new($false))
+    $fontBefore = Get-WtSetting 'ui.fontScale'
+    try {
+        Set-WtSetting 'ui.fontScale' 'l'
+        $fit = & $mod {
+            param($v, $p)
+            Select-WtFlowNode @{ Kind = 'script'; Path = $p }
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            while ((-not $script:info -or $script:info.Loading) -and $watch.ElapsedMilliseconds -lt 5000) { Update-WtWork; Start-Sleep -Milliseconds 20 }
+            $script:ui.Status.Visibility = 'Visible'
+            Show-WtFlowResult ([pscustomobject]@{ started = '2026-11-22 19:16:35'; ended = '2026-11-22 19:16:36'; whatIf = $false; exitCode = 0 }) 'success'
+            for ($pass = 0; $pass -lt 3; $pass++) { $v.Measure([System.Windows.Size]::new(1224, 700)); $v.Arrange([System.Windows.Rect]::new(0, 0, 1224, 700)); $v.UpdateLayout() }
+            $u = $script:ui; $g = $u.CenterGrid
+            $fixed = 0; foreach ($i in 0, 2, 3, 4) { $fixed += $g.RowDefinitions[$i].ActualHeight }
+            $last = $script:fields[-1].Input
+            @{ Fields = $script:fields.Count; Avail = $g.ActualHeight - $fixed; Need = $u.Form.DesiredSize.Height
+                Viewport = $u.FormScroll.ViewportHeight; Extent = $u.FormScroll.ExtentHeight; View = $u.FormScroll.ActualHeight; Out = $u.OutArea.ActualHeight
+                LastBottom = $last.TransformToAncestor($u.FormScroll).Transform([System.Windows.Point]::new(0, $last.ActualHeight)).Y }
+        } $view $three
+    } finally { Set-WtSetting 'ui.fontScale' $fontBefore }
+    $band = $fit.Need -gt [Math]::Max($fit.Avail * 0.6, $fit.Avail - 240) -and $fit.Need -le $fit.Avail - 120
+    Assert-WtTest 'WPF 업무 숨김 배치: 글자 크게 · 세 칸 폼이 출력 칸 120을 남기고 들어가면 스크롤 없이 다 보인다 (마지막 칸 아래 테두리가 폼 영역 안)' (
+        $fit.Fields -eq 3 -and $band -and $fit.Extent -le $fit.Viewport + 0.5 -and $fit.LastBottom -le $fit.View + 0.5 -and $fit.Out -ge 112) ($fit | ConvertTo-Json -Compress)
     # 손으로 고쳤거나 망가진 기록(시작 시각이 빔)이 있어도 설명 · 최근 실행을 그린다
     Save-WtFlowRun ([ordered]@{ id = 'bad'; script = ''; name = '망가진 기록'; started = ''; ended = '2026-10-24 14:10:42'; status = 'success'; tail = @() })
     $badHelp = & $mod { Clear-WtFlowSelection; @($script:ui.HelpPanel.Children | Where-Object { $_ -is [System.Windows.Controls.ListBox] }) }
     Assert-WtTest 'WPF 업무: 시작 시각이 빈 기록이 있어도 최근 실행을 그린다' ($badHelp.Count -eq 1 -and @($badHelp[0].Items | Where-Object { $_.Tag.id -eq 'bad' }).Count -eq 1)
-    # 좁은 창: 설명은 접혀 있다가 [설명 펼치기]로 가운데 위에 겹쳐 뜨고, 이때 접고 펼친 것은 설정에 남기지 않는다
-    Set-WtSetting 'workflows.help' $true
-    $layout = & $mod {
+    # 「최근 실행」 줄(11-22 실사용 보고 22): 배지와 시각 줄은 「최근 실행」 제목과 같은 x에서 시작하고(±1), 두 줄 행 48 안 위아래 가운데라
+    # 배지가 앞 행 구분선에 붙지 않는다(위 · 아래 여백이 같음). 실제 배치로 잰다
+    $runLook = & $mod {
         param($v)
-        $size = { param($w) $v.Measure([System.Windows.Size]::new($w, 700)); $v.Arrange([System.Windows.Rect]::new(0, 0, $w, 700)); $v.UpdateLayout() }
-        & $size 880
-        $r = @{ Narrow = $script:helpNarrow; Closed = "$($script:ui.HelpHost.Visibility)"; Open = "$($script:ui.HelpOpen.Visibility)" }
-        Open-WtFlowHelp
-        $r.Over = "$($script:ui.HelpHost.Visibility)"; $r.OverCol = [System.Windows.Controls.Grid]::GetColumn($script:ui.HelpHost); $r.Shadow = "$($script:ui.HelpShadow.Visibility)"
-        Close-WtFlowHelp
-        $r.Again = "$($script:ui.HelpHost.Visibility)"
-        & $size 1100
-        $r.Wide = -not $script:helpNarrow; $r.WideHost = "$($script:ui.HelpHost.Visibility)"; $r.WideCol = [System.Windows.Controls.Grid]::GetColumn($script:ui.HelpHost); $r.Column = $script:ui.HelpColumn.Width.Value
-        $r
+        for ($pass = 0; $pass -lt 2; $pass++) { $v.Measure([System.Windows.Size]::new(1224, 736)); $v.Arrange([System.Windows.Rect]::new(0, 0, 1224, 736)); $v.UpdateLayout() }
+        $panel = $script:ui.HelpPanel
+        $at = { param($e) $e.TransformToAncestor($panel).TransformBounds([System.Windows.Rect]::new(0, 0, $e.ActualWidth, $e.ActualHeight)) }
+        $head = @($panel.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] -and $_.Text -ceq '최근 실행' })[0]
+        $list = @($panel.Children | Where-Object { $_ -is [System.Windows.Controls.ListBox] })[0]
+        $rows = @(foreach ($i in 0, 1) { $list.ItemContainerGenerator.ContainerFromIndex($i) })
+        @{ Head = (& $at $head); Rows = @(foreach ($r in $rows) { & $at $r }); Badges = @(foreach ($r in $rows) { & $at $r.Content.Children[0] }); Lines = @(foreach ($r in $rows) { & $at $r.Content.Children[1] }) }
     } $view
-    Assert-WtTest 'WPF 업무: 창이 좁으면 설명을 접고, 펼치면 가운데 위에 겹쳐 연다 (설정은 그대로)' (
-        $layout.Narrow -and $layout.Closed -eq 'Collapsed' -and $layout.Open -eq 'Visible' -and $layout.Over -eq 'Visible' -and $layout.OverCol -eq 1 -and $layout.Shadow -eq 'Visible' -and
-        $layout.Again -eq 'Collapsed' -and (Get-WtSetting 'workflows.help') -eq $true -and $layout.Wide -and $layout.WideHost -eq 'Visible' -and $layout.WideCol -eq 2 -and $layout.Column -eq 280) ($layout | ConvertTo-Json -Compress)
+    $gapTop = $runLook.Badges[1].Top - $runLook.Rows[0].Bottom          # 앞 행 아래 구분선 ~ 둘째 행 배지 위
+    $gapBottom = $runLook.Rows[1].Bottom - 1 - $runLook.Lines[1].Bottom  # 둘째 행 시각 줄 아래 ~ 그 행 구분선(1) 위
+    Assert-WtTest '업무 최근 실행 숨김 배치: 배지 · 시각 줄 왼쪽 = 「최근 실행」 제목 왼쪽(±1), 배지는 앞 행 구분선에서 띄우고 위아래 여백이 같다' (
+        $runLook.Rows.Count -eq 2 -and [Math]::Abs($runLook.Badges[0].Left - $runLook.Head.Left) -le 1 -and [Math]::Abs($runLook.Lines[0].Left - $runLook.Head.Left) -le 1 -and
+        $gapTop -ge 3 -and [Math]::Abs($gapTop - $gapBottom) -le 1) "제목 $($runLook.Head.Left) · 배지 $($runLook.Badges[0].Left) · 시각 줄 $($runLook.Lines[0].Left) · 위 $gapTop · 아래 $gapBottom"
+    # 좁은 창(11-22 실사용 보고 11): 일정 · 근태 · 메모와 같은 공용 보조 칸 규칙(디자인 6절)이다. 창 폭 1024(1200 미만)면 설명은 폭 28 레일로 시작해
+    # 가운데 카드가 그만큼 넓어지고, 펼치면 가운데 위에 겹친다(폭 280 · 선 1). 1200 이상으로 늘리면 저장된 상태(펼침)로 돌아온다.
+    # 창 폭은 코어가 보는 앱 창(Shell의 $script:window)을 가짜로 바꿔 흉내 내고(창은 띄우지 않음), 화면은 그 창의 내용 폭(창 − 메뉴 48 − 오른쪽 8)으로 놓는다
+    $shellMod = Get-Module Shell
+    $savedWindow = & $shellMod { $script:window }
+    try {
+        $narrow = & $mod {
+            param($v, $shellMod)
+            # 가운데 카드 · 오른쪽 칸은 화면 격자의 열(1 · 2)로 찾는다. 아래 두 번째 블록도 쓰게 모듈 범위에 둔다
+            $script:testView = $v; $script:testShell = $shellMod
+            $script:testColumn = { param($i) @($script:ui.PageGrid.Children | Where-Object { [System.Windows.Controls.Grid]::GetColumn($_) -eq $i })[0].ActualWidth }
+            $script:testPanel = & $shellMod { param($r) @(Get-WtSidePanels $r)[0] } $script:ui.PageGrid
+            $script:testLay = { param($w) for ($pass = 0; $pass -lt 2; $pass++) { $script:testView.Measure([System.Windows.Size]::new($w, 700)); $script:testView.Arrange([System.Windows.Rect]::new(0, 0, $w, 700)); $script:testView.UpdateLayout() } }
+            $script:testResize = { param($winWidth) & $script:testShell { param($x) $script:window = [pscustomobject]@{ ActualWidth = $x; Width = $x } } $winWidth; if ($script:testPanel) { & $script:testShell { param($p) Update-WtSidePanel $p } $script:testPanel } }
+            & $script:testResize 1024; & $script:testLay 968
+            @{ Setting = [bool](Get-WtSetting 'workflows.sidebar.collapsed'); Side = (& $script:testColumn 2); Center = (& $script:testColumn 1); Rail = "$($script:testPanel.Rail.Visibility)" }
+        } $view $shellMod
+        Assert-WtTest 'WPF 업무 숨김 배치: 창 폭 1024면 설명은 레일 28로 시작하고 가운데 카드가 그만큼 넓다 (일정 · 근태와 같은 1200 기준, 설정은 그대로)' (
+            -not $narrow.Setting -and $narrow.Side -eq 28 -and $narrow.Rail -eq 'Visible' -and $narrow.Center -ge 968 - 240 - 36 - 1) ($narrow | ConvertTo-Json -Compress)
+        $overlay = & $mod {
+            $panel = $script:testPanel
+            $panel.Open.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent)); & $script:testLay 968
+            $r = @{ Over = "$($panel.Expanded.Visibility)"; OverWidth = $panel.Expanded.ActualWidth; OverBorder = $panel.Expanded.BorderThickness.Left; OverCenter = (& $script:testColumn 1)
+                OverLeft = $panel.Expanded.TranslatePoint([System.Windows.Point]::new(0, 0), $script:ui.PageGrid).X
+                CenterRight = $script:ui.Center.TranslatePoint([System.Windows.Point]::new($script:ui.Center.ActualWidth, 0), $script:ui.PageGrid).X }
+            & $script:testResize 1280; & $script:testLay 1224
+            $r.Wide = (& $script:testColumn 2); $r.WideBorder = $panel.Expanded.BorderThickness.Left; $r.WideCenter = (& $script:testColumn 1)
+            $r
+        }
+    } finally { & $shellMod { param($w) $script:window = $w } $savedWindow }
+    Assert-WtTest 'WPF 업무: 좁은 창에서 펼치면 가운데 위에 겹쳐 열고(폭 280 · 선 1 · 가운데 폭 그대로), 넓히면 펼친 칸 280으로 돌아온다' (
+        $overlay.Over -eq 'Visible' -and $overlay.OverWidth -eq 280 -and $overlay.OverBorder -eq 1 -and $overlay.OverLeft -lt $overlay.CenterRight -and $overlay.OverCenter -eq $narrow.Center -and
+        $overlay.Wide -eq 280 -and $overlay.WideBorder -eq 0 -and $overlay.WideCenter -ge 1224 - 240 - 288 - 1) ($overlay | ConvertTo-Json -Compress)
     $broken = New-WtFlow '망가진 업무' (Join-Path $scriptsRoot 'Bad-Syntax.ps1') @{ X = '1' } 'app'
     Save-WtFlows (@(Get-WtFlows) + [pscustomobject]$broken)
     & $mod { param($id) $script:pendingFlow = $id; Update-WtFlowsView } $broken.id
@@ -645,6 +744,13 @@ try {
     Assert-WtTest 'WPF 업무: 기본 폴더(내 스크립트 · 예제 스크립트)가 처음부터 보이고, 빼면 다시 생기지 않는다' (
         ($defaultTop -join '/') -eq '저장한 업무/내 스크립트/예제 스크립트' -and $emptyTip -like '*.ps1 파일을 넣고 F5*' -and ($removedTop -join '/') -eq '저장한 업무/예제 스크립트' -and
         (& $mod { $script:ui.Sub.Text }) -eq '왼쪽에서 스크립트나 저장한 업무를 고르세요.') "($($defaultTop -join '/') → $($removedTop -join '/'))"
+    # 공용 보조 칸 전의 설정(workflows.help = $false, 설명을 접어 둔 사람)은 화면을 만들 때 한 번만 새 접힘 키로 옮긴다
+    Set-WtSetting 'workflows.sidebar.collapsed' $false; Set-WtSetting 'workflows.help' $false
+    $view = New-WtTestView 'workflows'
+    $moved = @{ Collapsed = [bool](Get-WtSetting 'workflows.sidebar.collapsed'); Old = [bool](Get-WtSetting 'workflows.help'); Rail = "$((& $mod { $script:ui.HelpSide }).FindName('Rail').Visibility)" }
+    Set-WtSetting 'workflows.sidebar.collapsed' $false
+    Assert-WtTest 'WPF 업무: 예전에 설명을 접어 둔 설정은 공용 보조 칸의 접힘(레일)으로 한 번만 옮긴다' ($moved.Collapsed -and $moved.Old -and $moved.Rail -eq 'Visible') ($moved | ConvertTo-Json -Compress)
+    [void](& $addon.Refresh $view)
 
     # ---- 응답 없는 공유 폴더: 스크립트 폴더 찾기 · 스크립트 읽기 · 프로세스 시작이 돌아오지 않아도 화면은 짧게만 기다린다 ----
     # 가짜 서버 이름(\\wt-hang-*)의 경로만 문 앞에서 멈추고, 문이 열린 뒤에도 디스크 · 네트워크에는 가지 않는다

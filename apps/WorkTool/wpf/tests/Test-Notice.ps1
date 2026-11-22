@@ -256,10 +256,10 @@ try {
     $page = New-WtSettingsPage
     $page.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $page.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
     $texts = @(Get-WtTestTexts $page)
-    $labels = @('알림', '가짜 알림 행', '다시 알림', '알람 소리', '소리', '볼륨', '알람 잠시 끄기')
+    $labels = @('알림', '알람 잠시 끄기', '가짜 알림 행', '다시 알림', '알람 소리', '소리', '볼륨')
     $missing = @($labels | Where-Object { $texts -notcontains $_ })
     $order = @($texts | Where-Object { $_ -in $labels })
-    Assert-WtTest '설정 알림 묶음: 묶음 이름 → 탭 행 → 다시 알림 · 알람 소리 · 소리 · 볼륨 · 알람 잠시 끄기, 실패한 탭은 오류 줄' (
+    Assert-WtTest '설정 알림 묶음: 묶음 이름 → 알람 잠시 끄기 → 탭 행 → 다시 알림 · 알람 소리 · 소리 · 볼륨, 실패한 탭은 오류 줄' (
         -not $missing.Count -and ($order -join ',') -ceq ($labels -join ',') -and @($texts | Where-Object { $_ -like '가짜 실패 설정 행을 만들지 못했습니다*' }).Count -eq 1 -and $texts -notcontains '빠질 행') (
         "빠짐: $($missing -join ',') / 순서: $($order -join ',')")
     $ui = & (Get-Module Pages) { $script:noticeUi }
@@ -286,6 +286,40 @@ try {
     Assert-WtTest '설정 알람 잠시 끄기: 1시간 · 오늘 하루 · 다시 켤 때까지 → 끈 동안 「알람 꺼짐 ~ HH:mm」 + 다시 켜기 → 다시 세 단추' (
         $pausedRow.Count -eq 2 -and $pausedRow[0] -like '알람 꺼짐 ~ *' -and $pausedRow[1] -ceq '다시 켜기' -and -not (Get-WtNoticePause).Paused -and
         $resumedRow -ceq '1시간 | 오늘 하루 | 다시 켤 때까지') "$($pausedRow -join ' | ') / $resumedRow"
+
+    # 기본 설정 창(960 × 680, 내용 944 × 640)에서 「알람 잠시 끄기」가 스크롤 없이 보인다(11-22 실사용 보고: 볼륨 아래에 숨어 있었음).
+    # 일정 탭처럼 알림 행 셋(새 일정 기본 알람 · 하루 종일 알람 기준 · 늦게 켰을 때)을 등록한 화면을 숨김 호스트에 놓고 실제 배치로 잰다
+    $addonsBeforeRows = & (Get-Module Addons) { , $script:addons.ToArray() }
+    $rowsHost = $null
+    try {
+        & (Get-Module Addons) { $script:addons.Clear() }
+        Register-WtAddon -Id 'test-alarm-rows' -Title '가짜 일정' -Order 20 -NewView { New-WtText '가짜' } -SettingRows {
+            $combo = { param($w) $c = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $c $w; [void]$c.Items.Add('10분 전'); $c.SelectedIndex = 0; $c }
+            $day = New-WtStack Horizontal 8; [void](Add-WtChild $day (& $combo 'Setting.Combo')); $t = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $t 'Setting.Time'; [void](Add-WtChild $day $t)
+            @(@{ Group = '알림'; Label = '새 일정 기본 알람'; Control = (& $combo 'Setting.Combo') }, @{ Group = '알림'; Label = '하루 종일 알람 기준'; Control = $day },
+                @{ Group = '알림'; Label = '늦게 켰을 때'; Control = (& $combo 'Setting.ComboWide') })
+        }
+        $rowsPage = New-WtSettingsPage
+        $rowsParams = [System.Windows.Interop.HwndSourceParameters]::new('Notice settings rows test'); $rowsParams.WindowStyle = 0; $rowsParams.Width = 944; $rowsParams.Height = 640
+        $rowsHost = [System.Windows.Interop.HwndSource]::new($rowsParams)
+        $rowsRoot = [System.Windows.Controls.Border]::new()
+        $rowsRoot.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $rowsRoot.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+        $rowsRoot.Child = $rowsPage; $rowsHost.RootVisual = $rowsRoot
+        for ($pass = 0; $pass -lt 3; $pass++) {
+            $rowsRoot.Measure([System.Windows.Size]::new(944, 640)); $rowsRoot.Arrange([System.Windows.Rect]::new(0, 0, 944, 640)); $rowsRoot.UpdateLayout()
+            [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::ApplicationIdle)
+        }
+        $general = $rowsPage.Tag.Tabs.SelectedItem.Content
+        $pause = (& (Get-Module Pages) { $script:noticeUi }).Pause
+        $pauseBox = $pause.TransformToAncestor($general).TransformBounds([System.Windows.Rect]::new(0, 0, $pause.ActualWidth, $pause.ActualHeight))
+        $rowTexts = @(Get-WtTestTexts $rowsPage | Where-Object { $_ -in '알림', '알람 잠시 끄기', '새 일정 기본 알람', '하루 종일 알람 기준', '늦게 켰을 때', '다시 알림', '볼륨' })
+        Assert-WtTest '설정 숨김 배치: 기본 창 크기(내용 944 × 640)에서 「알람 잠시 끄기」 행이 스크롤 없이 보인다 (알림 묶음 맨 위)' (
+            $general.VerticalOffset -eq 0 -and $pauseBox.Height -gt 0 -and $pauseBox.Bottom -le $general.ViewportHeight -and
+            ($rowTexts -join ',') -ceq '알림,알람 잠시 끄기,새 일정 기본 알람,하루 종일 알람 기준,늦게 켰을 때,다시 알림,볼륨') "잠시 끄기 아래 $($pauseBox.Bottom) / 보이는 높이 $($general.ViewportHeight) · $($rowTexts -join ',')"
+    } finally {
+        if ($rowsHost) { $rowsHost.RootVisual = $null; $rowsHost.Dispose() }
+        & (Get-Module Addons) { param($items) $script:addons.Clear(); foreach ($item in $items) { $script:addons.Add($item) } } $addonsBeforeRows
+    }
     Write-Host '알림 부품 검사 PASS · FAIL 0'
 } finally {
     try { Clear-WtNotices } catch { }

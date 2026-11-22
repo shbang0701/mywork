@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 메뉴 항목 · 빈 화면 안내.
+    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 메뉴 항목 · 빈 화면 안내 · 설정 · 도움말 하위 탭의 첫 포커스.
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/tests/Test-Ui.ps1
 #>
@@ -231,6 +231,32 @@ try {
         Assert-WtTest "빈 화면 안내 숨김 좌표 경로: $(@(Get-WtTestTexts $target)[-1])" $route.Ok $route.Path
     }
     $root.Child = $null
+    # 설정 · 도움말 하위 탭(New-WtTabbedPage): 다른 탭 머리를 누르면 WPF가 그 탭 내용의 첫 포커스 자리로 포커스를 옮긴다. 그 자리가 탭 맨 위의
+    # 스크롤 면이라 중간의 단추가 포커스를 받아 스크롤이 내려가지 않는다(11-22 실사용 보고 12: 도움말 → 탭이 「근태」 부근부터 보였음).
+    # 가짜 탭을 등록해 도움말 「탭」 페이지 중간(설명 40줄 아래)에 누를 수 있는 단추를 두고, 머리 누름은 실제 처리(OnMouseLeftButtonDown → 포커스)를 탄다
+    $savedAddons = & (Get-Module Addons) { , $script:addons.ToArray() }
+    try {
+        & (Get-Module Addons) { $script:addons.Clear() }
+        Register-WtAddon -Id 'ui-help' -Title '가짜 탭' -Order 10 -NewView { } -Help @(1..40 | ForEach-Object { "가짜 설명 줄 $_" }) -HelpCard { New-WtButton '중간 단추' }
+        $helpPage = New-WtHelpPage
+        $root.Child = $helpPage; Set-UiLayout 944 640
+        $tabs = $helpPage.Tag.Tabs
+        $tabItem = @($tabs.Items | Where-Object { [string]$_.Header -ceq '탭' })[0]
+        [Windows.Input.Keyboard]::ClearFocus()
+        $press = [Windows.Input.MouseButtonEventArgs]::new([Windows.Input.Mouse]::PrimaryDevice, 0, [Windows.Input.MouseButton]::Left)
+        $press.RoutedEvent = [Windows.UIElement]::MouseLeftButtonDownEvent
+        $tabItem.RaiseEvent($press); Set-UiLayout 944 640
+        $scroll = $tabItem.Content
+        $middle = @(foreach ($b in @(Get-WtVisualChild $scroll ([Windows.Controls.Button]))) { $b })[0]
+        $focused = [Windows.Input.Keyboard]::FocusedElement
+        Assert-WtTest '설정 · 도움말 하위 탭 숨김 배치: 다른 탭 머리를 누르면 그 탭 맨 위(스크롤 0)부터 보이고, 첫 포커스는 탭의 스크롤 면(중간 단추 아님)' (
+            [object]::ReferenceEquals($tabs.SelectedItem, $tabItem) -and $scroll.ScrollableHeight -gt 0 -and $scroll.VerticalOffset -eq 0 -and
+            [object]::ReferenceEquals($focused, $scroll) -and $null -ne $middle -and -not $middle.IsKeyboardFocused -and
+            $scroll.FocusVisualStyle -eq $styles['Focus.Inside']) "선택 $($tabs.SelectedItem.Header) · 스크롤 $($scroll.VerticalOffset)/$($scroll.ScrollableHeight) · 포커스 $(if ($focused) { $focused.GetType().Name })"
+    } finally {
+        $root.Child = $null
+        & (Get-Module Addons) { param($items) $script:addons.Clear(); foreach ($item in $items) { $script:addons.Add($item) } } $savedAddons
+    }
     Write-Host '공통 화면 검사 PASS · FAIL 0'
 } finally {
     if ($hostSource) { $hostSource.Dispose() }

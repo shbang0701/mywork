@@ -235,9 +235,7 @@ $script:stylesXaml = @'
     </Style.Triggers>
   </Style>
   <Style x:Key="Sidebar.Collapse" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="VerticalAlignment" Value="Center"/></Style>
-  <Style x:Key="Workflows.HelpCard" TargetType="Border" BasedOn="{StaticResource Card}"><Setter Property="Padding" Value="0"/></Style>
-  <Style x:Key="Workflows.HelpHeader" TargetType="DockPanel"><Setter Property="Height" Value="40"/><Setter Property="Margin" Value="8,0"/></Style>
-  <Style x:Key="Workflows.HelpTitle" TargetType="TextBlock" BasedOn="{StaticResource T.H2}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="4,0,0,0"/></Style>
+  <!-- 업무 오른쪽 설명: 공용 보조 칸(Shell.SidePanel) 안의 내용. 안쪽 좌우 16 -->
   <Style x:Key="Workflows.HelpBody" TargetType="StackPanel"><Setter Property="Margin" Value="16,0,16,12"/></Style>
   <Style x:Key="Btn.Chrome" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
     <Setter Property="Width" Value="46"/>
@@ -1136,6 +1134,15 @@ $script:stylesXaml = @'
       </Setter.Value>
     </Setter>
   </Style>
+  <!-- 설정 · 도움말 하위 탭 하나의 스크롤 면. 탭을 누르면 WPF가 내용의 첫 포커스 자리로 포커스를 옮기는데,
+       이 면이 그 자리가 되어 맨 위(스크롤 0)에서 시작한다. 중간의 단추가 포커스를 받아 스크롤이 내려가지 않게(11-22 실사용 보고 12) -->
+  <Style x:Key="Page.TabScroll" TargetType="ScrollViewer" BasedOn="{StaticResource {x:Type ScrollViewer}}">
+    <Setter Property="Focusable" Value="True"/>
+    <Setter Property="IsTabStop" Value="True"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+    <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+  </Style>
 
   <!-- 값 고르기 막대(Slider, 가로): 높이 4 막대 + 지름 20 손잡이. 고른 쪽은 강조색 -->
   <Style x:Key="Range.Fill" TargetType="RepeatButton">
@@ -1652,13 +1659,14 @@ $script:stylesXaml = @'
     </Style.Triggers>
   </Style>
   <!-- 표 칸: 바탕은 행이 칠한다. 활성 작업 · 근태가 같이 쓴다 -->
+  <!-- 칸 포커스는 키보드로 옮겼을 때만 칸 안쪽에 그린다(FocusVisualStyle). 줄을 누르면 줄 선택만 보인다(11-22 실사용 보고 23) -->
   <Style x:Key="Task.Cell" TargetType="DataGridCell">
     <Setter Property="Padding" Value="12,0"/>
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
     <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="DataGridCell"><Border Padding="{TemplateBinding Padding}" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"><ContentPresenter VerticalAlignment="Center"/></Border></ControlTemplate></Setter.Value></Setter>
-    <Style.Triggers><Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderThickness" Value="2"/><Setter Property="BorderBrush" Value="{DynamicResource B.Text.Primary}"/></Trigger></Style.Triggers>
   </Style>
   <Style x:Key="Task.CheckCell" TargetType="DataGridCell" BasedOn="{StaticResource Task.Cell}"><Setter Property="Padding" Value="20,0,0,0"/></Style>
   <!-- 표 머리: 바탕 없이 작은 글자 + 아래 선. 활성 작업 · 근태가 같이 쓴다 -->
@@ -1736,6 +1744,12 @@ $script:stylesXaml = @'
   <Style x:Key="Row.TwoLine" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.Row2}"/>
 
+  </Style>
+  <!-- 업무 「최근 실행」: 두 줄 행(배지 + 시각 줄) 48. 행 안쪽 12 + 목록 테두리 안쪽 1만큼 좌우로 내밀어 글자가 「최근 실행」 제목과 같은 x에서
+       시작한다. 위 12는 제목과의 사이(설명 패널의 사이 12와 같음). 이 여백을 쓰려면 패널에 Add-WtChild 없이 넣는다(Add-WtChild는 여백을 직접 정함) -->
+  <Style x:Key="Workflows.RunList" TargetType="ListBox" BasedOn="{StaticResource List}">
+    <Setter Property="Margin" Value="-13,12,-13,0"/>
+    <Setter Property="ItemContainerStyle" Value="{StaticResource Row.TwoLine}"/>
   </Style>
   <Style x:Key="Memo.Row" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.MemoRow}"/>
@@ -3344,7 +3358,25 @@ function Set-WtDocumentTablesLayout($View) {
     }
     Update-DocumentBlocks $View.Document.Blocks
 }
-Export-ModuleMember -Function Register-WtTableHead, Update-WtTableHead, Set-WtDocumentTableWidths, Set-WtDocumentTablesLayout
+
+# 표(DataGrid)의 고정 폭 열을 글자 크기 배율만큼 넓히거나 좁힌다(디자인 5절 · 7절 표: 글자를 키우면 칸도 같은 비율로).
+# 처음 부를 때의 폭(XAML에 적은 배율 1 기준값)을 열마다 기억한다. 나머지 폭(*) 열은 남는 폭을 그대로 쓴다.
+# 열은 시각 트리 밖이라 DynamicResource로 묶을 수 없어서, 표를 만들 때 · 글자 크기가 바뀔 때 부른다
+$script:columnBase = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
+function Set-WtTableColumnScale($Table) {
+    $scale = Get-WtFontScale
+    foreach ($column in $Table.Columns) {
+        $base = $null
+        if (-not $script:columnBase.TryGetValue($column, [ref]$base)) {
+            if (-not $column.Width.IsAbsolute) { continue }
+            $base = [double]$column.Width.Value
+            $script:columnBase.Add($column, $base)
+        }
+        $width = [Math]::Round([double]$base * $scale)
+        if ($column.Width.Value -ne $width -or -not $column.Width.IsAbsolute) { $column.Width = [System.Windows.Controls.DataGridLength]::new($width) }
+    }
+}
+Export-ModuleMember -Function Register-WtTableHead, Update-WtTableHead, Set-WtDocumentTableWidths, Set-WtDocumentTablesLayout, Set-WtTableColumnScale
 
 # 지난 일정은 흐리게, 다음 일정은 진하게, 그 뒤는 옅게 칠한다.
 function Update-WtTimelineNow($Timeline, [datetime]$Now = (Get-Date)) {

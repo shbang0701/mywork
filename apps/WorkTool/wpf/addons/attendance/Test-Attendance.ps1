@@ -474,6 +474,23 @@ try {
         Assert-WtTest '폼: 이른 끝은 해당 칸 아래 오류·저장 안 함' ((Get-WtTestTexts $view) -contains '끝이 시작보다 이릅니다.' -and (& $module { [Windows.Controls.Validation]::GetHasError($script:form.Fields.end) }) -and [IO.File]::ReadAllText((Get-WtStorePath 'attendance')) -ceq $beforeBad)
         & $module { $script:form.Fields.next.IsChecked = $true; Save-WtAttForm }
         Assert-WtTest '폼: 다음 날 체크로 밤샘 직접 입력 저장' (@((Get-WtAttendanceData).Entries | Where-Object { $_.StartDate -eq [datetime]::new(2026,11,12) -and $_.Minutes -eq 900 }).Count -eq 1)
+        # 직접 입력(+) 폼은 「새 기록」이고 앞에 고른 줄의 선택을 푼다. 고치는 폼은 「기록 편집」이고 [삭제]는 다른 탭과 같은 Btn.Danger(11-22 실사용 보고 23 · 19)
+        $formLook = & $module {
+            Show-WtAttSummary
+            $script:table.SelectedItem = @($script:table.ItemsSource | Where-Object { $_.Entry.State -ceq 'ok' })[0]
+            $r = @{ EditTitle = $script:side.Title.Text; EditSelected = $null -ne $script:table.SelectedItem; Delete = $script:detail.Content.Children[0].Children[0] }
+            $r.Danger = $r.Delete.Style -eq (Get-WtStyleDictionary)['Btn.Danger']; $r.DeleteText = [string]$r.Delete.Content
+            $script:view.new.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+            $r.NewTitle = $script:side.Title.Text; $r.NewSelected = $script:table.SelectedItem; $r.IsNew = $script:form -and -not $script:form.Entry
+            $r
+        }
+        Assert-WtTest '근태 폼: 고칠 때는 「기록 편집」 · [삭제] Btn.Danger, 직접 입력(+)은 「새 기록」이고 표 선택을 푼다' (
+            $formLook.EditTitle -ceq '기록 편집' -and $formLook.EditSelected -and $formLook.Danger -and $formLook.DeleteText -ceq '삭제' -and
+            $formLook.NewTitle -ceq '새 기록' -and $null -eq $formLook.NewSelected -and $formLook.IsNew) "편집 $($formLook.EditTitle) 위험 $($formLook.Danger) / 새 $($formLook.NewTitle) 선택 $($null -ne $formLook.NewSelected)"
+        # 이동 칸은 옆 시간 칸 · 사이드바 합계와 같은 h:mm (가는 길 20 + 오는 길 5 = 0:25)
+        $travel = & $module { @($script:table.ItemsSource | Where-Object { $_.Travel } | ForEach-Object { "$($_.Entry.Id)=$($_.Travel)" }) }
+        Assert-WtTest '근태 표: 이동 칸은 h:mm (사이드바 「이동」과 같은 표기)' (
+            $travel.Count -gt 0 -and -not @($travel | Where-Object { $_ -notmatch '=\d+:\d\d$' }).Count -and $travel -contains 'weekend-unknown=0:25') ($travel -join ' · ')
         & $module { $script:month = $script:month.AddMonths(-1); $script:form = $null; Update-WtAttendanceView }
         Assert-WtTest '근태 화면: 달 이동 후 이전 달 자료·0인 미퇴근 줄 숨김' ((Get-WtTestTexts $view) -notcontains '퇴근 기록 없음' -and (& $module { $script:table.ItemsSource.Count -eq 1 }))
         [IO.File]::WriteAllText((Get-WtStorePath 'attendance'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))
@@ -541,6 +558,31 @@ try {
             $control = Get-WtTestNumberLayout $table
             Assert-WtTest '근태 숫자 열 고장 대조군: 왼쪽 맞춤 머리면 배치 검사=False' ($control.Laid -and -not $control.Ok) ($control.Detail -join ' / ')
             Write-Host "대조군 왼쪽 맞춤 머리: $($control.Detail -join ' / ')"
+            # 줄을 눌러 칸에 키보드 포커스가 가도 칸에 굵은 테두리를 그리지 않는다(줄 선택만, 11-22 실사용 보고 23). 키보드로 옮긴 포커스는 칸 안쪽 표시(Focus.Inside)
+            $table.SelectedIndex = 0; & $place
+            $cell = @(Find-WtTestVisual $table ([Windows.Controls.DataGridCell]) | Where-Object { [string]$_.Column.Header -ceq '시간' })[0]
+            [void]$cell.Focus(); & $place
+            $cellBorder = Get-WtVisualChild $cell ([Windows.Controls.Border])
+            Assert-WtTest '근태 표 숨김 배치: 줄을 눌러 칸에 포커스가 가도 칸 테두리 0(줄 선택만) · 키보드 포커스 표시는 Focus.Inside' (
+                $cell.IsKeyboardFocusWithin -and $cell.BorderThickness -eq [Windows.Thickness]::new(0) -and $cellBorder.BorderThickness -eq [Windows.Thickness]::new(0) -and
+                $cell.FocusVisualStyle -eq (Get-WtStyleDictionary)['Focus.Inside']) "포커스 $($cell.IsKeyboardFocusWithin) · 칸 테두리 $($cell.BorderThickness) / $($cellBorder.BorderThickness)"
+            # 글자 「크게」(1.12)면 고정 폭 열도 같은 비율로 넓어져 「오전 반차」가 잘리지 않는다(디자인 5절, 11-22 실사용 보고 14)
+            $fontBefore = Get-WtSetting 'ui.fontScale'
+            try {
+                Set-WtSetting 'ui.fontScale' 'l'; & $place; & $module { $script:viewKey = $null; Update-WtAttendanceView }; & $place
+                $kindText = @(Find-WtTestVisual $table ([Windows.Controls.DataGridCell]) | Where-Object { [string]$_.Column.Header -ceq '종류' } |
+                        ForEach-Object { Get-WtVisualChild $_ ([Windows.Controls.TextBlock]) } | Where-Object { $_.Text -ceq '오전 반차' })[0]
+                $large = @{ Widths = @($table.Columns | Select-Object -First 7 | ForEach-Object { $_.Width.Value }) -join ','; Need = [double]::PositiveInfinity; Shown = 0; Size = 0 }
+                if ($kindText) {
+                    $probe = [Windows.Controls.TextBlock]::new(); $probe.Text = '오전 반차'
+                    $probe.FontFamily = $kindText.FontFamily; $probe.FontSize = $kindText.FontSize; $probe.FontWeight = $kindText.FontWeight
+                    $probe.Measure([Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity))
+                    $large.Need = $probe.DesiredSize.Width; $large.Shown = $kindText.ActualWidth; $large.Size = $kindText.FontSize
+                }
+            } finally { Set-WtSetting 'ui.fontScale' $fontBefore; & $place }
+            $normal = @($table.Columns | Select-Object -First 7 | ForEach-Object { $_.Width.Value }) -join ','
+            Assert-WtTest '근태 표 숨김 배치: 글자 크게면 고정 폭 열이 1.12배(종류 99)라 「오전 반차」가 잘리지 않고, 보통으로 돌리면 원래 폭' (
+                $large.Size -gt 14 -and $large.Widths -ceq '112,99,72,72,81,63,72' -and $large.Shown -ge $large.Need - 0.5 -and $normal -ceq '100,88,64,64,72,56,64') "크게 $($large.Widths) · 글자 $($large.Need) / 보임 $($large.Shown) · 보통 $normal"
         } finally { $layoutHost.RootVisual = $null; $layoutHost.Dispose() }
     }
 
