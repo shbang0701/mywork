@@ -31,6 +31,11 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   OnExit       { } → 끝내기 직전(SavePending 확인 뒤) 타이머·조회 등 실행 자원을 정리한다 (선택)
   SavePending  { } → 이 화면을 떠날 때 · 끝낼 때 저장. 실패하면 $false를 돌려준다.
                      그러면 셸이 다시 시도 · 저장하지 않고 이동(끝내기) · 취소를 묻는다 (선택)
+  ConfirmExit  끝내면 사라질 내용(저장하지 않은 편집 폼 등)이 있을 때 끝내기 전에 사용자에게 묻는 자리 (선택)
+               @{ Pending = { } → 물을 것이 있으면 $true. 묻지 않고 빨리 판단만 한다
+                  Confirm = { } → 묻고, 끝내도 되면 $true · 취소(또는 저장 실패)면 $false. Pending이 $true일 때만 부른다 }
+               셸은 끝낼 때(트레이 종료 · 닫기 = 끝내기 · Alt+F4) 맨 먼저, 저장 통로 마무리(SavePending) · 쓰지 못한 내용 확인보다 앞에
+               탭 순서대로 부른다. Confirm 앞에 창을 띄우고 그 탭 화면을 보인다. 하나라도 $false면 끝내지 않고 뒤 단계도 묻지 않는다
   Help         도움말 「이 버전」에 넣을 설명 문단들 (선택)
   Shortcuts    도움말 「단축키」에 넣을 @('키', '설명') 목록. 키 처리는 탭 화면이 직접 한다 (선택)
                하나만 줄 때는 앞에 쉼표를 붙인다: -Shortcuts (, @('F5', '새로 고침'))
@@ -78,6 +83,7 @@ function Register-WtAddon {
         [scriptblock]$ImportLegacy,
         [scriptblock]$OnExit,
         [scriptblock]$SavePending,
+        [hashtable]$ConfirmExit,
         [ValidateSet('', 'View', 'Full')][string]$WarmUp = '',
         [string]$Description = '',
         [string[]]$Help = @(),
@@ -110,6 +116,13 @@ function Register-WtAddon {
         $relatedEntry = [pscustomobject]@{ Name = $Related.Name.Trim(); Templates = $templates
             Find = $Related.Find; Pick = $Related.Pick; New = $Related.New; Window = $Related.Window }
     }
+    $exitEntry = $null
+    if ($ConfirmExit) {
+        foreach ($key in 'Pending', 'Confirm') {
+            if ($ConfirmExit[$key] -isnot [scriptblock]) { throw "애드온 '$Id'의 ConfirmExit에는 $key(함수)가 필요합니다." }
+        }
+        $exitEntry = [pscustomobject]@{ Pending = $ConfirmExit.Pending; Confirm = $ConfirmExit.Confirm }
+    }
     $cards = @($HomeCards)
     if (-not $PSBoundParameters.ContainsKey('HomeCards') -and $HomeCard) {
         $cards = @(@{ Slot = $HomeSlot; Order = $HomeOrder; Card = $HomeCard })
@@ -129,7 +142,7 @@ function Register-WtAddon {
             HomeCards = $cards
             CalendarItems = $CalendarItems; ImportLegacy = $ImportLegacy; OnExit = $OnExit
             Description = $Description
-            SavePending = $SavePending; WarmUp = $WarmUp
+            SavePending = $SavePending; ConfirmExit = $exitEntry; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
             Related = $relatedEntry; DateMenu = $DateMenu
             Tick = $Tick; TickSeconds = $TickSeconds; SettingRows = $SettingRows

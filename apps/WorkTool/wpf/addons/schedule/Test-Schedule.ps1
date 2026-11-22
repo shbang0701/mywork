@@ -1090,7 +1090,7 @@ try {
         & $module {
             $script:saveAsked = [System.Collections.Generic.List[string]]::new()
             $script:saveAnswers = [System.Collections.Generic.Queue[string]]::new()
-            function script:Read-WtSaveChoice { param([string]$Text) $script:saveAsked.Add($Text); if ($script:saveAnswers.Count) { $script:saveAnswers.Dequeue() } else { 'discard' } }
+            function script:Read-WtSaveChoice { param([string]$Text) $script:saveAsked.Add($Text); if ($null -ne $global:wtExitTrace) { $global:wtExitTrace.Add('탭') }; if ($script:saveAnswers.Count) { $script:saveAnswers.Dequeue() } else { 'discard' } }
         }
         $dateText = '2026-10-26'
         $ids = @()
@@ -1844,6 +1844,43 @@ try {
             & $module { Set-WtScheduleViewMode 'calendar' }
             Assert-WtTest '폼 떠날 때(보고 2): 루틴 보기에서 다른 루틴을 지워도 고치던 폼 · 고친 글은 그대로이고 이어서 저장된다' (
                 $afterRoutineDelete -ceq "True|루틴 지워도 남음|$todayText|0" -and $r4Left -eq 0 -and $keptSaved -ceq 'True|루틴 지워도 남음') "$afterRoutineDelete / 남은 루틴 $r4Left / $keptSaved"
+
+            # 2 · 끝내기: 앱을 끝낼 때(셸 Stop-WtApp: 트레이 종료 · 닫기 = 끝내기 · Alt+F4)도 고친 폼이 있으면 일정 탭이 등록한 ConfirmExit로 먼저 묻는다.
+            # 셸의 뒤 단계 확인 창(저장 실패 · 쓰는 중)은 가짜로 바꿔 순서만 남긴다. [취소] · 저장 실패면 끝내지 않고 뒤 단계도 묻지 않는다
+            $shell = Get-Module Shell
+            $global:wtExitTrace = [System.Collections.Generic.List[string]]::new()
+            & $shell {
+                $script:exitTestPending = (Get-Item function:Show-WtPendingChoice).ScriptBlock; $script:exitTestWriting = (Get-Item function:Show-WtWritingChoice).ScriptBlock
+                function script:Show-WtPendingChoice { param($Purpose, $Title) $global:wtExitTrace.Add("셸:$Purpose"); 'cancel' }
+                # 쓰는 중 창 대신 저장 통로가 빌 때까지 거둔다(실제 창은 타이머로 거둔다)
+                function script:Show-WtWritingChoice { param($Purpose, [switch]$NoCancel) $global:wtExitTrace.Add("셸쓰기:$Purpose"); $w = [Diagnostics.Stopwatch]::StartNew(); while ((Test-WtDataWriting) -and $w.ElapsedMilliseconds -lt 5000) { Update-WtWork; Start-Sleep -Milliseconds 20 }; if (Test-WtDataWriting) { 'proceed' } else { 'done' } }
+            }
+            $exitRun = {
+                $global:wtExitTrace.Clear()
+                $allowed = & $shell { $script:exiting = $false; $script:frame = $null; Stop-WtApp }
+                & $shell { $script:exiting = $false }
+                "$allowed|$($global:wtExitTrace -join ',')"
+            }
+            try {
+                & $answer ''; & $module { Show-WtScheduleDay }
+                $exitClean = & $exitRun
+                & $openLeave; & $setTitle '끝낼 때 고침'; & $answer 'cancel'
+                $exitCancel = "$(& $exitRun)|$(& $uxState)"
+                & $setTitle ''; & $answer 'save'
+                $exitBad = "$(& $exitRun)|$(& $module { "$($script:form.Errors.title.Text)|$([Windows.Controls.Validation]::GetHasError($script:form.Fields.title))" })"
+                & $setTitle '끝낼 때 버림'; & $answer 'discard'
+                $exitDrop = "$(& $exitRun)|$(& $leaveTitle)"
+                & $openLeave; & $setTitle '끝낼 때 저장'; & $answer 'save'
+                $exitSave = & $exitRun
+                Wait-WtTestWrites
+                $exitSaved = & $leaveTitle
+            } finally {
+                & $shell { Set-Item function:script:Show-WtPendingChoice $script:exitTestPending; Set-Item function:script:Show-WtWritingChoice $script:exitTestWriting; $script:exiting = $false }
+                Remove-Variable wtExitTrace -Scope Global -ErrorAction SilentlyContinue
+            }
+            Assert-WtTest '끝내기(보고 2): 고친 폼이 없으면 묻지 않고 끝냄, [취소]는 끝내지 않고 폼 그대로 · 뒤 단계 확인 창 없음, [저장]이 틀리면 끝내지 않고 칸 오류, [저장 안 함]은 버리고 끝냄, [저장]은 저장하고 끝냄' (
+                $exitClean -ceq 'True|' -and $exitCancel -ceq "False|탭|True|끝낼 때 고침|$todayText|1" -and $exitBad -ceq 'False|탭|제목을 입력하세요.|True' -and
+                $exitDrop -ceq 'True|탭|루틴 지워도 남음' -and $exitSave -cmatch '^True\|탭(,셸쓰기:exit)*$' -and $exitSaved -ceq '끝낼 때 저장') "$exitClean / $exitCancel / $exitBad / $exitDrop / $exitSave / $exitSaved"
         } finally {
             Set-WtSetting 'ui.fontScale' 'm'
             & $module { $script:form = $null; $script:saveAnswers.Clear() }

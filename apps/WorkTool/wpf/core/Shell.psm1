@@ -39,6 +39,7 @@ $script:warmEnabled = $false  # WORKTOOL_WARMUP=1인 진단 세션에서만 켠�
 $script:warmStarted = $false  # ContentRendered가 다시 와도 세션당 한 번만 예약
 $script:forceOpaque = $false  # WORKTOOL_FORCE_OPAQUE=1: 설정을 저장하지 않는 불투명 창
 $script:writingDropped = $false   # 끝낼 때 사용자가 「저장을 기다리지 않고 끝내기」를 골랐는지
+$script:exitAsking = $false       # 끝내기 전에 묻는 중(그사이 트레이 종료 등이 또 와도 겹쳐 묻지 않게)
 
 $script:shellXaml = Get-WtShellXaml
 
@@ -151,12 +152,13 @@ function Close-WtUtilityWindows {
 }
 
 # 공개된 Select-WtPage의 출력은 그대로 두고, 항목 열기는 전환 성공 여부까지 확인한다.
-function Invoke-WtPageSelection([string]$Id) {
+# -NoSave: 떠나는 화면의 저장 확인을 건너뛴다(끝낼 때 물을 탭 화면을 보일 때. 그 저장은 바로 뒤 끝내기 저장 단계가 맡는다)
+function Invoke-WtPageSelection([string]$Id, [switch]$NoSave) {
     if ($script:selecting -or -not $Id) { return $false }
     $script:selecting = $true
     try {
         # 떠나는 화면에 저장하지 못한 내용이 있으면 묻는다 (다른 화면의 저장 상태는 그 화면을 떠날 때 묻는다)
-        if ($script:current -and $Id -ne $script:current -and -not (Save-WtPendingChanges -Purpose switch -Only $script:current)) { return $false }
+        if (-not $NoSave -and $script:current -and $Id -ne $script:current -and -not (Save-WtPendingChanges -Purpose switch -Only $script:current)) { return $false }
         $page = Get-WtPageView $Id
         if (-not $page) { return $false }
         if ($page.Addon -and $page.Addon.Refresh) { [void](& $page.Addon.Refresh $page.View) }
@@ -755,20 +757,48 @@ function Confirm-WtDataWrites([switch]$NoCancel) {
     $true
 }
 
+<#
+끝내기 전에 탭에 묻는다(Register-WtAddon -ConfirmExit). 끝내면 사라질 내용(저장하지 않은 편집 폼 등)이 있는 탭만 Pending이 $true다.
+물을 탭이 있으면 트레이에 숨은 창을 띄우고 그 탭 화면을 보인 뒤 Confirm을 부른다(고칠 곳 · 저장 오류가 보이게).
+화면을 옮길 때 떠나는 화면의 저장 확인은 건너뛴다: 그 저장은 바로 뒤 끝내기 저장 단계(Save-WtPendingChanges)가 맡고, 여기서 물으면 순서가 바뀐다.
+하나라도 $false(취소 · 저장 실패)면 $false. 탭의 함수가 실패하면 알리고 끝내기를 막지 않는다(끌 수 없는 상태를 만들지 않는다)
+#>
+function Confirm-WtAddonExit {
+    foreach ($a in @(Get-WtAddon -All)) {
+        if (-not $a.ConfirmExit) { continue }
+        $pending = $false
+        try { $pending = (@(& $a.ConfirmExit.Pending) | Select-Object -Last 1) -eq $true } catch { Show-WtError $_ "끝내기 확인: $($a.Title)" }
+        if (-not $pending) { continue }
+        if ($script:window -and -not $script:window.IsVisible) { Show-WtMainWindow }
+        if ($script:ui -and $script:current -ne $a.Id -and (Get-WtAddon -Id $a.Id)) { [void](Invoke-WtPageSelection $a.Id -NoSave) }
+        $ok = $true
+        try { $ok = (@(& $a.ConfirmExit.Confirm) | Select-Object -Last 1) -ne $false } catch { Show-WtError $_ "끝내기 확인: $($a.Title)" }
+        if (-not $ok) { return $false }
+    }
+    $true
+}
+
 # 저장을 확인한 뒤에만(또는 저장하지 않고 끝내기를 고른 뒤에만) 트레이·타이머를 정리하고 메시지 돌리기를 멈춘다.
 # 탭의 OnExit 뒤에 남은 화면 밖 작업(응답 없는 공유 폴더 조회 등)은 기다리지 않고 모두 버린다 (core\Work.psm1)
+# 묻는 순서: 탭이 묻기(고친 폼: 저장 · 저장 안 함 · 취소) → 저장 통로 마무리(SavePending, 실패면 다시 시도 · 끝내기) → 보조 창 닫기 →
+# 쓰는 중 · 쓰지 못한 내용 확인. 앞에서 취소하면 뒤는 묻지 않아 창이 겹치지 않는다. 묻는 동안 또 끝내기가 오면(트레이 종료 등) 바로 $false
 function Stop-WtApp {
     if (-not $script:exiting) {
-        $script:writingDropped = $false
-        if (-not (Save-WtPendingChanges -Purpose exit)) { return $false }
-        # 보조 창 위치를 저장한 쓰기도 종료 확인에 포함한다.
-        if (-not (Close-WtUtilityWindows)) { return $false }
-        if (-not (Confirm-WtDataWrites)) { return $false }
-        foreach ($a in @(Get-WtAddon -All)) {
-            if ($a.OnExit) { try { [void](& $a.OnExit) } catch { Show-WtError $_ "끝내기 전 저장: $($a.Title)" } }
-        }
-        # 정리 중에 시작한 저장(실행 기록 등)도 같다. 정리는 이미 했으니 취소는 없다
-        [void](Confirm-WtDataWrites -NoCancel)
+        if ($script:exitAsking) { return $false }
+        $script:exitAsking = $true
+        try {
+            $script:writingDropped = $false
+            if (-not (Confirm-WtAddonExit)) { return $false }
+            if (-not (Save-WtPendingChanges -Purpose exit)) { return $false }
+            # 보조 창 위치를 저장한 쓰기도 종료 확인에 포함한다.
+            if (-not (Close-WtUtilityWindows)) { return $false }
+            if (-not (Confirm-WtDataWrites)) { return $false }
+            foreach ($a in @(Get-WtAddon -All)) {
+                if ($a.OnExit) { try { [void](& $a.OnExit) } catch { Show-WtError $_ "끝내기 전 저장: $($a.Title)" } }
+            }
+            # 정리 중에 시작한 저장(실행 기록 등)도 같다. 정리는 이미 했으니 취소는 없다
+            [void](Confirm-WtDataWrites -NoCancel)
+        } finally { $script:exitAsking = $false }
     }
     $script:exiting = $true
     if ($script:writingDropped) { try { Stop-WtDataWrites } catch { } }   # 사용자가 기다리지 않고 끝내기를 골랐다
