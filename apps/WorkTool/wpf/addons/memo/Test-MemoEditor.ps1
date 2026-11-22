@@ -1657,10 +1657,11 @@ try {
         Set-EdText $ed $initial
         $y = (Get-EdPoint $ed.Live 'Notice').Y
         Open-EdAt $ed 1 8
+        # Enter 셋: 새 항목 · 빈 항목 끝내기(빈 줄을 남김, 11-22 규칙 · 원문 보기와 같게) · 빈 줄 = 줄 셋 늘어남
         Send-EdKey $ed Return 3
         Assert-Ed 'ListEnter-BeforeCallout: 원문 · 빈 줄 섬 · 블록 순서' (
-            (Get-EdText $ed) -ceq "- first`n- second`n`n`n`n> [!note] Notice`n> detail" -and
-            $ed.Island.Start -eq 2 -and @($ed.IslandBox.Text -split "\r?\n").Count -eq 2 -and $ed.Island.Last -lt $ed.Island.First -and
+            (Get-EdText $ed) -ceq "- first`n- second`n`n`n`n`n> [!note] Notice`n> detail" -and
+            $ed.Island.Start -eq 2 -and @($ed.IslandBox.Text -split "\r?\n").Count -eq 3 -and $ed.Island.Last -lt $ed.Island.First -and
             ($ed.Units.Kind -join ',') -ceq 'list-item,list-item,callout') "글=$((Get-EdText $ed).Replace("`n", '¶')) 섬=$($ed.Island.Start)..$($ed.Island.End) 섬줄=$(@($ed.IslandBox.Text -split "\r?\n").Count)"
         $openY = (Get-EdPoint $ed.Live 'Notice').Y
         $boxHeight = $ed.IslandBox.ActualHeight; $holderPadding = $ed.Island.Holder.Padding
@@ -1668,7 +1669,7 @@ try {
         $closedY = (Get-EdPoint $ed.Live 'Notice').Y
         $h = [double]$ed.Live.FindResource('F.Memo.Body.LineHeight')
         Assert-Ed 'ListEnter-BeforeCallout: 빈 줄 높이 · 섬 닫아도 같은 간격' (
-            [Math]::Abs($closedY - $y - 2 * $h) -lt 2 -and [Math]::Abs($openY - $closedY) -lt 2) "처음=$y 열림=$openY 닫힘=$closedY 줄=$h 상자=$boxHeight 여백=$holderPadding"
+            [Math]::Abs($closedY - $y - 3 * $h) -lt 2 -and [Math]::Abs($openY - $closedY) -lt 2) "처음=$y 열림=$openY 닫힘=$closedY 줄=$h 상자=$boxHeight 여백=$holderPadding"
         Assert-EdContract $ed 'ListEnter-BeforeCallout: 문서 약속'
     }
     Invoke-EdCase 'HeadingEnter-BeforeCallout' {
