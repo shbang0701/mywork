@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계.
+    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창.
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/tests/Test-Ui.ps1
 #>
@@ -132,6 +132,47 @@ try {
             }
         } finally { $table.Tag = $tag; Set-WtDocumentTableWidths $table }
     }
+    $styles = Get-WtStyleDictionary
+    function Get-UiBounds($Element) { $Element.TransformToAncestor($root).TransformBounds([Windows.Rect]::new(0, 0, $Element.ActualWidth, $Element.ActualHeight)) }
+    # 이름 묻는 창(Read-WtName): 창은 띄우지 않고 만든 내용(New-WtNameDialog)을 숨김 호스트에 붙여 모양 · 결과 · 좌표 경로를 본다.
+    # 결과는 누름 이벤트 콜백까지다. 실제 창 · OS 입력 · Enter/Esc(IsDefault · IsCancel)는 WPF 기본 동작이라 여기서 보지 않는다
+    $render = [Windows.Window].GetMethod('OnContentRendered', [Reflection.BindingFlags]'Instance,NonPublic')
+    $press = { param($Button) $Button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent)) }
+    foreach ($case in @(
+            @{ Name = '설명 · 처음 글'; Title = '업무로 저장'; Label = '업무 이름'; Note = '왼쪽 목록에 보일 이름을 정하세요. 예: PM 점검 · 서버실'; Text = '서버 점검' },
+            @{ Name = '빈 칸만'; Title = '보기 저장'; Label = '보기 이름'; Note = ''; Text = '' })) {
+        $dialog = & (Get-Module Ui) { param($c) New-WtNameDialog $c.Title $c.Label $c.Note $c.Text } $case
+        $window = $dialog.Window; $content = $window.Content; $window.Content = $null; $root.Child = $content; Set-UiLayout 480 400
+        $heading = Get-UiBounds $content.Children[0]; $box = Get-UiBounds $dialog.Box; $save = Get-UiBounds $dialog.Save; $cancel = Get-UiBounds $dialog.Cancel
+        $above = if ($case.Note) { (Get-UiBounds $dialog.Body.Children[0]).Bottom + 8 } else { $heading.Bottom + 12 }
+        Assert-WtTest "이름 묻는 창 ($($case.Name)): 제목 · 설명 한 줄 · 칸 이름 · 처음 글 · [저장] 주 버튼(Enter) · [취소](Esc) · 오류 줄 숨김" (
+            $window.Title -ceq $case.Title -and $window.Width -eq 480 -and $content.Children[0].Text -ceq $case.Title -and
+            $dialog.Body.Children.Count -eq $(if ($case.Note) { 2 } else { 1 }) -and
+            (-not $case.Note -or ($dialog.Body.Children[0].Text -ceq $case.Note -and $dialog.Body.Children[0].Style -eq $styles['T.Sub'])) -and
+            $dialog.Box.Style -eq $styles['Input'] -and [Windows.Automation.AutomationProperties]::GetName($dialog.Box) -ceq $case.Label -and $dialog.Box.Text -ceq $case.Text -and
+            @($dialog.Buttons.Children).Count -eq 2 -and [object]::ReferenceEquals($dialog.Buttons.Children[0], $dialog.Save) -and $dialog.Save.Style -eq $styles['Btn.Primary'] -and
+            $dialog.Save.IsDefault -and -not $dialog.Save.IsCancel -and $dialog.Cancel.IsCancel -and -not $dialog.Cancel.IsDefault -and $dialog.Error.Visibility -eq 'Collapsed') (@(Get-WtTestTexts $content) -join ' | ')
+        Assert-WtTest "이름 묻는 창 ($($case.Name)): 칸은 설명 아래 8(설명 없으면 제목 아래 12) · 폭 가득 · 높이 32, 단추는 오른쪽 끝에 사이 8 · 칸 아래 24" (
+            $box.Top -eq $above -and $box.Width -eq $heading.Width -and $box.Height -eq 32 -and
+            $save.Right + 8 -eq $cancel.Left -and $cancel.Right -eq $heading.Right -and $save.Top - $box.Bottom -eq 24) "칸=$box 저장=$save 취소=$cancel 제목=$heading"
+        [void]$render.Invoke($window, @([EventArgs]::Empty))
+        Assert-WtTest "이름 묻는 창 ($($case.Name)): 열리면 칸에 포커스 · 처음 글을 모두 골라 둠" ($dialog.Box.IsFocused -and $dialog.Box.SelectionLength -eq $case.Text.Length) "포커스=$($dialog.Box.IsFocused) 고름=$($dialog.Box.SelectionLength)"
+        foreach ($target in $dialog.Box, $dialog.Save, $dialog.Cancel) {
+            $route = Test-WtTestInputPath -View $root -Element $target -Target $target
+            Assert-WtTest "이름 묻는 창 ($($case.Name)) 숨김 좌표 경로: $(if ($target -is [Windows.Controls.TextBox]) { '칸' } else { $target.Content })" $route.Ok $route.Path
+        }
+        $dialog.Box.Text = '   '; & $press $dialog.Save; Set-UiLayout 480 400
+        $blank = $dialog.Error.Visibility -eq 'Visible' -and $dialog.Error.Text -ceq '이름을 넣으세요.' -and $window.Tag.Result -ceq ''
+        # 띄우지 않은 창이라 닫기(DialogResult)에서 멈춘다. 그 앞에서 결과를 남겼는지 본다
+        $dialog.Box.Text = ' PM 점검 '; $closing = $false
+        try { & $press $dialog.Save } catch { $closing = $_.Exception.Message -match 'DialogResult' }
+        Assert-WtTest "이름 묻는 창 ($($case.Name)): 비우고 저장하면 오류 줄 · 결과 없음, 이름은 앞뒤 공백을 빼고 돌려준 뒤 닫는다" ($blank -and $window.Tag.Result -ceq 'PM 점검' -and $closing) "오류=$($dialog.Error.Text) 결과=[$($window.Tag.Result)] 닫기=$closing"
+        $root.Child = $null
+    }
+    $dialog.Save.IsHitTestVisible = $false; $root.Child = $content; Set-UiLayout 480 400
+    $badRoute = Test-WtTestInputPath -View $root -Element $dialog.Save -Target $dialog.Save
+    Assert-WtTest '이름 묻는 창 고장 대조군: 누름을 받지 않는 [저장]은 좌표 경로=False' ($badRoute.Point -and -not $badRoute.Ok) $badRoute.Path
+    $root.Child = $null
     Write-Host '공통 화면 검사 PASS · FAIL 0'
 } finally {
     if ($hostSource) { $hostSource.Dispose() }

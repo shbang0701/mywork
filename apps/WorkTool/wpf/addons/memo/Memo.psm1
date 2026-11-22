@@ -1552,31 +1552,6 @@ function Save-WtMemoCurrentView([string]$Name, [switch]$Update) {
     Update-WtMemoList
 }
 
-function Read-WtMemoViewName {
-    $dialog = New-WtModal '보기 저장'
-    $box = [System.Windows.Controls.TextBox]::new()
-    Set-WtStyle $box 'Input'
-    [System.Windows.Automation.AutomationProperties]::SetName($box, '보기 이름')
-    [void](Add-WtChild $dialog.Body $box)
-    $save = New-WtButton '저장' -Kind Primary; $save.IsDefault = $true
-    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
-    $dialog.Window.Tag = @{ Box = $box; Error = $dialog.Error; Result = '' }
-    $save.Tag = $dialog.Window
-    $save.Add_Click({
-            param($s, $e)
-            $state = $s.Tag.Tag
-            $name = $state.Box.Text.Trim()
-            if (-not $name) { $state.Error.Text = '이름을 넣으세요.'; $state.Error.Visibility = 'Visible'; return }
-            $state.Result = $name
-            $s.Tag.DialogResult = $true
-        })
-    [void](Add-WtChild $dialog.Buttons $save)
-    [void](Add-WtChild $dialog.Buttons $cancel)
-    $dialog.Window.Add_ContentRendered({ param($s, $e) [void]$s.Tag.Box.Focus() })
-    [void]$dialog.Window.ShowDialog()
-    [string]$dialog.Window.Tag.Result
-}
-
 # ---- 목록: 메뉴 ---------------------------------------------------------------------------------
 
 function New-WtMemoMenuCaption([string]$Text) {
@@ -1619,7 +1594,7 @@ function Set-WtMemoViewMenu($Menu) {
         [void]$Menu.Items.Add((New-WtMemoMenuItem '보기 업데이트' { Save-WtMemoCurrentView ([string]$script:listSaved.name) -Update }))
         [void]$Menu.Items.Add((New-WtMemoMenuItem '이 보기 삭제' { try { [void](Set-WtMemoViewDeleted -Id ([string]$script:listSaved.id)) } catch { Show-WtError $_ '보기 삭제'; return }; $script:listSaved = $null; Update-WtMemoList }))
     }
-    [void]$Menu.Items.Add((New-WtMemoMenuItem '새 보기로 저장...' { $name = Read-WtMemoViewName; if ($name) { Save-WtMemoCurrentView $name } }))
+    [void]$Menu.Items.Add((New-WtMemoMenuItem '새 보기로 저장...' { $name = Read-WtName '보기 저장' '보기 이름'; if ($name) { Save-WtMemoCurrentView $name } }))
 }
 
 function Set-WtMemoFilterMenu($Menu) {

@@ -1538,33 +1538,8 @@ function Save-WtFlowFromForm {
     Set-WtFlowNote "업무로 저장했습니다: $title"
 }
 
-# 업무 이름을 묻는 창. 취소하면 빈 글자
-function Read-WtFlowTitle([string]$Suggest) {
-    $dialog = New-WtModal '업무로 저장'
-    [void](Add-WtChild $dialog.Body (New-WtText '왼쪽 목록에 보일 이름을 정하세요. 예: PM 점검 · 서버실' 'T.Sub'))
-    $box = [System.Windows.Controls.TextBox]::new()
-    Set-WtStyle $box 'Input'
-    $box.Text = $Suggest
-    [System.Windows.Automation.AutomationProperties]::SetName($box, '업무 이름')
-    [void](Add-WtChild $dialog.Body $box)
-    $save = New-WtButton '저장' -Kind Primary; $save.IsDefault = $true
-    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
-    $dialog.Window.Tag = @{ Box = $box; Error = $dialog.Error; Result = '' }
-    $save.Tag = $dialog.Window
-    $save.Add_Click({
-            param($s, $e)
-            $state = $s.Tag.Tag
-            $name = $state.Box.Text.Trim()
-            if (-not $name) { $state.Error.Text = '이름을 넣으세요.'; $state.Error.Visibility = 'Visible'; return }
-            $state.Result = $name
-            $s.Tag.DialogResult = $true
-        })
-    [void](Add-WtChild $dialog.Buttons $save)
-    [void](Add-WtChild $dialog.Buttons $cancel)
-    $dialog.Window.Add_ContentRendered({ param($s, $e) [void]$s.Tag.Box.Focus(); $s.Tag.Box.SelectAll() })
-    [void]$dialog.Window.ShowDialog()
-    [string]$dialog.Window.Tag.Result
-}
+# 업무 이름을 묻는 창. 취소하면 빈 글자 (검사가 이 함수를 바꿔 끼운다)
+function Read-WtFlowTitle([string]$Suggest) { Read-WtName '업무로 저장' '업무 이름' -Note '왼쪽 목록에 보일 이름을 정하세요. 예: PM 점검 · 서버실' -Text $Suggest }
 
 function Remove-WtFlowCurrent {
     if (-not $script:flow) { return }

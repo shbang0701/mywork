@@ -2670,6 +2670,42 @@ function New-WtModal([string]$Title) {
     @{ Window = $w; Body = $content; Error = $errorText; Buttons = $buttons }
 }
 
+# 이름 한 줄을 묻는 창. [저장]은 앞뒤 공백을 뺀 이름을, [취소] · Esc는 빈 글자를 돌려준다. 비우고 저장하면 창의 오류 줄에 알린다
+# -Label: 입력 칸 이름(화면 읽기용). -Note: 칸 위 설명 한 줄. -Text: 처음 글. 열리면 칸에 포커스를 두고 글을 모두 골라 둔다
+function Read-WtName([string]$Title, [string]$Label, [string]$Note, [string]$Text) {
+    $dialog = New-WtNameDialog $Title $Label $Note $Text
+    [void]$dialog.Window.ShowDialog()
+    [string]$dialog.Window.Tag.Result
+}
+
+# Read-WtName의 창을 띄우지 않고 만들기만 한다. 검사는 이 내용을 숨김 호스트에 붙여 본다
+function New-WtNameDialog([string]$Title, [string]$Label, [string]$Note, [string]$Text) {
+    $dialog = New-WtModal $Title
+    if ($Note) { [void](Add-WtChild $dialog.Body (New-WtText $Note 'T.Sub')) }
+    $box = [System.Windows.Controls.TextBox]::new()
+    Set-WtStyle $box 'Input'
+    if ($Text) { $box.Text = $Text }
+    [System.Windows.Automation.AutomationProperties]::SetName($box, $Label)
+    [void](Add-WtChild $dialog.Body $box)
+    $save = New-WtButton '저장' -Kind Primary; $save.IsDefault = $true
+    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
+    $dialog.Window.Tag = @{ Box = $box; Error = $dialog.Error; Result = '' }
+    $save.Tag = $dialog.Window
+    $save.Add_Click({
+            param($s, $e)
+            $state = $s.Tag.Tag
+            $name = $state.Box.Text.Trim()
+            if (-not $name) { $state.Error.Text = '이름을 넣으세요.'; $state.Error.Visibility = 'Visible'; return }
+            $state.Result = $name
+            $s.Tag.DialogResult = $true
+        })
+    [void](Add-WtChild $dialog.Buttons $save)
+    [void](Add-WtChild $dialog.Buttons $cancel)
+    $dialog.Window.Add_ContentRendered({ param($s, $e) [void]$s.Tag.Box.Focus(); $s.Tag.Box.SelectAll() })
+    $dialog.Box = $box; $dialog.Save = $save; $dialog.Cancel = $cancel
+    $dialog
+}
+
 function New-WtMinuteInput([int]$Value) {
     $row = New-WtStack Horizontal 12
     $box = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $box 'Input'
@@ -2776,7 +2812,7 @@ function Get-WtVisualChild($Root, [type]$Type) {
 }
 
 Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
-Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, New-WtMinuteInput, New-WtContextMenu, Get-WtVisualChild,
+Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, New-WtMinuteInput, New-WtContextMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
     New-WtPageHeader, New-WtPage, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
