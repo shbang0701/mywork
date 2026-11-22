@@ -153,6 +153,26 @@ try {
       }
     }
     Assert-WtTest '시간 막대 끝(보고 3): 20시 근처 · 범위 밖 이름은 끝 맞춤 · 겹치면 생략, +n · 알람 종도 막대 안, 1분마다 다시 놓아도 같은 자리' (-not $endProblems.Count -and $endAligned -gt 0) "끝 맞춤 $endAligned · $($endProblems -join ' | ')"
+    # 11-22 재확인: 밤(오늘 일정이 모두 범위 뒤)에 둘째 막대 이름이 빠지고 +n에도 안 셌다. PowerShell은 [Math]::Max(0, 636.67)을
+    # 정수 판으로 불러 637을 돌려준다. 끝에 맞춘 자리가 올림되면 오른쪽 끝을 0.5px 안쪽으로 넘어 「안 들어감」으로 숨겼다(배율 150% 노트북).
+    # 폭의 소수 부분을 바꿔 가며 배치 뒤 실제 자리로 본다: 막대 2개 = 이름 2개, 나머지는 +n, 이름은 끝 안
+    $lateItems = @(
+        @('21:11', '21:56', '백업 로그 일일 점검', $false), @('22:31', '23:08', 'SRV-01 펌웨어 적용 및 서비스 확인', $true),
+        @('23:09', '23:30', '방화벽 정책 변경 검토', $false), @('23:31', '23:59', '주간 인프라 운영 보고', $false)
+    ) | ForEach-Object { [pscustomobject]@{ Id = $_[0]; Title = $_[2]; Start = $date.Add([timespan]::Parse($_[0])); End = $date.Add([timespan]::Parse($_[1])); AllDay = $false; Alarm = $_[3]; ToolTip = $_[2] } }
+    $endLine = (New-WtTimeline $lateItems $date test-before).Timeline
+    $endLine.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $endLine.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    $lateProblems = [System.Collections.Generic.List[string]]::new()
+    foreach ($fraction in 0..9) {
+        $width = 856 + $fraction / 10
+        $endLine.Measure([Windows.Size]::new($width, 116)); $endLine.Arrange([Windows.Rect]::new(0, 0, $width, 116)); $endLine.UpdateLayout()
+        Update-WtTimelineNow $endLine $date.Add([timespan]::Parse('22:41')); $endLine.UpdateLayout()
+        $late = & $readEnd
+        $bars = @($endLine.Tag.Events | Where-Object { $_.Button.Visibility -eq 'Visible' }).Count
+        if ($late.Names.Count -ne $bars -or $endLine.Tag.More.Text -cne "+$($lateItems.Count - $bars)") { $lateProblems.Add("폭 $width 막대 $bars · 이름 $($late.Names.Count) · $($endLine.Tag.More.Text)") }
+        foreach ($n in $late.Names) { if ($n.L -lt -0.5 -or $n.R -gt $width + 0.5) { $lateProblems.Add("폭 $width 이름 $($n.Id) 범위 밖 $([Math]::Round($n.R, 2))") } }
+    }
+    Assert-WtTest '시간 막대 밤(재확인): 일정이 모두 범위 뒤여도 쌓인 막대마다 이름 · 나머지는 +n, 폭 소수 부분과 상관없이' (-not $lateProblems.Count) ($lateProblems -join ' | ')
     $next = New-WtNextEventLine $day
     Update-WtNextEventLine $next $date.AddHours(12).AddMinutes(20)
     $soon = "$($next.Tag.Pill.Child.Text)|$($next.Tag.Title.Text)"

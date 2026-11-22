@@ -3310,10 +3310,12 @@ function Set-WtTimelineLayout($Timeline) {
         [System.Windows.Controls.Canvas]::SetLeft($tick.Text, [Math]::Clamp($x - 12, 0, $width - 24))
     }
     # 막대는 두 줄까지 쌓고, 넘치면 숨긴 뒤 오른쪽에 +n으로 묶는다.
-    $ends = @([double]::NegativeInfinity, [double]::NegativeInfinity); $hidden = [System.Collections.Generic.List[string]]::new(); $placed = [System.Collections.Generic.List[object]]::new()
+    # [Math]::Max · Min의 첫 값은 0.0처럼 실수로 쓴다: PowerShell은 Max(0, 636.67)을 정수 판으로 불러 637을 돌려주고,
+    # 올림된 이름 자리가 오른쪽 끝을 넘어 숨겨졌다(11-22 재확인, 배율 150%)
+    $ends =@([double]::NegativeInfinity, [double]::NegativeInfinity); $hidden = [System.Collections.Generic.List[string]]::new(); $placed = [System.Collections.Generic.List[object]]::new()
     foreach ($event in $state.Events) {
         $left = [Math]::Clamp($event.Start, $state.Start, $state.End); $right = [Math]::Clamp($event.End, $state.Start, $state.End)
-        $barWidth = [Math]::Max(10, $width * ($right - $left) / $span)
+        $barWidth = [Math]::Max(10.0, $width * ($right - $left) / $span)
         $x = [Math]::Min($width - $barWidth, $width * ($left - $state.Start) / $span)
         $lane = if ($x -ge $ends[0]) { 0 } elseif ($x -ge $ends[1]) { 1 } else { -1 }
         if ($lane -lt 0) {
@@ -3359,7 +3361,7 @@ function Set-WtTimelineLayout($Timeline) {
         $captionWidth = Measure-WtTimelinePart $event.Caption $infinite
         $line = -1; $captionX = 0
         for ($l = 0; $l -lt 2 -and $line -lt 0; $l++) {
-            $x = [Math]::Max(0, [Math]::Min($item.X, $limits[$l] - $captionWidth))
+            $x = [Math]::Max(0.0, [Math]::Min($item.X, $limits[$l] - $captionWidth))
             if ($x -ge $captionEnds[$l] -and $x + $captionWidth -le $limits[$l] + 0.01) { $line = $l; $captionX = $x }
         }
         $event.Caption.Visibility = if ($line -lt 0) { 'Collapsed' } else { 'Visible' }
