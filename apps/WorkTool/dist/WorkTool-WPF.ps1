@@ -6,7 +6,7 @@
     - 창 틀 · 왼쪽 메뉴(애드온) · 테마(파스텔 7색 · 투명도 · 글자 크기) · 설정 · 도움말이 들어 있다.
     - 처음 실행하면 예전 WorkTool(WinForms)의 data 폴더를 찾아 메모 · 일정 · 근태를 읽어 와서 보여 준다.
       예전 데이터는 바꾸지 않는다. 새 버전 데이터는 문서\WorkTool 에 저장된다.
-    - 편집 · 알람은 2단계에서 옮긴다. 그때까지는 예전 WorkTool을 계속 쓴다.
+    - 일정 알람은 앱이 떠 있는 동안(트레이로 숨었을 때도) 화면 오른쪽 아래 작은 창과 소리로 알린다.
 
 .EXAMPLE
     .\Start-WorkTool.ps1
@@ -2201,6 +2201,12 @@ $script:defaults = @{
     'work.lunchEnd'   = '13:00'
     'work.halfDay'    = ''       # 반차 나누는 시각 HH:mm. 비면 정규 시간(점심 뺌)의 절반 지점
     'work.periods'    = @()      # 뒤 규칙들 @{ from = 'yyyy-MM-dd'; days; start; end; lunchStart; lunchEnd; halfDay }
+    # 알림(core\Notice.psm1, 디자인 8절 「설정·도움말」의 알림 묶음)
+    'notice.sound'    = $true    # 알람 소리 켜기
+    'notice.soundFile' = ''      # Windows 소리 폴더(C:\Windows\Media)의 .wav 이름. 비면 있는 것 중 기본(Get-WtNoticeSoundName)
+    'notice.volume'   = 70       # 알람 소리 볼륨 0~100
+    'notice.snooze'   = 5        # 다시 알림 간격(분) 5 · 10 · 15 · 30
+    'notice.pausedUntil' = ''    # 알람 잠시 끄기: '' 켬 · 'manual' 다시 켤 때까지 · 앱 시각(그때까지)
 }
 # 규칙 하나를 이루는 키. 기간 원소의 칸 이름은 앞의 'work.'을 뗀 것이다
 $script:workKeys = @('work.days', 'work.start', 'work.end', 'work.lunchStart', 'work.lunchEnd', 'work.halfDay')
@@ -3701,6 +3707,9 @@ $script:stylesXaml = @'
     <Setter Property="Padding" Value="9,6,8,6"/>
 
   </Style>
+  <!-- 메모 탭 폭: 글자에 맞추되 최소 · 최대 폭 안. 줄에 다 안 들어가면 메모 화면이 넓은 탭부터 MaxWidth를 최소 폭까지 낮춘다 -->
+  <sys:Double x:Key="F.MemoTab.MinWidth">120</sys:Double>
+  <sys:Double x:Key="F.MemoTab.MaxWidth">240</sys:Double>
   <!-- 메모 탭 하나. 선택 표시는 바탕 + 아래 가운데 막대(3 × 16). 막대 색은 BorderBrush로 받는다
        Memo.Tab: 선택 안 됨 · Memo.Tab.Current: 포커스가 있는 칸의 지금 탭 · Memo.Tab.Selected: 다른 칸의 지금 탭(덜 강조) -->
   <Style x:Key="Memo.Tab" TargetType="Button">
@@ -3710,8 +3719,8 @@ $script:stylesXaml = @'
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.MemoTab}"/>
-    <Setter Property="MinWidth" Value="120"/>
-    <Setter Property="MaxWidth" Value="240"/>
+    <Setter Property="MinWidth" Value="{DynamicResource F.MemoTab.MinWidth}"/>
+    <Setter Property="MaxWidth" Value="{DynamicResource F.MemoTab.MaxWidth}"/>
     <Setter Property="Padding" Value="12,0,0,0"/>
     <Setter Property="Margin" Value="0,0,4,0"/>
     <Setter Property="Cursor" Value="Hand"/>
@@ -3792,6 +3801,27 @@ $script:stylesXaml = @'
       </Border>
     </ControlTemplate></Setter.Value></Setter>
 
+  </Style>
+  <!-- 탭이 최소 폭으로도 넘칠 때 탭 줄 양 끝의 스크롤 단추(‹ ›). 닫기 영역과 같은 24 × 28 · 글리프 10.
+       내용은 아이콘 글자 하나. Windows 탭(TabView)처럼 포커스를 받지 않는다.
+       ‹(Memo.TabScroll)는 탭과 사이 4, ›(Memo.TabScroll.End)는 탭 · 보기 단추와 사이 4 -->
+  <Style x:Key="Memo.TabScroll" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
+    <Setter Property="Width" Value="24"/>
+    <Setter Property="Height" Value="{DynamicResource F.Height.MemoTab}"/>
+    <Setter Property="Margin" Value="0,0,4,0"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Font.Icon}"/>
+    <Setter Property="FontSize" Value="10"/>
+    <Setter Property="Focusable" Value="False"/>
+  </Style>
+  <Style x:Key="Memo.TabScroll.End" TargetType="Button" BasedOn="{StaticResource Memo.TabScroll}">
+    <Setter Property="Margin" Value="4,0,4,0"/>
+  </Style>
+  <!-- 탭들을 놓는 줄. 탭마다 오른쪽 간격 4가 붙으므로 마지막 탭의 간격은 줄 폭에서 뺀다(끝까지 스크롤하면 마지막 탭이 › 단추와 4 사이).
+       왼쪽 맞춤이라 줄 폭이 탭 폭 합을 따른다(글자 크기 설정 등으로 탭 폭이 바뀌면 크기 변화로 알 수 있음) -->
+  <Style x:Key="Memo.TabStrip" TargetType="StackPanel">
+    <Setter Property="Orientation" Value="Horizontal"/>
+    <Setter Property="HorizontalAlignment" Value="Left"/>
+    <Setter Property="Margin" Value="0,0,-4,0"/>
   </Style>
   <Style x:Key="Memo.ListBody" TargetType="DockPanel"><Setter Property="Margin" Value="12,0,12,8"/></Style>
   <Style x:Key="Memo.SearchRow" TargetType="DockPanel"><Setter Property="Margin" Value="0,0,0,8"/></Style>
@@ -4648,6 +4678,10 @@ $script:stylesXaml = @'
   <Style x:Key="Setting.Row" TargetType="Grid"><Setter Property="Margin" Value="0,6"/><Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/></Style>
   <Style x:Key="Setting.Label" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,12,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Setting.Time" TargetType="TextBox" BasedOn="{StaticResource Input}"><Setter Property="Width" Value="120"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/></Style>
+  <!-- 설정 묶음 이름(일반 탭의 「알림」): 위 행과 사이 24(행 아래 6 + 18), F.BodyStrong -->
+  <Style x:Key="Setting.Group" TargetType="TextBlock" BasedOn="{StaticResource T.Strong}"><Setter Property="Margin" Value="0,18,0,0"/></Style>
+  <Style x:Key="Setting.Combo" TargetType="ComboBox" BasedOn="{StaticResource Combo}"><Setter Property="Width" Value="160"/><Setter Property="HorizontalAlignment" Value="Left"/></Style>
+  <Style x:Key="Setting.ComboWide" TargetType="ComboBox" BasedOn="{StaticResource Combo}"><Setter Property="Width" Value="240"/><Setter Property="HorizontalAlignment" Value="Left"/></Style>
   <Style x:Key="Btn.Compact" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.Compact}"/>
 
@@ -4942,6 +4976,26 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.RangeDash" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="8,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="0,4,0,0"/></Style>
   <Style x:Key="Schedule.Separator" TargetType="Border"><Setter Property="Height" Value="16"/></Style>
+  <!-- 알람 자세히(디자인 8절 일정): 알람 칸 아래 4의 접힌 줄 28 · 바탕 없음 · Surface 조작색 · 모서리 4, 펼치면 아래 8부터 칸 넷 -->
+  <Style x:Key="Schedule.AlarmMore" TargetType="Button">
+    <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Height" Value="{DynamicResource F.Height.Compact}"/><Setter Property="Margin" Value="0,4,0,0"/>
+    <Setter Property="Padding" Value="4,0,8,0"/><Setter Property="HorizontalAlignment" Value="Stretch"/><Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+      <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}" Padding="{TemplateBinding Padding}">
+        <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/>
+      </Border>
+    </ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Schedule.AlarmMoreIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="10"/><Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/></Style>
+  <Style x:Key="Schedule.AlarmMoreText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Margin" Value="4,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/></Style>
+  <Style x:Key="Schedule.AlarmMoreSummary" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
+  <Style x:Key="Schedule.AlarmMorePanel" TargetType="StackPanel"><Setter Property="Margin" Value="0,8,0,0"/></Style>
   <Style x:Key="Schedule.EventRow" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="Height" Value="Auto"/><Setter Property="MinHeight" Value="32"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
@@ -4989,6 +5043,30 @@ $script:stylesXaml = @'
   <Style x:Key="Memo.PickEmpty" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="IsHitTestVisible" Value="False"/></Style>
   <!-- 메모 새 창(New-WtSideWindow): 창 바탕 위 흰 카드(가장자리 8, 위 4), 글 위 24 · 좌우 44(창이 480보다 좁으면 20), 제목 F.Memo.H1 -->
   <Style x:Key="SideWindow.Body" TargetType="Border" BasedOn="{StaticResource Panel.Surface}"><Setter Property="Margin" Value="8,4,8,8"/></Style>
+  <!-- 알람 창(core\Notice.psm1, 디자인 7절 「알람 창」): 폭 360 · B.Bg.Raised · 선 1 B.Border.Default · 머리 32 · 누르는 본문 · 단추 줄.
+       선 1 안쪽 기준이라 창 가장자리 값에서 1을 뺀다: 머리 왼쪽 16 → 15 · 오른쪽 8 → 7, 본문 좌우 8 → 7, 단추 오른쪽 · 아래 16 → 15 -->
+  <Style x:Key="Notice.Frame" TargetType="Border"><Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/><Setter Property="BorderThickness" Value="1"/></Style>
+  <Style x:Key="Notice.Head" TargetType="DockPanel"><Setter Property="Height" Value="32"/><Setter Property="Margin" Value="15,0,7,0"/></Style>
+  <Style x:Key="Notice.HeadIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="Foreground" Value="{DynamicResource B.Accent}"/></Style>
+  <Style x:Key="Notice.HeadText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Notice.HeadButton" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="4,0,0,0"/></Style>
+  <Style x:Key="Notice.Body" TargetType="Button">
+    <Setter Property="Background" Value="Transparent"/><Setter Property="Margin" Value="7,0,7,0"/><Setter Property="Padding" Value="8,4"/>
+    <Setter Property="Cursor" Value="Hand"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+      <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}" Padding="{TemplateBinding Padding}">
+        <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" RecognizesAccessKey="False"/>
+      </Border>
+    </ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Notice.Title" TargetType="TextBlock" BasedOn="{StaticResource T.Dialog}"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Notice.Detail" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,4,0,0"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Notice.Buttons" TargetType="StackPanel"><Setter Property="Orientation" Value="Horizontal"/><Setter Property="HorizontalAlignment" Value="Right"/><Setter Property="Margin" Value="0,12,15,15"/></Style>
+  <Style x:Key="Notice.Button" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Margin" Value="8,0,0,0"/></Style>
   <Style x:Key="SideWindow.ToolText" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0,0,0"/></Style>
   <Style x:Key="SideWindow.ToolIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/></Style>
   <Style x:Key="MemoWindow.Text" TargetType="StackPanel"><Setter Property="Margin" Value="44,24,44,24"/><Setter Property="MaxWidth" Value="680"/></Style>
@@ -6434,6 +6512,388 @@ function Close-WtOpenTransient($Root) {
 Export-ModuleMember -Function Close-WtOpenTransient
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Ui.psm1 끝 ----
+
+# ---- core\Notice.psm1 ----
+New-Module -Name 'WorkTool.Notice' -ScriptBlock {
+# 알림 창 · 알림 소리 · 알람 잠시 끄기 (디자인 3판 7절 「알람 창」 · 8절 「설정·도움말」의 알림 묶음, 일정 설계 16장).
+# 탭이 부르는 공용 부품이다. 코어는 탭 이름을 모르고, 부른 탭이 준 글 · 열 화면 · 메뉴 항목만 쓴다.
+# 알림 창은 앱 창에 붙이지 않는다(Owner 없음). 그래서 앱 창이 트레이로 숨거나 최소화돼도 뜨고, 맨 위에 있되 포커스는 가져가지 않는다.
+# 이벤트 처리기는 $script: 변수와 보낸 요소의 Tag만 쓴다(Shell.psm1 머리말).
+# 검사가 바꿔 끼우는 곳은 OS에 닿는 곳뿐이다: 창 보이기 · 작업 영역 · 소리 재생기 · Windows 기본 소리 · 앱 창 열기. 15초 타이머는 검사에서 끈다.
+
+$ErrorActionPreference = 'Stop'
+
+$script:notices = [System.Collections.Generic.List[object]]::new()   # 떠 있는 알림(아래에서 위 순서)
+$script:snoozed = [System.Collections.Generic.List[object]]::new()   # 다시 알림 @{ Due; Spec }
+$script:noticeTimer = $null
+$script:player = $null
+$script:inv = [System.Globalization.CultureInfo]::InvariantCulture
+$script:ko = [System.Globalization.CultureInfo]::GetCultureInfo('ko-KR')
+$script:noticeWidth = 360
+$script:noticeEdge = 16   # 작업 영역 오른쪽 · 아래와 띄움
+$script:noticeGap = 8     # 쌓을 때 창 사이
+
+$script:showWindow = { param($Window) $Window.Show() }
+$script:workArea = { [System.Windows.SystemParameters]::WorkArea }
+$script:newPlayer = { [System.Windows.Media.MediaPlayer]::new() }
+$script:systemSound = { [System.Media.SystemSounds]::Exclamation.Play() }
+$script:openPage = { param($Id, $OpenArgs) if (Get-WtWindow) { Show-WtMainWindow }; Open-WtPage -Id $Id -Args $OpenArgs }
+$script:useTimer = $true
+
+# ---- 알람 잠시 끄기 ---------------------------------------------------------------------------
+# 설정 notice.pausedUntil: '' 켬 · 'manual' 다시 켤 때까지 · 앱 시각(그때까지). 끈 동안 울릴 알림은 버린다(켤 때 몰아서 울리지 않게)
+
+function Get-WtNoticePause([datetime]$Now = (Get-Date)) {
+    $value = [string](Get-WtSetting 'notice.pausedUntil')
+    $off = [pscustomobject]@{ Paused = $false; Until = $null; Manual = $false; Text = '' }
+    if (-not $value) { return $off }
+    if ($value -ceq 'manual') { return [pscustomobject]@{ Paused = $true; Until = $null; Manual = $true; Text = '알람 꺼짐' } }
+    $stamp = ConvertFrom-WtStamp $value
+    if (-not $stamp -or $stamp.DateTime -le $Now) { return $off }
+    $until = $stamp.DateTime
+    $text = if ($until -eq $Now.Date.AddDays(1)) { '알람 꺼짐 · 오늘' }
+        elseif ($until.Date -eq $Now.Date) { '알람 꺼짐 ~ ' + $until.ToString('HH:mm', $script:inv) }
+        else { '알람 꺼짐 ~ ' + $until.ToString('M월 d일 HH:mm', $script:ko) }
+    [pscustomobject]@{ Paused = $true; Until = $until; Manual = $false; Text = $text }
+}
+
+# hour = 1시간 · today = 오늘 하루(내일 0시까지) · manual = 다시 켤 때까지 · off = 다시 켜기. 끄면 떠 있는 알림 창을 모두 닫는다
+function Set-WtNoticePause([ValidateSet('hour', 'today', 'manual', 'off')][string]$Mode, [datetime]$Now = (Get-Date)) {
+    $value = switch ($Mode) {
+        'hour' { Get-WtStamp $Now.AddHours(1) }
+        'today' { Get-WtStamp $Now.Date.AddDays(1) }
+        'manual' { 'manual' }
+        default { '' }
+    }
+    Set-WtSetting 'notice.pausedUntil' $value
+    if ($Mode -ne 'off') { Close-WtNotices 'pause' }
+    Get-WtNoticePause $Now
+}
+
+# ---- 알림 소리 --------------------------------------------------------------------------------
+# Windows에 들어 있는 소리 파일만 쓴다(C:\Windows\Media). 로컬 시스템 폴더라 화면 스레드에서 읽는다
+
+function Get-WtNoticeSoundFolder { Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)) 'Media' }
+
+function Get-WtNoticeSounds {
+    $folder = Get-WtNoticeSoundFolder
+    if (-not [System.IO.Directory]::Exists($folder)) { return @() }
+    @([System.IO.Directory]::GetFiles($folder, '*.wav') | ForEach-Object { [System.IO.Path]::GetFileName($_) } | Sort-Object -Culture 'ko-KR')
+}
+
+# 지금 쓸 소리 파일 이름: 설정 값, 비면 알림다운 기본 후보(Windows Notify Calendar → Alarm01 → 첫 파일)
+function Get-WtNoticeSoundName {
+    $name = [string](Get-WtSetting 'notice.soundFile')
+    if ($name) { return $name }
+    $list = @(Get-WtNoticeSounds)
+    foreach ($candidate in 'Windows Notify Calendar.wav', 'Alarm01.wav') { if ($list -contains $candidate) { return $candidate } }
+    if ($list.Count) { $list[0] } else { '' }
+}
+
+<#
+알림 소리를 낸다. -File(파일 이름) · -Volume(0~100)을 주지 않으면 설정을 쓴다. -Force는 설정의 「들어 보기」(소리 끔 · 잠시 끄기와 상관없음).
+MediaPlayer는 볼륨을 정할 수 있다. 파일이 없거나 재생하지 못하면 Windows 기본 경고음(볼륨 못 바꿈)으로 대신한다.
+돌려주는 값: 'file'(파일 재생) · 'system'(기본 경고음) · 'off'(내지 않음)
+#>
+function Invoke-WtNoticeSound([string]$File, $Volume, [switch]$Force, [datetime]$Now = (Get-Date)) {
+    if (-not $Force -and (-not [bool](Get-WtSetting 'notice.sound') -or (Get-WtNoticePause $Now).Paused)) { return 'off' }
+    if (-not $File) { $File = Get-WtNoticeSoundName }
+    $level = if ($null -ne $Volume) { [double]$Volume } else { [double](Get-WtSetting 'notice.volume') }
+    $level = [Math]::Max(0, [Math]::Min(100, $level))
+    # 파일 이름만 받는다(경로 구분자가 든 값은 쓰지 않음)
+    $path = if ($File -and $File.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -lt 0) { Join-Path (Get-WtNoticeSoundFolder) $File } else { '' }
+    if (-not $path -or -not [System.IO.File]::Exists($path)) { & $script:systemSound; return 'system' }
+    try {
+        if (-not $script:player) {
+            $script:player = & $script:newPlayer
+            # 형식 이름은 글자로 본다(WPF 어셈블리를 아직 안 불렀어도 예외 없이)
+            if ($script:player.GetType().FullName -ceq 'System.Windows.Media.MediaPlayer') { $script:player.add_MediaFailed({ & $script:systemSound }) }
+        }
+        $script:player.Stop()
+        $script:player.Open([uri]::new($path))
+        $script:player.Volume = $level / 100
+        $script:player.Play()
+        'file'
+    } catch { & $script:systemSound; 'system' }
+}
+
+# ---- 알림 창 ----------------------------------------------------------------------------------
+
+function Get-WtNoticeXaml {
+@'
+<Border {NS} x:Name="Frame" Style="{DynamicResource Notice.Frame}" Width="360">
+  <StackPanel>
+    <DockPanel Style="{DynamicResource Notice.Head}">
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+        <Button x:Name="More" Style="{DynamicResource Btn.Icon}" ToolTip="더 보기" AutomationProperties.Name="더 보기"><TextBlock Text="&#xE712;" Style="{DynamicResource T.Icon}"/></Button>
+        <Button x:Name="Close" Style="{DynamicResource Notice.HeadButton}" ToolTip="닫기 (Esc)" AutomationProperties.Name="닫기"><TextBlock Text="&#xE711;" Style="{DynamicResource T.Icon}"/></Button>
+      </StackPanel>
+      <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+        <TextBlock Text="&#xEA8F;" Style="{DynamicResource Notice.HeadIcon}"/>
+        <TextBlock Text="알람" Style="{DynamicResource Notice.HeadText}"/>
+      </StackPanel>
+    </DockPanel>
+    <Button x:Name="Body" Style="{DynamicResource Notice.Body}">
+      <StackPanel>
+        <TextBlock x:Name="TitleText" Style="{DynamicResource Notice.Title}"/>
+        <TextBlock x:Name="DetailText" Style="{DynamicResource Notice.Detail}"/>
+      </StackPanel>
+    </Button>
+    <StackPanel Style="{DynamicResource Notice.Buttons}">
+      <Button x:Name="Confirm" Style="{DynamicResource Btn.Primary}" Content="확인" IsDefault="True" AutomationProperties.Name="확인"/>
+      <Button x:Name="Snooze" Style="{DynamicResource Notice.Button}"/>
+      <Button x:Name="Undo" Style="{DynamicResource Notice.Button}" Content="실행 취소" Visibility="Collapsed" AutomationProperties.Name="실행 취소"/>
+    </StackPanel>
+  </StackPanel>
+</Border>
+'@
+}
+
+function Get-WtNoticeWindowXaml {
+@'
+<Window {NS} Title="WorkTool 알람" WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True" ShowActivated="False"
+    SizeToContent="WidthAndHeight" WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Ideal"
+    FontFamily="{DynamicResource Font.UI}" FontSize="{DynamicResource F.Body}" Foreground="{DynamicResource B.Text.Primary}" Background="{DynamicResource B.Bg.Raised}"/>
+'@
+}
+
+function Get-WtNoticeSnoozeMinutes($Spec) {
+    $minutes = 0
+    if ($Spec -and $null -ne $Spec.Snooze) { $minutes = [int]$Spec.Snooze }
+    if ($minutes -le 0) { $minutes = [int](Get-WtSetting 'notice.snooze') }
+    if ($minutes -le 0) { $minutes = 5 }
+    $minutes
+}
+
+<#
+알림 창 하나의 내용(창 없이). 검사는 이것을 숨김 호스트에 붙여 배치 · 입력 경로를 본다. Spec(해시 테이블):
+  Key      같은 키의 창이 떠 있으면 새로 띄우지 않고 글만 바꾼다
+  Title    제목(한 줄, 넘치면 말줄임 · 툴팁에 전체)
+  Detail   시각 줄 글. Refresh { param($Data, [datetime]$Now) } → 글 을 주면 띄울 때와 15초마다 다시 쓴다
+  Data     Refresh · Menu 처리기가 쓰는 값
+  Open     @{ Id = 탭 id; Args = @{} }: 본문을 누르면 앱 창을 앞으로 가져와 Open-WtPage. 없으면 닫기만 한다
+  Snooze   다시 알림 간격(분). 없거나 0이면 설정 notice.snooze
+  Sound    $true면 뜰 때 소리(설정 notice.sound를 부른 탭이 반영한 값)
+  Menu     더 보기 메뉴 앞쪽 항목 @(@{ Header = '글'; Action = { param($Notice) } }). 뒤에 구분선 · 알람 잠시 끄기 ›를 붙인다
+돌려주는 값(알림 기록): @{ Key; Spec; Frame; Parts; Window; Closed; Reason; Message; Undo; Place }
+#>
+function New-WtNoticeContent([hashtable]$Spec) {
+    $xaml = Get-WtNoticeXaml
+    $frame = ConvertFrom-WtXaml $xaml
+    $parts = Get-WtNamedElements $frame $xaml
+    $record = @{ Key = [string]$Spec.Key; Spec = $Spec; Frame = $frame; Parts = $parts; Window = $null
+        Closed = $false; Reason = ''; Message = ''; Undo = $null; Place = $null }
+    $parts.TitleText.Text = [string]$Spec.Title
+    $parts.Body.ToolTip = [string]$Spec.Title
+    [System.Windows.Automation.AutomationProperties]::SetName($parts.Body, [string]$Spec.Title)
+    $parts.Snooze.Content = '{0}분 뒤' -f (Get-WtNoticeSnoozeMinutes $Spec)
+    [System.Windows.Automation.AutomationProperties]::SetName($parts.Snooze, [string]$parts.Snooze.Content)
+    foreach ($name in 'More', 'Close', 'Body', 'Confirm', 'Snooze', 'Undo') { $parts[$name].Tag = $record }
+    $parts.More.Add_Click({ param($s, $e) [void](Open-WtNoticeMenu $s.Tag) })
+    $parts.Close.Add_Click({ param($s, $e) Close-WtNotice $s.Tag 'confirm' })
+    $parts.Confirm.Add_Click({ param($s, $e) Close-WtNotice $s.Tag 'confirm' })
+    $parts.Snooze.Add_Click({ param($s, $e) Invoke-WtNoticeSnooze $s.Tag })
+    $parts.Undo.Add_Click({ param($s, $e) Invoke-WtNoticeUndo $s.Tag })
+    $parts.Body.Add_Click({ param($s, $e) Open-WtNoticeTarget $s.Tag })
+    $frame.Tag = $record
+    $frame.Add_PreviewKeyDown({
+            param($s, $e)
+            if ($e.Key -eq [System.Windows.Input.Key]::Escape) { $e.Handled = $true; Close-WtNotice $s.Tag 'confirm' }
+        })
+    $record
+}
+
+function Update-WtNoticeDetail($Notice, [datetime]$Now = (Get-Date)) {
+    if (-not $Notice -or $Notice.Closed -or $Notice.Message) { return }
+    $text = [string]$Notice.Spec.Detail
+    if ($Notice.Spec.Refresh -is [scriptblock]) {
+        try { $text = [string](& $Notice.Spec.Refresh $Notice.Spec.Data $Now) } catch { }
+    }
+    $Notice.Parts.DetailText.Text = $text
+}
+
+function New-WtNoticeWindow($Notice) {
+    $w = ConvertFrom-WtXaml (Get-WtNoticeWindowXaml)
+    $w.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
+    $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    $w.Content = $Notice.Frame
+    $w.Tag = $Notice
+    # 창을 다른 길로 닫아도(작업 끝내기 등) 목록에서 빼고 남은 창을 내린다
+    $w.Add_Closed({ param($s, $e) if (-not $s.Tag.Closed) { Close-WtNotice $s.Tag 'closed' } })
+    $Notice.Window = $w
+    $w
+}
+
+# 쌓기 자리: 아래(0번)부터 위로. 창 높이 목록 → 왼쪽 위 점 목록. 작업 영역 위를 넘으면 맨 위 자리에 겹친다
+function Get-WtNoticePlacement([System.Windows.Rect]$WorkArea, [double[]]$Heights, [double]$Width = 360) {
+    $left = $WorkArea.Right - $script:noticeEdge - $Width
+    $bottom = $WorkArea.Bottom - $script:noticeEdge
+    $topLimit = $WorkArea.Top + $script:noticeEdge
+    foreach ($h in @($Heights)) {
+        $top = [Math]::Max($topLimit, $bottom - $h)
+        [System.Windows.Point]::new($left, $top)
+        $bottom = $top - $script:noticeGap
+    }
+}
+
+function Get-WtNoticeHeight($Notice) {
+    if ($Notice.Window -and $Notice.Window.ActualHeight -gt 0) { return [double]$Notice.Window.ActualHeight }
+    $Notice.Frame.Measure([System.Windows.Size]::new($script:noticeWidth, [double]::PositiveInfinity))
+    [Math]::Ceiling($Notice.Frame.DesiredSize.Height)
+}
+
+function Update-WtNoticeLayout {
+    $open = @($script:notices | Where-Object { -not $_.Closed })
+    if (-not $open.Count) { return }
+    $heights = [double[]]@($open | ForEach-Object { Get-WtNoticeHeight $_ })
+    $points = @(Get-WtNoticePlacement (& $script:workArea) $heights $script:noticeWidth)
+    for ($i = 0; $i -lt $open.Count; $i++) {
+        $open[$i].Place = $points[$i]
+        if ($open[$i].Window) { $open[$i].Window.Left = $points[$i].X; $open[$i].Window.Top = $points[$i].Y }
+    }
+}
+
+# 알림 창을 띄운다. 알람을 잠시 끈 동안이면 띄우지 않고 $null(부른 탭은 그 알림을 받아들인 것으로 본다)
+function Show-WtNotice([hashtable]$Spec, [datetime]$Now = (Get-Date)) {
+    if ((Get-WtNoticePause $Now).Paused) { return $null }
+    if ($Spec.Key) {
+        foreach ($open in @($script:notices)) {
+            if ($open.Closed -or $open.Key -cne [string]$Spec.Key) { continue }
+            $open.Spec = $Spec; $open.Parts.TitleText.Text = [string]$Spec.Title; Update-WtNoticeDetail $open $Now
+            return $open
+        }
+    }
+    $record = New-WtNoticeContent $Spec
+    Update-WtNoticeDetail $record $Now
+    [void](New-WtNoticeWindow $record)
+    $script:notices.Add($record)
+    Update-WtNoticeLayout
+    & $script:showWindow $record.Window
+    Update-WtNoticeLayout
+    if ($Spec.Sound) { [void](Invoke-WtNoticeSound -Now $Now) }
+    Start-WtNoticeTimer
+    $record
+}
+
+function Get-WtNotices { @($script:notices) }
+function Get-WtNoticeSnoozes { @($script:snoozed) }
+
+function Close-WtNotice($Notice, [string]$Reason = 'confirm') {
+    if (-not $Notice -or $Notice.Closed) { return }
+    $Notice.Closed = $true; $Notice.Reason = $Reason
+    [void]$script:notices.Remove($Notice)
+    if ($Notice.Window) { try { $Notice.Window.Close() } catch { } }
+    Update-WtNoticeLayout
+    if (-not $script:notices.Count -and -not $script:snoozed.Count) { Stop-WtNoticeTimer }
+}
+
+function Close-WtNotices([string]$Reason = 'confirm') { foreach ($n in @($script:notices)) { Close-WtNotice $n $Reason } }
+
+# 끝낼 때: 떠 있는 창을 닫고 다시 알림도 버린다
+function Clear-WtNotices { Close-WtNotices 'exit'; $script:snoozed.Clear(); Stop-WtNoticeTimer }
+
+# 「5분 뒤」: 창을 닫고 다시 알림 간격 뒤에 같은 내용으로 다시 띄운다(앱을 끄면 사라짐)
+function Invoke-WtNoticeSnooze($Notice, [datetime]$Now = (Get-Date)) {
+    if (-not $Notice -or $Notice.Closed) { return }
+    $minutes = Get-WtNoticeSnoozeMinutes $Notice.Spec
+    Close-WtNotice $Notice 'snooze'
+    $script:snoozed.Add(@{ Due = $Now.AddMinutes($minutes); Spec = $Notice.Spec })
+    Start-WtNoticeTimer
+}
+
+# 15초마다: 다시 알림 시각이 된 것을 다시 띄우고(잠시 끈 동안이면 버림), 떠 있는 창의 시각 줄을 다시 쓴다
+function Invoke-WtNoticeTick([datetime]$Now = (Get-Date)) {
+    $paused = (Get-WtNoticePause $Now).Paused
+    foreach ($waiting in @($script:snoozed)) {
+        if ($waiting.Due -gt $Now) { continue }
+        [void]$script:snoozed.Remove($waiting)
+        if (-not $paused) { [void](Show-WtNotice $waiting.Spec $Now) }
+    }
+    foreach ($n in @($script:notices)) { Update-WtNoticeDetail $n $Now }
+    if (-not $script:notices.Count -and -not $script:snoozed.Count) { Stop-WtNoticeTimer }
+}
+
+function Start-WtNoticeTimer {
+    if (-not $script:useTimer) { return }
+    if (-not $script:noticeTimer) {
+        $script:noticeTimer = [System.Windows.Threading.DispatcherTimer]::new()
+        $script:noticeTimer.Interval = [TimeSpan]::FromSeconds(15)
+        $script:noticeTimer.Add_Tick({ try { Invoke-WtNoticeTick } catch { } })
+    }
+    if (-not $script:noticeTimer.IsEnabled) { $script:noticeTimer.Start() }
+}
+function Stop-WtNoticeTimer { if ($script:noticeTimer) { $script:noticeTimer.Stop() } }
+
+# 더 보기 메뉴: 부른 탭의 항목 · 구분선 · 알람 잠시 끄기 ›(1시간 · 오늘 하루)
+function New-WtNoticeMenu($Notice) {
+    $menu = New-WtHomePinContextMenu
+    foreach ($entry in @($Notice.Spec.Menu)) {
+        if (-not $entry -or -not $entry.Header -or $entry.Action -isnot [scriptblock]) { continue }
+        $item = [System.Windows.Controls.MenuItem]::new()
+        $item.Header = [string]$entry.Header
+        $item.Tag = @{ Notice = $Notice; Action = $entry.Action }
+        $item.Add_Click({ param($s, $e) if (-not $s.Tag.Notice.Closed) { & $s.Tag.Action $s.Tag.Notice } })
+        [void]$menu.Items.Add($item)
+    }
+    if ($menu.Items.Count) { [void]$menu.Items.Add([System.Windows.Controls.Separator]::new()) }
+    $pause = [System.Windows.Controls.MenuItem]::new()
+    $pause.Header = '알람 잠시 끄기'
+    Set-WtStyle $pause 'Home.PinSubmenuItem'
+    foreach ($mode in @(@('hour', '1시간'), @('today', '오늘 하루'))) {
+        $sub = [System.Windows.Controls.MenuItem]::new()
+        $sub.Header = $mode[1]; $sub.Tag = $mode[0]
+        $sub.Add_Click({ param($s, $e) [void](Set-WtNoticePause ([string]$s.Tag)) })
+        [void]$pause.Items.Add($sub)
+    }
+    [void]$menu.Items.Add($pause)
+    $menu
+}
+
+function Open-WtNoticeMenu($Notice) {
+    if (-not $Notice -or $Notice.Closed) { return }
+    $menu = New-WtNoticeMenu $Notice
+    $menu.PlacementTarget = $Notice.Parts.More
+    $menu.Placement = 'Bottom'
+    $Notice.Parts.More.ContextMenu = $menu
+    $menu.IsOpen = $true
+    $menu
+}
+
+# 부른 탭의 메뉴 처리기가 일을 마친 뒤 부른다: 시각 줄 자리에 알림 글, 단추는 확인 · 실행 취소(-Undo를 주면)
+function Set-WtNoticeMessage($Notice, [string]$Text, [scriptblock]$Undo) {
+    if (-not $Notice -or $Notice.Closed) { return }
+    $Notice.Message = $Text; $Notice.Undo = $Undo
+    $Notice.Parts.DetailText.Text = $Text
+    $Notice.Parts.Snooze.Visibility = 'Collapsed'
+    $Notice.Parts.Undo.Visibility = if ($Undo) { 'Visible' } else { 'Collapsed' }
+}
+
+# 실행 취소: 처리기 { param($Notice) } → 알릴 글(비우면 「알람을 다시 켰습니다.」)
+function Invoke-WtNoticeUndo($Notice) {
+    if (-not $Notice -or $Notice.Closed -or $Notice.Undo -isnot [scriptblock]) { return }
+    $handler = $Notice.Undo
+    $text = ''
+    try { $text = [string](& $handler $Notice) } catch { $text = $_.Exception.Message }
+    Set-WtNoticeMessage $Notice $(if ($text) { $text } else { '알람을 다시 켰습니다.' }) $null
+}
+
+# 본문을 누름: 창을 닫고 앱 창을 앞으로 가져와 부른 탭의 화면을 연다
+function Open-WtNoticeTarget($Notice) {
+    if (-not $Notice -or $Notice.Closed) { return }
+    $target = $Notice.Spec.Open
+    Close-WtNotice $Notice 'open'
+    if ($target -and $target.Id) {
+        $pageArgs = if ($target.Args -is [hashtable]) { $target.Args } else { @{} }
+        & $script:openPage ([string]$target.Id) $pageArgs
+    }
+}
+
+Export-ModuleMember -Function Get-WtNoticePause, Set-WtNoticePause, Get-WtNoticeSoundFolder, Get-WtNoticeSounds, Get-WtNoticeSoundName, Invoke-WtNoticeSound,
+    Get-WtNoticeSnoozeMinutes, New-WtNoticeContent, Update-WtNoticeDetail, Get-WtNoticePlacement, Update-WtNoticeLayout, Show-WtNotice, Get-WtNotices,
+    Get-WtNoticeSnoozes, Close-WtNotice, Close-WtNotices, Clear-WtNotices, Invoke-WtNoticeSnooze, Invoke-WtNoticeTick, New-WtNoticeMenu, Open-WtNoticeMenu,
+    Set-WtNoticeMessage, Invoke-WtNoticeUndo, Open-WtNoticeTarget
+} | Import-Module -Force -DisableNameChecking
+# ---- core\Notice.psm1 끝 ----
 
 # ---- core\Highlight.psm1 ----
 New-Module -Name 'WorkTool.Highlight' -ScriptBlock {
@@ -9459,6 +9919,11 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   DateMenu     { param([datetime]$Date) } → 다른 탭(일정 등)의 날짜 칸 우클릭에 붙일 항목들 (선택). 설계 15.6
                항목 = @{ Header = '글'; Action = { param($Arg) }; Arg = 넘길 값; ToolTip; IsEnabled = $false(끔); Items = @(항목 | '-') }
                Items가 있으면 하위 메뉴다. 메뉴를 그리는 탭은 Get-WtDateMenuItems로 받는다. 탭끼리 서로 부르지 않는다
+  Tick         { param([datetime]$Now) } → 앱이 떠 있는 동안 TickSeconds(기본 60, 5~3600)마다 부른다 (선택). 설계 16
+               화면에 묶지 않아서 트레이로 숨거나 최소화하거나 다른 탭을 볼 때도 돈다. 꺼진 탭은 부르지 않는다.
+               실패는 그 탭 기록(Get-WtAddonTickError)에만 남기고 다음 틱을 막지 않는다(대화상자를 띄우지 않는다)
+  SettingRows  { } → 설정 화면에 넣을 행 @(@{ Group = '알림'; Label = '라벨'; Control = 화면 요소; Note = '툴팁' }) (선택)
+               지금 받는 묶음은 일반 탭의 '알림'뿐이다. 켜진 탭만, 탭 순서대로 코어 행 앞에 놓는다
 #>
 function Register-WtAddon {
     param(
@@ -9491,7 +9956,10 @@ function Register-WtAddon {
         [scriptblock]$HelpCard,
         [object[]]$HomeCards = @(),
         [hashtable]$Related,
-        [scriptblock]$DateMenu
+        [scriptblock]$DateMenu,
+        [scriptblock]$Tick,
+        [ValidateRange(5, 3600)][int]$TickSeconds = 60,
+        [scriptblock]$SettingRows
     )
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
@@ -9535,6 +10003,7 @@ function Register-WtAddon {
             SavePending = $SavePending; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
             Related = $relatedEntry; DateMenu = $DateMenu
+            Tick = $Tick; TickSeconds = $TickSeconds; SettingRows = $SettingRows
         })
     # 같은 탭을 다시 등록하면서 표시 함수를 뺐으면 옛 등록도 없앤다.
     Register-WtCalendarSource -Id "addon:$Id" -Page $Id -CalendarItems $CalendarItems
@@ -9574,6 +10043,53 @@ function Get-WtDateMenuItems([datetime]$Date, [string]$Exclude = '') {
                 if ($null -ne $item) { [pscustomobject]@{ Page = $addon.Id; Title = $addon.Title; Item = $item; Error = '' } }
             }
         } catch { [pscustomobject]@{ Page = $addon.Id; Title = $addon.Title; Item = $null; Error = $_.Exception.Message } }
+    }
+}
+
+# ---- 앱이 떠 있는 동안 도는 작업(Tick, 설계 16) ---------------------------------------------------
+$script:tickTimers = [System.Collections.Generic.List[object]]::new()
+$script:tickErrors = @{}
+
+# 한 탭의 Tick을 부른다. 꺼졌거나 Tick이 없으면 $false. 실패는 그 탭 기록에만 남긴다
+function Invoke-WtAddonTick([string]$Id, [datetime]$Now = (Get-Date)) {
+    $addon = Get-WtAddon -Id $Id
+    if (-not $addon -or -not $addon.Tick) { return $false }
+    try { [void](& $addon.Tick $Now); [void]$script:tickErrors.Remove($Id); $true }
+    catch { $script:tickErrors[$Id] = $_.Exception.Message; $false }
+}
+function Get-WtAddonTickError([string]$Id) { $script:tickErrors[$Id] }
+
+# 셸이 앱을 띄울 때 부른다. Tick을 등록한 탭마다 타이머 하나(꺼진 탭은 틱마다 건너뜀). 만든 타이머 수를 돌려준다
+function Start-WtAddonTicks {
+    Stop-WtAddonTicks
+    foreach ($addon in @(Get-WtAddon -All)) {
+        if (-not $addon.Tick) { continue }
+        $timer = [System.Windows.Threading.DispatcherTimer]::new()
+        $timer.Interval = [TimeSpan]::FromSeconds($addon.TickSeconds)
+        $timer.Tag = $addon.Id
+        $timer.Add_Tick({ param($s, $e) [void](Invoke-WtAddonTick ([string]$s.Tag)) })
+        $timer.Start()
+        $script:tickTimers.Add($timer)
+    }
+    $script:tickTimers.Count
+}
+function Stop-WtAddonTicks {
+    foreach ($timer in $script:tickTimers) { $timer.Stop() }
+    $script:tickTimers.Clear()
+}
+
+# 설정 화면 묶음(Group)에 넣을 탭의 행. 켜진 탭만 탭 순서대로. 한 탭이 실패하면 그 탭의 오류 줄 하나(Error)로 바꾼다
+function Get-WtAddonSettingRows([string]$Group) {
+    foreach ($addon in @(Get-WtAddon)) {
+        if (-not $addon.SettingRows) { continue }
+        try {
+            $rows = @(foreach ($row in @(& $addon.SettingRows)) {
+                    if ($null -eq $row -or [string]$row.Group -cne $Group) { continue }
+                    if (-not ($row.Label -is [string] -and $row.Label) -or $row.Control -isnot [System.Windows.UIElement]) { throw '설정 행은 Label(글) · Control(화면 요소)이 필요합니다.' }
+                    [pscustomobject]@{ Page = $addon.Id; Label = $row.Label; Control = $row.Control; Note = [string]$row.Note; Error = '' }
+                })
+            $rows
+        } catch { [pscustomobject]@{ Page = $addon.Id; Label = $addon.Title; Control = $null; Note = ''; Error = $_.Exception.Message } }
     }
 }
 
@@ -9688,7 +10204,7 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
 }
 
 Export-ModuleMember -Function Get-WtCalendarStores, Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource,
-    Get-WtDateMenuItems, Test-WtCalendarPartDay
+    Get-WtDateMenuItems, Test-WtCalendarPartDay, Invoke-WtAddonTick, Get-WtAddonTickError, Start-WtAddonTicks, Stop-WtAddonTicks, Get-WtAddonSettingRows
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Addons.psm1 끝 ----
 
@@ -9920,8 +10436,123 @@ function New-WtThemeCard {
     }
     [void](Add-WtChild $col (New-WtSettingRow '닫기 버튼 (X)' $close '트레이 아이콘을 우클릭한 뒤 종료를 누르세요.'))
 
+    # 알림 묶음(디자인 8절 「설정·도움말」): 탭이 등록한 행(Get-WtAddonSettingRows) → 코어 알림 부품의 행
+    [void](Add-WtChild $col (New-WtText '알림' 'Setting.Group'))
+    foreach ($row in @(Get-WtAddonSettingRows '알림')) {
+        if ($row.Error) { [void](Add-WtChild $col (New-WtText "$($row.Label) 설정 행을 만들지 못했습니다. $($row.Error)" 'T.Error')); continue }
+        [void](Add-WtChild $col (New-WtSettingRow $row.Label $row.Control $row.Note))
+    }
+    foreach ($row in @(New-WtNoticeSettingRows)) { [void](Add-WtChild $col $row) }
+
     $card.Child = $col
     $card
+}
+
+# ---- 설정 → 일반 → 알림: 다시 알림 · 알람 소리 · 소리 · 볼륨 · 알람 잠시 끄기 (값은 core\Notice.psm1이 읽는다) ----
+$script:noticeUi = $null        # 처리기가 쓰는 칸 묶음(처리기 안에서는 $script: 변수와 Tag만 쓴다)
+$script:volumeTimer = $null
+$script:pendingVolume = 70
+$script:noticeHandler = $false
+
+function New-WtNoticeSettingRows {
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $snooze = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $snooze 'Setting.Combo'
+    $current = [int](Get-WtSetting 'notice.snooze')
+    $choices = @(5, 10, 15, 30)
+    foreach ($m in $choices) { [void]$snooze.Items.Add("${m}분 뒤") }
+    if ($choices -notcontains $current) { [void]$snooze.Items.Add("${current}분 뒤") }
+    $snooze.SelectedItem = "${current}분 뒤"
+    $snooze.Add_SelectionChanged({ param($s, $e) if ($s.SelectedItem) { Set-WtSetting 'notice.snooze' ([int](([string]$s.SelectedItem) -replace '분 뒤$', '')) } })
+    [System.Windows.Automation.AutomationProperties]::SetName($snooze, '다시 알림')
+    $rows.Add((New-WtSettingRow '다시 알림' $snooze))
+
+    $soundOn = [System.Windows.Controls.CheckBox]::new(); Set-WtStyle $soundOn 'Check'
+    $soundOn.Content = '켜기'; $soundOn.IsChecked = [bool](Get-WtSetting 'notice.sound')
+    $soundOn.Add_Click({ param($s, $e) Set-WtSetting 'notice.sound' ([bool]$s.IsChecked); Update-WtNoticeSoundRow })
+    [System.Windows.Automation.AutomationProperties]::SetName($soundOn, '알람 소리 켜기')
+    $rows.Add((New-WtSettingRow '알람 소리' $soundOn))
+
+    $file = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $file 'Setting.ComboWide'
+    foreach ($name in @(Get-WtNoticeSounds)) { [void]$file.Items.Add([System.IO.Path]::GetFileNameWithoutExtension($name)) }
+    $selected = [System.IO.Path]::GetFileNameWithoutExtension((Get-WtNoticeSoundName))
+    if ($selected -and -not $file.Items.Contains($selected)) { [void]$file.Items.Add($selected) }
+    $file.SelectedItem = $selected
+    $file.Add_SelectionChanged({ param($s, $e) if ($s.SelectedItem) { Set-WtSetting 'notice.soundFile' ("$($s.SelectedItem).wav") } })
+    [System.Windows.Automation.AutomationProperties]::SetName($file, '알람 소리 파일')
+    $rows.Add((New-WtSettingRow '소리' $file))
+
+    # 볼륨: 끌면 글자만 바로 바꾸고, 손을 떼고 잠시 뒤 저장한다(불투명도와 같음)
+    $volumeRow = New-WtStack Horizontal 12
+    $slider = [System.Windows.Controls.Slider]::new(); Set-WtStyle $slider 'Range'
+    [System.Windows.Automation.AutomationProperties]::SetName($slider, '알람 볼륨')
+    $slider.Minimum = 0; $slider.Maximum = 100; $slider.TickFrequency = 5; $slider.IsSnapToTickEnabled = $true
+    $slider.Width = 240; $slider.VerticalAlignment = 'Center'
+    $slider.Value = [double](Get-WtSetting 'notice.volume')
+    $volumeText = New-WtText ('{0}%' -f [int]$slider.Value) 'T.Strong'; $volumeText.VerticalAlignment = 'Center'
+    $preview = New-WtButton '들어 보기'
+    $preview.Add_Click({ param($s, $e) $ui = $script:noticeUi; [void](Invoke-WtNoticeSound -File ("$($ui.File.SelectedItem).wav") -Volume $ui.Volume.Value -Force) })
+    if (-not $script:volumeTimer) {
+        $script:volumeTimer = [System.Windows.Threading.DispatcherTimer]::new()
+        $script:volumeTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+        $script:volumeTimer.Add_Tick({ param($s, $e) $s.Stop(); Set-WtSetting 'notice.volume' ([int]$script:pendingVolume) })
+    }
+    $slider.Add_ValueChanged({
+            param($s, $e)
+            $script:pendingVolume = [int]$e.NewValue
+            if ($script:noticeUi) { $script:noticeUi.VolumeText.Text = '{0}%' -f $script:pendingVolume }
+            $script:volumeTimer.Stop(); $script:volumeTimer.Start()
+        })
+    foreach ($child in $slider, $volumeText, $preview) { [void](Add-WtChild $volumeRow $child) }
+    $rows.Add((New-WtSettingRow '볼륨' $volumeRow))
+
+    $pauseBox = New-WtStack Horizontal 8
+    $rows.Add((New-WtSettingRow '알람 잠시 끄기' $pauseBox))
+    $script:noticeUi = @{ SoundOn = $soundOn; File = $file; Volume = $slider; VolumeText = $volumeText; Preview = $preview; Pause = $pauseBox }
+    Update-WtNoticeSoundRow
+    Update-WtNoticePauseRow
+    if (-not $script:noticeHandler) {
+        # 트레이 · 상태 줄 · 알람 창에서 잠시 끄거나 켜도 열린 설정 창의 줄을 맞춘다
+        Register-WtSettingHandler { param($key, $value) if ($key -ceq 'notice.pausedUntil') { Update-WtNoticePauseRow } }
+        $script:noticeHandler = $true
+    }
+    $rows.ToArray()
+}
+
+# 알람 소리를 끄면 소리 · 볼륨 · 들어 보기는 비활성, 이유는 툴팁
+function Update-WtNoticeSoundRow {
+    $ui = $script:noticeUi
+    if (-not $ui) { return }
+    $on = [bool]$ui.SoundOn.IsChecked
+    foreach ($control in $ui.File, $ui.Volume, $ui.Preview) {
+        $control.IsEnabled = $on
+        $control.ToolTip = if ($on) { $null } else { '알람 소리를 켜면 바꿀 수 있습니다.' }
+        [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($control, $true)
+    }
+}
+
+# 켜져 있으면 1시간 · 오늘 하루 · 다시 켤 때까지, 끈 동안은 「알람 꺼짐 ~ 15:30」 + 다시 켜기
+function Update-WtNoticePauseRow {
+    $ui = $script:noticeUi
+    if (-not $ui) { return }
+    $box = $ui.Pause
+    $box.Children.Clear()
+    $state = Get-WtNoticePause
+    if ($state.Paused) {
+        $box.Tag = [double]12
+        $text = New-WtText $state.Text 'T.Body'; $text.VerticalAlignment = 'Center'
+        [void](Add-WtChild $box $text)
+        $resume = New-WtButton '다시 켜기'
+        $resume.Add_Click({ [void](Set-WtNoticePause off) })
+        [void](Add-WtChild $box $resume)
+        return
+    }
+    $box.Tag = [double]8
+    foreach ($mode in @(@('hour', '1시간'), @('today', '오늘 하루'), @('manual', '다시 켤 때까지'))) {
+        $button = New-WtButton $mode[1]
+        $button.Tag = $mode[0]
+        $button.Add_Click({ param($s, $e) [void](Set-WtNoticePause ([string]$s.Tag)) })
+        [void](Add-WtChild $box $button)
+    }
 }
 
 function New-WtMenuCard {
@@ -10939,6 +11570,16 @@ function Update-WtStatusBar {
                 } catch { continue }
             }
         }
+        # 알람을 잠시 끈 동안: 오른쪽 맨 앞(오른쪽 줄은 오른쪽부터 쌓이므로 마지막에 넣는다)에 코어 항목. 누르면 바로 다시 켠다
+        $pause = try { Get-WtNoticePause } catch { $null }
+        if ($pause -and $pause.Paused) {
+            $button = New-WtStatusButton $pause.Text -Icon 0xE708
+            $button.ToolTip = '누르면 알람을 다시 켭니다.'
+            [System.Windows.Automation.AutomationProperties]::SetAutomationId($button, 'Status-core-pause')
+            [System.Windows.Automation.AutomationProperties]::SetName($button, $pause.Text)
+            $button.Add_Click({ param($s, $e) [void](Set-WtNoticePause off) })
+            [void]$script:ui.StatusRight.Children.Add($button)
+        }
         Set-WtStatusLayout $script:ui.StatusLeft
     }
 }
@@ -11334,6 +11975,8 @@ function Stop-WtApp {
     try { Stop-WtAllWork } catch { }
     if ($script:warmTimer) { $script:warmTimer.Stop() }
     if ($script:badgeTimer) { $script:badgeTimer.Stop() }
+    try { Stop-WtAddonTicks } catch { }
+    try { Clear-WtNotices } catch { }
     try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
     try { if ($script:icon) { $script:icon.Dispose() } } catch { }
     if ($script:frame) { $script:frame.Continue = $false }
@@ -11349,14 +11992,42 @@ function Update-WtCloseTip {
     $script:ui.CloseButton.ToolTip = if ([bool](Get-WtSetting 'window.closeToTray')) { '닫기 (트레이에서 계속 실행)' } else { '닫기' }
 }
 
+# 트레이 메뉴(디자인 6절): 열기 · 알람 잠시 끄기 ›(1시간 · 오늘 하루 · 다시 켤 때까지) · 구분선 · 종료.
+# 알람을 끈 동안은 잠시 끄기 대신 「알람 다시 켜기 (꺼짐 ~ 15:30)」. 열 때마다 지금 상태로 맞춘다
+function New-WtTrayMenu {
+    $menu = [System.Windows.Forms.ContextMenuStrip]::new()
+    [void]$menu.Items.Add('열기', $null, { Show-WtMainWindow })
+    $pause = [System.Windows.Forms.ToolStripMenuItem]::new('알람 잠시 끄기')
+    foreach ($mode in @(@('hour', '1시간'), @('today', '오늘 하루'), @('manual', '다시 켤 때까지'))) {
+        $sub = [System.Windows.Forms.ToolStripMenuItem]::new($mode[1])
+        $sub.Tag = $mode[0]
+        $sub.Add_Click({ param($s, $e) [void](Set-WtNoticePause ([string]$s.Tag)) })
+        [void]$pause.DropDownItems.Add($sub)
+    }
+    $resume = [System.Windows.Forms.ToolStripMenuItem]::new('알람 다시 켜기')
+    $resume.Add_Click({ [void](Set-WtNoticePause off) })
+    [void]$menu.Items.Add($pause)
+    [void]$menu.Items.Add($resume)
+    [void]$menu.Items.Add([System.Windows.Forms.ToolStripSeparator]::new())
+    [void]$menu.Items.Add('종료', $null, { Exit-WtApp })
+    $menu.Tag = @{ Pause = $pause; Resume = $resume }
+    $menu.Add_Opening({ param($s, $e) Update-WtTrayMenu $s })
+    Update-WtTrayMenu $menu
+    $menu
+}
+function Update-WtTrayMenu($Menu, [datetime]$Now = (Get-Date)) {
+    $state = try { Get-WtNoticePause $Now } catch { $null }
+    $paused = $state -and $state.Paused
+    $Menu.Tag.Pause.Visible = -not $paused
+    $Menu.Tag.Resume.Visible = $paused
+    if ($paused) { $Menu.Tag.Resume.Text = "알람 다시 켜기 ($($state.Text -replace '^알람 ', ''))" }
+}
+
 function New-WtTrayIcon([System.Drawing.Icon]$Icon) {
     $n = [System.Windows.Forms.NotifyIcon]::new()
     $n.Icon = $Icon
     $n.Text = 'WorkTool'
-    $menu = [System.Windows.Forms.ContextMenuStrip]::new()
-    [void]$menu.Items.Add('열기', $null, { Show-WtMainWindow })
-    [void]$menu.Items.Add('종료', $null, { Exit-WtApp })
-    $n.ContextMenuStrip = $menu
+    $n.ContextMenuStrip = New-WtTrayMenu
     $n.Add_MouseDoubleClick({ Show-WtMainWindow })
     $n.Visible = $true
     $n
@@ -11401,6 +12072,7 @@ function Initialize-WtShellSettings {
             'ui.opacity' { Set-WtOpacity }
             'window.closeToTray' { Update-WtCloseTip }
             'addons.disabled' { Update-WtNav }
+            'notice.pausedUntil' { Update-WtStatusBar }
         }
     }
     $script:settingHandlerRegistered = $true
@@ -11528,6 +12200,8 @@ function Start-WtApp {
 
     Update-WtNav
     Start-WtNavBadgeTimer
+    # 탭이 등록한, 화면에 묶지 않은 작업(일정 알람 확인 등). 트레이로 숨거나 다른 탭을 볼 때도 돈다
+    [void](Start-WtAddonTicks)
     Update-WtCloseTip
     Set-WtOpacity
     $script:notify = New-WtTrayIcon $script:icon
@@ -11544,6 +12218,8 @@ function Start-WtApp {
     } finally {
         if ($script:badgeTimer) { $script:badgeTimer.Stop() }
         if ($script:warmTimer) { $script:warmTimer.Stop() }
+        try { Stop-WtAddonTicks } catch { }
+        try { Clear-WtNotices } catch { }
         $script:warmQueue = $null
         try {
             if ($script:notify) { $script:notify.Visible = $false; $script:notify.Dispose() }
@@ -11554,7 +12230,8 @@ function Start-WtApp {
 
 Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Update-WtNavBadges, Register-WtKeyOwner, Test-WtKeyOwned,
     New-WtSidePanel, Switch-WtPanelCycle, Set-WtOpacity, Test-WtOpacityNeedsRestart,
-    Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp
+    Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp,
+    New-WtTrayMenu, Update-WtTrayMenu
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Shell.psm1 끝 ----
 
@@ -14545,7 +15222,9 @@ function New-WtMemoTabButton($Pane, $Tab) {
         })
     $Tab.Button = $b
     $Tab.Text = $text
+    $Tab.Close = $x
     $Tab.Style = 'Memo.Tab'
+    $Tab.NaturalKey = ''
     $b
 }
 
@@ -14568,17 +15247,143 @@ function Update-WtMemoTabStrip($Pane) {
     $Pane.Strip.Children.Clear()
     foreach ($t in $Pane.Tabs) { [void]$Pane.Strip.Children.Add((New-WtMemoTabButton $Pane $t)) }
     Update-WtMemoTabTexts
+    Update-WtMemoTabFit $Pane
     Update-WtMemoTabStyles
 }
 
 function Update-WtMemoTabTexts {
     foreach ($p in $script:panes) {
+        $changed = $false
         foreach ($t in $p.Tabs) {
             if (-not $t.Text) { continue }
             $title = Get-WtMemoTitle $t.Id
-            if ($t.Text.Text -cne $title) { $t.Text.Text = $title; $t.Button.ToolTip = $title }
+            if ($t.Text.Text -cne $title) { $t.Text.Text = $title; $t.Button.ToolTip = $title; $changed = $true }
         }
+        if ($changed) { Update-WtMemoTabFit $p }
     }
+}
+
+# 탭 줄의 탭 폭 상한. Windows 탭(TabView)처럼 다 들어가면 최대 폭(글자 폭대로), 모자라면 좁은 탭은 두고
+# 넓은 탭부터 같은 폭으로 줄인다(최소 폭까지). 최소 폭으로도 넘치면 -1: 최소 폭으로 두고 가로로 스크롤한다.
+# $Natural: 줄이지 않은 탭 폭 · $Room: 탭이 쓸 수 있는 폭 · $Gap: 탭마다 오른쪽에 붙는 간격
+function Get-WtMemoTabCap([double[]]$Natural, [double]$Room, [double]$Gap, [double]$Min, [double]$Max) {
+    $n = $Natural.Count
+    if (-not $n) { return $Max }
+    $free = $Room - $Gap * $n
+    # 창 크기를 끄는 동안 자주 불리므로 파이프라인 없이 정렬한다
+    $sorted = [double[]]::new($n)
+    $sum = 0.0
+    for ($k = 0; $k -lt $n; $k++) { $sorted[$k] = [Math]::Min($Max, [Math]::Max($Min, $Natural[$k])); $sum += $sorted[$k] }
+    [Array]::Sort($sorted)
+    if ($sum -le $free) { return $Max }
+    if ($Min * $n -gt $free) { return -1 }
+    $fixed = 0.0
+    for ($k = 0; $k -lt $n; $k++) {
+        $cap = ($free - $fixed) / ($n - $k)
+        if ($cap -le $sorted[$k]) { return [Math]::Max($Min, [Math]::Floor($cap)) }
+        $fixed += $sorted[$k]
+    }
+    $Max
+}
+
+# 줄이지 않았을 때의 탭 폭: 제목 글자 폭 + 탭 좌우 여백 + 닫기 영역 (최소 · 최대 폭은 Get-WtMemoTabCap이 맞춘다).
+# 제목 · 글꼴 · 화면 배율이 그대로면 다시 재지 않는다. 모양을 아직 못 받았으면 NaN
+function Get-WtMemoTabNatural($Tab) {
+    $t = $Tab.Text; $b = $Tab.Button
+    $dpi = [System.Windows.Media.VisualTreeHelper]::GetDpi($t).PixelsPerDip
+    $key = "$($t.Text)`n$($t.FontFamily)`n$($t.FontSize)`n$($t.FontWeight)`n$dpi`n$($b.Padding)`n$($Tab.Close.Width)"
+    if ($Tab.NaturalKey -cne $key) {
+        $face = [System.Windows.Media.Typeface]::new($t.FontFamily, $t.FontStyle, $t.FontWeight, $t.FontStretch)
+        $ft = [System.Windows.Media.FormattedText]::new($t.Text, [System.Globalization.CultureInfo]::CurrentUICulture,
+            [System.Windows.FlowDirection]::LeftToRight, $face, $t.FontSize, $t.Foreground, $dpi)
+        $Tab.Natural = [Math]::Ceiling($ft.WidthIncludingTrailingWhitespace) + $b.Padding.Left + $b.Padding.Right + $Tab.Close.Width
+        $Tab.NaturalKey = $key
+    }
+    [double]$Tab.Natural
+}
+
+# 탭 줄 폭 맞추기. 칸 폭 · 탭 수 · 제목이 바뀔 때 부른다(탭 줄 크기가 바뀌어도 다시 온다).
+# 다 들어가면 글자 폭대로, 모자라면 넓은 탭부터 최소 폭까지 줄이고(넘친 제목은 말줄임, 전체는 툴팁),
+# 최소 폭으로도 넘치면 양 끝 ‹ › 단추를 보이고 가로로 스크롤한다. 보기 · More 단추는 스크롤 밖 오른쪽 끝이라 늘 보인다
+function Update-WtMemoTabFit($Pane) {
+    $grid = $Pane.BarGrid
+    if (-not $grid -or $grid.ActualWidth -le 0) { return }
+    $min = $grid.TryFindResource('F.MemoTab.MinWidth'); $max = $grid.TryFindResource('F.MemoTab.MaxWidth')
+    if ($null -eq $min -or $null -eq $max) { return }
+    $tools = $Pane.BarTools
+    $room = $grid.ActualWidth - $tools.ActualWidth - $tools.Margin.Left - $tools.Margin.Right
+    $natural = [System.Collections.Generic.List[double]]::new()
+    $gap = 0.0
+    foreach ($t in $Pane.Tabs) {
+        if (-not $t.Button) { continue }
+        $w = Get-WtMemoTabNatural $t
+        if ([double]::IsNaN($w)) { return }   # 아직 모양을 못 받았다. 배치되면 탭 줄 크기가 바뀌어 다시 온다
+        $natural.Add($w)
+        $gap = $t.Button.Margin.Left + $t.Button.Margin.Right
+    }
+    $cap = Get-WtMemoTabCap $natural.ToArray() $room $gap ([double]$min) ([double]$max)
+    $overflow = $cap -lt 0
+    if ($overflow) { $cap = [double]$min }
+    $i = 0
+    foreach ($t in $Pane.Tabs) {
+        if (-not $t.Button) { continue }
+        # 제목이 상한보다 긴 탭은 모두 상한 폭(말줄임), 나머지는 글자 폭대로 둔다
+        $width = if ($natural[$i] -gt $cap) { $cap } else { [double]::NaN }
+        $i++
+        if ($t.Button.MaxWidth -ne $cap) { $t.Button.MaxWidth = $cap }
+        if (-not $t.Button.Width.Equals($width)) { $t.Button.Width = $width }
+    }
+    $vis = if ($overflow) { 'Visible' } else { 'Collapsed' }
+    foreach ($b in $Pane.ScrollLeft, $Pane.ScrollRight) { if ($b.Visibility -ne $vis) { $b.Visibility = $vis } }
+    Update-WtMemoTabScrollButtons $Pane
+    Show-WtMemoCurrentTab $Pane
+}
+
+# ‹ › 단추: 끝에 닿은 쪽은 끄고 이유를 툴팁에 둔다
+function Update-WtMemoTabScrollButtons($Pane) {
+    $sv = $Pane.Scroll
+    $canLeft = $sv.HorizontalOffset -gt 0.5
+    $canRight = $sv.HorizontalOffset -lt $sv.ScrollableWidth - 0.5
+    foreach ($spec in @(@($Pane.ScrollLeft, $canLeft, '왼쪽 탭 보기', '더 왼쪽에 탭이 없습니다'), @($Pane.ScrollRight, $canRight, '오른쪽 탭 보기', '더 오른쪽에 탭이 없습니다'))) {
+        $b = $spec[0]
+        if ($b.IsEnabled -ne $spec[1]) { $b.IsEnabled = $spec[1] }
+        $tip = if ($spec[1]) { $spec[2] } else { $spec[3] }
+        if ($b.ToolTip -cne $tip) { $b.ToolTip = $tip }
+    }
+}
+
+# ‹ › 한 번에 탭 하나: 가려진 다음 탭이 다 보이게(그 탭 끝을 보이는 영역 끝에 맞춰) 옮긴다
+function Move-WtMemoTabScroll($Pane, [int]$Step) {
+    $sv = $Pane.Scroll
+    $from = $sv.HorizontalOffset; $view = $sv.ViewportWidth
+    $to = if ($Step -gt 0) { $sv.ScrollableWidth } else { 0 }
+    $tabs = @($Pane.Tabs | Where-Object { $_.Button })
+    if ($Step -lt 0) { [array]::Reverse($tabs) }
+    foreach ($t in $tabs) {
+        $x = $t.Button.TransformToAncestor($Pane.Strip).Transform([System.Windows.Point]::new(0, 0)).X
+        if ($Step -gt 0) {
+            $end = $x + $t.Button.ActualWidth
+            if ($end -gt $from + $view + 0.5) { $to = $end - $view; break }
+        } elseif ($x -lt $from - 0.5) { $to = $x; break }
+    }
+    $sv.ScrollToHorizontalOffset([Math]::Max(0, [Math]::Min($sv.ScrollableWidth, $to)))
+}
+
+# 지금 탭이 탭 줄의 보이는 영역 안에 오게 스크롤한다. 스크롤 보기가 배치를 마친 뒤 실제 자리로 맞춘다
+function Show-WtMemoCurrentTab($Pane) {
+    if ($Pane.Current -and $Pane.Current.Button) { $Pane.Current.Button.BringIntoView() }
+}
+
+# 탭 줄 양 끝의 스크롤 단추. $Step -1 = 왼쪽(‹) · 1 = 오른쪽(›). 탭이 최소 폭으로도 넘칠 때만 보인다
+function New-WtMemoTabScrollButton($Pane, [int]$Step) {
+    $b = [System.Windows.Controls.Button]::new()
+    Set-WtStyle $b $(if ($Step -lt 0) { 'Memo.TabScroll' } else { 'Memo.TabScroll.End' })
+    $b.Content = [string][char]$(if ($Step -lt 0) { 0xE76B } else { 0xE76C })
+    $b.Tag = @{ Pane = $Pane; Step = $Step }
+    $b.Visibility = 'Collapsed'
+    [System.Windows.Automation.AutomationProperties]::SetName($b, $(if ($Step -lt 0) { '왼쪽 탭 보기' } else { '오른쪽 탭 보기' }))
+    $b.Add_Click({ param($s, $e) Move-WtMemoTabScroll $s.Tag.Pane $s.Tag.Step })
+    $b
 }
 
 # 선택된 탭 표시: 포커스가 있는 칸의 지금 탭만 강조색, 다른 칸의 지금 탭은 덜 강조
@@ -14590,7 +15395,7 @@ function Update-WtMemoTabStyles {
             $style = if (-not [object]::ReferenceEquals($t, $p.Current)) { 'Memo.Tab' } elseif ($i -eq $script:active) { 'Memo.Tab.Current' } else { 'Memo.Tab.Selected' }
             if ($t.Style -cne $style) { Set-WtStyle $t.Button $style; $t.Style = $style }
         }
-        if ($p.Current -and $p.Current.Button) { $p.Current.Button.BringIntoView() }
+        Show-WtMemoCurrentTab $p
     }
 }
 
@@ -14603,26 +15408,41 @@ function New-WtMemoPane {
     $card.Tag = $pane
     $card.Add_PreviewMouseDown({ param($s, $e) Set-WtMemoActivePane $s.Tag })
     $card.Add_GotKeyboardFocus({ param($s, $e) Set-WtMemoActivePane $s.Tag })
+    # 셸은 화면을 붙이기 전에 새로 고친다. 그때 다시 만든 탭은 모양을 못 받아 폭을 못 재므로, 붙은 뒤 탭 줄을 다시 맞춘다
+    $card.Add_Loaded({ param($s, $e) Update-WtMemoTabFit $s.Tag })
     $dock = [System.Windows.Controls.DockPanel]::new()
 
-    # 탭 줄: 넘치면 가로로 스크롤(마우스 휠로도), 오른쪽 끝에 +
+    # 탭 줄: ‹ · 탭(넘치면 가로 스크롤, 마우스 휠로도) · › · 보기 · More. 폭 맞추기는 Update-WtMemoTabFit
     $bar = [System.Windows.Controls.Border]::new()
     Set-WtStyle $bar 'Memo.TabBar'
     $barGrid = [System.Windows.Controls.Grid]::new()
-    $bc1 = [System.Windows.Controls.ColumnDefinition]::new()
-    $bc1.Width = [System.Windows.GridLength]::new(1, 'Star')
-    $bc2 = [System.Windows.Controls.ColumnDefinition]::new()
-    $bc2.Width = [System.Windows.GridLength]::Auto
-    $barGrid.ColumnDefinitions.Add($bc1)
-    $barGrid.ColumnDefinitions.Add($bc2)
+    foreach ($star in $false, $true, $false, $false) {
+        $col = [System.Windows.Controls.ColumnDefinition]::new()
+        $col.Width = if ($star) { [System.Windows.GridLength]::new(1, 'Star') } else { [System.Windows.GridLength]::Auto }
+        $barGrid.ColumnDefinitions.Add($col)
+    }
+    $barGrid.Tag = $pane
+    $barGrid.Add_SizeChanged({ param($s, $e) if ($e.WidthChanged) { Update-WtMemoTabFit $s.Tag } })
+    $scrollLeft = New-WtMemoTabScrollButton $pane -1
+    [void]$barGrid.Children.Add($scrollLeft)
     $scroll = [System.Windows.Controls.ScrollViewer]::new()
     $scroll.HorizontalScrollBarVisibility = 'Hidden'
     $scroll.VerticalScrollBarVisibility = 'Disabled'
     $scroll.Focusable = $false
+    $scroll.Tag = $pane
     $scroll.Add_PreviewMouseWheel({ param($s, $e) $s.ScrollToHorizontalOffset($s.HorizontalOffset - $e.Delta); $e.Handled = $true })
-    $strip = New-WtStack Horizontal
+    $scroll.Add_ScrollChanged({ param($s, $e) Update-WtMemoTabScrollButtons $s.Tag; $e.Handled = $true })
+    $strip = [System.Windows.Controls.StackPanel]::new()
+    Set-WtStyle $strip 'Memo.TabStrip'
+    $strip.Tag = $pane
+    # 탭을 열고 닫거나 제목 · 글자 크기 설정이 바뀌어 탭 줄 크기가 바뀌면 다시 맞춘다 (모양을 받은 뒤라 글자 폭을 잴 수 있다)
+    $strip.Add_SizeChanged({ param($s, $e) if ($e.WidthChanged) { Update-WtMemoTabFit $s.Tag } })
     $scroll.Content = $strip
+    [System.Windows.Controls.Grid]::SetColumn($scroll, 1)
     [void]$barGrid.Children.Add($scroll)
+    $scrollRight = New-WtMemoTabScrollButton $pane 1
+    [System.Windows.Controls.Grid]::SetColumn($scrollRight, 2)
+    [void]$barGrid.Children.Add($scrollRight)
     $viewButton = New-WtButton '' -Kind Icon -Icon 0xE70F -ToolTip '편집 보기 (Ctrl+E)'
     $viewButton.Tag = $pane
     $viewButton.Add_Click({ param($s, $e) Set-WtMemoActivePane $s.Tag; Switch-WtMemoView })
@@ -14637,10 +15457,10 @@ function New-WtMemoPane {
             Set-WtMemoActionItems $s.ContextMenu $p.Current.Id $p
             $s.ContextMenu.PlacementTarget = $s; $s.ContextMenu.Placement = 'Bottom'; $s.ContextMenu.IsOpen = $true
         })
-    $barTools = New-WtStack Horizontal 4
-    [void]$barTools.Children.Add($viewButton)
-    [void]$barTools.Children.Add($more)
-    [System.Windows.Controls.Grid]::SetColumn($barTools, 1)
+    $barTools = New-WtStack Horizontal 4   # 보기와 More 사이 4 (디자인 3판 8절 메모)
+    [void](Add-WtChild $barTools $viewButton)
+    [void](Add-WtChild $barTools $more)
+    [System.Windows.Controls.Grid]::SetColumn($barTools, 3)
     [void]$barGrid.Children.Add($barTools)
     $bar.Child = $barGrid
     [System.Windows.Controls.DockPanel]::SetDock($bar, 'Top')
@@ -14721,6 +15541,7 @@ function New-WtMemoPane {
     $card.Child = $dock
 
     $pane.Root = $card; $pane.Strip = $strip; $pane.Scroll = $scroll; $pane.Head = $head
+    $pane.BarGrid = $barGrid; $pane.BarTools = $barTools; $pane.ScrollLeft = $scrollLeft; $pane.ScrollRight = $scrollRight
     $pane.TitleText = $titleText; $pane.TitleBox = $titleBox; $pane.Meta = $meta; $pane.Tags = $tags; $pane.Status = $status
     $pane.Editor = $ed; $pane.Empty = $empty; $pane.EmptyText = $emptyText; $pane.EmptyQuick = $emptyQuick
     $pane.ViewButton = $viewButton; $pane.More = $more; $pane.UndoHost = $undoHost
@@ -21495,12 +22316,29 @@ $script:searchTimer = $null
 $script:collapsed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)   # 할 일에서 접은 묶음
 $script:tableItems = @()
 $script:tableUpdating = $false
+$script:ko = [Globalization.CultureInfo]::GetCultureInfo('ko-KR')
 Register-WtSettingDefault 'schedule.view' 'calendar'
+# 알람 전역 값(설정 → 일반 → 알림, 설계 16장). 다시 알림 · 소리는 코어 알림 부품의 설정(notice.*)이다
+Register-WtSettingDefault 'schedule.alarmDefault' 10   # 새 일정 기본 알람(분 전), -1 = 없음
+Register-WtSettingDefault 'schedule.alarmAllDay' ''    # 하루 종일 일정의 알람 기준 시각 HH:mm, 비면 그날 업무 시작
+Register-WtSettingDefault 'schedule.alarmLate' 30      # 늦게 켰을 때 시작 뒤 몇 분까지 울릴지, 0 = 울리지 않음
+# 폼의 알람 선택지 = 설정 「새 일정 기본 알람」 선택지(디자인 8절 일정)
+$script:alarmChoices = [ordered]@{ '없음' = -1; '정시' = 0; '5분 전' = 5; '10분 전' = 10; '15분 전' = 15; '30분 전' = 30; '1시간 전' = 60 }
+$script:snoozeChoices = @(5, 10, 15, 30)
+$script:lateChoices = [ordered]@{ '울리지 않음' = 0; '10분' = 10; '30분' = 30; '1시간' = 60 }
+# 알람 확인 틱(설계 16장): 앞 틱 시각 · 알람 상태 핸들 · 이번 실행에서 알린 "키|울릴 시각"(상태 파일을 못 써도 두 번 띄우지 않게)
+$script:alarmPrevious = $null
+$script:alarmState = $null
+$script:alarmSeen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 
 function Format-WtAlarm($Minutes) {
     if ($null -eq $Minutes -or "$Minutes" -eq '') { return $null }
     $m = [int]$Minutes
     if ($m -eq 0) { '정시' } elseif ($m -eq 1440) { '하루 전' } elseif ($m % 60 -eq 0) { "$($m / 60)시간 전" } else { "${m}분 전" }
+}
+function Get-WtScheduleDefaultAlarmText {
+    $m = [int](Get-WtSetting 'schedule.alarmDefault')
+    if ($m -lt 0) { '없음' } else { Format-WtAlarm $m }
 }
 
 # 반복 규칙(ConvertFrom-WtScheduleItem의 Repeat) → 짧은 이름
@@ -22437,13 +23275,15 @@ function Set-WtScheduleCheck($Check) {
     }
 }
 
-function Add-WtScheduleField([string]$Key, [string]$Label, $Control) {
+function Add-WtScheduleField([string]$Key, [string]$Label, $Control, $Parent) {
     $field = New-WtStack; Set-WtStyle $field 'Schedule.Field'
     if ($Label) { [void]$field.Children.Add((New-WtText $Label 'Schedule.FieldLabel')) }
     [void]$field.Children.Add($Control); $errorText = New-WtText '' 'Schedule.Error'; $errorText.Visibility = 'Collapsed'; [void]$field.Children.Add($errorText)
     [Windows.Automation.AutomationProperties]::SetName($Control, $(if ($Label) { $Label } else { [string]$Control.Content }))
     [Windows.Automation.AutomationProperties]::SetAutomationId($Control, "Schedule-$Key")
-    $script:form.Fields[$Key] = $Control; $script:form.Errors[$Key] = $errorText; $script:form.Rows[$Key] = $field; [void]$script:form.Panel.Children.Add($field)
+    $script:form.Fields[$Key] = $Control; $script:form.Errors[$Key] = $errorText; $script:form.Rows[$Key] = $field
+    $target = if ($Parent) { $Parent } else { $script:form.Panel }
+    [void]$target.Children.Add($field)
 }
 # 「시작 ~ 끝」 두 칸을 한 줄에 둔다(날짜 · 시각). 칸마다 이름과 자동화 id를 따로 단다. 오류는 같은 줄 아래에 쓴다
 function Add-WtScheduleRange([string]$Key, [string]$EndKey, [string]$Label, [string]$From, [string]$To, [string]$FromName, [string]$ToName) {
@@ -22470,6 +23310,118 @@ function New-WtScheduleCombo([string[]]$Values, [string]$Selected) {
 }
 function New-WtScheduleCheck([string]$Label, [bool]$Checked) {
     $checkBox = [Windows.Controls.CheckBox]::new(); Set-WtStyle $checkBox Check; $checkBox.Content = $Label; $checkBox.IsChecked = $Checked; $checkBox
+}
+
+# ---- 알람 자세히 (설계 16.4 · 디자인 8절 일정) ------------------------------------------------------
+# 알람 칸 아래 접힌 줄. 펼치면 소리 · 다시 알림 · 늦게 켰을 때 · (하루 종일만) 기준 시각. 비워 둔 값(전역 따름)은 $null로 저장한다.
+# 회차(이 회차만)의 알람 목록은 일정의 목록을 통째로 대신하므로, 이 회차만 저장할 때는 네 값을 모두 적는다(보이는 값 그대로)
+
+function Get-WtScheduleLateLabel([int]$Minutes) {
+    if ($Minutes -le 0) { '울리지 않음' } elseif ($Minutes % 60 -eq 0) { "$($Minutes / 60)시간" } else { "${Minutes}분" }
+}
+
+# 회차(또는 일정)의 첫 알람에 적힌 덮어쓰기 값. 새 일정 · 알람 없음이면 모두 $null(전역 따름)
+function Get-WtScheduleAlarmOptionValues($Occurrence) {
+    $opt = if ($Occurrence -and @($Occurrence.AlarmOptions).Count) { @($Occurrence.AlarmOptions)[0] } else { $null }
+    if (-not $opt) { return @{ Sound = $null; Snooze = $null; Late = $null; AllDayAt = $null } }
+    @{ Sound = $opt.Sound; Snooze = $opt.Snooze; Late = $opt.Late
+        AllDayAt = $(if ($null -ne $opt.AllDayAt) { $opt.AllDayAt.ToString('hh\:mm', $script:inv) } else { $null }) }
+}
+
+function Add-WtScheduleAlarmMore($Occurrence) {
+    $f = $script:form
+    $values = Get-WtScheduleAlarmOptionValues $Occurrence
+    $f.AlarmOptions = $values
+    # 알람 칸 묶음(라벨 · 고르기 칸 · 오류 줄) 끝에 넣어 알람 칸 아래 4에 놓는다
+    $row = $f.Rows.alarm
+    $toggle = [Windows.Controls.Button]::new(); Set-WtStyle $toggle 'Schedule.AlarmMore'
+    # 남는 폭을 요약이 쓰고, 넘치면 요약 끝을 말줄임한다(사이드바 폭 안)
+    $line = [Windows.Controls.DockPanel]::new(); $line.LastChildFill = $true
+    $chevron = New-WtIcon 0xE76C; Set-WtStyle $chevron 'Schedule.AlarmMoreIcon'
+    $summary = New-WtText '' 'Schedule.AlarmMoreSummary'
+    foreach ($child in $chevron, (New-WtText '알람 자세히' 'Schedule.AlarmMoreText')) { [Windows.Controls.DockPanel]::SetDock($child, 'Left'); [void]$line.Children.Add($child) }
+    [void]$line.Children.Add($summary)
+    $toggle.Content = $line
+    [Windows.Automation.AutomationProperties]::SetName($toggle, '알람 자세히')
+    [Windows.Automation.AutomationProperties]::SetAutomationId($toggle, 'Schedule-alarmMore')
+    $toggle.Add_Click({ Switch-WtScheduleAlarmMore })
+    $panel = New-WtStack; Set-WtStyle $panel 'Schedule.AlarmMorePanel'; $panel.Visibility = 'Collapsed'
+    [void]$row.Children.Add($toggle); [void]$row.Children.Add($panel)
+    $f.AlarmMore = @{ Toggle = $toggle; Chevron = $chevron; Summary = $summary; Panel = $panel; Open = $false }
+
+    $globalSound = if ([bool](Get-WtSetting 'notice.sound')) { '켬' } else { '끔' }
+    $soundItems = @("전역 따름 ($globalSound)", '켬', '끔')
+    $soundPick = if ($values.Sound -eq $true) { '켬' } elseif ($values.Sound -eq $false) { '끔' } else { $soundItems[0] }
+    Add-WtScheduleField alarmSound '소리' (New-WtScheduleCombo $soundItems $soundPick) $panel
+    $snoozeItems = @("전역 따름 ($([int](Get-WtSetting 'notice.snooze'))분)") + @($script:snoozeChoices | ForEach-Object { "${_}분" })
+    $snoozePick = if ($null -ne $values.Snooze) { "$($values.Snooze)분" } else { $snoozeItems[0] }
+    if ($snoozePick -notin $snoozeItems) { $snoozeItems += $snoozePick }
+    Add-WtScheduleField alarmSnooze '다시 알림' (New-WtScheduleCombo $snoozeItems $snoozePick) $panel
+    $lateItems = @("전역 따름 ($(Get-WtScheduleLateLabel ([int](Get-WtSetting 'schedule.alarmLate'))))") + @($script:lateChoices.Keys)
+    $latePick = if ($null -ne $values.Late) { Get-WtScheduleLateLabel $values.Late } else { $lateItems[0] }
+    if ($latePick -notin $lateItems) { $lateItems += $latePick }
+    Add-WtScheduleField alarmLate '늦게 켰을 때' (New-WtScheduleCombo $lateItems $latePick) $panel
+    # 기준 시각: 비우면 전역 따름(예시 글자). 하루 종일 일정만 보인다
+    $dayBox = New-WtScheduleInput $(if ($values.AllDayAt) { $values.AllDayAt } else { '' }); $dayBox.Width = 120
+    $dayHost = [Windows.Controls.Grid]::new(); $dayHost.HorizontalAlignment = 'Left'
+    $hint = New-WtText '전역 따름' 'Input.Hint'
+    [void]$dayHost.Children.Add($dayBox); [void]$dayHost.Children.Add($hint)
+    $dayBox.Tag = $hint; $hint.Visibility = if ($dayBox.Text) { 'Collapsed' } else { 'Visible' }
+    $dayBox.ToolTip = '비우면 설정의 하루 종일 알람 기준(기본 업무 시작)을 따릅니다. 예: 08:30'
+    $dayBox.Add_TextChanged({ param($s, $e) $s.Tag.Visibility = if ($s.Text) { 'Collapsed' } else { 'Visible' }; Update-WtScheduleAlarmSummary })
+    Add-WtScheduleField alarmDayAt '기준 시각' $dayHost $panel
+    $f.Fields.alarmDayAt = $dayBox
+    [Windows.Automation.AutomationProperties]::SetName($dayBox, '기준 시각'); [Windows.Automation.AutomationProperties]::SetAutomationId($dayBox, 'Schedule-alarmDayAt')
+    foreach ($key in 'alarm', 'alarmSound', 'alarmSnooze', 'alarmLate') { $f.Fields[$key].Add_SelectionChanged({ Update-WtScheduleFormFields }) }
+}
+
+function Switch-WtScheduleAlarmMore {
+    $more = $script:form.AlarmMore
+    if (-not $more) { return }
+    $more.Open = -not $more.Open
+    $more.Panel.Visibility = if ($more.Open) { 'Visible' } else { 'Collapsed' }
+    $more.Chevron.Text = [string][char]$(if ($more.Open) { 0xE70D } else { 0xE76C })
+}
+
+# 지금 고른 값(전역 따름 = $null). 기준 시각은 글 그대로(검사는 저장할 때)
+function Get-WtScheduleFormAlarmOptions {
+    $fields = $script:form.Fields
+    $soundText = [string]$fields.alarmSound.SelectedItem
+    $snoozeText = [string]$fields.alarmSnooze.SelectedItem
+    $lateText = [string]$fields.alarmLate.SelectedItem
+    $dayText = $fields.alarmDayAt.Text.Trim()
+    @{
+        Sound = $(if ($soundText -ceq '켬') { $true } elseif ($soundText -ceq '끔') { $false } else { $null })
+        Snooze = $(if ($snoozeText -match '^(\d+)분$') { [int]$Matches[1] } else { $null })
+        Late = $(if ($lateText -like '전역 따름*') { $null } elseif ($lateText -ceq '울리지 않음') { 0 } elseif ($lateText -match '^(\d+)시간$') { [int]$Matches[1] * 60 } elseif ($lateText -match '^(\d+)분$') { [int]$Matches[1] } else { $null })
+        AllDayAt = $(if ($dayText) { $dayText } else { $null })
+    }
+}
+
+# 접힌 줄 뒤 요약: 덮어쓴 값만 「 · 소리 끔 · 다시 알림 10분」처럼
+function Update-WtScheduleAlarmSummary {
+    $f = $script:form
+    if (-not $f -or -not $f.AlarmMore) { return }
+    if (-not $f.AlarmMore.Toggle.IsEnabled) { $f.AlarmMore.Summary.Text = ''; return }
+    $now = Get-WtScheduleFormAlarmOptions
+    $parts = @(
+        $(if ($null -ne $now.Sound) { if ($now.Sound) { '소리 켬' } else { '소리 끔' } })
+        $(if ($null -ne $now.Snooze) { "다시 알림 $($now.Snooze)분" })
+        $(if ($null -ne $now.Late) { "늦게 켰을 때 $(Get-WtScheduleLateLabel $now.Late)" })
+        $(if ($f.Fields.allDay.IsChecked -and $now.AllDayAt) { "기준 $($now.AllDayAt)" })
+    ) | Where-Object { $_ }
+    $f.AlarmMore.Summary.Text = if ($parts) { ' · ' + ($parts -join ' · ') } else { '' }
+}
+
+# 저장할 알람 칸: 일정 저장은 바뀐 칸만, 회차 저장(-All)은 네 칸 모두. 칸 이름은 저장 형식 그대로(sound · snooze · late · allDayAt)
+function Get-WtScheduleAlarmOptionPatch([hashtable]$Loaded, [hashtable]$Chosen, [bool]$AllDay, [switch]$All) {
+    $patch = @{}
+    foreach ($pair in @(@('Sound', 'sound'), @('Snooze', 'snooze'), @('Late', 'late'), @('AllDayAt', 'allDayAt'))) {
+        if ($pair[0] -ceq 'AllDayAt' -and -not $AllDay -and -not $All) { continue }   # 시각 일정은 기준 시각을 건드리지 않는다
+        $value = $Chosen[$pair[0]]
+        if ($All -or "$value" -cne "$($Loaded[$pair[0]])") { $patch[$pair[1]] = $value }
+    }
+    $patch
 }
 # ---- 관련 메모 (2단계, 설계 13장). 다른 탭은 코어 등록 목록(Get-WtRelatedSource)으로만 부른다 ----
 
@@ -22659,9 +23611,11 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
         $repeatOptions = @('없음', '매일', '매주', '격주', '매월'); if ($repeat -notin $repeatOptions) { $repeatOptions += $repeat }
         Add-WtScheduleField repeat '반복' (New-WtScheduleCombo $repeatOptions $repeat)
         Add-WtScheduleField until '끝나는 날' (New-WtScheduleInput $(if ($Occurrence -and $Occurrence.Entry.Repeat.Until) { ConvertTo-WtDateText $Occurrence.Entry.Repeat.Until } else { '' }))
-        $alarm = if ($Occurrence -and @($Occurrence.Alarms).Count) { Format-WtAlarm $Occurrence.Alarms[0] } else { '없음' }
-        $alarmOptions = @('없음', '5분 전', '10분 전', '30분 전', '1시간 전'); if ($alarm -notin $alarmOptions) { $alarmOptions += $alarm }
+        # 새 일정은 설정 「새 일정 기본 알람」, 기존 일정은 저장된 첫 알람(없으면 없음)
+        $alarm = if (-not $Occurrence) { Get-WtScheduleDefaultAlarmText } elseif (@($Occurrence.Alarms).Count) { Format-WtAlarm $Occurrence.Alarms[0] } else { '없음' }
+        $alarmOptions = @($script:alarmChoices.Keys); if ($alarm -notin $alarmOptions) { $alarmOptions += $alarm }
         Add-WtScheduleField alarm '알람' (New-WtScheduleCombo $alarmOptions $alarm)
+        Add-WtScheduleAlarmMore $Occurrence
         # 태그(설계 14.1): 계열 전체의 칸. 쉼표 · 공백으로 나누고 #은 없어도 된다
         Add-WtScheduleField tags '태그' (New-WtScheduleInput $(if ($Occurrence) { @($Occurrence.Entry.Tags) -join ', ' } else { '' }))
         $script:form.Fields.tags.ToolTip = '쉼표로 나눠 씁니다. 예: 점검, 작업'
@@ -22711,6 +23665,15 @@ function Update-WtScheduleFormFields {
         } else { $f.Fields.allDay.IsEnabled = $true; $f.Fields.allDay.ToolTip = $null }
         foreach ($key in 'start', 'end') { $f.Fields[$key].IsEnabled = -not $f.Fields.allDay.IsChecked }
         $f.Rows.until.Visibility = if ($f.Fields.repeat.SelectedItem -ne '없음') { 'Visible' } else { 'Collapsed' }
+        if ($f.AlarmMore) {
+            # 알람이 없음이면 알람 자세히를 접고 끈다(이유는 툴팁). 기준 시각은 하루 종일 일정만
+            $none = [string]$f.Fields.alarm.SelectedItem -ceq '없음'
+            if ($none -and $f.AlarmMore.Open) { Switch-WtScheduleAlarmMore }
+            $f.AlarmMore.Toggle.IsEnabled = -not $none
+            $f.AlarmMore.Toggle.ToolTip = if ($none) { '알람을 고르면 바꿀 수 있습니다.' } else { $null }
+            $f.Rows.alarmDayAt.Visibility = if ($f.Fields.allDay.IsChecked) { 'Visible' } else { 'Collapsed' }
+            Update-WtScheduleAlarmSummary
+        }
     } else {
         $f.Rows.days.Visibility = if ($f.Fields.freq.SelectedItem -eq '요일') { 'Visible' } else { 'Collapsed' }
         $f.Rows.time.Visibility = if ($f.Fields.freq.SelectedItem -ne '시간마다') { 'Visible' } else { 'Collapsed' }
@@ -22758,7 +23721,17 @@ function Save-WtScheduleForm([string]$Scope) {
             }
             $alarms = if ($fields.alarm.SelectedItem -eq '없음') { @() } elseif ($f.Occurrence -and $fields.alarm.SelectedItem -eq (Format-WtAlarm @($f.Occurrence.Alarms)[0])) {
                 @($f.Occurrence.Alarms | ForEach-Object { @{ before = $_ } })
-            } else { @(@{ before = $(switch ($fields.alarm.SelectedItem) { '5분 전' { 5 }; '10분 전' { 10 }; '30분 전' { 30 }; '1시간 전' { 60 } }) }) }
+            } else { @(@{ before = [int]$script:alarmChoices[[string]$fields.alarm.SelectedItem] }) }
+            # 알람 자세히(설계 16.4): 일정 저장은 바뀐 칸만, 이 회차만은 보이는 네 칸 모두(회차 목록이 일정 목록을 대신함)
+            if ($f.AlarmMore -and $alarms.Count) {
+                $chosen = Get-WtScheduleFormAlarmOptions
+                if ($fields.allDay.IsChecked -and $chosen.AllDayAt -and $null -eq (ConvertFrom-WtTimeText $chosen.AllDayAt)) {
+                    if (-not $f.AlarmMore.Open) { Switch-WtScheduleAlarmMore }
+                    Set-WtScheduleFormError alarmDayAt '기준 시각은 HH:mm 형식으로 입력하세요.'; return
+                }
+                $optionPatch = Get-WtScheduleAlarmOptionPatch $f.AlarmOptions $chosen ([bool]$fields.allDay.IsChecked) -All:($Scope -eq '이 회차만')
+                foreach ($a in $alarms) { foreach ($k in $optionPatch.Keys) { $a[$k] = $optionPatch[$k] } }
+            }
             $dayText = ConvertTo-WtDateText $date
             $tags = @(ConvertFrom-WtScheduleTagText $fields.tags.Text)
             $patch = @{ title = $fields.title.Text; start = @{ date = $dayText; time = $(if ($null -ne $start) { $fields.start.Text } else { $null }) }
@@ -22899,9 +23872,166 @@ function Open-WtScheduleArgs($OpenArgs) {
     } elseif ($date) { Set-WtScheduleDate $date; if ($OpenArgs.RoutineId) { Show-WtScheduleForm -Kind routine -Id $OpenArgs.RoutineId } }
 }
 
+# ---- 알람 울리기 (설계 16장) ----------------------------------------------------------------------
+# 코어가 15초마다 부른다(Register-WtAddon -Tick). 화면에 묶지 않아서 트레이로 숨거나 다른 탭을 볼 때도 돈다.
+# 판정은 ScheduleData의 Get-WtScheduleAlarms, 알림 창 · 소리는 코어 알림 부품(Show-WtNotice). 잠시 끈 동안 울릴 알람은 기록만 남겨 버린다.
+# 돌려주는 값: 이번 틱에 받아들인 알람 목록(검사용)
+function Invoke-WtScheduleAlarmTick([datetime]$Now = (Get-Date)) {
+    $stamp = Get-WtStamp $Now
+    $data = Get-WtScheduleData
+    if ($data.Error) { throw $data.Error }
+    if (-not $script:alarmState) { $script:alarmState = Open-WtScheduleAlarmStore }
+    # 상태 파일을 못 읽으면 기록 없이 판정한다(이번 실행 안에서는 alarmSeen이 두 번 울리지 않게 막는다)
+    $state = if ($script:alarmState.State -eq 'error') { $null } else { $script:alarmState }
+    $done = try { Get-WtEventDone } catch { $null }   # 체크 기록을 못 읽어도 알람은 울린다
+    $result = Get-WtScheduleAlarms -Now $stamp -Previous $script:alarmPrevious -Entries $data.Entries -StateStore $state -Done $done `
+        -Late ([int](Get-WtSetting 'schedule.alarmLate')) -AllDayAt ([string](Get-WtSetting 'schedule.alarmAllDay'))
+    $script:alarmPrevious = $stamp
+    if (-not $result.Success) { return @() }   # 시계가 뒤로 갔으면 이번 틱만 건너뛴다(다음 틱은 새 시각부터)
+    $paused = (Get-WtNoticePause $Now).Paused
+    $accepted = [System.Collections.Generic.List[object]]::new()
+    foreach ($alarm in $result.Alarms) {
+        if (-not $script:alarmSeen.Add("$($alarm.Key)|$($alarm.Due.Ticks)")) { continue }
+        $accepted.Add($alarm)
+        if (-not $paused) { [void](Show-WtNotice (New-WtScheduleAlarmNotice $alarm) $Now) }
+    }
+    if ($accepted.Count -and $state) {
+        try { $script:alarmState = (Save-WtScheduleAlarms $state $accepted.ToArray() -At $stamp).Store }
+        catch { $script:alarmState = $null; throw }   # 다음 틱에 다시 연다
+    }
+    $accepted.ToArray()
+}
+
+# 알림 창의 시각 줄(디자인 7절 「알람 창」): 14:00 · 10분 뒤 / 지금 / 5분 지남, 하루 종일, 오늘이 아니면 날짜를 앞에
+function Format-WtScheduleAlarmWhen([datetime]$Start, [bool]$AllDay, [datetime]$Now = (Get-Date)) {
+    $day = if ($Start.Date -eq $Now.Date) { '' } else { $Start.ToString('M월 d일 (ddd) ', $script:ko) }
+    if ($AllDay) { return "${day}하루 종일" }
+    $span = $Start - $Now
+    $relative = if ($span.TotalSeconds -gt 0) {
+        $minutes = [int][Math]::Ceiling($span.TotalMinutes)
+        if ($minutes -lt 60) { "${minutes}분 뒤" }
+        elseif ($minutes -lt 1440) { $h = [Math]::Floor($minutes / 60); $m = $minutes % 60; if ($m) { "${h}시간 ${m}분 뒤" } else { "${h}시간 뒤" } }
+        else { "$([Math]::Floor($minutes / 1440))일 뒤" }
+    } elseif (-$span.TotalMinutes -lt 1) { '지금' }
+    else {
+        $minutes = [int][Math]::Floor(-$span.TotalMinutes)
+        if ($minutes -lt 60) { "${minutes}분 지남" } else { $h = [Math]::Floor($minutes / 60); $m = $minutes % 60; if ($m) { "${h}시간 ${m}분 지남" } else { "${h}시간 지남" } }
+    }
+    "$day$($Start.ToString('HH:mm', $script:inv)) · $relative"
+}
+
+# 알람 하나 → 알림 창 내용(core\Notice.psm1 Show-WtNotice의 Spec). 소리 · 다시 알림은 알람의 덮어쓰기 값, 없으면 전역
+function New-WtScheduleAlarmNotice($Alarm) {
+    $sound = if ($null -ne $Alarm.Sound) { [bool]$Alarm.Sound } else { [bool](Get-WtSetting 'notice.sound') }
+    @{
+        Key = [string]$Alarm.Key; Title = [string]$Alarm.Title
+        Data = @{ Start = $Alarm.Start; AllDay = [bool]$Alarm.AllDay; Id = [string]$Alarm.Id; OriginalDate = [string]$Alarm.OriginalDate; Restore = $null }
+        Refresh = { param($Data, $When) Format-WtScheduleAlarmWhen $Data.Start $Data.AllDay $When }
+        Open = @{ Id = 'schedule'; Args = @{ Date = $Alarm.Start.Date; Id = [string]$Alarm.Id } }
+        Snooze = $Alarm.Snooze
+        Sound = $sound
+        Menu = @(@{ Header = '이 일정 알람 끄기'; Action = { param($Notice) Disable-WtScheduleNoticeAlarm $Notice } })
+    }
+}
+
+# 알림 창 더 보기의 「이 일정 알람 끄기」: 그 일정의 알람을 없음으로(반복이면 계열 전체 = 이후 모두, 지난 회차는 어차피 울리지 않음).
+# 알람 칸의 다른 값(소리 등)은 남기고 before만 끈다. 실행 취소는 끄기 전 before를 되돌린다
+function Disable-WtScheduleNoticeAlarm($Notice) {
+    $id = [string]$Notice.Spec.Data.Id
+    $data = Get-WtScheduleData
+    $item = @($data.Items | Where-Object { (Test-WtRecordObject $_) -and [string](Get-WtField $_ 'id') -ceq $id }) | Select-Object -First 1
+    if (-not $item) { Set-WtNoticeMessage $Notice '일정을 찾지 못했습니다.'; return }
+    $stored = Get-WtField $item 'alarms'   # 목록 값은 한 덩어리로 돌려받는다(@()로 감싸면 한 겹 더 싸임)
+    $befores = @(foreach ($alarmItem in @($stored)) { if (Test-WtRecordObject $alarmItem) { Get-WtField $alarmItem 'before' } else { $null } })
+    try { $r = Save-WtScheduleItem $data.Store @{ alarms = @() } -Id $id } catch { Set-WtNoticeMessage $Notice $_.Exception.Message; return }
+    if (-not $r.Success) { Set-WtNoticeMessage $Notice $r.Reason; return }
+    $Notice.Spec.Data.Restore = $befores
+    Set-WtNoticeMessage $Notice '이 일정 알람을 껐습니다.' -Undo { param($Target) Restore-WtScheduleNoticeAlarm $Target }
+    if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
+}
+function Restore-WtScheduleNoticeAlarm($Notice) {
+    $id = [string]$Notice.Spec.Data.Id
+    $patch = @(foreach ($before in @($Notice.Spec.Data.Restore)) { @{ before = $before } })
+    $r = Save-WtScheduleItem (Get-WtScheduleData).Store @{ alarms = $patch } -Id $id
+    if (-not $r.Success) { return $r.Reason }
+    '알람을 다시 켰습니다.'
+}
+
+# 설정 → 일반 → 알림에 넣는 일정 탭의 행(Register-WtAddon -SettingRows): 새 일정 기본 알람 · 하루 종일 알람 기준 · 늦게 켰을 때
+function New-WtScheduleAlarmSettingRows {
+    $default = [Windows.Controls.ComboBox]::new(); Set-WtStyle $default 'Setting.Combo'
+    foreach ($name in $script:alarmChoices.Keys) { [void]$default.Items.Add($name) }
+    $current = Get-WtScheduleDefaultAlarmText
+    if (-not $default.Items.Contains($current)) { [void]$default.Items.Add($current) }
+    $default.SelectedItem = $current
+    $default.Add_SelectionChanged({
+            param($s, $e)
+            $text = [string]$s.SelectedItem
+            $minutes = if ($script:alarmChoices.Contains($text)) { [int]$script:alarmChoices[$text] } elseif ($text -match '^(\d+)분 전$') { [int]$Matches[1] } else { return }
+            Set-WtSetting 'schedule.alarmDefault' $minutes
+        })
+    [Windows.Automation.AutomationProperties]::SetName($default, '새 일정 기본 알람')
+
+    # 하루 종일 알람 기준: 업무 시작 시각(그날 규칙) · 직접(시각 입력, 직접일 때만 켬). 틀린 시각은 칸 아래 오류 줄
+    $dayRow = New-WtStack Vertical 4
+    $dayLine = New-WtStack Horizontal 8
+    $direct = [string](Get-WtSetting 'schedule.alarmAllDay')
+    $mode = [Windows.Controls.ComboBox]::new(); Set-WtStyle $mode 'Setting.Combo'
+    foreach ($name in '업무 시작 시각', '직접') { [void]$mode.Items.Add($name) }
+    $timeBox = [Windows.Controls.TextBox]::new(); Set-WtStyle $timeBox 'Setting.Time'
+    $timeBox.Text = if ($direct) { $direct } else { [string](Get-WtWorkHours)['work.start'] }
+    [Windows.Automation.AutomationProperties]::SetName($timeBox, '하루 종일 알람 기준 시각')
+    $dayError = New-WtText '' 'T.Error'; $dayError.Visibility = 'Collapsed'
+    $mode.Tag = @{ Time = $timeBox; Error = $dayError }
+    $timeBox.Tag = @{ Mode = $mode; Error = $dayError }
+    $mode.SelectedItem = if ($direct) { '직접' } else { '업무 시작 시각' }
+    $timeBox.IsEnabled = [bool]$direct
+    $mode.ToolTip = '하루 종일 일정의 「10분 전」은 이 시각의 10분 전입니다.'
+    $mode.Add_SelectionChanged({
+            param($s, $e)
+            $t = $s.Tag
+            if ([string]$s.SelectedItem -ceq '직접') { $t.Time.IsEnabled = $true; Save-WtScheduleAllDaySetting $t.Time; return }
+            $t.Time.IsEnabled = $false; $t.Error.Visibility = 'Collapsed'
+            $t.Time.Text = [string](Get-WtWorkHours)['work.start']
+            Set-WtSetting 'schedule.alarmAllDay' ''
+        })
+    $timeBox.Add_LostFocus({ param($s, $e) if ($s.IsEnabled) { Save-WtScheduleAllDaySetting $s } })
+    $timeBox.Add_KeyDown({ param($s, $e) if ($e.Key -eq [Windows.Input.Key]::Enter) { Save-WtScheduleAllDaySetting $s } })
+    [void](Add-WtChild $dayLine $mode); [void](Add-WtChild $dayLine $timeBox)
+    [void](Add-WtChild $dayRow $dayLine); [void](Add-WtChild $dayRow $dayError)
+
+    $late = [Windows.Controls.ComboBox]::new(); Set-WtStyle $late 'Setting.ComboWide'
+    $lateNames = [ordered]@{ '울리지 않음' = 0; '시작 뒤 10분까지 울림' = 10; '시작 뒤 30분까지 울림' = 30; '시작 뒤 1시간까지 울림' = 60 }
+    foreach ($name in $lateNames.Keys) { [void]$late.Items.Add($name) }
+    $lateNow = [int](Get-WtSetting 'schedule.alarmLate')
+    $latePick = @($lateNames.Keys | Where-Object { $lateNames[$_] -eq $lateNow }) | Select-Object -First 1
+    if (-not $latePick) { $latePick = "시작 뒤 $(Get-WtScheduleLateLabel $lateNow)까지 울림"; [void]$late.Items.Add($latePick) }
+    $late.SelectedItem = $latePick
+    $late.Add_SelectionChanged({
+            param($s, $e)
+            $text = [string]$s.SelectedItem
+            $minutes = if ($text -ceq '울리지 않음') { 0 } elseif ($text -match '(\d+)시간') { [int]$Matches[1] * 60 } elseif ($text -match '(\d+)분') { [int]$Matches[1] } else { return }
+            Set-WtSetting 'schedule.alarmLate' $minutes
+        })
+    [Windows.Automation.AutomationProperties]::SetName($late, '늦게 켰을 때')
+    @(
+        @{ Group = '알림'; Label = '새 일정 기본 알람'; Control = $default }
+        @{ Group = '알림'; Label = '하루 종일 알람 기준'; Control = $dayRow }
+        @{ Group = '알림'; Label = '늦게 켰을 때'; Control = $late; Note = '앱이 꺼져 있는 동안 지난 알람을 나중에 울릴지 정합니다.' }
+    )
+}
+function Save-WtScheduleAllDaySetting($Box) {
+    $text = $Box.Text.Trim()
+    if ($null -eq (ConvertFrom-WtTimeText $text)) {
+        $Box.Tag.Error.Text = '시각은 HH:mm 형식으로 입력하세요.'; $Box.Tag.Error.Visibility = 'Visible'; return
+    }
+    $Box.Tag.Error.Visibility = 'Collapsed'
+    if ([string](Get-WtSetting 'schedule.alarmAllDay') -cne $text) { Set-WtSetting 'schedule.alarmAllDay' $text }
+}
+
 # 메뉴 개수 = 할 일 수(기한 지남 + 오늘 남은 일정 · 루틴 + 마감 임박, 설계 14.5). 보기 단추의 숫자와 같다
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } -Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
-Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -Tick { param($Now) [void](Invoke-WtScheduleAlarmTick $Now) } -TickSeconds 15 -SettingRows { New-WtScheduleAlarmSettingRows } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder }-Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
+Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel, Invoke-WtScheduleAlarmTick, Format-WtScheduleAlarmWhen
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\schedule\Schedule.psm1 끝 ----
 
@@ -23031,19 +24161,37 @@ function Get-WtSchTiming($StartPoint, $EndPoint) {
     @{ Start = $start; End = $end; AllDay = $allDay; LastDay = $last.Date; Problem = '' }
 }
 
-# alarms 목록 → @{ List(int[] 분 전); Problem }. before가 없는 알람은 이 앱이 모르는 모양이라 건너뛰고, before가 null이면 꺼진 알람이라 건너뛴다
+# alarms 목록 → @{ List(int[] 분 전); Options(List와 같은 자리의 덮어쓰기 값); Problem }.
+# before가 없는 알람은 이 앱이 모르는 모양이라 건너뛰고, before가 null이면 꺼진 알람이라 건너뛴다
 function Read-WtSchAlarms($Alarms) {
     $list = [System.Collections.Generic.List[int]]::new()
+    $options = [System.Collections.Generic.List[object]]::new()
     foreach ($a in @($Alarms)) {
         if ($null -eq $a) { continue }
-        if (-not (Test-WtSchObject $a)) { return @{ List = @(); Problem = "알람 모양이 틀렸습니다: '$a'" } }
+        if (-not (Test-WtSchObject $a)) { return @{ List = @(); Options = @(); Problem = "알람 모양이 틀렸습니다: '$a'" } }
         $b = Get-WtField $a 'before'
         if ($null -eq $b) { continue }
         $m = ConvertFrom-WtWhole $b $script:limits.before[0] $script:limits.before[1]
-        if ($null -eq $m) { return @{ List = @(); Problem = "알람을 읽지 못했습니다(0~$($script:limits.before[1])분 정수): '$b'" } }
+        if ($null -eq $m) { return @{ List = @(); Options = @(); Problem = "알람을 읽지 못했습니다(0~$($script:limits.before[1])분 정수): '$b'" } }
         $list.Add([int]$m)
+        $options.Add((Read-WtSchAlarmOptions $a))
     }
-    @{ List = $list.ToArray(); Problem = '' }
+    @{ List = $list.ToArray(); Options = $options.ToArray(); Problem = '' }
+}
+
+# 알람 하나의 덮어쓰기 칸(설계 2.2 · 16장). 없거나 모양이 다르면 $null = 전역 따름(고칠 항목이 아니고, 저장할 때 그대로 둔다)
+#   sound true/false · snooze 1~1440분 · late 0~1440분(0 = 늦은 알람 울리지 않음) · allDayAt "HH:mm"(하루 종일 일정의 기준 시각)
+function Read-WtSchAlarmOptions($Alarm) {
+    $sound = Get-WtField $Alarm 'sound'
+    $snooze = ConvertFrom-WtWhole (Get-WtField $Alarm 'snooze') 1 1440
+    $late = ConvertFrom-WtWhole (Get-WtField $Alarm 'late') 0 1440
+    $dayAt = Get-WtField $Alarm 'allDayAt'
+    [pscustomobject]@{
+        Sound = $(if ($sound -is [bool]) { $sound } else { $null })
+        Snooze = $(if ($null -ne $snooze) { [int]$snooze } else { $null })
+        Late = $(if ($null -ne $late) { [int]$late } else { $null })
+        AllDayAt = $(if ($dayAt -is [string]) { ConvertFrom-WtTimeText $dayAt } else { $null })
+    }
 }
 
 # repeat 객체 → @{ Rule; State(ok · readonly · broken); Problem }. changes는 시간을 알아야 해서 ConvertFrom-WtScheduleItem이 읽는다
@@ -23107,7 +24255,7 @@ function Read-WtSchRepeat($Repeat) {
 # 회차 하나의 바뀐 칸 → @{ Timing | $null; Title | $null; Note | $null; Alarms | $null; Problem }. 시작만 바꾸면 길이는 그대로 둔다
 function Read-WtSchChange($Entry, [string]$Key, $Change) {
     if (-not (Test-WtSchObject $Change)) { return @{ Problem = "회차 $Key 바꿈 모양이 틀렸습니다" } }
-    $c = @{ Timing = $null; Title = $null; Note = $null; Alarms = $null; Problem = '' }
+    $c = @{ Timing = $null; Title = $null; Note = $null; Alarms = $null; AlarmOptions = $null; Problem = '' }
     $ps = @{}
     foreach ($p in (Get-WtSchPairs $Change)) { $ps[$p.Name] = $p }
     if ($ps['start'] -or $ps['end']) {
@@ -23134,6 +24282,7 @@ function Read-WtSchChange($Entry, [string]$Key, $Change) {
         $al = Read-WtSchAlarms $ps['alarms'].Value
         if ($al.Problem) { return @{ Problem = "회차 $Key 바꿈: $($al.Problem)" } }
         $c.Alarms = $al.List
+        $c.AlarmOptions = $al.Options
     }
     $c
 }
@@ -23141,11 +24290,12 @@ function Read-WtSchChange($Entry, [string]$Key, $Change) {
 <#
 저장된 항목 하나 → 화면 · 계산용 값. 저장 파일은 바꾸지 않는다(Item에 원래 객체가 그대로 있다).
 State: ok(계산 · 알람에 씀) · readonly(새 버전의 값이 있어 읽기만) · broken(고칠 항목) · deleted(지운 항목)
-나머지: Id · Kind · Title · Note · Start · End · AllDay · LastDay · Repeat(규칙 | $null) · Alarms(int[]) · Tags · Links([{ Page, Key, Date }]) · Problem(이유)
+나머지: Id · Kind · Title · Note · Start · End · AllDay · LastDay · Repeat(규칙 | $null) · Alarms(int[]) · AlarmOptions(Alarms와 같은 자리의
+덮어쓰기 값 @{ Sound; Snooze; Late; AllDayAt }, Read-WtSchAlarmOptions) · Tags · Links([{ Page, Key, Date }]) · Problem(이유)
 #>
 function ConvertFrom-WtScheduleItem($Item) {
     $e = [ordered]@{ Id = ''; Item = $Item; State = 'ok'; Problem = ''; Kind = ''; Title = ''; Note = ''
-        Start = $null; End = $null; AllDay = $true; LastDay = $null; Repeat = $null; Alarms = @(); Tags = @(); Links = @() }
+        Start = $null; End = $null; AllDay = $true; LastDay = $null; Repeat = $null; Alarms = @(); AlarmOptions = @(); Tags = @(); Links = @() }
     if (Test-WtDeleted $Item) { $e.Id = [string]$Item.id; $e.State = 'deleted'; return [pscustomobject]$e }
     if (-not (Test-WtSchObject $Item)) { $e.State = 'broken'; $e.Problem = '항목 모양이 틀렸습니다'; return [pscustomobject]$e }
     $e.Id = [string]$Item.id; $e.Kind = [string]$Item.kind; $e.Title = [string]$Item.title; $e.Note = [string]$Item.note
@@ -23169,6 +24319,7 @@ function ConvertFrom-WtScheduleItem($Item) {
     $al = Read-WtSchAlarms $Item.alarms
     if ($al.Problem -and -not $problem) { $problem = $al.Problem }
     $e.Alarms = $al.List
+    $e.AlarmOptions = $al.Options
     if (-not $problem -and $e.Repeat -and $e.Repeat.RawChanges) {
         $entryView = [pscustomobject]$e
         foreach ($p in @(Get-WtSchPairs $e.Repeat.RawChanges)) {
@@ -23303,20 +24454,21 @@ function New-WtSchOccurrence($Entry, [datetime]$Original, $Change) {
     $shift = $Original.Date - $Entry.Start.Date
     $o = [ordered]@{ Key = "$($Entry.Id)@$(ConvertTo-WtDateText $Original)"; Entry = $Entry; Original = $Original.Date
         Start = $Entry.Start + $shift; End = $Entry.End + $shift; LastDay = $Entry.LastDay + $shift; AllDay = $Entry.AllDay
-        Title = $Entry.Title; Note = $Entry.Note; Alarms = $Entry.Alarms; Changed = $false }
+        Title = $Entry.Title; Note = $Entry.Note; Alarms = $Entry.Alarms; AlarmOptions = $Entry.AlarmOptions; Changed = $false }
     if ($Change) {
         $o.Changed = $true
         if ($Change.Timing) { $o.Start = $Change.Timing.Start; $o.End = $Change.Timing.End; $o.LastDay = $Change.Timing.LastDay; $o.AllDay = $Change.Timing.AllDay }
         if ($null -ne $Change.Title) { $o.Title = $Change.Title }
         if ($null -ne $Change.Note) { $o.Note = $Change.Note }
-        if ($null -ne $Change.Alarms) { $o.Alarms = $Change.Alarms }
+        # 회차의 알람 목록은 일정의 목록을 통째로 대신한다(덮어쓰기 값도 회차 것, 비면 전역 따름)
+        if ($null -ne $Change.Alarms) { $o.Alarms = $Change.Alarms; $o.AlarmOptions = $Change.AlarmOptions }
     }
     [pscustomobject]$o
 }
 
 <#
 $From ~ $To(날짜, 그날 포함)와 겹치는 회차들. 계산할 수 있는 항목(State ok)만 쓴다. 시작 순서(같으면 하루 종일 먼저, 그다음 제목)
-회차: Key("<id>@<원래 날짜>") · Entry · Original(원래 날짜) · Start · End · LastDay · AllDay · Title · Note · Alarms · Changed
+회차: Key("<id>@<원래 날짜>") · Entry · Original(원래 날짜) · Start · End · LastDay · AllDay · Title · Note · Alarms · AlarmOptions · Changed
 여러 날에 걸친 회차는 시작이 범위 앞이어도 범위에 걸치면 들어간다. 다른 날로 옮긴 회차(changes)는 옮긴 날로 들어간다
 #>
 function Get-WtScheduleOccurrences([object[]]$Entries, [datetime]$From, [datetime]$To) {
@@ -23781,34 +24933,119 @@ function Remove-WtScheduleLink($Store, [string]$Id, [string]$Page, [string]$Key,
     Set-WtScheduleLinkCore $Store $Id $Page $Key $Date $false $At
 }
 
-# ---- 알람 (앱이 켜져 있는 동안, 소리 · 타이머 없음) --------------------------------------------
+# ---- 알람 (앱이 켜져 있는 동안. 확인 타이머 · 알림 창 · 소리는 Schedule.psm1과 core\Notice.psm1, 설계 16장) ----------
 
 function Open-WtScheduleAlarmStore { Open-WtStore -Name 'schedule-state' -Schema 1 }
 
-# (Previous, Now] 현지 벽시계 구간. Previous 없으면 첫 실행이라 지난 알람은 울리지 않는다.
-# 상태는 회차 키 + before로 구분한다(한 회차의 여러 알람이 서로 막지 않게).
-function Get-WtScheduleAlarms($Now, $Previous, [object[]]$Entries, $StateStore) {
+<#
+울릴 알람. 결과 { Success, Reason, Alarms }. Alarms 하나:
+  Key("<회차 키>/<before>") · OccurrenceKey · Id · OriginalDate · Before · Due(울릴 시각) · Base(기준: 시각 일정은 시작, 하루 종일은 그날 기준 시각)
+  Start · AllDay · Title · Note · Late(늦게 울리는 것인지) · Sound · Snooze(알람의 덮어쓰기 값, $null = 전역 따름)
+두 가지로 부른다(설계 9.1 · 16장).
+  -Late 없음: (Previous, Now] 현지 벽시계 구간만 본다. Previous가 없으면(첫 실행) 빈 목록이다.
+  -Late <분>(설정 「늦게 켰을 때」): 앱의 확인 타이머다. Previous가 있고 Now - Previous가 2분 안이면 (Previous, Now]는 제때 울린다.
+    그 밖에 Due ≤ Now인 알람(앱이 꺼져 있었거나 PC가 잠자기였음)은 늦은 알람 허용(알람의 late, 없으면 -Late)이 0보다 크고
+    Now ≤ Base + 허용일 때만 울린다.
+하루 종일 일정의 기준 시각: 알람의 allDayAt → -AllDayAt(HH:mm) → 그날 업무시간 규칙의 시작(Get-WtWorkHours -Date).
+상태는 회차 키 + before로 구분한다(한 회차의 여러 알람이 서로 막지 않게). 기록의 at(울린 시각)이 이번 Due보다 이르면
+울린 뒤 일정을 늦춘 것이라 다시 울린다. Done(끝낸 회차 키 모음, Get-WtEventDone)에 든 회차는 울리지 않는다.
+#>
+function Get-WtScheduleAlarms($Now, $Previous, [object[]]$Entries, $StateStore, $Done, $Late, [string]$AllDayAt) {
     $r = [pscustomobject]@{ Success = $true; Reason = ''; Alarms = @() }
     $nowAt = ConvertFrom-WtStamp ([string]$Now)
     $prevAt = ConvertFrom-WtStamp ([string]$Previous)
     if (-not $nowAt -or ($Previous -and -not $prevAt)) { $r.Success = $false; $r.Reason = '앱 시각을 읽지 못했습니다'; return $r }
-    if (-not $prevAt) { return $r }
-    if ($nowAt -lt $prevAt -or $nowAt.DateTime -lt $prevAt.DateTime) { $r.Success = $false; $r.Reason = '지금 시각이 앞서 본 시각보다 이릅니다'; return $r }
+    $timerMode = $null -ne $Late
+    if (-not $timerMode -and -not $prevAt) { return $r }
+    if ($prevAt -and ($nowAt -lt $prevAt -or $nowAt.DateTime -lt $prevAt.DateTime)) { $r.Success = $false; $r.Reason = '지금 시각이 앞서 본 시각보다 이릅니다'; return $r }
     if ($StateStore -and $StateStore.State -eq 'error') { $r.Success = $false; $r.Reason = $StateStore.Error; return $r }
-    $fired = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($i in @($StateStore.Items)) { if ($i.key) { [void]$fired.Add([string]$i.key) } }
+    $clock = $nowAt.DateTime
+    $prevClock = if ($prevAt) { $prevAt.DateTime } else { $null }
+    $onTime = $null -ne $prevClock -and (-not $timerMode -or ($clock - $prevClock).TotalMinutes -le 2)
+    $lateAll = if ($timerMode) { [Math]::Max(0, [int]$Late) } else { 0 }
+    $dayAt = ConvertFrom-WtTimeText $AllDayAt
+    $workStart = @{}
+    # 키 → 마지막으로 울린 벽시계 시각. at을 읽지 못하는 기록은 늘 울린 것으로 본다(두 번 울리지 않게)
+    $fired = [System.Collections.Generic.Dictionary[string, datetime]]::new([StringComparer]::Ordinal)
+    foreach ($record in @($StateStore.Items)) {
+        if (-not $record.key) { continue }
+        $stamp = ConvertFrom-WtStamp ([string]$record.at)
+        $seen = if ($stamp) { $stamp.DateTime } else { [datetime]::MaxValue }
+        $old = [datetime]::MinValue
+        if (-not $fired.TryGetValue([string]$record.key, [ref]$old) -or $old -lt $seen) { $fired[[string]$record.key] = $seen }
+    }
+    $doneKeys = if ($null -eq $Done) { $null } elseif ($Done -is [System.Collections.Generic.HashSet[string]]) { $Done } else {
+        [System.Collections.Generic.HashSet[string]]::new([string[]]@($Done | ForEach-Object { [string]$_ }), [StringComparer]::Ordinal)
+    }
+    # 항목마다 펼칠 날: 앞은 (Now - 늦은 허용 - 하루) · Previous 날 중 이른 날, 뒤는 그 항목의 가장 큰 before(366일까지)가 닿는 날.
+    # 늘 366일을 펼치면 일정 300개(매일 반복 30개)에 한 번 2초가 넘는다. 범위가 같은 항목은 묶어 한 번에 펼친다. 옮긴 회차는 기존 펼치기 함수가 찾는다.
+    # 15초마다 부르므로, 알람 있는 일정 색인(Get-WtSchAlarmIndex, 목록이 바뀔 때만 다시 만듦)에서 반복 일정과 범위 안 날짜의 일정만 본다
+    $first = [datetime]::new(1900, 1, 1); $last = [datetime]::new(2199, 12, 31)
+    $index = Get-WtSchAlarmIndex $Entries
+    $loAll = if ($timerMode) { $clock.AddMinutes(-[Math]::Max($lateAll, $index.LateMax)).AddDays(-1).Date } else { $prevClock.Date }
+    if ($null -ne $prevClock -and $prevClock.Date -lt $loAll) { $loAll = $prevClock.Date }
+    if ($loAll -lt $first) { $loAll = $first }
+    $hiAll = $clock.AddMinutes([Math]::Max(0, $index.MostMax)).Date
+    if ($hiAll -gt $last) { $hiAll = $last }
+    $candidates = [System.Collections.Generic.List[object]]::new($index.Repeating)
+    for ($day = $loAll; $day -le $hiAll; $day = $day.AddDays(1)) {
+        $bucket = $null
+        if ($index.ByStart.TryGetValue($day, [ref]$bucket)) { $candidates.AddRange($bucket) }
+    }
+    $groups = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    foreach ($candidate in $candidates) {
+        $e = $candidate.Entry
+        $lateMost = if ($timerMode) { [Math]::Max($lateAll, $candidate.LateMax) } else { 0 }
+        # 하루 종일 회차는 기준 시각이 그날 안 어디든 될 수 있어 하루를 더 본다. 시각 일정은 시작 뒤 허용 시간만 본다
+        $lo = if (-not $timerMode) { $prevClock.Date } elseif ($candidate.AllDay) { $clock.AddMinutes(-$lateMost).AddDays(-1).Date } else { $clock.AddMinutes(-$lateMost).Date }
+        if ($null -ne $prevClock -and $prevClock.Date -lt $lo) { $lo = $prevClock.Date }
+        if ($lo -lt $first) { $lo = $first }
+        $hi = $clock.AddMinutes($candidate.Most).Date
+        if ($hi -gt $last) { $hi = $last }
+        # 반복 없는 일정은 날짜만 보고 범위 밖이면 펼치지 않는다
+        if (-not $e.Repeat -and ($e.Start.Date -gt $hi -or $e.LastDay -lt $lo)) { continue }
+        $groupKey = "$($lo.Ticks)|$($hi.Ticks)"
+        if (-not $groups.ContainsKey($groupKey)) { $groups[$groupKey] = @{ From = $lo; To = $hi; Items = [System.Collections.Generic.List[object]]::new() } }
+        $groups[$groupKey].Items.Add($e)
+    }
     $list = [System.Collections.Generic.List[object]]::new()
-    # 366일 앞의 일정도 미리 알람을 줄 수 있다. 옮긴 회차는 기존 펼치기 함수가 찾는다.
-    $lo = $prevAt.DateTime.Date
-    $hi = $nowAt.DateTime.Date.AddDays(366)
-    if ($hi -gt [datetime]::new(2199, 12, 31)) { $hi = [datetime]::new(2199, 12, 31) }
-    foreach ($o in @(Get-WtScheduleOccurrences $Entries $lo $hi)) {
-        foreach ($before in @($o.Alarms)) {
-            $due = $o.Start.AddMinutes(-$before)
-            $key = "$($o.Key)/$before"
-            if ($due -gt $prevAt.DateTime -and $due -le $nowAt.DateTime -and $fired.Add($key)) {
+    foreach ($group in $groups.Values) {
+        # 같은 일정들 · 같은 범위의 회차는 틱마다 같다. 펼친 결과를 색인에 두고(목록이 바뀌면 색인째 버림), 키에는 범위와 일정 id를 모두 넣는다
+        $signature = [System.Text.StringBuilder]::new("$($group.From.Ticks)|$($group.To.Ticks)")
+        foreach ($member in $group.Items) { [void]$signature.Append('|').Append($member.Id) }
+        $signatureText = $signature.ToString()
+        $occurrences = $null
+        if (-not $index.Occurrences.TryGetValue($signatureText, [ref]$occurrences)) {
+            if ($index.Occurrences.Count -ge 16) { $index.Occurrences.Clear() }
+            $occurrences = @(Get-WtScheduleOccurrences $group.Items.ToArray() $group.From $group.To)
+            $index.Occurrences[$signatureText] = $occurrences
+        }
+        foreach ($o in $occurrences) {
+            if ($null -ne $doneKeys -and $doneKeys.Contains([string]$o.Key)) { continue }
+            $befores = @($o.Alarms); $options = @($o.AlarmOptions)
+            for ($i = 0; $i -lt $befores.Count; $i++) {
+                $before = $befores[$i]
+                $opt = if ($i -lt $options.Count) { $options[$i] } else { $null }
+                $base = $o.Start
+                if ($o.AllDay) {
+                    $time = if ($opt -and $null -ne $opt.AllDayAt) { $opt.AllDayAt } elseif ($null -ne $dayAt) { $dayAt } else { Get-WtSchWorkStart $o.Start.Date $workStart }
+                    $base = $o.Start.Date + $time
+                }
+                $due = $base.AddMinutes(-$before)
+                if ($due -gt $clock) { continue }
+                $fresh = $onTime -and $due -gt $prevClock
+                if (-not $fresh) {
+                    if (-not $timerMode) { continue }
+                    $allow = if ($opt -and $null -ne $opt.Late) { $opt.Late } else { $lateAll }
+                    if ($allow -le 0 -or $clock -gt $base.AddMinutes($allow)) { continue }
+                }
+                $key = "$($o.Key)/$before"
+                $seen = [datetime]::MinValue
+                if ($fired.TryGetValue($key, [ref]$seen) -and $seen -ge $due) { continue }
+                $fired[$key] = [datetime]::MaxValue   # 한 회차에 같은 before가 둘이어도 한 번만
                 $list.Add([pscustomobject]@{ Key = $key; OccurrenceKey = $o.Key; Id = $o.Entry.Id; OriginalDate = ConvertTo-WtDateText $o.Original
-                    Before = $before; Due = $due; Title = $o.Title; Note = $o.Note; Start = $o.Start })
+                    Before = $before; Due = $due; Base = $base; Start = $o.Start; AllDay = [bool]$o.AllDay; Title = $o.Title; Note = $o.Note; Late = -not $fresh
+                    Sound = $(if ($opt) { $opt.Sound } else { $null }); Snooze = $(if ($opt) { $opt.Snooze } else { $null }) })
             }
         }
     }
@@ -23816,23 +25053,73 @@ function Get-WtScheduleAlarms($Now, $Previous, [object[]]$Entries, $StateStore) 
     $r
 }
 
+# 알람 있는 일정 색인: 반복 일정 목록 · 반복 없는 일정의 시작 날짜별 목록 · 가장 큰 before · 가장 큰 late 덮어쓰기.
+# 일정 목록(Get-WtScheduleData의 Entries 배열)이 같으면 다시 만들지 않는다. 항목 = @{ Entry; Most(가장 큰 before); LateMax(가장 큰 late, 없으면 -1) }
+$script:alarmIndex = $null
+function Get-WtSchAlarmIndex([object[]]$Entries) {
+    $cached = $script:alarmIndex
+    if ($cached -and [object]::ReferenceEquals($cached.Entries, $Entries)) { return $cached }
+    $repeating = [System.Collections.Generic.List[object]]::new()
+    $byStart = [System.Collections.Generic.Dictionary[datetime, System.Collections.Generic.List[object]]]::new()
+    $mostMax = -1; $lateMax = -1
+    foreach ($e in $Entries) {
+        if ($null -eq $e -or $e.State -ne 'ok') { continue }
+        $most = -1; $lateTop = -1; $allDay = [bool]$e.AllDay
+        foreach ($b in $e.Alarms) { if ($b -gt $most) { $most = $b } }
+        foreach ($opt in $e.AlarmOptions) { if ($opt -and $null -ne $opt.Late -and $opt.Late -gt $lateTop) { $lateTop = $opt.Late } }
+        if ($e.Repeat -and $e.Repeat.Changes.Count) {
+            foreach ($c in $e.Repeat.Changes.Values) {
+                if ($c.Timing -and $c.Timing.AllDay) { $allDay = $true }   # 하루 종일로 옮긴 회차
+                if ($null -eq $c.Alarms) { continue }
+                foreach ($b in $c.Alarms) { if ($b -gt $most) { $most = $b } }
+                foreach ($opt in @($c.AlarmOptions)) { if ($opt -and $null -ne $opt.Late -and $opt.Late -gt $lateTop) { $lateTop = $opt.Late } }
+            }
+        }
+        if ($most -lt 0) { continue }
+        $item = [pscustomobject]@{ Entry = $e; Most = $most; LateMax = $lateTop; AllDay = $allDay }
+        if ($most -gt $mostMax) { $mostMax = $most }
+        if ($lateTop -gt $lateMax) { $lateMax = $lateTop }
+        if ($e.Repeat) { $repeating.Add($item); continue }
+        $day = $e.Start.Date
+        if (-not $byStart.ContainsKey($day)) { $byStart[$day] = [System.Collections.Generic.List[object]]::new() }
+        $byStart[$day].Add($item)
+    }
+    $script:alarmIndex = [pscustomobject]@{ Entries = $Entries; Repeating = $repeating; ByStart = $byStart; MostMax = $mostMax; LateMax = $lateMax
+        Occurrences = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal) }
+    $script:alarmIndex
+}
+
+# 그날 업무 시작(하루 종일 알람의 기본 기준, 설정 → 업무시간의 그날 규칙). 한 번 부를 때 날짜마다 한 번만 읽는다
+function Get-WtSchWorkStart([datetime]$Date, [hashtable]$Cache) {
+    $dayKey = $Date.Ticks
+    if (-not $Cache.ContainsKey($dayKey)) {
+        $time = ConvertFrom-WtTimeText ([string](Get-WtWorkHours -Date $Date)['work.start'])
+        $Cache[$dayKey] = if ($null -ne $time) { $time } else { [timespan]::FromHours(9) }
+    }
+    $Cache[$dayKey]
+}
+
 # 실제 알림을 받아들인 뒤에만 호출한다. 실패 · 낡은 핸들은 Save-WtStore의 예외 그대로다.
+# 이미 있는 키(울린 뒤 늦춘 일정이 다시 울림)는 at만 새로 적는다. 모르는 칸은 그대로 둔다.
 function Save-WtScheduleAlarms($Store, [object[]]$Alarms, [string]$At = (Get-WtStamp)) {
     $now = ConvertFrom-WtStamp $At
     if ($Store.Name -cne 'schedule-state' -or -not $now) { return [pscustomobject]@{ Success = $false; Reason = '알람 상태 핸들 · 시각을 확인하세요'; Store = $Store } }
     $items = [System.Collections.Generic.List[object]]::new()
-    $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $index = [System.Collections.Generic.Dictionary[string, int]]::new([StringComparer]::Ordinal)
     foreach ($i in @($Store.Items)) {
         $atValue = ConvertFrom-WtStamp ([string]$i.at)
         if ($atValue -and $atValue -lt $now.AddDays(-7)) { continue }
+        if ($i.key -and -not $index.ContainsKey([string]$i.key)) { $index[[string]$i.key] = $items.Count }
         $items.Add((Copy-WtItem $i))
-        if ($i.key) { [void]$keys.Add([string]$i.key) }
     }
     foreach ($a in @($Alarms)) {
         if (-not $a.Key -or -not $a.OccurrenceKey -or $null -eq (ConvertFrom-WtWhole $a.Before 0 527040)) {
             return [pscustomobject]@{ Success = $false; Reason = '알람 결과 목록을 넘기세요'; Store = $Store }
         }
-        if ($keys.Add([string]$a.Key)) { $items.Add([pscustomobject]@{ key = [string]$a.Key; occurrence = [string]$a.OccurrenceKey; before = $a.Before; at = $At }) }
+        $key = [string]$a.Key
+        if ($index.ContainsKey($key)) { Set-WtField $items[$index[$key]] 'at' $At; continue }
+        $index[$key] = $items.Count
+        $items.Add([pscustomobject]@{ key = $key; occurrence = [string]$a.OccurrenceKey; before = $a.Before; at = $At })
     }
     $next = Save-WtStore $Store $items.ToArray()
     [pscustomobject]@{ Success = $true; Reason = ''; Store = $next }
@@ -26174,6 +27461,13 @@ function Update-WtFlowHelp {
         $notes = (@($info.Notes -split "`r?`n" | Where-Object { $_ -notmatch '^\s*WorkTool:\s*콘솔\s*$' }) -join "`n").Trim()
         if ($notes) { $n = New-WtText $notes 'T.Sub'; $n.TextWrapping = 'Wrap'; [void](Add-WtChild $panel $n) }
         if (-not $info.Description -and -not $info.Examples.Count -and -not $notes) { [void](Add-WtChild $panel (New-WtText '이 스크립트에는 설명(.DESCRIPTION · .EXAMPLE)이 없습니다.' 'T.Sub')) }
+    } else {
+        # 안 골랐을 때 설명 자리: 빈 상태 한 줄 (없으면 「최근 실행」 제목이 「설명」 머리에 바로 붙는다). 넘치면 …, 전체는 툴팁
+        $hint = New-WtText '스크립트를 고르면 설명이 여기에 보입니다.' 'T.Sub'
+        $hint.TextWrapping = 'NoWrap'
+        $hint.TextTrimming = 'CharacterEllipsis'
+        $hint.ToolTip = $hint.Text
+        [void](Add-WtChild $panel $hint)
     }
     $head = New-WtText '최근 실행' 'T.H2'
     $head.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)
