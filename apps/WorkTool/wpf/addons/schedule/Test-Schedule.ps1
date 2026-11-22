@@ -1085,6 +1085,13 @@ try {
         Assert-WtTest '홈 자료: 다음 일정·시간 막대의 전개 한 번, 오늘 루틴의 변환 한 번, 다음 갱신은 다시 계산' $homeReads ($homeProbe | ConvertTo-Json -Compress)
         $test = New-WtTestData 'schedule-view'; $tests.Add($test)
         $module = Get-Module Schedule
+        # 고친 폼을 떠날 때 묻는 창(core Read-WtSaveChoice)은 띄우지 않는다. 일정 모듈 안의 같은 이름 함수가 먼저 불린다.
+        # 답을 넣지 않으면 「저장 안 함」(전에 말없이 버리던 것과 같은 결과라 다른 검사는 그대로 돈다). 넣으면 그 순서대로 답한다
+        & $module {
+            $script:saveAsked = [System.Collections.Generic.List[string]]::new()
+            $script:saveAnswers = [System.Collections.Generic.Queue[string]]::new()
+            function script:Read-WtSaveChoice { param([string]$Text) $script:saveAsked.Add($Text); if ($script:saveAnswers.Count) { $script:saveAnswers.Dequeue() } else { 'discard' } }
+        }
         $dateText = '2026-10-26'
         $ids = @()
         foreach ($spec in @(@('한날 하나', '09:00'), @('한날 둘', '10:00'), @('한날 셋', '11:00'), @('한날 넷', '12:00'))) {
@@ -1491,10 +1498,13 @@ try {
         $sideBox = @(Get-WtTestLogical (& $module { $script:detail }) | Where-Object { $_ -is [Windows.Controls.CheckBox] -and [Windows.Automation.AutomationProperties]::GetName($_) -ceq '가 루틴' })[0]
         $sideBox.IsChecked = $true
         $afterSide = & $module { "$($script:view.DueCount.Text.Trim())|$(@($script:tableItems | Where-Object { $_.Title -ceq '가 루틴' -and $_.Done }).Count)" }
+        $headsAfterSide = @(& $module { $script:tableItems } | Where-Object IsHead | ForEach-Object { "$($_.Group)=$($_.HeadCount)" }) -join ','
         $sideBox = @(Get-WtTestLogical (& $module { $script:detail }) | Where-Object { $_ -is [Windows.Controls.CheckBox] -and [Windows.Automation.AutomationProperties]::GetName($_) -ceq '가 루틴' })[0]
         $sideBox.IsChecked = $false
         $afterUndo = & $module { $script:view.DueCount.Text.Trim() }
         Assert-WtTest '사이드바 루틴 체크: 할 일 숫자와 할 일 줄을 바로 맞춘다' ($afterSide -ceq '6|1' -and $afterUndo -ceq '7') "$afterSide / $afterUndo"
+        # 11-22 실사용 보고(할 일 숫자 착시): 끝낸 루틴 줄은 오늘 묶음에 보이지만 배지는 남은 일만 센다. 배지 합 = 할 일 수(6)
+        Assert-WtTest '할 일 묶음 배지: 끝낸 줄은 세지 않아 묶음 배지 합이 할 일 수와 같다' ($headsAfterSide -ceq 'overdue=1,today=4,soon=1') $headsAfterSide
         $dueItems = @(& $module { $script:tableItems })
         & $module { param($i) Open-WtScheduleTableItem $i } @($dueItems | Where-Object { $_.IsHead -and $_.Group -ceq 'today' })[0]
         $folded = (@(& $module { $script:tableItems } | ForEach-Object { if ($_.IsHead) { "[$($_.HeadName)]" } else { $_.Title } }) -join ',')
@@ -1616,6 +1626,228 @@ try {
                         ($scroll.ComputedVerticalScrollBarVisibility -eq 'Visible') -eq $case[2] -and $head.Padding.Right -eq $(if ($case[2]) { 12 } else { 0 })) "$($scroll.ComputedVerticalScrollBarVisibility) / $($head.Padding.Right)"
                 }
             } finally { $list.ItemsSource = $oldItems }
+        }
+
+        # ---- 11-22 실사용 보고(일정 영역): 폼 떠날 때 묻기(2) · 칸 오류 표시(19) · 단추 줄(4) · 상태 줄(10) · 루틴 오늘 열(17) · + 메뉴 자리(21) · 새 일정 포커스 ----
+        # 숨김 호스트(WindowStyle=0인 HwndSource, 창을 띄우지 않음)에 1280 × 800 창의 내용 크기(1224 × 736)로 배치해 실제 좌표 · 경로로 본다.
+        # 대화상자 · 메뉴 팝업은 띄우지 않는다. 묻는 창은 위의 가짜 답, + 메뉴는 WPF가 그 자리를 정할 때 쓰는 배치 함수로 계산한다
+        $uxW = 1224; $uxH = 736
+        $uxHost = [Windows.Controls.Border]::new()
+        $uxParameters = [Windows.Interop.HwndSourceParameters]::new('Schedule ux test'); $uxParameters.WindowStyle = 0; $uxParameters.Width = $uxW; $uxParameters.Height = $uxH
+        $uxSource = [Windows.Interop.HwndSource]::new($uxParameters); $uxSource.RootVisual = $uxHost
+        $layoutUx = {
+            for ($pass = 0; $pass -lt 2; $pass++) {
+                $uxHost.Measure([Windows.Size]::new($uxW, $uxH)); $uxHost.Arrange([Windows.Rect]::new(0, 0, $uxW, $uxH)); $uxHost.UpdateLayout()
+                [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
+            }
+        }
+        $boundsUx = { param($Element) $Element.TransformToAncestor($uxHost).TransformBounds([Windows.Rect]::new(0, 0, $Element.ActualWidth, $Element.ActualHeight)) }
+        $pressUx = { param($Element) $Element.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent)) }
+        $pressItem = { param($Menu, [string]$Header) @($Menu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] -and [string]$_.Header -ceq $Header })[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent)) }
+        $answer = { param([string]$Choice) & $module { param($c) $script:saveAsked.Clear(); $script:saveAnswers.Clear(); if ($c) { $script:saveAnswers.Enqueue($c) } } $Choice }
+        $uxState = { & $module { "$($null -ne $script:form)|$(if ($script:form) { $script:form.Fields.title.Text })|$($script:selected.ToString('yyyy-MM-dd'))|$($script:saveAsked.Count)" } }
+        $setTitle = { param([string]$Text) & $module { param($t) $script:form.Fields.title.Text = $t } $Text }
+        try {
+            $uxHost.Child = $view
+            & $module { $script:form = $null; Set-WtScheduleViewMode 'calendar'; Set-WtScheduleDate ([datetime]::Today) }
+            & $layoutUx
+            $leave = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '떠날 때 묻기'; start = @{ date = (& $dt 0); time = '19:30' }; end = @{ date = (& $dt 0); time = '20:30' } }
+            $openLeave = { & (Get-WtAddon -Id schedule).OnOpen @{ Id = $leave.Id; Date = $t0 } }
+            $leaveTitle = { @((Get-WtScheduleData).Entries | Where-Object Id -CEQ $leave.Id)[0].Title }
+            $otherDay = if ($t0.Day -gt 1) { $t0.AddDays(-1) } else { $t0.AddDays(1) }   # 같은 달 칸
+            $otherText = $otherDay.ToString('yyyy-MM-dd'); $todayText = $t0.ToString('yyyy-MM-dd')
+            $otherCell = @((& $module { ,$script:cells }) | Where-Object { $_.Button.DataContext -eq $otherDay })[0].Button
+            $cellRoute = Test-WtTestInputPath -View $uxHost -Element $otherCell -Target $otherCell
+            # 2: 다른 날짜를 누르면 — 안 고친 폼은 묻지 않고 그날 목록, 고친 폼은 묻는다
+            & $openLeave; & $answer ''; & $pressUx $otherCell
+            $quiet = & $uxState
+            & $openLeave; & $setTitle '떠날 때 묻기 고침'; & $answer 'cancel'; & $pressUx $otherCell
+            $kept = & $uxState
+            $keptBody = & $module { $null -ne $script:form -and [object]::ReferenceEquals($script:detail.Content.Children[1].Content, $script:form.Panel) }
+            & $answer 'discard'; & $pressUx $otherCell
+            $dropped = & $uxState; $droppedTitle = & $leaveTitle
+            & $openLeave; & $setTitle '떠날 때 묻기 저장'; & $answer 'save'; & $pressUx $otherCell
+            $savedLeave = & $uxState; $savedTitle = & $leaveTitle
+            $askedText = & $module { $script:saveAsked[0] }
+            Assert-WtTest '폼 떠날 때(보고 2): 다른 날짜 칸(좌표 경로) — 안 고치면 안 묻고, 고치면 묻는다. [취소] 폼 · 고친 글 · 고른 날 그대로 · [저장 안 함] 버림 · [저장] 저장 후 그 날로' (
+                $cellRoute.Ok -and $quiet -ceq "False||$otherText|0" -and $kept -ceq "True|떠날 때 묻기 고침|$todayText|1" -and $keptBody -and
+                $dropped -ceq "False||$otherText|1" -and $droppedTitle -ceq '떠날 때 묻기' -and $savedLeave -ceq "False||$otherText|1" -and $savedTitle -ceq '떠날 때 묻기 저장' -and
+                $askedText -ceq '「떠날 때 묻기」 일정에서 고친 내용이 저장되지 않았습니다.') "$($cellRoute.Path) / $quiet / $kept / $keptBody / $dropped / $droppedTitle / $savedLeave / $savedTitle / $askedText"
+            # 다른 길도 같다. 각각 [취소]로 한 번만 묻고 폼 · 고친 글 · 고른 날 · 보기를 지킨다
+            & $module { Set-WtScheduleViewMode 'table' }
+            $tableRow = @(& $module { $script:tableItems } | Where-Object { -not $_.IsHead -and $_.Row.Date -ne $t0 })[0]
+            if (-not $tableRow) { $tableRow = @(& $module { $script:tableItems } | Where-Object { -not $_.IsHead })[0] }
+            & $module { Set-WtScheduleViewMode 'calendar' }
+            & $openLeave; & $setTitle '다른 길 고침'
+            $paths = [ordered]@{
+                '날짜 우클릭 새 일정' = { & $module { param($b, $p) Update-WtScheduleDayMenu $b; & $p $b.ContextMenu '새 일정' } $otherCell $pressItem }
+                '+ 메뉴 새 루틴' = { & $module { param($p) & $p $script:side.Add.ContextMenu '새 루틴' } $pressItem }
+                '표 오늘' = { & $module { Move-WtScheduleTableMonth 0 } }
+                '다른 탭에서 열기' = { & (Get-WtAddon -Id schedule).OnOpen @{ Date = $otherDay; View = 'due' } }
+                '표 줄' = { & $module { param($i) Open-WtScheduleTableItem $i } $tableRow }
+                '루틴 줄' = { & $module { param($id) Show-WtScheduleForm -Kind routine -Id $id } $r1.Id }
+            }
+            $pathStates = @(foreach ($name in $paths.Keys) { & $answer 'cancel'; & $paths[$name]; "$name=$(& $uxState)|$(& $module { $script:viewMode })" })
+            $pathBad = @($pathStates | Where-Object { $_ -cnotlike "*=True|다른 길 고침|$todayText|1|calendar" })
+            # 떠나지 않는 길은 묻지 않고 폼과 고친 글을 그대로 둔다: 보기 전환 · 달 옮기기 · 사이드바 접기 · 펴기. [취소] 단추는 묻지 않고 닫는다
+            & $answer ''
+            & $module { Set-WtScheduleViewMode 'table'; Set-WtScheduleViewMode 'routines'; Set-WtScheduleViewMode 'calendar'; & $script:picker.OnPick $script:month.AddMonths(1); & $script:picker.OnPick $script:month.AddMonths(-1) }
+            $sidePanel = & $module { $script:side }
+            & $pressUx $sidePanel.Collapse; & $layoutUx; & $pressUx $sidePanel.Open; & $layoutUx
+            $stay = & $uxState
+            $cancelButton = & $module { $script:detail.Content.Children[0].Children[1].Children[1] }
+            & $pressUx $cancelButton
+            $cancelled = & $uxState
+            Assert-WtTest '폼 떠날 때(보고 2): 날짜 우클릭 · + 메뉴 · 표 ‹오늘› · 다른 탭에서 열기 · 표 줄 · 루틴 줄도 한 번만 묻고 [취소]면 그대로, 보기 · 달 · 사이드바 접기는 묻지 않고 유지, [취소] 단추는 바로 닫음' (
+                -not $pathBad.Count -and $stay -ceq "True|다른 길 고침|$todayText|0" -and $cancelled -ceq "False||$todayText|0") "$($pathStates -join ' / ') / $stay / $cancelled"
+            # 루틴 폼도 같다. 묻는 글은 루틴 이름
+            & $module { param($id) Show-WtScheduleForm -Kind routine -Id $id; $script:form.Fields.freq.SelectedItem = '요일' } $r1.Id
+            & $answer 'cancel'; & $pressUx $otherCell
+            $routineKept = & $module { "$($script:form.Kind)|$($script:form.Fields.freq.SelectedItem)|$($script:saveAsked.Count)|$($script:saveAsked[0])" }
+            Assert-WtTest '폼 떠날 때(보고 2): 고친 루틴 폼도 묻고 [취소]면 그대로' ($routineKept -ceq 'routine|요일|1|「가 루틴」 루틴에서 고친 내용이 저장되지 않았습니다.') $routineKept
+            & $module { Show-WtScheduleDay }
+
+            # 19: 칸 오류는 근태 · 메모처럼 빨간 선 + 칸 안 오른쪽 오류 아이콘 + 칸 아래 문구(core Set-WtInputError). 고쳐 다시 저장하면 그 칸은 지운다
+            & $answer ''
+            & $module { Show-WtScheduleForm -Kind event; Save-WtScheduleForm }
+            & $layoutUx
+            $titleBox = & $module { $script:form.Fields.title }; $endBox = & $module { $script:form.Fields.end }
+            $errorLook = {
+                param($Box)
+                $icon = $Box.Template.FindName('ErrorIcon', $Box)
+                $boxRect = & $boundsUx $Box
+                $iconRect = if ($icon -and $icon.IsVisible) { & $boundsUx $icon } else { [Windows.Rect]::Empty }
+                [pscustomobject]@{ Error = [Windows.Controls.Validation]::GetHasError($Box); Icon = [string]$icon.Visibility
+                    Line = $Box.BorderBrush.Color -eq $view.FindResource('B.Status.Error.Icon').Color
+                    Inside = -not $iconRect.IsEmpty -and $iconRect.Left -gt $boxRect.Left + $boxRect.Width / 2 -and $iconRect.Right -le $boxRect.Right + 0.5 }
+            }
+            $titleLook = & $errorLook $titleBox
+            $titleLine = & $module { "$($script:form.Errors.title.Text)|$($script:form.Errors.title.Visibility)" }
+            & $module { $f = $script:form.Fields; $f.title.Text = '오류 시험'; $f.start.Text = '10:00'; $f.end.Text = '09:00'; Save-WtScheduleForm }
+            & $layoutUx
+            $titleAfter = & $errorLook $titleBox; $endLook = & $errorLook $endBox
+            Assert-WtTest '칸 오류(보고 19): 빨간 선 · 칸 안 오른쪽 오류 아이콘 · 칸 아래 문구, 고쳐 다시 저장하면 그 칸은 지우고 틀린 칸만 표시' (
+                $titleLook.Error -and $titleLook.Icon -ceq 'Visible' -and $titleLook.Line -and $titleLook.Inside -and $titleLine -ceq '제목을 입력하세요.|Visible' -and
+                -not $titleAfter.Error -and $titleAfter.Icon -ceq 'Collapsed' -and $endLook.Error -and $endLook.Icon -ceq 'Visible' -and $endLook.Line -and $endLook.Inside) (
+                "$($titleLook | ConvertTo-Json -Compress) / $titleLine / $($titleAfter | ConvertTo-Json -Compress) / $($endLook | ConvertTo-Json -Compress)")
+            & $module { Show-WtScheduleDay }
+
+            # 4: 알람 자세히를 펼쳐도 칸 스크롤 영역과 단추 줄이 나뉜다. 사이 12, 스크롤 막대도 단추 줄 위 12에서 끝난다(글자 크게도)
+            $gapStates = @(foreach ($scale in 'm', 'l') {
+                    Set-WtSetting 'ui.fontScale' $scale
+                    & $answer ''; & $openLeave
+                    & $module { Switch-WtScheduleAlarmMore }
+                    & $layoutUx
+                    $formBody = & $module { $script:detail.Content }
+                    $buttonsRow = $formBody.Children[0]; $formScroll = $formBody.Children[1]
+                    $scrollRect = & $boundsUx $formScroll; $rowRect = & $boundsUx $buttonsRow
+                    $bar = $formScroll.Template.FindName('PART_VerticalScrollBar', $formScroll)
+                    $barGap = if ($bar -and $bar.IsVisible) { $rowRect.Top - (& $boundsUx $bar).Bottom } else { -1 }
+                    "$scale|$([string]$formScroll.ComputedVerticalScrollBarVisibility)|$([Math]::Round($rowRect.Top - $scrollRect.Bottom, 1))|$([Math]::Round($barGap, 1))"
+                })
+            Set-WtSetting 'ui.fontScale' 'm'
+            $gapBad = @($gapStates | Where-Object { $p = $_ -split '\|'; $p[1] -cne 'Visible' -or [double]$p[2] -lt 11.5 -or [double]$p[3] -lt 11.5 })
+            Assert-WtTest '폼 단추 줄(보고 4): 알람 자세히를 펼쳐 스크롤이 생겨도 칸 영역과 단추 줄 사이 12 · 스크롤 막대도 그 위에서 끝남(보통 · 크게)' (-not $gapBad.Count) ($gapStates -join ' / ')
+            & $module { Show-WtScheduleDay }
+
+            # 10: 저장 · 삭제 바로 뒤 창 아래 상태 줄(남은 일)을 같이 다시 쓴다. 메뉴 · 상태 줄 갱신(Update-WtNavBadges)을 가로채 그때 상태 줄 글과 보기 단추 숫자를 남긴다
+            $dueText = { param([int]$n) if ($n) { "남은 일 $n" } else { '남은 일 없음' } }
+            & $module {
+                $script:badgeProbe = [System.Collections.Generic.List[string]]::new()
+                function script:Update-WtNavBadges { $due = @(Get-WtScheduleStatusItems | Where-Object { $_.Key -ceq 'due' })[0]; $script:badgeProbe.Add("$($due.Text)|$($script:view.DueCount.Text.Trim())") }
+            }
+            try {
+                $dueBefore = Get-WtScheduleDueCount
+                & $module { param($d) Show-WtScheduleForm -Kind event; $f = $script:form.Fields; $f.title.Text = '상태 줄 시험'; $f.date.Text = $d; $f.endDate.Text = $d; Save-WtScheduleForm } $todayText
+                $afterSave = @(& $module { $script:badgeProbe })
+                $statusEvent = @((Get-WtScheduleData).Entries | Where-Object Title -ceq '상태 줄 시험')[0]
+                & (Get-WtAddon -Id schedule).OnOpen @{ Id = $statusEvent.Id; Date = $t0 }
+                & $module { $script:badgeProbe.Clear(); Remove-WtScheduleForm }
+                $afterDelete = @(& $module { $script:badgeProbe })
+            } finally { & $module { Remove-Item function:script:Update-WtNavBadges -ErrorAction Ignore } }
+            Assert-WtTest '상태 줄(보고 10): 일정 저장 · 삭제 바로 뒤 남은 일을 다시 써서 보기 단추 숫자와 같다' (
+                $afterSave.Count -ge 1 -and $afterSave[-1] -ceq "$(& $dueText ($dueBefore + 1))|$($dueBefore + 1)" -and
+                $afterDelete.Count -ge 1 -and $afterDelete[-1] -ceq "$(& $dueText $dueBefore)|$dueBefore") "$dueBefore / $($afterSave -join ',') / $($afterDelete -join ',')"
+
+            # 17: 루틴 보기 「오늘」 칸은 「오늘 없음」이 잘리지 않는 폭이고 머리 「오늘」과 줄의 열이 맞는다(보통 · 크게)
+            $todayStates = @(foreach ($scale in 'm', 'l') {
+                    Set-WtSetting 'ui.fontScale' $scale
+                    & $module { Set-WtScheduleViewMode 'routines' }
+                    & $layoutUx
+                    $routineList = & $module { $script:view.RoutineList }
+                    $noneItem = @($routineList.ItemsSource | Where-Object { $_.TodayText -ceq '오늘 없음' })[0]
+                    $routineList.ScrollIntoView($noneItem); & $layoutUx
+                    $container = $routineList.ItemContainerGenerator.ContainerFromItem($noneItem)
+                    $presenter = Get-WtVisualChild $container ([Windows.Controls.ContentPresenter])
+                    $cell = $presenter.ContentTemplate.FindName('RoutineToday', $presenter)
+                    $natural = [Windows.Controls.TextBlock]::new(); $natural.FontFamily = $cell.FontFamily; $natural.FontSize = $cell.FontSize; $natural.FontWeight = $cell.FontWeight; $natural.Text = $cell.Text
+                    $natural.Measure([Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity))
+                    # 머리와 줄의 열 맞춤: 목록 틀의 바깥 1만큼 모든 열이 같이 밀려 있으므로 「규칙」 열과 같은 만큼 밀렸는지(= 열 폭이 같은지) 본다
+                    $headCells = (& $module { $script:view.RoutineHead.Child }).Children
+                    $headToday = @($headCells | Where-Object { $_.Text -ceq '오늘' })[0]; $headRule = @($headCells | Where-Object { $_.Text -ceq '규칙' })[0]
+                    $ruleCell = @($cell.Parent.Children | Where-Object { [Windows.Controls.Grid]::GetColumn($_) -eq 1 })[0]
+                    $shift = ((& $boundsUx $headToday).Left - (& $boundsUx $cell).Left) - ((& $boundsUx $headRule).Left - (& $boundsUx $ruleCell).Left)
+                    "$scale|$([Math]::Round($natural.DesiredSize.Width, 1))|$([Math]::Round($cell.ActualWidth, 1))|$([Math]::Round($shift, 1))"
+                })
+            Set-WtSetting 'ui.fontScale' 'm'
+            $todayBad = @($todayStates | Where-Object { $p = $_ -split '\|'; [double]$p[1] -gt [double]$p[2] + 0.5 -or [Math]::Abs([double]$p[3]) -gt 0.5 })
+            Assert-WtTest '루틴 보기 오늘 열(보고 17): 「오늘 없음」 전체가 칸에 들어가고(보통 · 크게) 머리 「오늘」과 줄의 열이 맞는다' (-not $todayBad.Count) ($todayStates -join ' / ')
+
+            # 21: + 메뉴는 오른쪽 맞춤으로 창 안쪽에 연다. 누름 길(좌표 경로 + 누름)이 메뉴 자리를 정하고, 그 자리를 WPF가 쓰는 배치 함수로 계산한다(팝업은 띄우지 않음)
+            & $module { Set-WtScheduleViewMode 'calendar'; Show-WtScheduleDay }
+            & $layoutUx
+            $addButton = & $module { $script:side.Add }
+            $addRoute = Test-WtTestInputPath -View $uxHost -Element $addButton -Target $addButton
+            & $module { $script:menuOpened = $null; function script:Open-WtButtonMenu { param($Button, [switch]$Right) $script:menuOpened = @{ Button = $Button; Right = [bool]$Right }; Set-WtButtonMenuPlacement $Button -Right:$Right } }
+            try { & $pressUx $addButton } finally { & $module { Remove-Item function:script:Open-WtButtonMenu -ErrorAction Ignore } }
+            $opened = & $module { $script:menuOpened }
+            $addMenu = $addButton.ContextMenu
+            # 메뉴 크기: 띄울 때와 같은 모양(공통 메뉴 스타일)으로 숨김 원본에 잠깐 붙여 잰다
+            $menuParameters = [Windows.Interop.HwndSourceParameters]::new('Schedule menu size'); $menuParameters.WindowStyle = 0; $menuParameters.Width = 300; $menuParameters.Height = 300
+            $menuSource = [Windows.Interop.HwndSource]::new($menuParameters)
+            try {
+                $addMenu.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $addMenu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+                $menuSource.RootVisual = $addMenu
+                $addMenu.Measure([Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)); $menuSize = $addMenu.DesiredSize
+            } finally { $menuSource.RootVisual = $null; $menuSource.Dispose() }
+            $origin = $addButton.TranslatePoint([Windows.Point]::new(0, 0), $uxHost)
+            $placed = $null
+            if ($addMenu.Placement -eq 'Custom' -and $addMenu.CustomPopupPlacementCallback) {
+                $placed = @($addMenu.CustomPopupPlacementCallback.Invoke($menuSize, [Windows.Size]::new($addButton.ActualWidth, $addButton.ActualHeight), [Windows.Point]::new(0, 0)))[0].Point
+            }
+            $menuRight = if ($placed) { $origin.X + $placed.X + $menuSize.Width } else { $origin.X + $menuSize.Width }
+            $menuTop = if ($placed) { $origin.Y + $placed.Y } else { $origin.Y + $addButton.ActualHeight }
+            $oldRight = $origin.X + $menuSize.Width   # 고장 대조군: 예전 자리(단추 왼쪽에 맞춘 아래)
+            Assert-WtTest '+ 메뉴 자리(보고 21): + 단추(좌표 경로)를 누르면 메뉴 오른쪽 끝을 단추 오른쪽 끝에 맞춰 창 안쪽 · 단추 바로 아래에 연다(예전 왼쪽 맞춤은 창 밖)' (
+                $addRoute.Ok -and $opened -and $opened.Right -and [Math]::Abs($menuRight - ($origin.X + $addButton.ActualWidth)) -lt 0.5 -and $menuRight -le $uxW -and
+                [Math]::Abs($menuTop - ($origin.Y + $addButton.ActualHeight)) -lt 0.5 -and $oldRight -gt $uxW) "$($addRoute.Path) / 메뉴 $($menuSize) 단추 $origin / 오른쪽 $menuRight 위 $menuTop / 예전 $oldRight"
+
+            # 헤맨 곳: + → 새 일정 폼을 열면 커서가 제목 칸에 있다. 메뉴가 닫히며 포커스가 + 단추로 돌아온 뒤 항목 누름이 오는 순서 그대로 본다
+            & $module { Show-WtScheduleDay }; & $layoutUx
+            $plusFocused = $addButton.Focus()
+            & $pressItem $addMenu '새 일정'
+            & $layoutUx
+            $newTitle = & $module { $script:form.Fields.title }
+            Assert-WtTest '새 일정 포커스(헤맨 곳): + → 새 일정 뒤 제목 칸에 키보드 포커스' ($plusFocused -and $newTitle.IsKeyboardFocused) "+ 포커스 $plusFocused · 제목 $($newTitle.IsKeyboardFocused) · 지금 $([Windows.Input.Keyboard]::FocusedElement)"
+            & $module { Show-WtScheduleDay }
+
+            # 2: 루틴 보기에서 다른 루틴을 지워도 고치던 폼과 고친 글은 그대로이고 그 뒤 저장도 된다(전에는 말없이 닫혀 고친 내용이 사라졌다). 지운 루틴의 폼만 닫는다
+            & $answer ''; & $openLeave; & $setTitle '루틴 지워도 남음'
+            & $module { Set-WtScheduleViewMode 'routines' }
+            $routineList = & $module { $script:view.RoutineList }
+            $routineList.SelectedItem = @($routineList.ItemsSource | Where-Object { $_.Id -ceq $r4.Id })[0]
+            & $module { Invoke-WtScheduleRoutineAction '삭제' }
+            $afterRoutineDelete = & $uxState
+            $r4Left = @(Get-WtRoutineEntries (Get-WtScheduleData).Store | Where-Object { $_.Id -ceq $r4.Id -and $_.State -cne 'deleted' }).Count
+            & $module { Save-WtScheduleForm }
+            $keptSaved = "$(& $module { $null -eq $script:form })|$(& $leaveTitle)"
+            & $module { Set-WtScheduleViewMode 'calendar' }
+            Assert-WtTest '폼 떠날 때(보고 2): 루틴 보기에서 다른 루틴을 지워도 고치던 폼 · 고친 글은 그대로이고 이어서 저장된다' (
+                $afterRoutineDelete -ceq "True|루틴 지워도 남음|$todayText|0" -and $r4Left -eq 0 -and $keptSaved -ceq 'True|루틴 지워도 남음') "$afterRoutineDelete / 남은 루틴 $r4Left / $keptSaved"
+        } finally {
+            Set-WtSetting 'ui.fontScale' 'm'
+            & $module { $script:form = $null; $script:saveAnswers.Clear() }
+            $uxHost.Child = $null; $uxSource.Dispose()
         }
         & $module { Set-WtScheduleViewMode 'calendar' }
         [IO.File]::WriteAllText((Get-WtStorePath 'schedule'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))

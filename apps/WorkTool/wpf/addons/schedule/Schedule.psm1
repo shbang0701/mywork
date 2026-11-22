@@ -162,7 +162,8 @@ function New-WtScheduleView {
     $menu = New-WtHomePinContextMenu
     foreach ($spec in @('새 일정', 'event'), @('새 루틴', 'routine')) { [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($kind) Show-WtScheduleForm -Kind $kind } $spec[1])) }
     $add.ContextMenu = $menu
-    $add.Add_Click({ param($s, $e) $s.ContextMenu.PlacementTarget = $s; $s.ContextMenu.Placement = 'Bottom'; $s.ContextMenu.IsOpen = $true })
+    # +는 사이드바 제목 줄 오른쪽 끝(창 오른쪽 끝)이라 메뉴를 오른쪽에 맞춰 창 안쪽으로 연다
+    $add.Add_Click({ param($s, $e) Open-WtButtonMenu $s -Right })
     [void]$script:view.Side.Children.Add($side)
     $mode = [string](Get-WtSetting 'schedule.view')
     $script:viewMode = if ($mode -cin $script:viewModes) { $mode } else { 'calendar' }
@@ -233,7 +234,7 @@ function Initialize-WtScheduleLists {
     }
     $v.TableHead.Child = $head
     $routineHead = [Windows.Controls.Grid]::new()
-    foreach ($width in 0, 220, 72, 72, 60) {
+    foreach ($width in 0, 220, 72, 88, 60) {   # 줄 모양(core\Ui.psm1 Schedule.RoutineItem)과 같은 폭
         $column = [Windows.Controls.ColumnDefinition]::new(); $column.Width = if ($width) { [Windows.GridLength]::new($width) } else { [Windows.GridLength]::new(1, 'Star') }
         $routineHead.ColumnDefinitions.Add($column)
     }
@@ -324,9 +325,12 @@ function Invoke-WtScheduleSearch {
     Update-WtScheduleView
 }
 
-# 표 보기 ‹ 오늘 ›: 앞 · 뒤 달, 0이면 이번 달 · 오늘
+# 표 보기 ‹ 오늘 ›: 앞 · 뒤 달, 0이면 이번 달 · 오늘(폼을 닫으므로 고친 내용이 있으면 먼저 묻는다)
 function Move-WtScheduleTableMonth([int]$Step) {
-    if ($Step -eq 0) { $script:selected = [datetime]::Today; $script:month = [datetime]::new([datetime]::Today.Year, [datetime]::Today.Month, 1); $script:form = $null }
+    if ($Step -eq 0) {
+        if (-not (Confirm-WtScheduleFormLeave)) { return }
+        $script:selected = [datetime]::Today; $script:month = [datetime]::new([datetime]::Today.Year, [datetime]::Today.Month, 1); $script:form = $null
+    }
     else { $script:month = $script:month.AddMonths($Step) }
     Update-WtScheduleView
 }
@@ -356,6 +360,10 @@ function Update-WtScheduleDueTab {
     $v.ViewTabs['due'].ToolTip = if ($null -ne $dueCount) { "할 일 $dueCount개 (기한 지남 · 오늘 · 마감 임박)" } else { '할 일' }
 }
 
+# 메뉴 개수와 창 아래 상태 줄(다음 일정 · 남은 일)을 지금 자료로 다시 쓴다. 일정 · 루틴 · 휴무일을 저장하거나 지운 바로 뒤에 부른다.
+# 보기의 「할 일」 숫자는 화면을 다시 그릴 때 바뀌므로, 이것을 빼면 상태 줄만 1분 타이머까지 앞 숫자로 남는다(11-22 실사용 보고 10)
+function Update-WtScheduleBadges { if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges } }
+
 # 사이드바 · 홈에서 루틴을 체크한 뒤: 보고 있는 표 · 할 일 · 루틴 보기와 숫자를 맞춘다(사이드바 목록은 체크한 곳이 이미 다시 그림)
 function Update-WtScheduleAfterRoutineCheck {
     if ($script:view) {
@@ -373,7 +381,13 @@ function Get-WtScheduleRangeText($Row) {
     "$($first.ToString('M월 d일', $script:inv)) ~ $end"
 }
 
+# 남은 일 수: 안 끝낸 일정 줄 + 오늘 차례가 남은 루틴(시간마다는 루틴 하나). 할 일 제목 · 묶음 머리 배지 · 메뉴 · 상태 줄이 같은 셈이다
+function Get-WtScheduleLeftCount([object[]]$Rows) {
+    @($Rows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count + @($Rows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count
+}
+
 # 줄 → 표에 그릴 값. 할 일은 묶음 머리를 끼우고, 접은 묶음의 줄은 뺀다. 같은 날 둘째 줄부터 날짜를 비운다(여러 날은 늘 기간)
+# 묶음 머리 배지는 그 묶음에서 남은 일 수다(끝낸 줄은 보이지만 세지 않는다. 배지 합 = 할 일 수)
 function ConvertTo-WtScheduleTableItems([object[]]$Rows, [switch]$Due) {
     $today = [datetime]::Today; $prev = $null; $group = $null
     $names = @{ overdue = '기한 지남'; today = '오늘'; soon = '마감 임박' }
@@ -381,7 +395,7 @@ function ConvertTo-WtScheduleTableItems([object[]]$Rows, [switch]$Due) {
         if ($Due -and $row.Group -cne $group) {
             $group = $row.Group; $prev = $null
             $closed = $script:collapsed.Contains($group)
-            [pscustomobject]@{ IsHead = $true; Group = $group; HeadName = $names[$group]; HeadCount = [string]@($Rows | Where-Object Group -CEQ $group).Count
+            [pscustomobject]@{ IsHead = $true; Group = $group; HeadName = $names[$group]; HeadCount = [string](Get-WtScheduleLeftCount @($Rows | Where-Object Group -CEQ $group))
                 HeadGlyph = [string][char]$(if ($closed) { 0xE76C } else { 0xE70D }); Key = "head:$group"; Done = $false; CanCheck = $false; Row = $null
                 DateText = ''; TimeText = ''; Title = $names[$group]; Tags = @(); DueText = ''; DueWarn = 'Collapsed'; DueStrong = $false; DueKind = ''
                 RoutineShown = 'Collapsed'; MemoShown = 'Collapsed'; MemoCount = ''; Progress = ''; ProgressShown = 'Collapsed'; CheckTip = ''; CheckName = '' }
@@ -431,7 +445,7 @@ function Update-WtScheduleTable {
     $rows = if ($result) { @($result.Rows) } else { @() }
     # 할 일 제목의 숫자는 할 일 수와 같은 셈(안 끝낸 일정 + 오늘 차례가 남은 루틴, 시간마다는 루틴 하나)
     if ($title -ceq '찾기 결과') { $count = [string]$result.Count }
-    elseif ($title) { $count = [string](@($rows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count + @($rows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count) }
+    elseif ($title) { $count = [string](Get-WtScheduleLeftCount $rows) }
     Update-WtScheduleHeader $title $count
     $items = @(ConvertTo-WtScheduleTableItems $rows -Due:($mode -ceq 'due'))
     $script:tableItems = $items
@@ -469,6 +483,8 @@ function Open-WtScheduleTableItem($Item) {
         $script:focusKey = $Item.Key; Update-WtScheduleTable; return
     }
     $row = $Item.Row
+    # 고른 날을 바꾸기 전에 묻는다(취소하면 고친 폼과 사이드바 제목을 그대로 둔다)
+    if (-not (Confirm-WtScheduleFormLeave)) { return }
     $script:selected = $row.Date
     $script:side.Title.Text = Format-WtDate $script:selected 'M월 d일 dddd'
     if ($row.Kind -ceq 'event') { Show-WtScheduleForm -Kind event -Occurrence $row.Occurrence } else { Show-WtScheduleForm -Kind routine -Id $row.RoutineId }
@@ -541,7 +557,11 @@ function Invoke-WtScheduleRoutineAction([string]$Action) {
     if ($Action -ceq '편집') { Show-WtScheduleForm -Kind routine -Id ([string]$item.Id); return }
     $result = Set-WtRoutineDeleted -Id ([string]$item.Id)
     if (-not $result.Success) { $script:view.RoutineNote.Text = "루틴을 지우지 못했습니다. $($result.Reason)"; $script:view.RoutineNote.Visibility = 'Visible'; return }
-    $script:form = $null; Update-WtScheduleView
+    # 지운 루틴의 폼만 닫는다. 다른 일정 · 루틴을 고치던 폼은 그대로 두고(고친 내용을 말없이 버리지 않음), 저장이 거부되지 않게 새 핸들로 바꾼다
+    if ($script:form -and [string]$script:form.Id -ceq [string]$item.Id) { $script:form = $null }
+    elseif ($script:form) { $data = Get-WtScheduleData; if (-not $data.Error) { $script:form.Store = $data.Store } }
+    Update-WtScheduleView
+    Update-WtScheduleBadges
 }
 
 # 깔때기: 상태 · 종류 · 태그(많이 쓴 순 8). 고르면 찾기 칸 글에 더하고, 이미 있으면 뺀다. 지금 식에 있는 조건은 앞에 ✓
@@ -592,7 +612,8 @@ function Switch-WtScheduleQueryTerm([string]$Term) {
 function Update-WtScheduleDayMenu($Button) {
     $menu = $Button.ContextMenu; $menu.Items.Clear(); $date = [datetime]$Button.DataContext
     foreach ($spec in @('새 일정', 'event'), @('새 루틴', 'routine')) {
-        [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($v) Set-WtScheduleDate $v.Date; Show-WtScheduleForm -Kind $v.Kind } @{ Date = $date; Kind = $spec[1] }))
+        # 고친 폼이 있으면 한 번만 묻는다(저장 · 저장 안 함 뒤에는 폼이 비어 아래 두 단계가 다시 묻지 않는다)
+        [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($v) if (Confirm-WtScheduleFormLeave) { Set-WtScheduleDate $v.Date; Show-WtScheduleForm -Kind $v.Kind } } @{ Date = $date; Kind = $spec[1] }))
     }
     [void]$menu.Items.Add([Windows.Controls.Separator]::new())
     foreach ($entry in @(Get-WtDateMenuItems $date -Exclude 'schedule')) {
@@ -639,9 +660,12 @@ function Set-WtScheduleHoliday([string]$Date, [string[]]$Kinds, [bool]$Enabled, 
         }
     } catch { Show-WtMessage "휴무일을 저장하지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
     Update-WtScheduleView
+    Update-WtScheduleBadges
 }
 
+# 날짜를 고르면 오른쪽은 그날 목록이 된다(폼을 닫는다). 고친 폼이 있으면 먼저 묻고, 취소하면 아무것도 바꾸지 않는다
 function Set-WtScheduleDate([datetime]$Date) {
+    if (-not (Confirm-WtScheduleFormLeave)) { return }
     $script:selected = $Date.Date; $script:month = [datetime]::new($Date.Year, $Date.Month, 1); $script:form = $null
     Update-WtScheduleView
 }
@@ -833,7 +857,7 @@ function New-WtRoutineList([datetime]$Date) {
                                 else { Open-WtPage -Id schedule -Args @{ Date = $v.Row.Date; RoutineId = $id } }
                             } else {
                                 $result = Set-WtRoutineDeleted -Id $id
-                                if ($result.Success) { Update-WtRoutineList $v.Row.List $v.Row.Date }
+                                if ($result.Success) { Update-WtRoutineList $v.Row.List $v.Row.Date; Update-WtScheduleAfterRoutineCheck }
                             }
                         } @{ Action = $name; Row = $check.Tag }))
             }
@@ -1259,11 +1283,13 @@ function Invoke-WtScheduleLinkAction([string]$Action, $Row) {
 }
 
 function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Occurrence, [string]$Id) {
+    # 다른 폼으로 바꾸기 전에 지금 폼의 고친 내용을 묻는다(새로 만들기 · 표 · 루틴 보기 · 다른 탭에서 열기)
+    if (-not (Confirm-WtScheduleFormLeave)) { return }
     $store = (Get-WtScheduleData).Store; $entry = $null
     if ($Kind -eq 'routine' -and $Id) { $entry = @($store.Items | Where-Object id -CEQ $Id)[0] }
     if ($Occurrence) { $Id = $Occurrence.Entry.Id }
     $body = [Windows.Controls.DockPanel]::new(); Set-WtStyle $body 'Schedule.SideBody'
-    $buttons = [Windows.Controls.DockPanel]::new(); [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
+    $buttons = [Windows.Controls.DockPanel]::new(); Set-WtStyle $buttons 'Schedule.FormButtons'; [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
     $delete = New-WtButton '삭제'; $delete.Visibility = if ($Id) { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
     $actions = New-WtStack Horizontal 8; $actions.HorizontalAlignment = 'Right'
     $save = New-WtButton '저장' Primary; $cancel = New-WtButton '취소'
@@ -1318,10 +1344,57 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
     $f0.LinkSubject = if ($Occurrence) { [string]$Occurrence.Title } elseif ($entry) { [string]$entry.title } else { '' }
     $f0.LinkBox = New-WtStack; Set-WtStyle $f0.LinkBox 'Schedule.LinkSection'; [void]$col.Children.Add($f0.LinkBox)
     Update-WtScheduleLinks
+    # [취소]는 고친 내용을 버리는 단추라 묻지 않는다
     $save.Add_Click({ Save-WtScheduleForm }); $cancel.Add_Click({ Show-WtScheduleDay }); $delete.Add_Click({ Remove-WtScheduleForm })
     Update-WtScheduleFormFields; $script:detail.Content = $body
+    $script:form.Initial = Get-WtScheduleFormState   # 떠날 때 이 값과 다르면 묻는다
     if ($script:side.Rail.Visibility -eq 'Visible') { $script:side.Open.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent)) }
-    [void]$script:form.Fields.title.Focus()
+    # 제목 칸에 커서를 둔다. 지금은 칸이 아직 화면에 붙기 전이라 Focus()가 듣지 않고, + 메뉴로 열면 메뉴가 닫히며 포커스를 + 단추로 돌려준다.
+    # 그래서 배치가 끝난 뒤(입력 차례)에 둔다. 그사이 다른 폼으로 바뀌었으면 그 폼의 제목 칸이다
+    [void]$script:detail.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Input, [Action]{
+            $f = $script:form
+            if ($f -and $f.Fields.title.IsVisible -and -not $f.Fields.title.IsKeyboardFocusWithin) { [void]$f.Fields.title.Focus() }
+        })
+}
+
+# ---- 폼을 떠날 때 묻기 (11-22 실사용 보고 2) ----------------------------------------------------
+# 폼을 닫는 길(다른 날짜 · 여러 날 막대 · 달 고르기 「오늘」 · 표 ‹오늘› · 새로 만들기 · 표 · 루틴 줄 · 다른 탭에서 열기)은
+# 떠나기 전에 Confirm-WtScheduleFormLeave를 부른다. 보기 전환 · 달 이동 · 사이드바 접기 · 탭 이동은 폼을 그대로 두므로 묻지 않는다
+
+# 폼 칸의 지금 값. 열 때 값과 비교해 고친 것이 있는지 본다. 관련 메모는 붙이고 빼는 즉시 저장되므로 넣지 않는다
+function Get-WtScheduleFormState {
+    $f = $script:form; if (-not $f) { return '' }
+    @(foreach ($key in @($f.Fields.Keys | Sort-Object)) {
+            $c = $f.Fields[$key]
+            $value = if ($c -is [Windows.Controls.TextBox]) { $c.Text }
+            elseif ($c -is [Windows.Controls.ComboBox]) { [string]$c.SelectedItem }
+            elseif ($c -is [Windows.Controls.Primitives.ToggleButton]) { [string]$c.IsChecked }
+            elseif ($c -is [Windows.Controls.Panel]) { @($c.Children | Where-Object { $_ -is [Windows.Controls.CheckBox] -and $_.IsChecked } | ForEach-Object { [string]$_.Tag }) -join ',' }
+            else { '' }
+            "$key=$value"
+        }) -join "`n"
+}
+function Test-WtScheduleFormDirty {
+    $f = $script:form
+    [bool]($f -and $null -ne $f.Initial -and (Get-WtScheduleFormState) -cne $f.Initial)
+}
+
+# 폼을 닫아도 되면 $true. 고친 것이 없으면 묻지 않는다.
+# [저장]: 저장이 끝났을 때만 떠난다(틀린 칸이 있거나 반복 일정의 「이 회차만 · 이후 모두」를 고르는 중이면 폼에 남는다).
+# [저장 안 함]: 고친 내용을 버리고 떠난다. [취소] · Esc: 폼과 고친 내용을 그대로 두고, 부른 동작을 하지 않는다
+function Confirm-WtScheduleFormLeave {
+    if (-not (Test-WtScheduleFormDirty)) { return $true }
+    $f = $script:form
+    $kindName = if ($f.Kind -eq 'routine') { '루틴' } else { '일정' }
+    $original = if ($f.Occurrence) { [string]$f.Occurrence.Title } elseif ($f.Id) { [string]$f.LinkSubject } else { '' }
+    # 한글 앞의 변수는 ${}로 감싼다(PowerShell은 한글도 변수 이름에 넣는다)
+    $text = if ($f.Id -and $original) { "「$original」 ${kindName}에서 고친 내용이 저장되지 않았습니다." } else { "새 ${kindName}에 쓴 내용이 저장되지 않았습니다." }
+    switch (Read-WtSaveChoice $text) {
+        'save' { Save-WtScheduleForm; return $null -eq $script:form }
+        # 부른 동작이 오른쪽을 다시 그리지 않고 끝나도(열 일정을 못 찾음 등) 버린 폼이 남아 보이지 않게 그날 목록으로 돌린다
+        'discard' { Show-WtScheduleDay; return $true }
+        default { return $false }
+    }
 }
 function Update-WtScheduleFormFields {
     if (-not $script:form) { return }; $f = $script:form
@@ -1352,13 +1425,17 @@ function Update-WtScheduleFormFields {
         foreach ($key in 'every', 'start', 'end') { $f.Rows[$key].Visibility = if ($f.Fields.freq.SelectedItem -eq '시간마다') { 'Visible' } else { 'Collapsed' } }
     }
 }
-function Set-WtScheduleFormError([string]$Key, [string]$Message) {
+# 칸 오류: 칸 아래 한 줄 + 글 칸이면 빨간 선 · 오류 아이콘 · 툴팁(근태 · 메모와 같은 공통 표시, core\Ui.psm1 Set-WtInputError).
+# -Notice: 칸 탓이 아닌 알림(저장 실패 등)은 제목 칸 아래 글만 쓰고 칸을 빨갛게 하지 않는다
+function Set-WtScheduleFormError([string]$Key, [string]$Message, [switch]$Notice) {
     $script:form.Errors[$Key].Text = $Message; $script:form.Errors[$Key].Visibility = 'Visible'
     [Windows.Automation.AutomationProperties]::SetHelpText($script:form.Fields[$Key], $Message)
+    if (-not $Notice) { Set-WtInputError $script:form.Fields[$Key] $Message }
 }
 function Save-WtScheduleForm([string]$Scope) {
     $f = $script:form; if (-not $f) { return }
     foreach ($errorText in $f.Errors.Values) { $errorText.Text = ''; $errorText.Visibility = 'Collapsed' }
+    foreach ($field in $f.Fields.Values) { Set-WtInputError $field '' }
     $fields = $f.Fields
     if (-not $fields.title.Text.Trim()) { Set-WtScheduleFormError title '제목을 입력하세요.'; return }
     try {
@@ -1447,18 +1524,20 @@ function Save-WtScheduleForm([string]$Scope) {
             $patch = @{ title = $fields.title.Text; routine = $rule }; if (-not $f.Id) { $patch.start = @{ date = ConvertTo-WtDateText $script:selected } }
             $result = Save-WtRoutine $f.Store $patch -Id $f.Id -From ([datetime]::Today)
         }
-        if (-not $result.Success) { Set-WtScheduleFormError title $result.Reason; return }
+        if (-not $result.Success) { Set-WtScheduleFormError title $result.Reason -Notice; return }
         if ($f.Kind -eq 'event') { $script:selected = $date; $script:month = [datetime]::new($date.Year, $date.Month, 1) }
         $script:form = $null; Update-WtScheduleView
-    } catch { Set-WtScheduleFormError title $_.Exception.Message }
+        Update-WtScheduleBadges
+    } catch { Set-WtScheduleFormError title $_.Exception.Message -Notice }
 }
 function Remove-WtScheduleForm {
     $f = $script:form; if (-not $f -or -not $f.Id) { return }
     try {
         $result = if ($f.Kind -eq 'routine') { Set-WtRoutineDeleted $f.Store -Id $f.Id } else { Set-WtScheduleDeleted $f.Store -Id $f.Id }
-        if (-not $result.Success) { Set-WtScheduleFormError title $result.Reason; return }
+        if (-not $result.Success) { Set-WtScheduleFormError title $result.Reason -Notice; return }
         $script:form = $null; Update-WtScheduleView
-    } catch { Set-WtScheduleFormError title $_.Exception.Message }
+        Update-WtScheduleBadges
+    } catch { Set-WtScheduleFormError title $_.Exception.Message -Notice }
 }
 
 # 홈 「오늘 일정」 · 다음 일정 줄. 끝낸 회차는 제목 앞에 ✓를 붙이고(Done), 다음 일정 줄 · 메뉴 개수에서는 뺀다
@@ -1526,6 +1605,8 @@ function New-WtRoutineHomeCard {
 }
 function Open-WtScheduleArgs($OpenArgs) {
     if (-not $script:view) { return }
+    # 다른 탭(홈 시간 막대 · 작은 달력 · 상태 줄 · 알람 창)에서 날짜 · 일정을 열면 폼을 닫는다. 고친 내용이 있으면 먼저 묻고, 취소하면 보기도 그대로 둔다
+    if (($OpenArgs.Id -or $OpenArgs.Date) -and -not (Confirm-WtScheduleFormLeave)) { return }
     if ($OpenArgs.View -cin $script:viewModes) {
         # 상태 줄에서 여는 오늘·할 일은 전에 남긴 찾기 조건 없이 연다.
         $script:search.Box.Text = ''

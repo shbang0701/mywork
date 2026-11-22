@@ -1954,6 +1954,8 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.Add" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.SideBody" TargetType="DockPanel"><Setter Property="Margin" Value="16,0,16,16"/></Style>
   <Style x:Key="Schedule.Form" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
+  <!-- 편집 폼 단추 줄(삭제 · 저장 · 취소): 칸 스크롤 밖 아래에 고정하고 스크롤 영역과 사이 12. 펼친 칸이 단추 바로 뒤에서 잘려 겹쳐 보이지 않게(디자인 8절 일정) -->
+  <Style x:Key="Schedule.FormButtons" TargetType="DockPanel"><Setter Property="Margin" Value="0,12,0,0"/></Style>
   <Style x:Key="Schedule.Field" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
   <Style x:Key="Schedule.FieldLabel" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,0,8"/></Style>
   <Style x:Key="Schedule.RangeDash" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="8,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
@@ -2180,10 +2182,10 @@ $script:stylesXaml = @'
     </DataTemplate.Triggers>
   </DataTemplate>
   <Style x:Key="Schedule.TableList" TargetType="ListBox" BasedOn="{StaticResource List}"><Setter Property="ItemContainerStyle" Value="{StaticResource Schedule.TableRow}"/><Setter Property="ItemTemplate" Value="{StaticResource Schedule.TableItem}"/></Style>
-  <!-- 루틴 보기 줄: 이름(나머지) · 규칙 220 · 시각 72 · 오늘 72 · 메모 60 -->
+  <!-- 루틴 보기 줄: 이름(나머지) · 규칙 220 · 시각 72 · 오늘 88 · 메모 60. 오늘 88은 「오늘 없음」이 글자 크게에서도 잘리지 않는 폭 -->
   <DataTemplate x:Key="Schedule.RoutineItem">
     <Grid MinHeight="32">
-      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="220"/><ColumnDefinition Width="72"/><ColumnDefinition Width="72"/><ColumnDefinition Width="60"/></Grid.ColumnDefinitions>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="220"/><ColumnDefinition Width="72"/><ColumnDefinition Width="88"/><ColumnDefinition Width="60"/></Grid.ColumnDefinitions>
       <DockPanel Margin="12,0"><TextBlock Text="&#xE8EE;" Style="{DynamicResource Schedule.TableRoutineIcon}"/><TextBlock x:Name="RoutineName" Text="{Binding Title}" Style="{DynamicResource Table.Cell}" Margin="0"/></DockPanel>
       <TextBlock Grid.Column="1" Text="{Binding RuleText}" Style="{DynamicResource Table.CellSub}"/>
       <TextBlock Grid.Column="2" Text="{Binding TimeText}" Style="{DynamicResource Table.CellSub}"/>
@@ -2722,6 +2724,50 @@ function New-WtNameDialog([string]$Title, [string]$Label, [string]$Note, [string
     $dialog
 }
 
+# 고친 내용을 버리게 되는 동작 앞에서 묻는 창(apps/design.md 13장): 제목 = 질문, [저장] [저장 안 함] [취소] (주 버튼이 왼쪽).
+# 'save' · 'discard' · 'cancel' 중 하나를 돌려준다. Enter = 저장, Esc · 창 닫기 = 취소. -Text: 제목 아래 한 문장(무엇을 고쳤는지)
+function Read-WtSaveChoice([string]$Text) {
+    $dialog = New-WtSaveChoiceDialog $Text
+    [void]$dialog.Window.ShowDialog()
+    [string]$dialog.Window.Tag.Choice
+}
+
+# Read-WtSaveChoice의 창을 띄우지 않고 만들기만 한다. 검사는 이 내용을 숨김 호스트에 붙여 본다
+function New-WtSaveChoiceDialog([string]$Text) {
+    $dialog = New-WtModal '변경 내용을 저장할까요?'
+    if ($Text) { $line = New-WtText $Text; $line.TextWrapping = 'Wrap'; [void](Add-WtChild $dialog.Body $line) }
+    $save = New-WtButton '저장' -Kind Primary; $save.IsDefault = $true
+    $discard = New-WtButton '저장 안 함'
+    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
+    $dialog.Window.Tag = @{ Choice = 'cancel'; Focus = $save }
+    foreach ($pair in @(@($save, 'save'), @($discard, 'discard'))) {
+        $pair[0].Tag = @{ Window = $dialog.Window; Choice = $pair[1] }
+        $pair[0].Add_Click({ param($s, $e) $s.Tag.Window.Tag.Choice = $s.Tag.Choice; $s.Tag.Window.DialogResult = $true })
+    }
+    foreach ($button in $save, $discard, $cancel) { [void](Add-WtChild $dialog.Buttons $button) }
+    $dialog.Window.Add_ContentRendered({ param($s, $e) [void]$s.Tag.Focus.Focus() })
+    $dialog.Save = $save; $dialog.Discard = $discard; $dialog.Cancel = $cancel
+    $dialog
+}
+
+# 입력칸 오류 표시(디자인 7절 「입력칸」): 선과 오른쪽 오류 아이콘(EB90)을 B.Status.Error.Icon으로, 이유는 툴팁. 문구가 비면 지운다.
+# 모양은 Input 스타일의 Validation.HasError 트리거가 그린다. 글이 바인딩되지 않은 칸도 쓸 수 있게 Uid에 빈 바인딩을 걸어 오류를 단다
+# (근태 · 메모 찾기와 같은 방식). 글 칸이 아닌 것(고르기 칸 · 체크 상자 묶음)은 그대로 둔다. 칸 아래 문구는 부르는 탭이 쓴다
+function Set-WtInputError($Box, [string]$Message) {
+    if ($Box -isnot [System.Windows.Controls.TextBox]) { return }
+    $expression = $Box.GetBindingExpression([System.Windows.Controls.TextBox]::TextProperty)
+    if (-not $expression) { $expression = $Box.GetBindingExpression([System.Windows.FrameworkElement]::UidProperty) }
+    if (-not $expression) {
+        if (-not $Message) { return }
+        $binding = [System.Windows.Data.Binding]::new('Value'); $binding.Source = [pscustomobject]@{ Value = '' }
+        $expression = $Box.SetBinding([System.Windows.FrameworkElement]::UidProperty, $binding)
+    }
+    if ($Message) {
+        [System.Windows.Controls.Validation]::MarkInvalid($expression,
+            [System.Windows.Controls.ValidationError]::new([System.Windows.Controls.ExceptionValidationRule]::new(), $expression, $Message, $null))
+    } else { [System.Windows.Controls.Validation]::ClearInvalid($expression) }
+}
+
 function New-WtMinuteInput([int]$Value) {
     $row = New-WtStack Horizontal 12
     $box = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $box 'Input'
@@ -2828,6 +2874,29 @@ function New-WtMenuItem([string]$Text, [scriptblock]$OnClick, $Value, [switch]$C
     $item
 }
 
+# 단추의 펼침 메뉴(단추의 ContextMenu)를 단추 아래에 둔다. -Right: 메뉴 오른쪽 끝을 단추 오른쪽 끝에 맞춘다.
+# 창 오른쪽 끝 단추의 메뉴가 창 밖으로 나가지 않게 쓴다(디자인 7절 「메뉴」). 열기는 Open-WtButtonMenu, 이 함수는 자리만 정한다
+function Set-WtButtonMenuPlacement($Button, [switch]$Right) {
+    $menu = $Button.ContextMenu
+    $menu.PlacementTarget = $Button
+    $menu.HorizontalOffset = 0; $menu.VerticalOffset = 0
+    if (-not $Right) { $menu.Placement = 'Bottom'; return }
+    # 크기는 WPF가 넘겨 주는 단위 그대로 쓴다(배율에서 단위가 달라도 같은 단위끼리 빼므로 맞는다)
+    if (-not $script:rightBelowPlacement) {
+        $script:rightBelowPlacement = [System.Windows.Controls.Primitives.CustomPopupPlacementCallback]{
+            param([System.Windows.Size]$PopupSize, [System.Windows.Size]$TargetSize, [System.Windows.Point]$Offset)
+            , [System.Windows.Controls.Primitives.CustomPopupPlacement[]]@(
+                [System.Windows.Controls.Primitives.CustomPopupPlacement]::new([System.Windows.Point]::new($TargetSize.Width - $PopupSize.Width, $TargetSize.Height), 'Horizontal'))
+        }
+    }
+    $menu.CustomPopupPlacementCallback = $script:rightBelowPlacement
+    $menu.Placement = 'Custom'
+}
+function Open-WtButtonMenu($Button, [switch]$Right) {
+    Set-WtButtonMenuPlacement $Button -Right:$Right
+    $Button.ContextMenu.IsOpen = $true
+}
+
 # 메뉴 안의 묶음 이름(누를 수 없는 줄)
 function New-WtMenuCaption([string]$Text) {
     $item = [System.Windows.Controls.MenuItem]::new()
@@ -2845,7 +2914,8 @@ function Get-WtVisualChild($Root, [type]$Type) {
 }
 
 Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
-Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption, Get-WtVisualChild,
+Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, Read-WtSaveChoice, Set-WtInputError, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption,
+    Set-WtButtonMenuPlacement, Open-WtButtonMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
     New-WtPageHeader, New-WtPage, New-WtEmptyState, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
@@ -3135,7 +3205,7 @@ function New-WtTimeline([object[]]$Items, [datetime]$Date, [string]$Page, [strin
         }
         [void]$canvas.Children.Add($button)
         $caption = New-WtText ($entry.Start.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) + ' ' + $entry.Title) 'T.Sub'
-        $caption.TextWrapping = 'NoWrap'; $caption.IsHitTestVisible = $false; [void]$canvas.Children.Add($caption)
+        $caption.TextWrapping = 'NoWrap'; $caption.TextTrimming = 'CharacterEllipsis'; $caption.IsHitTestVisible = $false; [void]$canvas.Children.Add($caption)
         $alarm = $null
         if ($entry.Alarm) {
             $alarm = New-WtIcon 0xEA8F; $alarm.FontSize = 12; Set-WtResource $alarm Foreground 'B.Accent'; $alarm.ToolTip = $entry.ToolTip
@@ -3158,6 +3228,15 @@ function New-WtTimeline([object[]]$Items, [datetime]$Date, [string]$Page, [strin
     elseif (-not $Items.Count) { [void](Add-WtChild $col (New-WtText '오늘 일정 없음' 'T.Sub')) }
     $card.Child = $col
     @{ Card = $card; Timeline = $canvas }
+}
+
+# 시간 막대 글 · 아이콘의 폭. 접힌(Collapsed) 요소는 폭을 0으로 재므로 숨김(Hidden)으로 바꾼 뒤 잰다.
+# 전에는 앞 배치에서 숨긴 이름이 폭 0으로 들어가 끝 맞춤 · 겹침 판단을 비껴갔다: 오른쪽 끝을 넘어 잘리고,
+# 1분마다 다시 놓을 때 숨긴 이름과 보인 이름이 번갈아 바뀌었다(11-22 실사용 보고 3)
+function Measure-WtTimelinePart($Element, [System.Windows.Size]$Size) {
+    if ($Element.Visibility -eq 'Collapsed') { $Element.Visibility = 'Hidden' }
+    $Element.Measure($Size)
+    $Element.DesiredSize.Width
 }
 
 function Set-WtTimelineLayout($Timeline) {
@@ -3188,26 +3267,48 @@ function Set-WtTimelineLayout($Timeline) {
         $placed.Add(@{ Event = $event; X = $x; Width = $barWidth; Lane = $lane })
     }
     $stacked = @($placed | Where-Object { $_.Lane -eq 1 }).Count -gt 0
-    $captionEnds = @([double]::NegativeInfinity, [double]::NegativeInfinity)
     $infinite = [System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)
+    # +n은 이름 첫 줄의 오른쪽 끝이다. 첫 줄 이름은 +n 앞 12까지만 쓰고, 둘째 줄은 막대 오른쪽 끝까지 쓴다
+    $state.More.Text = "+$($hidden.Count)"; $state.More.ToolTip = $hidden -join "`n`n"
+    $limits = @($width, $width)
+    if ($hidden.Count) { $limits[0] = $width - (Measure-WtTimelinePart $state.More $infinite) - 12 }
+    $state.More.Visibility = if ($hidden.Count) { 'Visible' } else { 'Collapsed' }
+    $captionEnds = @([double]::NegativeInfinity, [double]::NegativeInfinity)
     foreach ($item in $placed) {
         $event = $item.Event; $button = $event.Button
         $button.Width = $item.Width; $button.Height = if ($stacked) { 8 } else { 14 }
         if ($button.Content) { $button.Content.Width = $item.Width }  # 범위 밖 표시를 양 끝에 맞춘다.
         $top = if ($stacked) { 46 + $item.Lane * 8 } else { 47 }
         [System.Windows.Controls.Canvas]::SetLeft($button, $item.X); [System.Windows.Controls.Canvas]::SetTop($button, $top)
-        if ($event.Alarm) { [System.Windows.Controls.Canvas]::SetLeft($event.Alarm, $item.X + $item.Width); [System.Windows.Controls.Canvas]::SetTop($event.Alarm, $top - 2) }
-        $event.Caption.Measure($infinite); $captionWidth = $event.Caption.DesiredSize.Width
-        $captionX = [Math]::Max(0, [Math]::Min($item.X, $width - $captionWidth))
-        $line = if ($captionX -ge $captionEnds[0]) { 0 } elseif ($captionX -ge $captionEnds[1]) { 1 } else { -1 }
+        if ($event.Alarm) {
+            # 알람 종은 막대 바로 뒤다. 막대가 오른쪽 끝까지 가서 자리가 없으면 막대 바로 앞에 두고,
+            # 앞도 같은 줄의 다른 막대에 걸리면 그리지 않는다(알람은 툴팁에 있다). 막대 범위 밖으로 나가지 않는다
+            $alarm = $event.Alarm
+            $alarmWidth = Measure-WtTimelinePart $alarm $infinite
+            $alarmX = $item.X + $item.Width
+            if ($alarmX + $alarmWidth -gt $width + 0.01) {
+                $alarmX = $item.X - $alarmWidth
+                $blocked = $alarmX -lt -0.01 -or @($placed | Where-Object { $_.Lane -eq $item.Lane -and -not [object]::ReferenceEquals($_, $item) -and
+                        $_.X -lt $item.X -and $_.X + $_.Width -gt $alarmX + 0.01 }).Count
+                if ($blocked) { $alarmX = $null }
+            }
+            $alarm.Visibility = if ($null -eq $alarmX) { 'Collapsed' } else { 'Visible' }
+            if ($null -ne $alarmX) { [System.Windows.Controls.Canvas]::SetLeft($alarm, $alarmX); [System.Windows.Controls.Canvas]::SetTop($alarm, $top - 2) }
+        }
+        # 이름은 막대 시작에 두고, 오른쪽 끝(첫 줄은 +n 앞)을 넘으면 끝에 맞춘다. 앞 이름과 12 안으로 붙으면 둘째 줄, 둘째 줄도 겹치면 쓰지 않는다
+        $event.Caption.MaxWidth = $width
+        $captionWidth = Measure-WtTimelinePart $event.Caption $infinite
+        $line = -1; $captionX = 0
+        for ($l = 0; $l -lt 2 -and $line -lt 0; $l++) {
+            $x = [Math]::Max(0, [Math]::Min($item.X, $limits[$l] - $captionWidth))
+            if ($x -ge $captionEnds[$l] -and $x + $captionWidth -le $limits[$l] + 0.01) { $line = $l; $captionX = $x }
+        }
         $event.Caption.Visibility = if ($line -lt 0) { 'Collapsed' } else { 'Visible' }
         if ($line -ge 0) {
             $captionEnds[$line] = $captionX + $captionWidth + 12
             [System.Windows.Controls.Canvas]::SetLeft($event.Caption, $captionX); [System.Windows.Controls.Canvas]::SetTop($event.Caption, 70 + $line * 18)
         }
     }
-    $state.More.Visibility = if ($hidden.Count) { 'Visible' } else { 'Collapsed' }
-    $state.More.Text = "+$($hidden.Count)"; $state.More.ToolTip = $hidden -join "`n`n"
     $minute = ($state.Now - $state.Date.Date).TotalMinutes
     $visible = $minute -ge $state.Start -and $minute -le $state.End
     $state.Line.Visibility = $state.Label.Visibility = if ($visible) { 'Visible' } else { 'Collapsed' }
