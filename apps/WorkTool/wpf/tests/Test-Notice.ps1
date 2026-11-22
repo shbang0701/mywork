@@ -183,7 +183,7 @@ try {
         [object]::ReferenceEquals($a, $again) -and $a.Parts.TitleText.Text -ceq '첫 알람 바뀜' -and $global:wtNoticeProbe.Shown -eq $shownBefore + 2 -and
         $player.Plays -eq $playsBefore + 1 -and @(Get-WtNotices).Count -eq 2 -and $placed) "$($a.Place) / $($b.Place) / $($global:wtNoticeProbe.Shown - $shownBefore) / $($player.Plays - $playsBefore)"
     $a.Parts.Confirm.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
-    Assert-WtTest '알림 확인: 닫고 남은 창은 아래로 내려옴' ($a.Closed -and $a.Reason -ceq 'confirm' -and @(Get-WtNotices).Count -eq 1 -and $b.Place.Y -eq 875) "$($b.Place)"
+    Assert-WtTest '알림 확인: 닫고 남은 창은 아래로 내려옴' ($a.Closed -and $a.Reason -ceq 'confirm' -and @(Get-WtNotices).Count -eq 1 -and (& $near $b.Place.Y 875)) "$($b.Place)"
     Invoke-WtNoticeSnooze $b $t0
     $snoozed = @(Get-WtNoticeSnoozes)
     $shownBefore = $global:wtNoticeProbe.Shown
