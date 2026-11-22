@@ -37,6 +37,7 @@ $script:rowGetters = [scriptblock[]]@(
     { if ($this.Snippet) { "$($this.Stamp) · $($this.Snippet)" } else { $this.Stamp } }
 )
 $script:quickOpen = $false
+$script:listRefreshQueued = $false   # 목록 다시 그리기를 예약했는지 (Request-WtMemoListUpdate)
 $script:memoIndex = $null    # 검색 색인. 다 만들어지기 전에는 $script:indexBuild가 들고 있다
 $script:indexBuild = $null
 $script:indexTimer = $null
@@ -57,6 +58,8 @@ $script:tocKey = ''
 $script:openedStore = $null
 $script:openedAt = @{}
 $script:shortcutIds = $null   # 바로 가기 확인용 메모 id. memo.json 표식이 같으면 다시 읽지 않는다
+$script:shortcutItems = $null # 그 id를 만든 메모들. 지금 제목(Get-WtMemoShortcutTitle)을 처음 물을 때 id → 제목 사전을 만든다
+$script:shortcutTitles = $null
 $script:shortcutStamp = ''
 $script:listPage = 40        # 한 번에 만드는 목록 줄 수
 
@@ -111,7 +114,8 @@ function Open-WtMemoRowToolTip($Element) {
     if (-not $row -or -not $row.PSObject.Properties['SnippetSource']) { return }
     $date = [datetime]::MinValue
     $stamp = if ([datetime]::TryParse([string]$row.Updated, [ref]$date)) { Format-WtDate $date 'yyyy-MM-dd HH:mm' } else { $row.Updated }
-    $Element.ToolTip = "$($row.Title)`n수정일 $stamp`n$($row.Snippet)"
+    $title = if ([string]$row.Title) { $row.Title } else { '제목 없음' }
+    $Element.ToolTip = "$title`n수정일 $stamp`n$($row.Snippet)"
 }
 
 function Get-WtMemoStamp([datetime]$When) {
@@ -139,10 +143,11 @@ function Get-WtMemoTags([string]$Body) {
     $seen.ToArray()
 }
 
-# 메모 하나의 제목 · 본문을 바꾼다. 제목이 비면 저장 시각을 제목으로 쓴다 (예전 WorkTool과 같음)
+# 메모 하나의 제목 · 본문을 바꾼다. 제목이 비면 저장 시각을 제목으로 쓴다 (예전 WorkTool과 같음).
+# 본문도 비었으면 시각을 채우지 않고 빈 메모로 둔다: 빈 메모는 닫힐 때 지운다(Remove-WtMemoIfEmpty)
 function Set-WtMemoContent($Memo, [string]$Title, [string]$Body, [datetime]$When = (Get-Date)) {
     $t = $Title.Trim()
-    if (-not $t) { $t = $When.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
+    if (-not $t -and $Body.Trim()) { $t = $When.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
     $Memo.title = $t
     $Memo.body = $Body
     $Memo | Add-Member -NotePropertyName tags -NotePropertyValue @(Get-WtMemoTags $Body) -Force   # 예전 데이터엔 tags가 없을 수 있다
@@ -686,6 +691,16 @@ function New-WtMemoPane {
     $titleBox.Tag = $pane
     $titleBox.Add_TextChanged({ param($s, $e) Set-WtMemoDirty $s.Tag })
     $titleBox.Add_LostKeyboardFocus({ [void](Save-WtMemoNow) })
+    # 제목에서 Enter: 본문 첫 줄로 간다(제목은 한 줄이다, 11-22 실사용 「헤맨 곳」). 포커스가 나가며 제목을 저장한다
+    $titleBox.Add_PreviewKeyDown({
+            param($s, $e)
+            if ($e.Key -ne [System.Windows.Input.Key]::Return -or (Get-WtMemoModifiers) -ne [System.Windows.Input.ModifierKeys]::None) { return }
+            $p = $s.Tag
+            if (-not $p.Current) { return }
+            $e.Handled = $true
+            $null = Set-WtMemoEditorState $p.Editor @{ Line = 0; Col = 0; Scroll = 0 }
+            $null = Set-WtMemoEditorFocus $p.Editor
+        })
     $metaRow = [System.Windows.Controls.DockPanel]::new()
     $status = [System.Windows.Controls.Label]::new()
     Set-WtResource $status 'FontFamily' 'Font.UI'
@@ -821,8 +836,10 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
     $existing = $Pane.Tabs | Where-Object { $_.Id -eq $Id } | Select-Object -First 1
     if ($existing) { return Select-WtMemoTab $Pane $existing }
     Save-WtMemoPaneState $Pane
+    $replaced = ''
     if ($How -eq 'here' -and $Pane.Current) {
         $tab = $Pane.Current
+        $replaced = [string]$tab.Id
         if ($History) { $tab.Back.Add($tab.Id); $tab.Forward.Clear() }
         $tab.Id = $Id
         $tab.State = $null
@@ -841,7 +858,46 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
     Save-WtMemoTabs
     Add-WtMemoUse $Id
     Add-WtMemoOpened $Id
+    # 같은 탭에서 다른 메모를 열면 앞 메모는 닫힌 것이다. 빈 메모면 지운다(목록 고르기 중일 수 있어 목록은 그 뒤에 다시 그린다)
+    if ($replaced -and $replaced -cne $Id -and (Remove-WtMemoIfEmpty $replaced)) { Request-WtMemoListUpdate }
     $true
+}
+
+# 제목 · 본문이 모두 비었는가(공백 · 빈 줄만 있는 것도 빈 것). 이런 메모는 닫힐 때 지운다(11-22 승호 결정)
+function Test-WtMemoEmpty($Memo) {
+    $null -ne $Memo -and -not ([string]$Memo.title).Trim() -and -not ([string]$Memo.body).Trim()
+}
+
+# 닫힌 빈 메모를 조용히 지운다. 지울 내용이 없으니 실행 취소 알림 줄은 띄우지 않는다.
+# 다른 칸 · 탭에 아직 열려 있으면 두고, 마지막 탭이 닫힐 때만 지운다. 지웠으면 $true (목록은 부른 쪽이 다시 그린다)
+function Remove-WtMemoIfEmpty([string]$Id) {
+    $m = Get-WtMemoById $Id
+    if (-not (Test-WtMemoEmpty $m)) { return $false }
+    foreach ($p in $script:panes) { foreach ($t in $p.Tabs) { if ([string]$t.Id -ceq $Id) { return $false } } }
+    $next = @($script:items | Where-Object { -not [object]::ReferenceEquals($_, $m) })
+    try { Save-WtMemoItems $next } catch { return $false }   # 못 지우면 빈 메모가 남을 뿐이다
+    $script:items = $next
+    $script:viewStamp = Get-WtMemoViewStamp
+    Update-WtMemoIndexItem $m -Removed
+    $script:rowCache.Remove([string]$m.id)
+    $true
+}
+
+# 끝낼 때: 열린 탭 가운데 빈 메모의 탭을 닫는다. 마지막 탭이 닫히며 메모도 지워진다(OnExit, 저장한 뒤)
+function Close-WtMemoEmptyTabs {
+    foreach ($p in @($script:panes)) {
+        foreach ($t in @($p.Tabs)) {
+            if (-not $script:panes.Contains($p) -or -not $p.Tabs.Contains($t)) { continue }
+            if (Test-WtMemoEmpty (Get-WtMemoById $t.Id)) { [void](Close-WtMemoTab $p $t -NoHistory) }
+        }
+    }
+}
+
+# 목록을 지금 처리(목록에서 고르는 중 등)가 끝난 뒤 한 번 다시 그린다
+function Request-WtMemoListUpdate {
+    if ($script:listRefreshQueued -or -not $script:ui.List) { return }
+    $script:listRefreshQueued = $true
+    [void]$script:ui.List.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Normal, [Action] { $script:listRefreshQueued = $false; Update-WtMemoList })
 }
 
 function Select-WtMemoTab($Pane, $Tab) {
@@ -877,11 +933,13 @@ function Close-WtMemoTab($Pane, $Tab, [switch]$NoHistory) {
     if ($wasCurrent) {
         $Pane.Current = if ($Pane.Tabs.Count) { $Pane.Tabs[[Math]::Min($i, $Pane.Tabs.Count - 1)] } else { $null }
     }
+    # 제목 · 본문이 모두 빈 메모는 마지막 탭이 닫힐 때 지운다(실행 취소 알림 없음)
+    $removed = Remove-WtMemoIfEmpty ([string]$Tab.Id)
     Update-WtMemoTabStrip $Pane
     Update-WtMemoPaneLayout
     if ($wasCurrent -and $script:panes.Contains($Pane)) { Show-WtMemoPane $Pane }
     Update-WtMemoTabStyles
-    Sync-WtMemoListSelection
+    if ($removed) { Update-WtMemoList } else { Sync-WtMemoListSelection }
     Save-WtMemoTabs
     $true
 }
@@ -953,6 +1011,7 @@ function Move-WtMemoHistory([int]$Step) {
     Save-WtMemoPaneState $p
     $target = $from[$from.Count - 1]
     $from.RemoveAt($from.Count - 1)
+    $replaced = [string]$tab.Id
     $to.Add($tab.Id)
     $tab.Id = $target
     $tab.State = $null
@@ -960,6 +1019,8 @@ function Move-WtMemoHistory([int]$Step) {
     Update-WtMemoTabTexts
     Sync-WtMemoListSelection
     Save-WtMemoTabs
+    # 같은 탭에서 다른 메모로 갔다: 앞 메모가 빈 메모면 지운다(되돌아갈 때는 건너뛴다)
+    if ($replaced -cne [string]$target -and (Remove-WtMemoIfEmpty $replaced)) { Update-WtMemoList }
 }
 
 # 지운 메모의 탭을 모든 칸에서 닫는다 (저장은 이미 한 뒤). 지금 탭이 바뀐 칸만 다시 채운다
@@ -1161,7 +1222,9 @@ function Remove-WtMemoItem([string]$Id, $Pane) {
     $bar = $script:ui.UndoBar
     if ($bar.Parent) { $bar.Parent.Content = $null }
     $script:panes[[Math]::Max(0, [Math]::Min($paneIndex, $script:panes.Count - 1))].UndoHost.Content = $bar
-    $script:ui.UndoText.Text = "'$($m.title)' 삭제함"
+    $title = if ([string]$m.title) { [string]$m.title } else { '제목 없음' }
+    $script:ui.UndoText.Text = "'$title"
+    $script:ui.UndoText.ToolTip = $title
     $bar.Visibility = 'Visible'
     $script:undoTimer.Stop()
     $script:undoTimer.Start()
@@ -1881,6 +1944,20 @@ function Invoke-WtMemoKey([System.Windows.Input.Key]$Key, [System.Windows.Input.
     $false
 }
 
+# 메모 화면이 떠 있는데 키보드 포커스가 화면 밖(왼쪽 메뉴 · 제목 줄 · 창 자체)에 있을 때 셸이 넘기는 키 (등록 -PageKey).
+# 메뉴로 메모를 연 직후 · 창을 다시 켜며 포커스를 되돌리지 못했을 때도 메모 단축키와 찾기 막대 Esc가 먹게 한다(11-22 실사용 5)
+function Invoke-WtMemoPageKey([System.Windows.Input.Key]$Key, [System.Windows.Input.ModifierKeys]$Modifiers) {
+    if (-not $script:ui.Count) { return $false }
+    if (@(Invoke-WtMemoKey $Key $Modifiers)[-1] -eq $true) { return $true }
+    $pane = Get-WtMemoActivePane
+    if ($Key -eq [System.Windows.Input.Key]::Escape -and $Modifiers -eq [System.Windows.Input.ModifierKeys]::None -and
+        $pane -and $pane.Current -and $pane.Editor.Find.Bar.Visibility -eq 'Visible') {
+        Close-WtMemoFind $pane.Editor
+        return $true
+    }
+    $false
+}
+
 # ---- 화면 만들기 ------------------------------------------------------------------------------
 
 function New-WtMemoView {
@@ -2011,8 +2088,13 @@ function New-WtMemoView {
     # 공통 한 줄 행과 글자 스타일을 쓰고, 메모의 한 줄 배치만 이 탭에 둔다.
     $rowStyle = [System.Windows.Style]::new([System.Windows.Controls.ListBoxItem], (Get-WtStyleDictionary)['Row'])
     $rowStyle.Setters.Add([System.Windows.Setter]::new([System.Windows.FrameworkElement]::ToolTipProperty, ''))
-    # 화면 읽기 이름은 메모 제목(없으면 행 객체 글 「@{Id=…}」이 읽힌다, 11-17 실제 화면 시험)
+    # 화면 읽기 이름은 메모 제목(없으면 행 객체 글 「@{Id=…}」이 읽힌다, 11-17 실제 화면 시험). 제목이 빈 메모는 탭 · 목차처럼 「제목 없음」
     $rowStyle.Setters.Add([System.Windows.Setter]::new([System.Windows.Automation.AutomationProperties]::NameProperty, [System.Windows.Data.Binding]::new('Title')))
+    $untitled = [System.Windows.DataTrigger]::new()
+    $untitled.Binding = [System.Windows.Data.Binding]::new('Title')
+    $untitled.Value = ''
+    $untitled.Setters.Add([System.Windows.Setter]::new([System.Windows.Automation.AutomationProperties]::NameProperty, '제목 없음'))
+    $rowStyle.Triggers.Add($untitled)
     # 툴팁 이벤트는 Direct이므로 가상화로 만든 행 자신에게 연결한다. 표시 내용은 아직 만들지 않는다.
     $rowStyle.Setters.Add([System.Windows.EventSetter]::new([System.Windows.Controls.ToolTipService]::ToolTipOpeningEvent,
         [System.Windows.Controls.ToolTipEventHandler]{ param($s, $e) Open-WtMemoRowToolTip $s }))
@@ -2026,8 +2108,14 @@ function New-WtMemoView {
       <TextBlock Text="&#xE718;" Visibility="{Binding PinShown}" Style="{DynamicResource T.Icon}" FontSize="{DynamicResource F.Caption}" Foreground="{DynamicResource B.Text.Tertiary}" Margin="0,0,4,0"/>
       <TextBlock Text="{Binding Stamp}" Style="{DynamicResource T.CaptionMuted}" TextWrapping="NoWrap"/>
     </StackPanel>
-    <TextBlock Text="{Binding Title}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+    <TextBlock x:Name="Title" Text="{Binding Title}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
   </DockPanel>
+  <DataTemplate.Triggers>
+    <DataTrigger Binding="{Binding Title}" Value="">
+      <Setter TargetName="Title" Property="Text" Value="제목 없음"/>
+      <Setter TargetName="Title" Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
+    </DataTrigger>
+  </DataTemplate.Triggers>
 </DataTemplate>
 '@
     $list.AddHandler([System.Windows.Controls.ScrollViewer]::ScrollChangedEvent, [System.Windows.Controls.ScrollChangedEventHandler] {
@@ -2122,15 +2210,25 @@ function New-WtMemoView {
     [System.Windows.Controls.Grid]::SetColumn($right, 2)
     [void]$grid.Children.Add($right)
 
-    # 실행 취소 막대: 지운 칸 아래에 붙인다
-    $undoBar = New-WtStack Horizontal 8
+    # 실행 취소 막대: 지운 칸 아래에 붙인다. 「'제목' 삭제함 [실행 취소]」에서 넘치는 것은 제목뿐이다:
+    # 단추 · 「' 삭제함」을 먼저 오른쪽에 대고 제목이 남는 폭을 쓴다. 막대는 왼쪽 맞춤이라 짧은 제목이면 단추가 글 바로 옆에 온다(11-22 실사용 1)
+    $undoBar = [System.Windows.Controls.DockPanel]::new()
+    $undoBar.HorizontalAlignment = 'Left'
     $undoBar.Visibility = 'Collapsed'
+    $undo = New-WtButton '실행 취소' -Kind Link -Icon 0xE7A7 -ToolTip '삭제 되돌리기'
+    $undo.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
+    $undo.Add_Click({ Restore-WtMemoDeleted })
+    [System.Windows.Controls.DockPanel]::SetDock($undo, 'Right')
+    [void]$undoBar.Children.Add($undo)
+    $undoSuffix = New-WtText "' 삭제함" 'T.Sub'
+    $undoSuffix.VerticalAlignment = 'Center'
+    [System.Windows.Controls.DockPanel]::SetDock($undoSuffix, 'Right')
+    [void]$undoBar.Children.Add($undoSuffix)
     $undoText = New-WtText '' 'T.Sub'
     $undoText.VerticalAlignment = 'Center'
-    $undo = New-WtButton '실행 취소' -Kind Link -Icon 0xE7A7 -ToolTip '삭제 되돌리기'
-    $undo.Add_Click({ Restore-WtMemoDeleted })
-    [void](Add-WtChild $undoBar $undoText)
-    [void](Add-WtChild $undoBar $undo)
+    $undoText.TextWrapping = 'NoWrap'
+    $undoText.TextTrimming = 'CharacterEllipsis'
+    [void]$undoBar.Children.Add($undoText)
 
     # 빠른 이동 (Ctrl+O): 화면 위에 겹쳐 뜬다
     $qHost = [System.Windows.Controls.Grid]::new()
@@ -2145,6 +2243,8 @@ function New-WtMemoView {
     $qDock = [System.Windows.Controls.DockPanel]::new()
     $qsb = New-WtSearchBox '메모 이름으로 이동'
     $qsb.Box.ToolTip = 'Enter 열기 · Ctrl+Enter 새 탭 · Esc 닫기'
+    # 툴팁은 칸 위에 띄운다. 기본(마우스 아래)이면 열자마자 첫 결과를 가린다(11-22 실사용 8)
+    [System.Windows.Controls.ToolTipService]::SetPlacement($qsb.Box, [System.Windows.Controls.Primitives.PlacementMode]::Top)
     $qsb.Box.Add_TextChanged({ Update-WtMemoQuickResults })
     [System.Windows.Controls.DockPanel]::SetDock($qsb.Root, 'Top')
     [void]$qDock.Children.Add($qsb.Root)
@@ -2230,19 +2330,37 @@ function Start-WtMemoQueryWarmUp {
 # 바로 가기의 메모가 남아 있는지. 홈을 그릴 때 줄마다 불리므로 memo.json이 바뀌었을 때만 다시 읽고,
 # 메모 화면이 같은 내용을 들고 있으면 파일을 읽지 않는다.
 # 다시 읽을 때는 저장 핸들도 함께 바꾼다. id 확인에는 편집용 항목 사본이 필요하지 않다.
-function Test-WtMemoShortcut([string]$Key) {
+function Update-WtMemoShortcutCache {
     $stamp = Get-WtStoreStamp 'memo'
-    if (-not $script:shortcutIds -or $script:shortcutStamp -cne $stamp) {
-        $fresh = $script:viewStamp -ceq "$stamp|$([datetime]::Today.Ticks)"
-        if ($fresh) { $items = $script:items }
-        else {
-            Read-WtMemoStore
-            $items = if ($script:preparedMemo) { $script:preparedMemo.Live } else { Get-WtMemoLiveItems $script:memoStore.Items }
-        }
-        $script:shortcutIds = [Collections.Generic.HashSet[string]]::new([Collections.Generic.IEnumerable[string]](Get-WtMemoIdArray $items), [StringComparer]::Ordinal)
-        $script:shortcutStamp = $stamp
+    if ($script:shortcutIds -and $script:shortcutStamp -ceq $stamp) { return }
+    $fresh = $script:viewStamp -ceq "$stamp|$([datetime]::Today.Ticks)"
+    if ($fresh) { $items = $script:items }
+    else {
+        Read-WtMemoStore
+        $items = if ($script:preparedMemo) { $script:preparedMemo.Live } else { Get-WtMemoLiveItems $script:memoStore.Items }
     }
+    $script:shortcutIds = [Collections.Generic.HashSet[string]]::new([Collections.Generic.IEnumerable[string]](Get-WtMemoIdArray $items), [StringComparer]::Ordinal)
+    $script:shortcutItems = $items
+    $script:shortcutTitles = $null
+    $script:shortcutStamp = $stamp
+}
+
+function Test-WtMemoShortcut([string]$Key) {
+    Update-WtMemoShortcutCache
     $script:shortcutIds.Contains($Key)
+}
+
+# 바로 가기에 쓸 지금 제목. 연 뒤 이름을 바꿨으면 바뀐 이름, 제목이 빈 메모는 탭 · 목록처럼 「제목 없음」. 없는 메모는 $null
+function Get-WtMemoShortcutTitle([string]$Key) {
+    Update-WtMemoShortcutCache
+    if (-not $script:shortcutTitles) {
+        $titles = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+        foreach ($m in @($script:shortcutItems)) { if ($null -ne $m) { $titles[[string]$m.id] = [string]$m.title } }
+        $script:shortcutTitles = $titles
+    }
+    $title = $null
+    if (-not $script:shortcutTitles.TryGetValue($Key, [ref]$title)) { return $null }
+    if ($title) { $title } else { '제목 없음' }
 }
 
 # ---- 다른 탭과 잇기 (일정 2단계, 설계 13.5). 코어 등록 목록 -Related로만 불린다 ----------------------
@@ -2588,9 +2706,11 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
         Window = { param($Key) [void](Show-WtMemoWindow $Key) }
     } `
     -ShortcutExists { param($Key) Test-WtMemoShortcut $Key } `
+    -ShortcutTitle { param($Key) Get-WtMemoShortcutTitle $Key } `
+    -PageKey { param($Key, $Modifiers) Invoke-WtMemoPageKey $Key $Modifiers } `
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
     -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
-    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
+    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow); Close-WtMemoEmptyTabs }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
     -Help @('마크다운 메모를 탭과 두 칸으로 엽니다.', 'Ctrl+E로 편집 · 원문 · 읽기를 차례로 바꿉니다.', '찾기 칸에 #태그 · folder:업무 · updated:7d 같은 조건을 쓸 수 있습니다.',
         '백틱은 한 줄 선택을 인라인 코드로, 여러 줄 선택을 코드 블록으로 감싸며 빈 짝을 넣습니다. 닫는 백틱은 건너뛰고, 빈 짝 직후 Backspace는 둘 다 지웁니다.',
         '편집기 찾기 막대에서 Alt+C는 대소문자 구분, Alt+R은 정규식을 켜고 끕니다.',
@@ -2604,7 +2724,7 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
         @('Ctrl + B / Ctrl + I', '굵게 / 기울임 (다시 누르면 풀기)'), @('Ctrl + K', '링크 만들기'), @('Alt + Shift + 5', '취소선'),
         @('`', '한 줄은 인라인 코드 · 여러 줄은 코드 블록 · 빈 짝 넣기 · 닫는 짝 넘기기 (빈 짝 직후 Backspace = 둘 다 삭제)'),
         @('```', '줄 맨 앞에 치면 닫는 ``` 를 자동으로'),
-        @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)'), @('Enter', '목록 · 할 일 이어 쓰기 (빈 항목에서 Enter = 목록 끝)'),
+        @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)'), @('Enter', '목록 · 할 일 · 인용 이어 쓰기 (빈 항목 · 빈 인용 줄에서 Enter = 빈 줄을 두고 끝)'),
         @('Tab / Shift + Tab', '목록 들여쓰기 / 내어쓰기'), @('Ctrl + L', '할 일 체크박스 넣기 · 완료 / 해제'),
         @('Alt + ↑ / Alt + ↓', '줄 옮기기'), @('Ctrl + F / Ctrl + H / F3', '찾기 / 바꾸기 / 다음 찾기'),
         @('Alt + C / Alt + R', '찾기 막대에서 대소문자 구분 / 정규식'),

@@ -1387,14 +1387,18 @@ try {
         if (-not $ed.IslandBox.IsKeyboardFocused) { throw '둘째 줄을 받을 키보드 포커스가 없습니다.' }
         Send-EdText $ed 'Callout line content'
         Send-EdKey $ed Return 2
-        $exitFocus = $ed.Island -and $ed.IslandBox.IsKeyboardFocused -and (Get-EdCaret $ed) -ceq '2:0'
+        # 인용 탈출은 빈 줄을 남긴다: 바로 아래 줄에 쓰면 콜아웃 문단에 이어지는 줄(lazy)이 되어 콜아웃 안에 그려진다(11-22 실사용 13)
+        $exitFocus = $ed.Island -and $ed.IslandBox.IsKeyboardFocused -and (Get-EdCaret $ed) -ceq '3:0'
         if (-not $ed.IslandBox.IsKeyboardFocused) { throw '다음 문단을 받을 키보드 포커스가 없습니다.' }
         Send-EdText $ed 'Next paragraph text'
         Sync-EdUi
         Assert-Ed 'Callout-NewMemoKeepsFocus: 인용 탈출 뒤 다음 문단까지 입력 보존 · 포커스 유지' (
             $exitFocus -and $ed.Island -and $ed.IslandBox.IsKeyboardFocused -and
-            (Get-EdText $ed) -ceq "> [!note] Fresh Callout`n> Callout line content`nNext paragraph text") "글=$((Get-EdText $ed).Replace("`n", '¶'))"
+            (Get-EdText $ed) -ceq "> [!note] Fresh Callout`n> Callout line content`n`nNext paragraph text") "글=$((Get-EdText $ed).Replace("`n", '¶')) 커서=$(Get-EdCaret $ed)"
         Assert-EdContract $ed 'Callout-NewMemoKeepsFocus: 문서 약속'
+        Close-Ed $ed
+        $kinds = @($ed.Units | ForEach-Object { '{0}-{1} {2}' -f $_.Start, $_.End, $_.Kind }) -join ', '
+        Assert-Ed 'QuoteExit-NextBlockOutside: 탈출 뒤 쓴 문단은 콜아웃 밖 단위' ($kinds -ceq '0-2 callout, 3-4 para') $kinds
     }
     Invoke-EdCase 'BlankCaret-EnterUpType' {
         foreach ($block in @(@('```ps', 'Get-Service', 'Get-Process', '```'), @('middle line'), @('## Heading'))) {
@@ -1681,16 +1685,31 @@ try {
         Assert-Ed 'Callout-RenderOnExit: 인용 안 작성 중에는 원문' ($ed.Island.Start -eq 0 -and $ed.IslandBox.Text.EndsWith('> '))
         Send-EdKey $ed Return
         Assert-Ed 'Callout-RenderOnExit: 두 번째 Enter 즉시 콜아웃을 그리고 빈 줄만 섬' (
-            (Get-EdText $ed) -ceq "> [!note] Notice`n> detail`n" -and $ed.Island.Start -eq 2 -and $ed.Island.End -eq 3 -and
+            (Get-EdText $ed) -ceq "> [!note] Notice`n> detail`n`n" -and $ed.Island.Start -eq 2 -and $ed.Island.End -eq 4 -and (Get-EdCaret $ed) -ceq '3:0' -and
             $ed.Units[0].Kind -ceq 'callout' -and [object]::ReferenceEquals($ed.Live.Document.Blocks.FirstBlock, $ed.Sections[0]) -and
-            (Get-EdPoint $ed.Live 'Notice').Y -ge 0)
+            (Get-EdPoint $ed.Live 'Notice').Y -ge 0) "글=$((Get-EdText $ed).Replace("`n", '¶')) 섬=$($ed.Island.Start)..$($ed.Island.End) 커서=$(Get-EdCaret $ed)"
         Assert-EdContract $ed 'Callout-RenderOnExit: 문서 약속'
         Set-EdText $ed '> plain'
         Open-EdAt $ed 0 7
         Send-EdKey $ed Return 2
         Assert-Ed 'Callout-RenderOnExit: 일반 인용도 탈출 즉시 그리고 빈 줄만 섬' (
-            (Get-EdText $ed) -ceq "> plain`n" -and $ed.Island.Start -eq 1 -and $ed.Units[0].Kind -ceq 'quote' -and
-            [object]::ReferenceEquals($ed.Live.Document.Blocks.FirstBlock, $ed.Sections[0]))
+            (Get-EdText $ed) -ceq "> plain`n`n" -and $ed.Island.Start -eq 1 -and $ed.Units[0].Kind -ceq 'quote' -and
+            [object]::ReferenceEquals($ed.Live.Document.Blocks.FirstBlock, $ed.Sections[0])) "글=$((Get-EdText $ed).Replace("`n", '¶')) 섬=$($ed.Island.Start)..$($ed.Island.End)"
+        # 탈출 뒤 바로 표를 쓰면 콜아웃 밖의 표다 (11-22 실사용 13: 표가 콜아웃 안으로 흡수됨). 편집 단위 · 읽기 보기가 같은 규칙
+        Set-EdText $ed "> [!note] 주의사항`n> SRV-03 확인"
+        Open-EdAt $ed 1 11
+        Send-EdKey $ed Return 2
+        foreach ($row in '| 서버 | 상태 |', '| --- | --- |', '| SRV-03 | 교체 |') { Send-EdText $ed $row; if ($row -notlike '*교체*') { Send-EdKey $ed Return } }
+        Close-Ed $ed
+        $kinds = @($ed.Units | ForEach-Object { '{0}-{1} {2}' -f $_.Start, $_.End, $_.Kind }) -join ', '
+        $model = (ConvertTo-WtMarkdownModel (Get-EdText $ed)).Blocks
+        Set-WtMemoEditorMode $ed 'read'
+        $readTable = $null
+        foreach ($b in $ed.View.Document.Blocks) { if ($b -is [System.Windows.Documents.Table] -or ($b -is [System.Windows.Documents.Section] -and $b.Blocks.FirstBlock -is [System.Windows.Documents.Table])) { $readTable = $b } }
+        Assert-Ed 'QuoteExit-TableOutsideCallout: 콜아웃 → Enter 두 번 → 표는 콜아웃 밖 (편집 단위 · 모델 · 읽기 보기 맨 위 블록)' (
+            $kinds -ceq '0-2 callout, 3-6 table' -and $model.Count -eq 2 -and $model[0].T -ceq 'callout' -and $model[1].T -ceq 'table' -and
+            @($model[0].Blocks | Where-Object { $_.T -ceq 'table' }).Count -eq 0 -and $null -ne $readTable) "단위=$kinds 모델=$(@($model | ForEach-Object T) -join ',') 글=$((Get-EdText $ed).Replace("`n", '¶'))"
+        Set-WtMemoEditorMode $ed 'live'
     }
     Invoke-EdCase 'BlankSpacing-LiveOnly' {
         $ed = New-EdEditor
@@ -2133,6 +2152,138 @@ try {
         $ed.IslandBox.SelectedText = "본문`r`n둘째"
         & $em { param($x) Invoke-WtMemoContextAction $x 'SelectAll' } $ed
         Assert-Ed 'BodyContextMenu-KoreanCommands: 아직 저장하지 않은 새 줄도 모두 선택' ($ed.IslandBox.SelectedText -ceq "본문`r`n둘째")
+    }
+
+    # ---- 11-22 실사용 보고 회귀 (번호 = 보고서 번호) ----
+    Invoke-EdCase 'MemoView-NoFocusOutline' {
+        $ed = New-EdEditor
+        Set-EdText $ed "# 제목`n`n본문"
+        $ok = $true; $detail = @()
+        foreach ($mode in 'live', 'read') {
+            Set-WtMemoEditorMode $ed $mode
+            $surface = if ($mode -eq 'live') { $ed.Live } else { $ed.View }
+            [void]$surface.Focus(); Sync-EdUi
+            $ok = $ok -and $surface.IsKeyboardFocused -and $null -eq $surface.FocusVisualStyle
+            $detail += "$mode 포커스=$($surface.IsKeyboardFocused) 포커스모양=$($surface.FocusVisualStyle)"
+        }
+        Assert-Ed 'MemoView-NoFocusOutline: 편집 · 읽기 보기 문서 면은 포커스가 있어도 바깥 포커스 네모 없음 (16)' $ok ($detail -join ' / ')
+        Set-WtMemoEditorMode $ed 'live'
+    }
+    Invoke-EdCase 'ReadTask-KeepsFocus' {
+        $ed = New-EdEditor
+        Set-EdText $ed "# 할 일`n`n- [ ] 하나`n- [ ] 둘"
+        Set-WtMemoEditorMode $ed 'read'
+        $win.UpdateLayout()
+        $link = Find-EdTaskLink $ed.View 3
+        if (-not $link) { throw '읽기 보기 체크 표시를 찾지 못했습니다' }
+        Assert-EdInputPath $ed.View $link.Inlines.FirstInline $link '읽기 보기 체크 줄 3'
+        [void]$link.Focus()   # 실제로 누르면 체크 표시(링크)가 포커스를 받는다
+        $linkFocused = $link.IsKeyboardFocused
+        $link.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Documents.Hyperlink]::ClickEvent, $link))
+        Sync-EdUi
+        $focused = [System.Windows.Input.Keyboard]::FocusedElement
+        Assert-Ed 'ReadTask-KeepsFocus: 읽기 보기 체크를 누른 뒤에도 키보드 포커스가 보기에 남는다 (5②)' (
+            $linkFocused -and $ed.Lines[2] -ceq '- [x] 하나' -and $ed.View.IsKeyboardFocusWithin) "링크포커스=$linkFocused 줄=[$($ed.Lines[2])] 포커스=$(if ($focused) { $focused.GetType().Name } else { '없음' })"
+        Set-WtMemoEditorMode $ed 'live'
+    }
+    Invoke-EdCase 'FindBar-SideMargin' {
+        $ed = New-EdEditor; Set-EdText $ed '본문 target'
+        Set-WtMemoEditorSide $ed 44
+        Open-WtMemoFind $ed -Replace
+        $win.UpdateLayout(); Sync-EdUi; $win.UpdateLayout()
+        $rectOf = { param($el) $el.TransformToAncestor($ed.Root).TransformBounds([Windows.Rect]::new([Windows.Point]::new(0, 0), $el.RenderSize)) }
+        $actions = $ed.Find.Count.Parent
+        $close = $actions.Children[$actions.Children.Count - 1]
+        $q = & $rectOf $ed.Find.Query; $r = & $rectOf $ed.Find.Replace; $c = & $rectOf $close; $a = & $rectOf $ed.Find.All
+        $width = $ed.Root.ActualWidth
+        Assert-Ed 'FindBar-SideMargin: 찾기 막대는 글과 같은 좌우 44 · 닫기와 모두 바꾸기 오른쪽 끝 같음 · 두 칸 같은 폭 · 아래 선은 칸 끝까지 (18)' (
+            [Math]::Abs($q.Left - 44) -lt 0.5 -and [Math]::Abs($r.Left - 44) -lt 0.5 -and
+            [Math]::Abs($c.Right - ($width - 44)) -lt 0.5 -and [Math]::Abs($a.Right - ($width - 44)) -lt 0.5 -and
+            [Math]::Abs($q.Width - $r.Width) -lt 0.5 -and [Math]::Abs($ed.Find.Bar.ActualWidth - $width) -lt 0.5) "찾기 왼쪽=$($q.Left) 바꾸기 왼쪽=$($r.Left) 닫기 오른쪽=$($c.Right) 모두 오른쪽=$($a.Right) 폭=$width"
+        & $em { param($x) Close-WtMemoFind $x } $ed
+    }
+    Invoke-EdCase 'FindReplace-AfterIslandClosed' {
+        $ed = New-EdEditor
+        Set-EdText $ed "# SRV-03 작업`n`n대상 서버 ``SRV-03`` 점검`n`n| 서버 | 상태 |`n| --- | --- |`n| SRV-03 | 교체 |`n| SRV-01 | 정상 |"
+        try {
+            Open-EdAt $ed 2 6
+            Open-WtMemoFind $ed -Replace
+            $ed.Find.Regex.IsChecked = $true
+            $ed.Find.Query.Text = 'SRV-0[0-9]'   # 찾기 칸에 치면 커서부터 첫 일치를 고른다
+            Sync-EdUi
+            $ed.Find.Replace.Text = 'SRV-99'
+            $before = "$($ed.Find.Count.Text)|$($ed.IslandBox.SelectedText)"
+            [System.Windows.Input.Keyboard]::ClearFocus(); Sync-EdUi   # 창 전환 등으로 포커스가 편집기 밖으로 나가 섬이 닫힌다
+            $closed = -not $ed.Island
+            Assert-EdInputPath $ed.Root $ed.Find.One $ed.Find.One '바꾸기 단추'
+            [void]$ed.Find.One.Focus()
+            $ed.Find.One.GetType().GetMethod('OnClick', [Reflection.BindingFlags]'Instance,NonPublic').Invoke($ed.Find.One, @())
+            Sync-EdUi
+            $text = Get-EdText $ed
+            Assert-Ed 'FindReplace-AfterIslandClosed: 섬이 닫혀도 첫 바꾸기가 찾아 둔 SRV-03을 바로 바꾸고 다음 일치로 (6)' (
+                $before -ceq '4개|SRV-03' -and $closed -and $text.Contains('대상 서버 `SRV-99` 점검') -and ([regex]::Matches($text, 'SRV-99')).Count -eq 1 -and
+                $ed.Find.Count.Text -ceq '2/3' -and $ed.IslandBox.SelectedText -ceq 'SRV-03') "전=$before 닫힘=$closed 개수=$($ed.Find.Count.Text) 선택=[$($ed.IslandBox.SelectedText)] 글=$($text.Replace("`n", '¶'))"
+            # 본문을 눌러 커서를 옮겼으면 찾아 둔 곳은 버린다: 바꾸지 않고 커서부터 다음을 찾는다
+            Open-EdAt $ed 0 0
+            & $em { param($x) $x.Find.LastMatch = $null } $ed   # 본문 누름(PreviewMouseDown)이 하는 일
+            [System.Windows.Input.Keyboard]::ClearFocus(); Sync-EdUi
+            & $em { param($x) Invoke-WtMemoReplace $x } $ed
+            Assert-Ed 'FindReplace-AfterIslandClosed: 커서를 옮긴 뒤 닫힌 섬에서는 바꾸지 않고 다음을 찾는다' (([regex]::Matches((Get-EdText $ed), 'SRV-99')).Count -eq 1) (Get-EdText $ed)
+        } finally {
+            & $em { param($x) Close-WtMemoFind $x } $ed
+            Set-WtSetting 'memo.find.regex' $false
+        }
+    }
+    Invoke-EdCase 'FindCount-RefreshOnChange' {
+        $ed = New-EdEditor
+        Set-EdText $ed 'SRV-01 SRV-02 SRV-03'
+        Open-EdAt $ed 0 0
+        Open-WtMemoFind $ed -Replace
+        $ed.Find.Query.Text = 'SRV'; Sync-EdUi
+        $ed.Find.Replace.Text = 'HOST'
+        & $em { param($x) Invoke-WtMemoReplace $x -All } $ed
+        Sync-EdUi
+        $afterAll = "$($ed.Find.Count.Text)|$($ed.Find.One.IsEnabled)|$($ed.Find.All.IsEnabled)|$($ed.Find.One.ToolTip)"
+        Set-EdText $ed '외부 구간 10.0.0.20:8443 허용 규칙'   # 다른 메모를 연 것처럼 글을 불러온다
+        Sync-EdUi
+        $other = "$($ed.Find.Count.Text)|$($ed.Find.One.IsEnabled)|$($ed.Find.All.IsEnabled)"
+        Set-EdText $ed 'SRV-07 하나'
+        Sync-EdUi
+        $again = "$($ed.Find.Count.Text)|$($ed.Find.One.IsEnabled)"
+        Assert-Ed 'FindCount-RefreshOnChange: 모두 바꾸기 뒤 남은 0개로 단추 꺼짐 · 다른 메모로 바꾸면 다시 센다 (7)' (
+            $afterAll -ceq '3개 바꿈|False|False|찾은 것이 없습니다.' -and $other -ceq '0개|False|False' -and $again -ceq '1개|True') "모두 뒤=$afterAll 다른 메모=$other 다시=$again"
+        Open-EdAt $ed 0 0
+        Send-EdText $ed 'SRV-08 '
+        Wait-EdUi 30; Sync-EdUi
+        Assert-Ed 'FindCount-RefreshOnChange: 막대가 열린 채 글을 고치면 한가할 때 다시 센다' ($ed.Find.Count.Text -ceq '2개') $ed.Find.Count.Text
+        & $em { param($x) Close-WtMemoFind $x } $ed
+    }
+    Invoke-EdCase 'BodyHint-EmptyMemo' {
+        $ed = New-EdEditor
+        Set-WtMemoEditorSide $ed 44
+        $ok = $true; $detail = @()
+        foreach ($mode in 'live', 'source') {
+            Set-WtMemoEditorMode $ed $mode
+            Set-EdText $ed ''
+            if ($mode -eq 'live') { Open-EdAt $ed 0 0 }
+            $win.UpdateLayout(); Sync-EdUi
+            $box = Get-EdBox $ed
+            $caret = $box.GetRectFromCharacterIndex(0); $cp = $box.TranslatePoint($caret.TopLeft, $ed.Body)
+            $glyph = $ed.Hint.ContentStart.GetNextInsertionPosition('Forward').GetCharacterRect('Backward'); $hp = $ed.Hint.TranslatePoint($glyph.TopLeft, $ed.Body)
+            $shown = $ed.Hint.Visibility -eq 'Visible' -and $ed.Hint.Text -ceq '내용을 입력하세요' -and
+                $ed.Hint.Foreground.Color -eq $ed.Root.FindResource('B.Text.Tertiary').Color -and $ed.Hint.FontSize -eq $ed.Root.FindResource('F.Memo.Body')
+            $aligned = [Math]::Abs($cp.X - $hp.X) -lt 0.5 -and [Math]::Abs($cp.Y - $hp.Y) -lt 0.5
+            $surface = if ($mode -eq 'live') { $ed.Live } else { $ed.Source }
+            $route = Test-WtTestInputPath -View $ed.Root -Element $ed.Hint -Target $surface
+            Send-EdText $ed '가'; Sync-EdUi
+            $hidden = $ed.Hint.Visibility -eq 'Collapsed'
+            $ok = $ok -and $shown -and $aligned -and $route.Reached -and $hidden
+            $detail += "$mode 보임=$shown 맞춤=$aligned(커서 $($cp.X),$($cp.Y) 글자 $($hp.X),$($hp.Y)) 누름=$($route.Reached) 숨김=$hidden"
+        }
+        Set-EdText $ed ''; Set-WtMemoEditorMode $ed 'read'
+        $ok = $ok -and $ed.Hint.Visibility -eq 'Collapsed'
+        Assert-Ed 'BodyHint-EmptyMemo: 빈 본문은 첫 글자 자리에 예시 글자 · 누름은 본문으로 · 쓰면 숨김 · 읽기 보기 없음 (헤맨 곳)' $ok ($detail -join ' / ')
+        Set-WtMemoEditorMode $ed 'live'
     }
 
     # ---- 무작위 편집 (고정 시드) ----

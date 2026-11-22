@@ -876,7 +876,11 @@ $script:stylesXaml = @'
     <Setter Property="VerticalAlignment" Value="Top"/>
     <Setter Property="Margin" Value="0,24,0,0"/>
   </Style>
+  <!-- 떠 있는 면: B.Bg.Raised · 선 1 B.Border.Default · 모서리 8 (값 문서 8절 메모 「빠른 이동」). 뒤 화면과 경계가 보이게 -->
   <Style x:Key="Memo.QuickPanel" TargetType="Border" BasedOn="{StaticResource Card}">
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
+    <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Overlay}"/>
     <Setter Property="Padding" Value="12"/>
   </Style>
@@ -1205,6 +1209,27 @@ $script:stylesXaml = @'
     <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
     <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
     <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+  </Style>
+  <!-- 빈 메모 본문의 예시 글자: 본문 글자와 같은 크기 · 줄 높이, 예시 글자 색(값 문서 8절 메모) -->
+  <Style x:Key="Memo.BodyHint" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Memo.Body.LineHeight}"/>
+    <Setter Property="LineStackingStrategy" Value="BlockLineHeight"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
+    <Setter Property="TextWrapping" Value="NoWrap"/>
+    <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    <Setter Property="VerticalAlignment" Value="Top"/>
+    <Setter Property="HorizontalAlignment" Value="Left"/>
+    <Setter Property="IsHitTestVisible" Value="False"/>
+  </Style>
+  <!-- 원문 보기: 원문 칸(Editor)처럼 줄 높이 안에서 글자를 위에 붙인다 -->
+  <Style x:Key="Memo.BodyHint.Source" TargetType="TextBlock" BasedOn="{StaticResource Memo.BodyHint}">
+    <Setter Property="LineStackingStrategy" Value="MaxHeight"/>
+  </Style>
+  <!-- 메모 편집 · 읽기 보기: 문서처럼 읽고 이어 쓰는 면이라 바깥 포커스 네모를 그리지 않는다(원문 칸 · 섬과 같음, 값 문서 7절 입력칸) -->
+  <Style x:Key="Memo.View" TargetType="RichTextBox" BasedOn="{StaticResource Md.View}">
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
   </Style>
   <Style x:Key="Md.Doc" TargetType="FlowDocument">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
