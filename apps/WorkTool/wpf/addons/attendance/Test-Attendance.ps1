@@ -438,30 +438,6 @@ try {
         # 열은 시각 트리 밖이라 DynamicResource로 준 스타일이 조용히 안 먹는다
         $columns = & $module { $c = $script:table.Columns; @{ Text = $null -ne $c[0].ElementStyle; Right = [string](@($c[6].ElementStyle.Setters; $c[6].ElementStyle.BasedOn.Setters) | Where-Object { $_.Property.Name -eq 'TextAlignment' } | Select-Object -First 1).Value; Head = [string](@($c[6].HeaderStyle.Setters) | Where-Object { $_.Property.Name -eq 'HorizontalContentAlignment' } | Select-Object -First 1).Value } }
         Assert-WtTest '근태 표: 열 스타일이 들어가고 이동 · 시간은 머리까지 오른쪽 맞춤' ($columns.Text -and $columns.Right -ceq 'Right' -and $columns.Head -ceq 'Right') "$($columns.Text)/$($columns.Right)/$($columns.Head)"
-        $numberLayout = & $module {
-            function Find-NumberVisuals($node, [type]$type) {
-                if ($node -is $type) { $node }
-                for ($i = 0; $i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($node); $i++) { Find-NumberVisuals ([Windows.Media.VisualTreeHelper]::GetChild($node,$i)) $type }
-            }
-            $headers = @(Find-NumberVisuals $script:table ([Windows.Controls.Primitives.DataGridColumnHeader]) | Where-Object { $_.Content -in '이동','시간' })
-            $ok = $headers.Count -eq 2
-            foreach ($header in $headers) {
-                $content = Get-WtVisualChild $header ([Windows.Controls.ContentPresenter])
-                $offset = $content.TranslatePoint([Windows.Point]::new($content.ActualWidth,0), $header).X
-                $ok = $ok -and $header.HorizontalContentAlignment -eq 'Right' -and $content.HorizontalAlignment -eq 'Right' -and [Math]::Abs($offset - ($header.ActualWidth - $header.Padding.Right)) -lt 0.1
-            }
-            $row = @(Find-NumberVisuals $script:table ([Windows.Controls.DataGridRow]))[0]
-            $cells = @(Find-NumberVisuals $row ([Windows.Controls.DataGridCell]) | Sort-Object { $_.Column.DisplayIndex })
-            foreach ($header in $headers) {
-                $cell = $cells[$header.Column.DisplayIndex]; $text = Get-WtVisualChild $cell ([Windows.Controls.TextBlock])
-                $content = Get-WtVisualChild $header ([Windows.Controls.ContentPresenter])
-                $ok = $ok -and $text.TextAlignment -eq 'Right' -and [Math]::Abs($text.TranslatePoint([Windows.Point]::new($text.ActualWidth,0),$script:table).X - $content.TranslatePoint([Windows.Point]::new($content.ActualWidth,0),$script:table).X) -lt 0.1
-            }
-            $duration = Get-WtVisualChild $cells[6] ([Windows.Controls.TextBlock]); $note = Get-WtVisualChild $cells[7] ([Windows.Controls.TextBlock])
-            $gap = $note.TranslatePoint([Windows.Point]::new(0,0),$script:table).X - $duration.TranslatePoint([Windows.Point]::new($duration.ActualWidth,0),$script:table).X
-            @{ Right = $ok; Gap = $gap; NoteHead = $script:table.Columns[7].HeaderStyle }
-        }
-        Assert-WtTest '근태 숫자 열: 실제 머리 글자 끝 오른쪽 정렬 · 메모 열 사이 12' ($numberLayout.Right -and $numberLayout.Gap -eq 12 -and $numberLayout.NoteHead -eq (Get-WtStyleDictionary)['Attendance.NoteHead'])
         Assert-WtTest '근태 화면: 같은 월과 데이터는 표 재사용' (& $module { [object]::ReferenceEquals($script:testFirst, $script:table.ItemsSource) })
         Assert-WtTest '근태 표: 날짜순 8열·U14 폭·행 32·— 장소' (& $module {
             ($script:table.Columns | ForEach-Object Header) -join ',' -ceq '날짜,종류,시작,끝,장소,이동,시간,메모' -and
@@ -503,6 +479,69 @@ try {
         [IO.File]::WriteAllText((Get-WtStorePath 'attendance'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))
         & $module { $script:viewKey = $null; Update-WtAttendanceView }
         Assert-WtTest '못 읽는 파일: 쓰기 버튼 비활성·이유 툴팁, 빈 화면 유지' (& $module { -not $script:view.new.IsEnabled -and $script:table.ToolTip -like '*더 새 버전*' })
+    }
+
+    # ---- 숫자 열 머리글: 숨김 호스트(WindowStyle=0, 창을 띄우지 않음)에 놓고 머리 글자 끝과 값 글자 끝을 실제 배치로 잰다 ----
+    # 스타일 값(HorizontalContentAlignment)이 아니라 글자 자리(TextPointer)를 표 기준 x로 옮겨 비교한다
+    if (Test-WtTestWpf) {
+        $test = New-WtTestData 'attendance-layout'; $tests.Add($test)
+        Copy-WtTestFixture 'v2-travel.json'; Copy-WtTestHolidays
+        function Find-WtTestVisual($Node, [type]$Type) {
+            if ($Node -is $Type) { $Node }
+            for ($i = 0; $i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($Node); $i++) { Find-WtTestVisual ([Windows.Media.VisualTreeHelper]::GetChild($Node, $i)) $Type }
+        }
+        # 글자 끝(-Start면 시작) x. 값 칸 TextBlock은 칸 폭만큼 늘어나 있어 상자 끝은 맞춤과 상관없다
+        function Get-WtTestTextX($Text, $Table, [switch]$Start) {
+            $at = if ($Start) { $Text.ContentStart.GetCharacterRect('Forward') } else { $Text.ContentEnd.GetCharacterRect('Backward') }
+            $Text.TransformToAncestor($Table).Transform([Windows.Point]::new($at.X, 0)).X
+        }
+        function Get-WtTestNumberLayout($Table) {
+            $heads = @{}
+            foreach ($h in @(Find-WtTestVisual $Table ([Windows.Controls.Primitives.DataGridColumnHeader]) | Where-Object Column)) { $heads[[string]$h.Content] = Get-WtVisualChild $h ([Windows.Controls.TextBlock]) }
+            $cells = @(foreach ($row in @(Find-WtTestVisual $Table ([Windows.Controls.DataGridRow]))) {
+                $c = @{}; foreach ($cell in @(Find-WtTestVisual $row ([Windows.Controls.DataGridCell]))) { $c[[string]$cell.Column.Header] = Get-WtVisualChild $cell ([Windows.Controls.TextBlock]) }; $c
+            })
+            $r = @{ Laid = $heads.Count -eq 8 -and $cells.Count -gt 0; Detail = [Collections.Generic.List[string]]::new() }
+            $r.Ok = $r.Laid
+            foreach ($name in '이동', '시간') {
+                $head = Get-WtTestTextX $heads[$name] $Table
+                $ends = @(foreach ($c in $cells) { if ($c[$name].Text) { Get-WtTestTextX $c[$name] $Table } })
+                $r.Ok = $r.Ok -and $ends.Count -gt 0 -and -not @($ends | Where-Object { [Math]::Abs($_ - $head) -gt 1 }).Count
+                $r.Detail.Add("$name 머리 끝 $head · 값 끝 $(@($ends | Sort-Object -Unique) -join ',')")
+            }
+            # 메모: 시간 값 끝에서 12 띄워 시작하고, 머리 글자 시작이 값 글자 시작과 같다
+            $gaps = @(foreach ($c in $cells) { if ($c['시간'].Text -and $c['메모'].Text) { (Get-WtTestTextX $c['메모'] $Table -Start) - (Get-WtTestTextX $c['시간'] $Table) } })
+            $noteHead = Get-WtTestTextX $heads['메모'] $Table -Start
+            $noteStarts = @(foreach ($c in $cells) { if ($c['메모'].Text) { Get-WtTestTextX $c['메모'] $Table -Start } })
+            $r.Ok = $r.Ok -and $gaps.Count -gt 0 -and -not @($gaps | Where-Object { [Math]::Abs($_ - 12) -gt 1 }).Count -and -not @($noteStarts | Where-Object { [Math]::Abs($_ - $noteHead) -gt 1 }).Count
+            $r.Detail.Add("메모 사이 $(@($gaps | Sort-Object -Unique) -join ',') · 메모 머리 시작 $noteHead · 값 시작 $(@($noteStarts | Sort-Object -Unique) -join ',')")
+            $r
+        }
+        $module = Get-Module Attendance
+        & $module { $script:month = [datetime]::new(2026,11,1); $script:form = $null; $script:viewKey = $null }
+        $view = New-WtTestView 'attendance'
+        $layoutParams = [Windows.Interop.HwndSourceParameters]::new('Attendance layout test')
+        $layoutParams.WindowStyle = 0; $layoutParams.Width = 1080; $layoutParams.Height = 616
+        $layoutHost = [Windows.Interop.HwndSource]::new($layoutParams)
+        try {
+            $layoutHost.RootVisual = $view
+            $place = {
+                for ($pass = 0; $pass -lt 2; $pass++) {
+                    $view.Measure([Windows.Size]::new(1080,616)); $view.Arrange([Windows.Rect]::new(0,0,1080,616)); $view.UpdateLayout()
+                    [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
+                }
+            }
+            & $place; & $module { Update-WtAttendanceView }; & $place
+            $table = & $module { $script:table }
+            $numbers = Get-WtTestNumberLayout $table
+            Assert-WtTest '근태 숫자 열 숨김 배치: 이동 · 시간 머리 글자 끝 = 값 글자 끝(±1), 메모는 시간 값 끝에서 12 · 머리 시작 = 값 시작' $numbers.Ok ($numbers.Detail -join ' / ')
+            # 고장 대조군: 숫자 열 머리를 왼쪽 맞춤(Task.Header)으로 돌리면 같은 검사가 어긋남을 잡아야 한다
+            foreach ($i in 5, 6) { $table.Columns[$i].HeaderStyle = (Get-WtStyleDictionary)['Task.Header'] }
+            & $place
+            $control = Get-WtTestNumberLayout $table
+            Assert-WtTest '근태 숫자 열 고장 대조군: 왼쪽 맞춤 머리면 배치 검사=False' ($control.Laid -and -not $control.Ok) ($control.Detail -join ' / ')
+            Write-Host "대조군 왼쪽 맞춤 머리: $($control.Detail -join ' / ')"
+        } finally { $layoutHost.RootVisual = $null; $layoutHost.Dispose() }
     }
 
     # ---- 4단계 화면: 휴가 종류 · 반차 시각 · 대휴 발생 폼, 표 · 사이드바 대휴, 다른 탭 날짜 메뉴 · 근태 열기 ----

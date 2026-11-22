@@ -1663,6 +1663,13 @@ function Update-WtFlowHelp {
         $notes = (@($info.Notes -split "`r?`n" | Where-Object { $_ -notmatch '^\s*WorkTool:\s*콘솔\s*$' }) -join "`n").Trim()
         if ($notes) { $n = New-WtText $notes 'T.Sub'; $n.TextWrapping = 'Wrap'; [void](Add-WtChild $panel $n) }
         if (-not $info.Description -and -not $info.Examples.Count -and -not $notes) { [void](Add-WtChild $panel (New-WtText '이 스크립트에는 설명(.DESCRIPTION · .EXAMPLE)이 없습니다.' 'T.Sub')) }
+    } else {
+        # 안 골랐을 때 설명 자리: 빈 상태 한 줄 (없으면 「최근 실행」 제목이 「설명」 머리에 바로 붙는다). 넘치면 …, 전체는 툴팁
+        $hint = New-WtText '스크립트를 고르면 설명이 여기에 보입니다.' 'T.Sub'
+        $hint.TextWrapping = 'NoWrap'
+        $hint.TextTrimming = 'CharacterEllipsis'
+        $hint.ToolTip = $hint.Text
+        [void](Add-WtChild $panel $hint)
     }
     $head = New-WtText '최근 실행' 'T.H2'
     $head.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)

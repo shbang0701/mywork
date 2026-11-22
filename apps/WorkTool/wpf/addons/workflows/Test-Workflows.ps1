@@ -432,6 +432,46 @@ try {
     Set-WtSetting 'workflows.hiddenRoots' @($dataScripts, $appScripts)
     Set-WtSetting 'workflows.roots' @($scriptsRoot, (Join-Path $test.Root '없는 폴더'))
     $addon = Get-WtAddon -Id 'workflows'
+    # 안 골랐을 때 설명 자리: 숨김 호스트(WindowStyle=0, 창을 띄우지 않음)에 놓고 실제 배치로 본다.
+    # 「설명」 머리 바로 아래 한 줄이 보이고(없으면 「최근 실행」 제목이 머리에 붙음), 고르면 빠지고, 다시 비우면 돌아온다.
+    # 이 검사만의 화면을 쓴다: 호스트에서 떼어 낸 화면은 배치가 멈춰서(Measure가 아무것도 안 함) 아래 검사에 쓸 수 없다
+    $hintText = '스크립트를 고르면 설명이 여기에 보입니다.'
+    $helpView = New-WtTestView 'workflows'
+    [void](& $addon.Refresh $helpView)
+    $ui = & $mod { $script:ui }
+    $helpSource = $null
+    try {
+        $helpParams = [Windows.Interop.HwndSourceParameters]::new('Workflows help test')
+        $helpParams.WindowStyle = 0; $helpParams.Width = 1224; $helpParams.Height = 736
+        $helpSource = [Windows.Interop.HwndSource]::new($helpParams); $helpSource.RootVisual = $helpView
+        $placeHelp = {
+            for ($pass = 0; $pass -lt 2; $pass++) {
+                $helpView.Measure([Windows.Size]::new(1224, 736)); $helpView.Arrange([Windows.Rect]::new(0, 0, 1224, 736)); $helpView.UpdateLayout()
+                [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
+            }
+            $card = $ui.HelpHost.Children[1]; $first = $ui.HelpPanel.Children[0]
+            $box = { param($e) $e.TransformToAncestor($card).TransformBounds([Windows.Rect]::new(0, 0, $e.ActualWidth, $e.ActualHeight)) }
+            $recent = @($ui.HelpPanel.Children | Where-Object { $_ -is [Windows.Controls.TextBlock] -and $_.Text -ceq '최근 실행' })[0]
+            # 스타일은 DynamicResource라 패널에서 빠진 뒤에는 풀리지 않는다: 놓여 있을 때 읽어 둔다
+            @{ First = $first; Visible = $first.IsVisible; At = (& $box $first); Head = (& $box $card.Child.Children[0]); Width = $card.ActualWidth
+                Recent = $(if ($recent) { & $box $recent }); Texts = @(Get-WtTestTexts $ui.HelpPanel)
+                Sub = $first.Style -eq (Get-WtStyleDictionary)['T.Sub']; LineHeight = $first.LineHeight; Wrap = "$($first.TextWrapping)"; Trim = "$($first.TextTrimming)"; Tip = $first.ToolTip }
+        }
+        $empty = & $placeHelp; $hint = $empty.First
+        & $mod { param($p) Select-WtFlowNode @{ Kind = 'script'; Path = $p } } $sample
+        $picked = & $placeHelp; $picked.HintVisible = $hint.IsVisible
+        & $mod { Clear-WtFlowSelection }
+        $cleared = & $placeHelp
+    } finally { if ($helpSource) { $helpSource.RootVisual = $null; $helpSource.Dispose() } }
+    $line = $empty.At
+    Assert-WtTest '업무 사이드바 숨김 배치: 안 골랐을 때 「설명」 머리 바로 아래 T.Sub 한 줄(카드 안 · 말줄임 · 툴팁) 뒤 「최근 실행」, 고르면 빠지고 그 자리에 경로, 비우면 돌아옴' (
+        $hint.Text -ceq $hintText -and $empty.Visible -and $empty.Sub -and $empty.Wrap -eq 'NoWrap' -and $empty.Trim -eq 'CharacterEllipsis' -and $empty.Tip -ceq $hintText -and
+        $line.Width -gt 0 -and $line.Height -gt 0 -and $line.Height -lt 1.5 * $empty.LineHeight -and [Math]::Abs($line.Top - $empty.Head.Bottom) -le 1 -and
+        $line.Left -ge 15 -and $line.Right -le $empty.Width - 15 -and $null -ne $empty.Recent -and $empty.Recent.Top -ge $line.Bottom + 11 -and
+        -not $picked.HintVisible -and -not @($picked.Texts | Where-Object { $_ -ceq $hintText }).Count -and $picked.First.Text -ceq $sample -and $picked.Visible -and
+        [Math]::Abs($picked.At.Top - $picked.Head.Bottom) -le 1 -and $cleared.First.Text -ceq $hintText -and $cleared.Visible -and [Math]::Abs($cleared.At.Top - $cleared.Head.Bottom) -le 1) (
+        "한 줄 $($line) 보임 $($empty.Visible) T.Sub $($empty.Sub) 줄 높이 $($empty.LineHeight) $($empty.Wrap)/$($empty.Trim) · 머리 아래 $($empty.Head.Bottom) · 최근 실행 위 $($empty.Recent.Top) · 카드 폭 $($empty.Width) / 고른 뒤 첫 줄 '$($picked.First.Text)' 남은 줄 보임 $($picked.HintVisible) / 다시 '$($cleared.First.Text)' 보임 $($cleared.Visible)")
+    # 아래 검사는 새 화면(호스트에 놓인 적 없음)으로 한다
     $view = New-WtTestView 'workflows'
     [void](& $addon.Refresh $view)
     $helpLook = & $mod {
@@ -445,7 +485,7 @@ try {
         [Windows.Controls.DockPanel]::GetDock($helpLook.Button) -eq 'Left' -and
         (@(Get-WtTestTexts $helpLook.Button) -join '') -ceq [string][char]0xE76C -and $helpLook.Button.ToolTip -ceq '설명 접기' -and
         [Windows.Automation.AutomationProperties]::GetName($helpLook.Button) -ceq '설명 접기' -and
-        -not @($helpLook.Texts | Where-Object { $_ -like '스크립트를 고르면*' }).Count -and $helpLook.Card.CornerRadius.TopLeft -eq 8)
+        -not @($helpLook.Texts | Where-Object { $_ -like '*도움말과 최근 실행 기록이*' }).Count -and $helpLook.Card.CornerRadius.TopLeft -eq 8)
     $top = & $mod { @($script:ui.Tree.Items | ForEach-Object { $_.Header.Children[1].Text }) }
     Assert-WtTest 'WPF 업무: 목록은 저장한 업무 · 스크립트 폴더 · 없는 폴더 표시' ($top.Count -eq 3 -and $top[0] -eq '저장한 업무' -and $top[1] -eq '스크립트 폴더' -and $top[2] -eq '없는 폴더 · 폴더 없음') ($top -join ' / ')
     & $mod { $script:testHelp = $script:ui.HelpPanel.Children[0]; Update-WtFlowsView }
