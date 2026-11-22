@@ -501,6 +501,81 @@ try {
     $a = Get-WtScheduleAlarms -Now '2026-03-29T18:00:00+09:00' -Previous '2026-03-29T17:59:59+09:00' -Entries @((ConvertFrom-WtScheduleItem $hidden), (ConvertFrom-WtScheduleItem $future))
     Assert-WtTest '알람: 지운 항목 · 읽기 전용 항목 제외' (-not $a.Alarms.Count)
 
+    # ---- 알람 연속 틱 (2026-11-22 점검) ----
+    # 앱에는 아직 판정을 부르는 타이머와 알리는 방식이 없다(설계 9.1의 2b). 붙일 타이머가 지킬 약속을 가짜 알리기로 고정한다.
+    # 틱마다 (앞 틱, 지금] 판정 → 알리기 → 받아들인 것만 기록. 창 · 소리 · 트레이 풍선은 쓰지 않는다.
+    $test = New-WtTestData 'schedule-alarm-ticks'; $tests.Add($test)
+    $alarmAt = '2026-11-20T08:00:00+09:00'
+    $store = Open-WtScheduleStore; $k = @{}
+    foreach ($pair in @(
+            @('once', @{ title = '한 번'; start = @{ date = '2026-11-23'; time = '14:00' }; alarms = @(@{ before = 10 }) }),
+            @('daily', @{ title = '매일'; start = @{ date = '2026-11-22'; time = '09:00' }; repeat = @{ freq = 'daily' }; alarms = @(@{ before = 5 }) }),
+            @('allDay', @{ title = '하루 종일'; start = @{ date = '2026-11-24'; time = $null }; alarms = @(@{ before = 360 }) }),
+            @('multi', @{ title = '여러 날'; start = @{ date = '2026-11-25'; time = $null }; end = @{ date = '2026-11-26'; time = $null }; alarms = @(@{ before = 60 }) }),
+            @('done', @{ title = '체크함'; start = @{ date = '2026-11-23'; time = '15:00' }; alarms = @(@{ before = 10 }) }),
+            @('far', @{ title = '366일 전'; start = @{ date = '2027-11-25'; time = '10:00' }; alarms = @(@{ before = 527040 }) }))) {
+        $r = Save-WtScheduleItem $store $pair[1] -At $alarmAt
+        if (-not $r.Success) { throw "알람 틱 준비 $($pair[0]): $($r.Reason)" }
+        $k[$pair[0]] = $r.Id; $store = $r.Store
+    }
+    Wait-WtTestWrites
+    $checked = Set-WtEventCheck -Event $k.done -Date '2026-11-23' -Done $true -At $alarmAt
+    Wait-WtTestWrites
+    $alarmEntries = (Get-WtScheduleData).Entries
+    $notified = [System.Collections.Generic.List[string]]::new()
+    # 틱 하나 = 붙일 타이머가 할 일. 가짜 알리기는 키만 적는다. 기록한 뒤의 상태 핸들을 돌려준다
+    function Invoke-WtTestAlarmTick([string]$Now, [string]$Previous, $State) {
+        $result = Get-WtScheduleAlarms -Now $Now -Previous $Previous -Entries $alarmEntries -StateStore $State -Done (Get-WtEventDone)
+        if (-not $result.Success) { throw "알람 틱 $Now : $($result.Reason)" }
+        foreach ($alarm in $result.Alarms) { $notified.Add($alarm.Key) }
+        if ($result.Alarms.Count) { (Save-WtScheduleAlarms $State $result.Alarms -At $Now).Store } else { $State }
+    }
+    $alarmState = Open-WtScheduleAlarmStore
+    $steps = @(7, 15, 60, 1020, 10800); $tickCount = 0
+    $clock = [DateTimeOffset]::new(2026, 11, 22, 8, 0, 0, [timespan]::FromHours(9)); $previous = Get-WtStamp $clock
+    while ($clock -lt [DateTimeOffset]::new(2026, 11, 27, 0, 0, 0, [timespan]::FromHours(9))) {
+        $clock = $clock.AddSeconds($steps[$tickCount % $steps.Count]); $tickCount++
+        $nowText = Get-WtStamp $clock
+        $alarmState = Invoke-WtTestAlarmTick $nowText $previous $alarmState; $previous = $nowText
+    }
+    $expected = @("$($k.daily)@2026-11-22/5", "$($k.daily)@2026-11-23/5", "$($k.once)@2026-11-23/10", "$($k.allDay)@2026-11-24/360",
+        "$($k.daily)@2026-11-24/5", "$($k.far)@2027-11-25/527040", "$($k.multi)@2026-11-25/60", "$($k.daily)@2026-11-25/5", "$($k.daily)@2026-11-26/5") -join ','
+    Assert-WtTest '알람 틱: 한 번 · 매일 · 하루 종일(전날 18시) · 여러 날 · 366일 전이 회차마다 정확히 한 번 (7초 ~ 3시간 틱)' (
+        $checked.Success -and ($notified -join ',') -ceq $expected) "$($notified -join ',') / 틱 $tickCount"
+    Assert-WtTest '알람 틱: 체크한 회차는 울리지 않는다' ($notified -cnotcontains "$($k.done)@2026-11-23/10") ($notified -join ',')
+    $count = $notified.Count
+    $alarmState = Invoke-WtTestAlarmTick '2026-11-23T14:00:00+09:00' '2026-11-23T08:00:00+09:00' $alarmState
+    Assert-WtTest '알람 틱: 울린 구간을 다시 봐도(겹친 틱) 또 울리지 않는다' ($notified.Count -eq $count) ($notified -join ',')
+    $unchecked = Set-WtEventCheck -Event $k.done -Date '2026-11-23' -Done $false -At $alarmAt
+    Wait-WtTestWrites
+    $alarmState = Invoke-WtTestAlarmTick '2026-11-23T14:50:00+09:00' '2026-11-23T14:49:00+09:00' $alarmState
+    Assert-WtTest '알람 틱: 체크를 풀면 그 회차는 울린다' ($unchecked.Success -and $notified.Count -eq $count + 1 -and
+        $notified[$notified.Count - 1] -ceq "$($k.done)@2026-11-23/10") ($notified -join ',')
+    $moved = Save-WtScheduleItem (Get-WtScheduleData).Store @{ start = @{ date = '2026-11-23'; time = '15:30' } } -Id $k.once -At '2026-11-23T14:05:00+09:00'
+    Wait-WtTestWrites
+    $alarmEntries = (Get-WtScheduleData).Entries
+    $count = $notified.Count
+    $alarmState = Invoke-WtTestAlarmTick '2026-11-23T15:21:00+09:00' '2026-11-23T15:19:00+09:00' $alarmState
+    $alarmState = Invoke-WtTestAlarmTick '2026-11-23T15:22:00+09:00' '2026-11-23T15:00:00+09:00' $alarmState
+    Assert-WtTest '알람 틱: 울린 뒤 같은 날 늦춘 일정(14:00 → 15:30)은 새 시각에 한 번 더' ($moved.Success -and $moved.Id -ceq $k.once -and
+        $notified.Count -eq $count + 1 -and $notified[$notified.Count - 1] -ceq "$($k.once)@2026-11-23/10") "$($moved.Reason) $($notified -join ',')"
+    # 판정 비용: 일정 300개(매일 30 · 매주 30 · 한 번 240)에 판정 한 번. 바쁜 PC에서도 흔들리지 않게 이 프로세스의 CPU 시간으로 잰다
+    $bigEntries = @(for ($n = 0; $n -lt 300; $n++) {
+            $freq = if ($n -lt 30) { 'daily' } elseif ($n -lt 60) { 'weekly' } else { $null }
+            ConvertFrom-WtScheduleItem ([pscustomobject][ordered]@{ id = ('{0:x12}' -f (0xb00000000000 + $n)); kind = 'event'; title = "가짜 $n"; note = ''
+                    start = [ordered]@{ date = [datetime]::new(2026, 1, 1).AddDays($n).ToString('yyyy-MM-dd', $inv); time = '10:00' }; end = $null
+                    repeat = $(if ($freq) { [ordered]@{ freq = $freq } } else { $null }); alarms = @([ordered]@{ before = 10 }); tags = @(); rev = 0
+                    created = $alarmAt; updated = $alarmAt; deleted = $null; origin = $null })
+        })
+    $dayCount = @(Get-WtScheduleOccurrences $bigEntries (& $d '2026-11-24') (& $d '2026-11-24')).Count
+    $cpu = @(foreach ($round in 1..3) {
+            $t0 = [Diagnostics.Process]::GetCurrentProcess().TotalProcessorTime
+            $big = Get-WtScheduleAlarms -Now '2026-11-24T09:50:05+09:00' -Previous '2026-11-24T09:49:50+09:00' -Entries $bigEntries
+            ([Diagnostics.Process]::GetCurrentProcess().TotalProcessorTime - $t0).TotalMilliseconds
+        }) | Sort-Object
+    Assert-WtTest '알람 판정 비용: 일정 300개(매일 반복 30개)에 한 번 CPU 0.5초 미만 (예전 366일 펼치기는 약 2.3초)' (
+        $big.Success -and $dayCount -gt 30 -and $big.Alarms.Count -eq $dayCount -and $cpu[0] -lt 500) "CPU $([int]$cpu[0])ms · 알람 $($big.Alarms.Count)/$dayCount"
+
     $test = New-WtTestData 'schedule-preserve-edit'; $tests.Add($test)
     Copy-WtTestFixture 'v2-future.json'
     $data = Get-WtScheduleData

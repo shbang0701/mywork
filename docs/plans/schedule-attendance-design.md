@@ -517,8 +517,10 @@ schema와 고정 시험 자료는 그대로입니다. 편집 함수는 먼저 �
   - 날짜를 넘는 시각 일정은 새로 만들지 않습니다(업무외시간 사용). 이미 저장된 기간 일정의 읽기 · 알람은 유지합니다.
 - 알람, 같은 모듈
   - `Open-WtScheduleAlarmStore` → 별도 `schedule-state.json` 핸들(schema 1). `items` 하나는 `{ key: "<회차 키>/<before>", occurrence: "<회차 키>", before, at }`입니다. 원자료의 schema는 바뀌지 않습니다. 다시 알림은 이번에 구현하지 않았습니다.
-  - `Get-WtScheduleAlarms -Now -Previous -Entries [-StateStore]` → `{ Success, Reason, Alarms }`. `(Previous, Now]` 현지 벽시계 구간을 계산합니다. `Alarms` 하나는 `Key/OccurrenceKey/Id/OriginalDate/Before/Due/Title/Note/Start`입니다. `Due/Start`는 벽시계 `datetime`입니다. 첫 실행(`Previous` 없음)은 빈 목록, 시계가 뒤로 가면 이유를 돌려줍니다. 휴무일이어도 울립니다.
-  - `Save-WtScheduleAlarms Store Alarms [-At]` → `{ Success, Reason, Store }`. 알림을 받아들인 뒤 호출합니다. 울린 기록을 7일간 남겨 중복을 막습니다. 상태 파일을 못 읽으면 이유를 표시하고, 파일이 없어도 첫 실행에 지난 알람을 되살리지 않습니다. 타이머 · 소리 · 창은 2b가 맡습니다.
+  - `Get-WtScheduleAlarms -Now -Previous -Entries [-StateStore] [-Done]` → `{ Success, Reason, Alarms }`. `(Previous, Now]` 현지 벽시계 구간을 계산합니다. `Alarms` 하나는 `Key/OccurrenceKey/Id/OriginalDate/Before/Due/Title/Note/Start`입니다. `Due/Start`는 벽시계 `datetime`입니다. 첫 실행(`Previous` 없음)은 빈 목록, 시계가 뒤로 가면 이유를 돌려줍니다. 휴무일이어도 울립니다.
+    - `Done`(끝낸 회차 키 모음, `Get-WtEventDone`)에 든 회차는 울리지 않습니다. 항목마다 그 항목의 가장 큰 `before`가 닿는 날까지만 펼칩니다(늘 366일을 펼치면 일정 300개에 한 번 2초가 넘음).
+    - 울린 기록의 `at`이 이번에 울릴 시각보다 이르면(울린 뒤 같은 날 일정을 늦춤) 다시 울립니다.
+  - `Save-WtScheduleAlarms Store Alarms [-At]` → `{ Success, Reason, Store }`. 알림을 받아들인 뒤 호출합니다. 울린 기록을 7일간 남겨 중복을 막고, 이미 있는 키는 `at`만 새로 적습니다. 상태 파일을 못 읽으면 이유를 표시하고, 파일이 없어도 첫 실행에 지난 알람을 되살리지 않습니다. 타이머 · 소리 · 창은 2b가 맡습니다(2026-11-22 기준 아직 없음: 앱은 이 함수를 부르지 않아 알람이 울리지 않습니다).
 - 근태, `addons/attendance/AttendanceData.psm1`
   - `Save-WtAttendanceItem Store Patch [-Id] [-At]`: `Id` 생략은 추가, 있으면 `kind/start/end/place/note/tags/overtime/leave` 편집입니다. 직접 고친 점에서는 `at`을 지우고, 안 바꾼 점의 증거는 유지합니다.
   - `Start-WtAttendanceRecord Store [-Kind work|overtime] [-How remote|onsite] [-Ref] [-Place] [-Note] [-At]`, `Stop-WtAttendanceRecord Store [-Kind] [-Id] [-At]`: 지금 출근/퇴근 · 업무외 시작/끝입니다. 벽시계와 `at`을 함께 찍습니다. 열린 같은 종류가 있으면 새 시작을 막고, 출근 버튼은 그날 이미 끝낸 출근도 중복으로 만들지 않습니다. 직접 입력으로 같은 날 여러 출근은 가능하며 요약에서는 하루입니다. 열린 기록이 여럿이면 끝낼 `Id`를 골라야 합니다.
