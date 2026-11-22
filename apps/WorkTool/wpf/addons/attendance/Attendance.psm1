@@ -33,7 +33,8 @@ function New-WtAttTableRow($Entry, [datetime]$Month, $DayOff) {
         Start = $(if ($range) { $range[0].ToString('HH:mm', $script:inv) } elseif ($Entry.HasTime) { $Entry.Start.ToString('HH:mm', $script:inv) } else { '' })
         End = $(if ($range) { $range[1].ToString('HH:mm', $script:inv) } elseif ($Entry.HasTime -and $Entry.HasEnd) { $Entry.End.ToString('HH:mm', $script:inv) } else { '' })
         Place = $(if ($Entry.Kind -ceq 'work' -or ($Entry.Kind -ceq 'overtime' -and $Entry.How -ceq 'onsite')) { '작업장' } elseif ($Entry.Kind -ceq 'overtime' -and $Entry.How -ceq 'remote') { '원격' } else { '—' })
-        Travel = $(if ($Entry.Kind -ceq 'overtime' -and $Entry.Travel -gt 0) { $Entry.Travel.ToString($script:inv) } else { '' })
+        # 이동은 옆 시간 칸 · 사이드바 합계와 같은 h:mm (폼의 가는 길 · 오는 길만 분)
+        Travel = $(if ($Entry.Kind -ceq 'overtime' -and $Entry.Travel -gt 0) { Format-WtHours $Entry.Travel } else { '' })
         Duration = $(if ($Entry.Kind -ceq 'leave') { "$(Format-WtDays (Get-WtLeaveDays $Entry $Month $last $DayOff))일" } elseif ($Entry.Kind -ceq 'leave-grant') { "+$(Format-WtDays $Entry.LeaveDays)일" }
             elseif ($null -ne $Entry.Minutes) { Format-WtHours $Entry.Minutes } else { '' })
         Note = $Entry.Note; Problem = $(if ($Entry.Problem) { $Entry.Problem } elseif ($Entry.Kind -ceq 'work' -and -not $Entry.HasEnd) { '퇴근 기록 없음' } else { '' }); Entry = $Entry
@@ -74,6 +75,7 @@ function New-WtAttendanceView {
         $script:view[$spec[1]] = $button; [void](Add-WtChild $script:view.Actions $button)
     }
     $script:table = (Get-WtStyleDictionary)['Attendance.TableView'].LoadContent(); $script:view.TableHost.Content = $script:table
+    Set-WtTableColumnScale $script:table
     $script:table.Add_SelectionChanged({ param($s, $e) if (-not $script:refreshing -and $s.SelectedItem) { Show-WtAttForm $s.SelectedItem.Entry } })
     # 취소 후 같은 선택 행을 다시 눌러도 폼을 연다. 선택 변경만으로는 이 클릭을 받지 못한다.
     $script:table.Add_PreviewMouseUp({
@@ -129,7 +131,9 @@ function Update-WtAttendanceView {
         $script:monthLabel.Text = Format-WtDate $script:month 'yyyy년 M월'
         $dayOff = Get-WtHolidayDates $script:month $script:month.AddMonths(1).AddDays(-1)
         $rows = @(foreach ($entry in @($script:data.Entries | Where-Object { Test-WtAttInMonth $_ $script:month } | Sort-Object Start, Id)) { New-WtAttTableRow $entry $script:month $dayOff })
+        Set-WtTableColumnScale $script:table
         $script:table.ItemsSource = $rows
+        if ($script:form) { Select-WtAttRow }   # 다른 곳에서 자료가 바뀌어 표를 새로 그려도 고치는 기록의 줄을 계속 보인다
         $script:view.Empty.Visibility = if ($rows.Count) { 'Collapsed' } else { 'Visible' }
         $script:table.ToolTip = @($script:data.Error, $holidays.Error, @($script:data.Entries | Where-Object { $_.State -cin 'broken','readonly' } | ForEach-Object Problem)) | Where-Object { $_ } | Join-String -Separator "`n"
         $today = @($script:data.Entries | Where-Object { $_.State -ceq 'ok' -and $_.Kind -ceq 'work' -and $_.StartDate -eq [datetime]::Today })
@@ -224,7 +228,7 @@ function Set-WtAttFormKind {
 function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     $body = [Windows.Controls.DockPanel]::new(); Set-WtStyle $body 'Attendance.Body'
     $buttons = [Windows.Controls.DockPanel]::new(); [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
-    $delete = New-WtButton '삭제'; $delete.Visibility = if ($Entry -and $Entry.State -ceq 'ok') { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
+    $delete = New-WtButton '삭제' -Kind Danger; $delete.Visibility = if ($Entry -and $Entry.State -ceq 'ok') { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
     $actions = New-WtStack Horizontal 8; $actions.HorizontalAlignment = 'Right'
     $save = New-WtButton '저장' Primary; $cancel = New-WtButton '취소'
     [void](Add-WtChild $actions $save); [void](Add-WtChild $actions $cancel); [void]$buttons.Children.Add($actions); [void]$body.Children.Add($buttons)
@@ -264,8 +268,26 @@ function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     })
     $save.IsEnabled = -not $Entry -or $Entry.State -ceq 'ok'
     if ($Entry -and $Entry.Problem) { $save.ToolTip = $Entry.Problem }
-    $scroll.Content = $col; [void]$body.Children.Add($scroll); $script:detail.Content = $body; $script:side.Title.Text = '기록 편집'
+    # 새로 적는 폼은 「새 기록」이고 표 선택을 푼다. 고치는 폼은 「기록 편집」이고 그 기록의 줄을 고른다(11-22 실사용 보고 23)
+    $scroll.Content = $col; [void]$body.Children.Add($scroll); $script:detail.Content = $body; $script:side.Title.Text = if ($Entry) { '기록 편집' } else { '새 기록' }
+    Select-WtAttRow
     if ($script:side.Rail.Visibility -eq 'Visible') { $script:side.Open.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent)) }
+}
+
+# 같은 기록인지(표를 새로 그리면 기록 객체가 바뀌므로 id로 본다. id가 없는 기록은 같은 객체일 때만)
+function Test-WtAttSameEntry($A, $B) {
+    if ($null -eq $A -or $null -eq $B) { return $false }
+    if ($A.Id -and $B.Id) { return $A.Id -ceq $B.Id }
+    [object]::ReferenceEquals($A, $B)
+}
+# 표 선택을 지금 폼에 맞춘다: 고치는 기록의 줄, 새 기록이면 선택 없음. 코드로 바꾸는 동안의 선택 변경은 폼을 열지 않는다
+function Select-WtAttRow {
+    if (-not $script:table) { return }
+    $target = $null
+    if ($script:form -and $script:form.Entry) { $target = @($script:table.ItemsSource | Where-Object { Test-WtAttSameEntry $_.Entry $script:form.Entry }) | Select-Object -First 1 }
+    if ([object]::ReferenceEquals($script:table.SelectedItem, $target)) { return }
+    $was = $script:refreshing; $script:refreshing = $true
+    try { $script:table.SelectedItem = $target } finally { $script:refreshing = $was }
 }
 function Set-WtAttFormError([string]$Key, [string]$Message) {
     $script:form.Errors[$Key].Text = $Message; $script:form.Errors[$Key].Visibility = 'Visible'
@@ -392,6 +414,8 @@ function Open-WtAttArgs($OpenArgs) {
     Update-WtAttendanceView
     if ($entry) { Show-WtAttForm $entry } else { Show-WtAttForm $null -Date (ConvertTo-WtDateText $newDate) -Kind 'leave' }
 }
+# 글자 크기를 바꾸면 표의 고정 폭 열도 같은 비율로 바꾼다(화면이 떠 있는 동안에도). 열은 시각 트리 밖이라 자원으로 묶이지 않는다
+Register-WtSettingHandler { param($key, $value) if ($key -ceq 'ui.fontScale' -and $script:table) { Set-WtTableColumnScale $script:table } }
 Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -Order 30 -WarmUp Full `
     -Badge {
         $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }

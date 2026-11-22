@@ -224,4 +224,4 @@ function New-WtThemeDictionary {
     $d
 }
 Export-ModuleMember -Function ConvertFrom-WtHex, Get-WtMixedColor, Get-WtLuminance, Get-WtContrast, Get-WtPalette,
-    Get-WtThemeColors, Update-WtThemeDictionary, New-WtThemeDictionary, Get-WtFontSize, Get-WtFontName
+    Get-WtThemeColors, Update-WtThemeDictionary, New-WtThemeDictionary, Get-WtFontScale, Get-WtFontSize, Get-WtFontName

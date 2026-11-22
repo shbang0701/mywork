@@ -1264,7 +1264,7 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
     if ($Occurrence) { $Id = $Occurrence.Entry.Id }
     $body = [Windows.Controls.DockPanel]::new(); Set-WtStyle $body 'Schedule.SideBody'
     $buttons = [Windows.Controls.DockPanel]::new(); [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
-    $delete = New-WtButton '삭제'; $delete.Visibility = if ($Id) { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
+    $delete = New-WtButton '삭제' -Kind Danger; $delete.Visibility = if ($Id) { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
     $actions = New-WtStack Horizontal 8; $actions.HorizontalAlignment = 'Right'
     $save = New-WtButton '저장' Primary; $cancel = New-WtButton '취소'
     [void](Add-WtChild $actions $save); [void](Add-WtChild $actions $cancel); [void]$buttons.Children.Add($actions); [void]$body.Children.Add($buttons)

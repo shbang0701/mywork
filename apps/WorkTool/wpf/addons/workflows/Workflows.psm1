@@ -28,13 +28,11 @@ $script:filling = $false     # 코드로 트리를 고르는 중
 $script:outputKey = $null    # 출력 칸에 보이는 것이 어느 스크립트 · 업무의 것인지 ('script:경로' | 'flow:id')
 $script:shown = 0            # 출력 칸에 붙인 줄 수 (화면에 안 보여도 직접 센다)
 $script:encoding = $null     # 출력 문자 코드 (Get-WtFlowEncoding)
-$script:threeColumns = 896   # 세 칸이 다 들어가는 폭: 목록 240 + 가운데 최소 360 + 설명 280 + 사이 8 × 2
-$script:helpNarrow = $false  # 창이 좁아 설명을 가운데 위에 겹쳐 여는 중인지 (Update-WtFlowHelp)
-$script:helpOverlay = $false # 좁을 때 겹쳐 연 설명이 열려 있는지
 
 Register-WtSettingDefault 'workflows.roots' @()   # 사용자가 [폴더 추가]한 스크립트 폴더 목록
 Register-WtSettingDefault 'workflows.hiddenRoots' @()   # 사용자가 목록에서 뺀 기본 스크립트 폴더 (다시 넣지 않는다)
-Register-WtSettingDefault 'workflows.help' $true  # 오른쪽 설명 패널을 펼침
+# 오른쪽 설명은 공용 보조 칸이 접힘을 workflows.sidebar.collapsed에 남긴다. 예전 키(펼침 = $true)로 접어 둔 사람만 화면을 만들 때 한 번 옮긴다
+Register-WtSettingDefault 'workflows.help' $true
 $script:defaultRoots = $null # 기본 스크립트 폴더 (Get-WtFlowDefaultRoots, 앱 · 데이터 폴더가 같으면 다시 찾지 않음)
 $script:madeRoot = $null     # 이번에 만든(있는지 본) 데이터 폴더의 scripts
 # 스크립트 폴더 · 파일은 공유 폴더일 수 있어서 화면 밖(core\Work.psm1)에서 읽는다. 로컬 폴더는 기다리는 시간 안에 끝나 바로 보인다
@@ -1580,31 +1578,8 @@ function Select-WtFlowScriptAgain {
 function Update-WtFlowHelp {
     $u = $script:ui
     if (-not $u.Count) { return }
-    # 세 칸이 다 안 들어가면 설명은 접어 두고, 펼치면 가운데 위에 겹쳐 연다.
-    # 이때 펼치고 접는 것은 설정에 남기지 않는다 (창을 넓히면 설정대로 돌아간다)
-    $script:helpNarrow = Test-WtFlowNarrow $u.PageGrid.ActualWidth
-    if (-not $script:helpNarrow) { $script:helpOverlay = $false }
-    $show = if ($script:helpNarrow) { $script:helpOverlay } else { [bool](Get-WtSetting 'workflows.help') }
-    $u.HelpColumn.Width = [System.Windows.GridLength]::new($(if ($show -and -not $script:helpNarrow) { 280 } else { 0 }))
-    $box = $u.HelpHost
-    if ($script:helpNarrow) {
-        [System.Windows.Controls.Grid]::SetColumn($box, 1)
-        $box.HorizontalAlignment = 'Right'
-        $box.Width = 280
-        $box.Margin = [System.Windows.Thickness]::new(0)
-        [System.Windows.Controls.Panel]::SetZIndex($box, 1)
-    } else {
-        [System.Windows.Controls.Grid]::SetColumn($box, 2)
-        $box.HorizontalAlignment = 'Stretch'
-        $box.Width = [double]::NaN
-        $box.Margin = [System.Windows.Thickness]::new(16, 0, 0, 0)
-        [System.Windows.Controls.Panel]::SetZIndex($box, 0)
-    }
-    $u.HelpShadow.Visibility = if ($script:helpNarrow) { 'Visible' } else { 'Collapsed' }
-    $box.Visibility = if ($show) { 'Visible' } else { 'Collapsed' }
-    $u.HelpOpen.Visibility = if ($show) { 'Collapsed' } else { 'Visible' }
+    # 접고 펼치기 · 좁은 창(1200 미만)의 레일 · 겹쳐 열기는 공용 보조 칸(New-WtSidePanel)이 맡는다. 여기서는 내용만 채운다
     $panel = $u.HelpPanel
-    if (-not $show) { $panel.Children.Clear(); $script:helpKey = $null; $script:helpList = $null; return }
     $key = ConvertTo-Json -Compress -Depth 10 -InputObject @((Get-WtStoreStamp 'workflow-runs'), $script:info, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
     if ($script:helpKey -ceq $key) {
         if ($script:helpList) { $script:helpList.SelectedItem = $null }
@@ -1652,7 +1627,8 @@ function Update-WtFlowHelp {
     $runs = @(Get-WtFlowRuns | Where-Object { -not $info -or $_.script -eq $info.Path } | Select-Object -First 10)
     if (-not $runs.Count) { [void](Add-WtChild $panel (New-WtText '아직 실행 기록이 없습니다.' 'T.Sub')); $script:helpKey = $key; return }
     $list = [System.Windows.Controls.ListBox]::new()
-    Set-WtStyle $list 'List'
+    # 두 줄 행 48: 배지 · 시각 줄이 행 안 위아래 가운데라 앞 행 구분선에 붙지 않고, 글자는 「최근 실행」 제목과 같은 x에서 시작한다
+    Set-WtStyle $list 'Workflows.RunList'
     [System.Windows.Controls.ScrollViewer]::SetVerticalScrollBarVisibility($list, 'Disabled')
     foreach ($r in $runs) {
         $look = Get-WtFlowStatusLook ([string]$r.status) ([bool]$r.whatIf)
@@ -1670,26 +1646,13 @@ function Update-WtFlowHelp {
         [void]$list.Items.Add($item)
     }
     $list.Add_SelectionChanged({ param($s, $e) if ($s.SelectedItem) { Show-WtFlowRecordTail $s.SelectedItem.Tag } })
-    [void](Add-WtChild $panel $list)
+    [void]$panel.Children.Add($list)   # 위 사이 · 좌우로 내민 폭은 스타일 여백(Workflows.RunList)이 정한다
     $script:helpList = $list; $script:helpKey = $key
 }
 
-# 가운데 · 양옆 패널이 놓일 폭이 세 칸에 모자라는지 (아직 배치 전이라 폭이 0이면 모자라지 않은 것으로 본다)
-function Test-WtFlowNarrow([double]$Width) { $Width -gt 0 -and $Width -lt $script:threeColumns }
-
-# [설명 펼치기] · [접기]. 넓으면 설정을 바꾸고, 좁으면 겹쳐 연 것만 열고 닫는다
-function Open-WtFlowHelp {
-    if ($script:helpNarrow) { $script:helpOverlay = $true } else { Set-WtSetting 'workflows.help' $true }
-    Update-WtFlowHelp
-}
-
-function Close-WtFlowHelp {
-    if ($script:helpNarrow) { $script:helpOverlay = $false } else { Set-WtSetting 'workflows.help' $false }
-    Update-WtFlowHelp
-}
-
-# 폼 높이: 남는 높이(제목 · 명령 · 결과 · 알림을 뺀 것)의 60%나 출력 칸에 240을 남긴 높이 중 큰 쪽까지 쓰고,
-# 출력 칸에는 적어도 120을 남긴다. 넘으면 폼만 스크롤한다. 칸이 적으면 폼은 칸 높이만큼만 쓰고, 실행 명령은 폼 바로 아래에 붙는다
+# 폼 높이: 폼 전체가 출력 칸에 120을 남기고 들어가면 다 보인다(칸이 반쯤 잘려 보이지 않게, 글자를 키워 칸이 커져도. 11-22 실사용 보고 14).
+# 안 들어가면 남는 높이(제목 · 명령 · 결과 · 알림을 뺀 것)의 60%나 출력 칸에 240을 남긴 높이 중 큰 쪽까지 쓰고 폼만 스크롤한다.
+# 칸이 적으면 폼은 칸 높이만큼만 쓰고, 실행 명령은 폼 바로 아래에 붙는다
 function Update-WtFlowFormHeight {
     $u = $script:ui
     if (-not $u.Count) { return }
@@ -1698,7 +1661,11 @@ function Update-WtFlowFormHeight {
     $fixed = 0
     foreach ($i in 0, 2, 3, 4) { $fixed += $g.RowDefinitions[$i].ActualHeight }
     $avail = $g.ActualHeight - $fixed
-    $u.FormScroll.MaxHeight = [Math]::Max(80, [Math]::Floor([Math]::Min([Math]::Max($avail * 0.6, $avail - 240), $avail - 120)))
+    $most = [Math]::Floor($avail - 120)
+    $max = [Math]::Max($avail * 0.6, $avail - 240)
+    $need = [Math]::Ceiling($u.Form.DesiredSize.Height)
+    if ($need -gt $max -and $need -le $most) { $max = $need }
+    $u.FormScroll.MaxHeight = [Math]::Max(80, [Math]::Floor([Math]::Min($max, $most)))
 }
 
 # 기록을 고르면 그때의 출력 마지막 줄을 출력 칸에 보여 준다 (실행 중이면 바꾸지 않는다)
@@ -1733,7 +1700,7 @@ function New-WtFlowsView {
     $grid = [System.Windows.Controls.Grid]::new()
     $c1 = [System.Windows.Controls.ColumnDefinition]::new(); $c1.Width = [System.Windows.GridLength]::new(240)
     $c2 = [System.Windows.Controls.ColumnDefinition]::new(); $c2.Width = [System.Windows.GridLength]::new(1, 'Star'); $c2.MinWidth = 360
-    $c3 = [System.Windows.Controls.ColumnDefinition]::new(); $c3.Width = [System.Windows.GridLength]::new(280)
+    $c3 = [System.Windows.Controls.ColumnDefinition]::new(); $c3.Width = [System.Windows.GridLength]::Auto   # 공용 보조 칸이 폭(280 · 레일 28)을 정한다
     foreach ($c in @($c1, $c2, $c3)) { $grid.ColumnDefinitions.Add($c) }
 
     # 왼쪽: 저장한 업무 + 스크립트 폴더
@@ -1796,13 +1763,11 @@ function New-WtFlowsView {
     $saveFlow = New-WtButton '업무로 저장' -Icon 0xE74E
     [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($saveFlow, $true)
     $saveFlow.Add_Click({ Save-WtFlowFromForm })
-    $deleteFlow = New-WtButton '업무 삭제' -Kind Link -Icon 0xE74D
+    # 삭제는 다른 탭의 삭제 · 닫기와 같은 위험 단추(Btn.Danger, 디자인 7절)
+    $deleteFlow = New-WtButton '업무 삭제' -Kind Danger -Icon 0xE74D
     $deleteFlow.ToolTip = '저장한 업무를 지웁니다 (스크립트 파일은 그대로)'
     $deleteFlow.Add_Click({ Remove-WtFlowCurrent })
-    $helpOpen = New-WtButton '설명 펼치기' -Kind Link -Icon 0xE946
-    $helpOpen.ToolTip = '오른쪽에 스크립트 도움말과 최근 실행을 보여 줍니다'
-    $helpOpen.Add_Click({ Open-WtFlowHelp })
-    foreach ($b in @($deleteFlow, $saveFlow, $helpOpen)) { [void](Add-WtChild $headActions $b) }
+    foreach ($b in @($deleteFlow, $saveFlow)) { [void](Add-WtChild $headActions $b) }
     [System.Windows.Controls.DockPanel]::SetDock($headActions, 'Right')
     [void]$head.Children.Add($headActions)
     $titleStack = New-WtStack Vertical 4
@@ -1839,19 +1804,21 @@ function New-WtFlowsView {
     [void]$cgrid.Children.Add($empty)
 
     # 실행 명령: [실행] [미리보기] [취소] 실행 방식. 좁으면 실행 방식이 다음 줄로 내려간다
+    # 줄 높이는 그 줄에서 가장 높은 것(실행 방식 묶음)을 따르므로, 단추는 세로 가운데에 두어 늘어나지 않게 한다(높이 32, 디자인 8절 업무)
     $commands = [System.Windows.Controls.WrapPanel]::new()
     $commands.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)
     $runButton = New-WtButton '실행' -Kind Primary -Icon 0xE768
     $runButton.Add_Click({ Invoke-WtFlowRun })
     $preview = New-WtButton '미리보기' -Icon 0xE7B3
     $preview.Add_Click({ Invoke-WtFlowRun -WhatIf })
-    $cancel = New-WtButton '취소' -Icon 0xE711
+    $cancel = New-WtButton '취소' -Icon 0xE71A
     $cancel.Add_Click({ Stop-WtFlowRun })
     $mode = New-WtSegmented @(@('app', '앱 안에서'), @('console', '콘솔 창에서')) 'app' 'WtFlowMode' { param($value) Set-WtFlowModeChoice $value; Update-WtFlowCommands }
     $mode.ToolTip = '앱 안: 출력을 아래 칸에 보여 줍니다 · 콘솔 창: 자기 화면이 있거나 키 입력을 받는 스크립트'
     foreach ($b in @($runButton, $preview, $cancel, $mode)) {
         [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($b, $true)
         $b.Margin = [System.Windows.Thickness]::new(0, 0, 8, 8)
+        $b.VerticalAlignment = 'Center'
         [void]$commands.Children.Add($b)
     }
     [System.Windows.Controls.Grid]::SetRow($commands, 2)
@@ -1907,29 +1874,15 @@ function New-WtFlowsView {
     [void]$outArea.Children.Add($outHint)
     [System.Windows.Controls.Grid]::SetRow($outArea, 5)
     [void]$cgrid.Children.Add($outArea)
-    # 폼 최대 높이는 가운데 높이나 다른 줄(제목 · 명령 · 결과 · 알림)의 높이가 바뀔 때마다 다시 잰다
-    foreach ($x in @($cgrid, $head, $commands, $statusStack, $noteRow)) { $x.Add_SizeChanged({ Update-WtFlowFormHeight }) }
+    # 폼 최대 높이는 가운데 높이나 다른 줄(제목 · 명령 · 결과 · 알림)의 높이, 폼 칸 전체 높이가 바뀔 때마다 다시 잰다
+    foreach ($x in @($cgrid, $head, $commands, $statusStack, $noteRow, $form)) { $x.Add_SizeChanged({ Update-WtFlowFormHeight }) }
     $center.Child = $cgrid
     [System.Windows.Controls.Grid]::SetColumn($center, 1)
     [void]$grid.Children.Add($center)
 
-    # 오른쪽: 설명 · 최근 실행. 머리글의 [접기]는 늘 같은 자리에 둔다.
-    # 창이 좁으면 가운데 위에 겹쳐 연다 (Update-WtFlowHelp). 그때만 뒤에 그림자를 깐다
-    $right = New-WtCard
-    Set-WtStyle $right 'Workflows.HelpCard'
-    $rdock = [System.Windows.Controls.DockPanel]::new()
-    $rhead = [System.Windows.Controls.DockPanel]::new()
-    Set-WtStyle $rhead 'Workflows.HelpHeader'
-    $helpClose = New-WtButton '' -Kind Icon -Icon 0xE76C -ToolTip '설명 접기'
-    Set-WtStyle $helpClose 'Sidebar.Collapse'
-    [System.Windows.Automation.AutomationProperties]::SetName($helpClose, '설명 접기')
-    $helpClose.Add_Click({ Close-WtFlowHelp })
-    [System.Windows.Controls.DockPanel]::SetDock($helpClose, 'Left')
-    [void]$rhead.Children.Add($helpClose)
-    $rtitle = New-WtText '설명' 'Workflows.HelpTitle'
-    [void]$rhead.Children.Add($rtitle)
-    [System.Windows.Controls.DockPanel]::SetDock($rhead, 'Top')
-    [void]$rdock.Children.Add($rhead)
+    # 오른쪽: 설명 · 최근 실행. 일정 · 근태 · 메모와 같은 공용 보조 칸이다(디자인 6절): 머리 왼쪽 접기 단추, 접으면 폭 28 레일,
+    # 창 폭 1200 미만이면 저장값과 상관없이 레일로 시작하고 펼치면 가운데 위에 겹친다. Ctrl+Shift+B로도 접고 편다
+    if (-not [bool](Get-WtSetting 'workflows.help')) { Set-WtSetting 'workflows.sidebar.collapsed' $true; Set-WtSetting 'workflows.help' $true }
     $helpScroll = [System.Windows.Controls.ScrollViewer]::new()
     $helpScroll.VerticalScrollBarVisibility = 'Auto'
     $helpScroll.HorizontalScrollBarVisibility = 'Disabled'
@@ -1937,26 +1890,15 @@ function New-WtFlowsView {
     $helpPanel = New-WtStack Vertical 12
     Set-WtStyle $helpPanel 'Workflows.HelpBody'
     $helpScroll.Content = $helpPanel
-    [void]$rdock.Children.Add($helpScroll)
-    $right.Child = $rdock
-    $helpShadow = [System.Windows.Controls.Border]::new()
-    Set-WtStyle $helpShadow 'Overlay.Shadow'
-    $helpShadow.Visibility = 'Collapsed'
-    $helpHost = [System.Windows.Controls.Grid]::new()
-    $helpHost.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
-    [void]$helpHost.Children.Add($helpShadow)
-    [void]$helpHost.Children.Add($right)
-    [System.Windows.Controls.Grid]::SetColumn($helpHost, 2)
-    [void]$grid.Children.Add($helpHost)
-    # 좁고 넓음이 바뀔 때만 설명 자리를 다시 정한다
-    $grid.Add_SizeChanged({ param($s, $e) if ((Test-WtFlowNarrow $s.ActualWidth) -ne $script:helpNarrow) { Update-WtFlowHelp } })
+    $helpSide = New-WtSidePanel -Content $helpScroll -Side Right -Key 'workflows.sidebar.collapsed' -Title '설명' -Width 280
+    [System.Windows.Controls.Grid]::SetColumn($helpSide, 2)
+    [void]$grid.Children.Add($helpSide)
     [void]$page.Panel.Children.Add($grid)
 
     # 업무 화면 안 단축키
     $page.Root.Add_PreviewKeyDown({
             param($s, $e)
             if ($e.Key -eq 'F5') { Update-WtFlowTree; Set-WtFlowNote '스크립트 목록을 새로 읽었습니다.'; $e.Handled = $true }
-            elseif ($e.Key -eq 'Escape' -and $script:helpOverlay) { Close-WtFlowHelp; $e.Handled = $true }
         })
 
     $script:ui = @{
@@ -1965,10 +1907,8 @@ function New-WtFlowsView {
         SaveFlow = $saveFlow; DeleteFlow = $deleteFlow; RunButton = $runButton; Preview = $preview; Cancel = $cancel
         Status = $statusStack; RunStatus = $runStatus; Elapsed = $elapsed; Busy = $busy; NoteRow = $noteRow; Note = $note; Undo = $undo
         Output = $output; OutputHint = $outHint; OutArea = $outArea
-        PageGrid = $grid; HelpColumn = $c3; HelpHost = $helpHost; HelpShadow = $helpShadow; HelpPanel = $helpPanel; HelpOpen = $helpOpen
+        PageGrid = $grid; Center = $center; HelpSide = $helpSide; HelpPanel = $helpPanel
     }
-    $script:helpNarrow = $false
-    $script:helpOverlay = $false
     # 화면을 새로 만들면 고른 것의 수명도 끝난다 (오는 중인 읽기 결과는 새 화면에 넣지 않는다)
     $script:selection = $null
     $script:readSeq++

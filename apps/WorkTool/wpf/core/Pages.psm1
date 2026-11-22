@@ -120,26 +120,32 @@ function New-WtThemeCard {
     }
     [void](Add-WtChild $col (New-WtSettingRow '닫기 버튼 (X)' $close '트레이 아이콘을 우클릭한 뒤 종료를 누르세요.'))
 
-    # 알림 묶음(디자인 8절 「설정·도움말」): 탭이 등록한 행(Get-WtAddonSettingRows) → 코어 알림 부품의 행
+    # 알림 묶음(디자인 8절 「설정·도움말」): 알람 잠시 끄기 → 탭이 등록한 행(Get-WtAddonSettingRows) → 코어 알림 부품의 나머지 행.
+    # 잠시 끄기는 기본 창 크기(960 × 680)에서도 스크롤 없이 보이게 묶음 맨 위에 둔다(11-22 실사용 보고)
     [void](Add-WtChild $col (New-WtText '알림' 'Setting.Group'))
+    $noticeRows = @(New-WtNoticeSettingRows)
+    [void](Add-WtChild $col $noticeRows[0])
     foreach ($row in @(Get-WtAddonSettingRows '알림')) {
         if ($row.Error) { [void](Add-WtChild $col (New-WtText "$($row.Label) 설정 행을 만들지 못했습니다. $($row.Error)" 'T.Error')); continue }
         [void](Add-WtChild $col (New-WtSettingRow $row.Label $row.Control $row.Note))
     }
-    foreach ($row in @(New-WtNoticeSettingRows)) { [void](Add-WtChild $col $row) }
+    foreach ($row in @($noticeRows | Select-Object -Skip 1)) { [void](Add-WtChild $col $row) }
 
     $card.Child = $col
     $card
 }
 
-# ---- 설정 → 일반 → 알림: 다시 알림 · 알람 소리 · 소리 · 볼륨 · 알람 잠시 끄기 (값은 core\Notice.psm1이 읽는다) ----
+# ---- 설정 → 일반 → 알림: 알람 잠시 끄기 · 다시 알림 · 알람 소리 · 소리 · 볼륨 (값은 core\Notice.psm1이 읽는다) ----
 $script:noticeUi = $null        # 처리기가 쓰는 칸 묶음(처리기 안에서는 $script: 변수와 Tag만 쓴다)
 $script:volumeTimer = $null
 $script:pendingVolume = 70
 $script:noticeHandler = $false
 
+# 맨 앞은 알람 잠시 끄기 행이다. 설정 화면은 이 행을 묶음 맨 위(탭이 등록한 행보다 앞)에 둔다
 function New-WtNoticeSettingRows {
     $rows = [System.Collections.Generic.List[object]]::new()
+    $pauseBox = New-WtStack Horizontal 8
+    $rows.Add((New-WtSettingRow '알람 잠시 끄기' $pauseBox))
     $snooze = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $snooze 'Setting.Combo'
     $current = [int](Get-WtSetting 'notice.snooze')
     $choices = @(5, 10, 15, 30)
@@ -189,8 +195,6 @@ function New-WtNoticeSettingRows {
     foreach ($child in $slider, $volumeText, $preview) { [void](Add-WtChild $volumeRow $child) }
     $rows.Add((New-WtSettingRow '볼륨' $volumeRow))
 
-    $pauseBox = New-WtStack Horizontal 8
-    $rows.Add((New-WtSettingRow '알람 잠시 끄기' $pauseBox))
     $script:noticeUi = @{ SoundOn = $soundOn; File = $file; Volume = $slider; VolumeText = $volumeText; Preview = $preview; Pause = $pauseBox }
     Update-WtNoticeSoundRow
     Update-WtNoticePauseRow
@@ -329,10 +333,10 @@ function New-WtTabbedPage([string]$Title, [object[]]$Sections) {
         $item = [System.Windows.Controls.TabItem]::new()
         Set-WtStyle $item 'Tab'
         $item.Header = $section[0]
+        # 탭을 누르면 내용의 첫 포커스 자리로 포커스가 간다. 스크롤 면이 그 자리라 탭 맨 위(스크롤 0)부터 보인다 (Page.TabScroll)
         $scroll = [System.Windows.Controls.ScrollViewer]::new()
-        $scroll.VerticalScrollBarVisibility = 'Auto'
-        $scroll.HorizontalScrollBarVisibility = 'Disabled'
-        $scroll.Focusable = $false
+        Set-WtStyle $scroll 'Page.TabScroll'
+        [System.Windows.Automation.AutomationProperties]::SetName($scroll, [string]$section[0])
         $scroll.Content = $section[1]
         $item.Content = $scroll
         [void]$tabs.Items.Add($item)
