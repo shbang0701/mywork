@@ -39,6 +39,7 @@ $ErrorActionPreference = 'Stop'
 $script:editors = [System.Collections.Generic.List[System.WeakReference]]::new()
 $script:undoPause = [TimeSpan]::FromMilliseconds(1200)   # 이만큼 쉬었다 치면 실행 취소 단위를 새로 나눈다
 $script:undoLimit = 200
+$script:textInset = 2   # 입력칸(TextBox) 안 글자가 안쪽 여백에서 더 들어가는 폭(WPF 글자 상자 기본 2). 빈 본문 예시 글자를 첫 글자 자리에 맞춘다
 Register-WtSettingDefault 'memo.find.case' $false
 Register-WtSettingDefault 'memo.find.regex' $false
 
@@ -75,7 +76,8 @@ function New-WtMemoEditor {
         $f = $s.Tag.Find
         if ($f.KeepFocus -and $f.Bar.Visibility -eq 'Visible' -and $f.Bar.IsKeyboardFocusWithin) { $e.Handled = $true }
     })
-    $body.Add_PreviewMouseDown({ param($s, $e) $s.Tag.Find.KeepFocus = $false; $s.Tag.FocusPending = $null })
+    # 본문을 누르면 커서를 옮긴 것이다. 막대가 마지막으로 찾은 곳은 더 이상 「지금 찾은 것」이 아니다(바꾸기는 커서부터 다시 찾는다)
+    $body.Add_PreviewMouseDown({ param($s, $e) $s.Tag.Find.KeepFocus = $false; $s.Tag.FocusPending = $null; $s.Tag.Find.LastMatch = $null })
     $body.Add_PreviewDrop({ param($s, $e) $s.Tag.Find.KeepFocus = $false; $s.Tag.FocusPending = $null })
     [void]$root.Children.Add($body)
     $ed.Body = $body
@@ -97,6 +99,7 @@ function New-WtMemoEditor {
 
     # 실시간 모드 보기 (단위별로 그린 문서 + 섬)
     $live = New-WtMarkdownView -Scroll -OnLink { param($link, $st) Invoke-WtMemoEditorLink $link $st } -OnTask { param($line, $el) Invoke-WtMemoTaskClick $line $el }
+    Set-WtStyle $live 'Memo.View'   # 문서 면: 바깥 포커스 네모 없음
     $live.Tag.Editor = $ed
     # 문서에서 블록을 빼고 넣을 때 RichTextBox가 실행 취소용으로 뺀 요소를 XAML로 저장하려 한다.
     # 섬(Tag에 편집기 상태)을 저장하다 끝없이 파고들어 멈추므로 끈다. 실행 취소는 편집기가 따로 든다
@@ -113,6 +116,7 @@ function New-WtMemoEditor {
 
     # 읽기 모드 보기 (문서 전체를 한 번에 그림)
     $view = New-WtMarkdownView -Scroll -OnLink { param($link, $st) Invoke-WtMemoEditorLink $link $st } -OnTask { param($line, $el) Invoke-WtMemoTaskClick $line $el }
+    Set-WtStyle $view 'Memo.View'   # 문서 면: 바깥 포커스 네모 없음 (11-22 실사용 16)
     $view.Tag.Editor = $ed
     $view.IsInactiveSelectionHighlightEnabled = $true
     [void]$body.Children.Add($view)
@@ -140,6 +144,10 @@ function New-WtMemoEditor {
     Add-WtMemoBoxHandlers $island -Island
     $island.Add_PreviewMouseWheel({ param($s, $e) Invoke-WtMemoIslandWheel $s $e })
     $ed.IslandBox = $island
+    # 빈 본문의 예시 글자(값 문서 8절 메모). 첫 줄 글자 자리에 겹쳐 두고 누름 · 입력은 아래 본문이 받는다
+    $hint = New-WtText '내용을 입력하세요' 'Memo.BodyHint'
+    [void]$body.Children.Add($hint)
+    $ed.Hint = $hint
     # 자동 완성 팝업은 미리 붙여 둔다 (막 붙인 팝업은 그려지기 전까지 열기가 미뤄진다)
     [void](Get-WtMemoSuggestUi $ed)
 
@@ -251,6 +259,8 @@ function Invoke-WtMemoContextAction($Ed, [string]$Action) {
 }
 
 function Invoke-WtMemoEditorChanged($Ed) {
+    Update-WtMemoBodyHint $Ed
+    if ($Ed.Find.Bar.Visibility -eq 'Visible') { Request-WtMemoFindRecount $Ed }
     if ($Ed.OnChanged) { & $Ed.OnChanged $Ed }
 }
 
@@ -311,6 +321,8 @@ function Invoke-WtMemoTaskClick([int]$Line, $El) {
             $ed.ReadText = $null
             Update-WtMemoRead $ed
             if ($sv) { $ed.View.UpdateLayout(); $sv.ScrollToVerticalOffset($y) }
+            # 누른 체크 표시(링크)가 포커스를 가진 채 문서와 함께 버려진다. 보기에 포커스를 돌려 놓아야 메모 단축키 · 스크롤 키가 먹는다(11-22 실사용 5)
+            [void]$ed.View.Focus()
             Invoke-WtMemoEditorChanged $ed
         }
     } finally { $ed.Busy-- }
@@ -368,6 +380,9 @@ function Set-WtMemoEditorText($Ed, [AllowEmptyString()][string]$Text) {
             switch ($Ed.Mode) { 'source' { [void]$Ed.Source.Focus() } 'live' { [void]$Ed.Live.Focus() } 'read' { [void]$Ed.View.Focus() } }
         }
     } finally { $Ed.Loading = $false; $Ed.Busy-- }
+    Update-WtMemoBodyHint $Ed
+    # 열린 찾기 막대는 새 글로 다시 센다. 앞 메모의 「5개 바꿈」 · 켜진 바꾸기 단추가 남지 않게(11-22 실사용 7)
+    if ($Ed.Find.Bar.Visibility -eq 'Visible') { Update-WtMemoFindCount $Ed }
 }
 
 # 줄 나누기는 마크다운 블록 나누기(Get-WtMarkdownUnits)와 같은 규칙: \r\n · \r · \n 모두 줄바꿈
@@ -422,6 +437,7 @@ function Update-WtMemoEditorMode($Ed) {
     $Ed.Source.Visibility = if ($Ed.Mode -eq 'source') { 'Visible' } else { 'Collapsed' }
     $Ed.Live.Visibility = if ($Ed.Mode -eq 'live') { 'Visible' } else { 'Collapsed' }
     $Ed.View.Visibility = if ($Ed.Mode -eq 'read') { 'Visible' } else { 'Collapsed' }
+    Update-WtMemoBodyHint $Ed
 }
 
 function Update-WtMemoRead($Ed) {
@@ -434,6 +450,7 @@ function Update-WtMemoRead($Ed) {
 function Set-WtMemoEditorEnabled($Ed, [bool]$Enabled) {
     $Ed.Enabled = $Enabled
     $Ed.Root.IsEnabled = $Enabled
+    Update-WtMemoBodyHint $Ed
 }
 
 function Set-WtMemoEditorFocus($Ed, [switch]$End) {
@@ -501,9 +518,23 @@ function Set-WtMemoEditorState($Ed, $State) {
 }
 
 # 글 좌우 여백. 보기는 Md.View의 -5를 더해 원문과 글 시작을 맞춘다.
+# 찾기 막대 · 빈 본문 예시 글자도 같은 여백 안에 둔다(제목 · 본문 글과 왼쪽 끝을 맞춤, 11-22 실사용 18). 막대 아래 선은 칸 끝까지
 function Set-WtMemoEditorSide($Ed, [double]$Side) {
     $Ed.Source.Padding = [System.Windows.Thickness]::new($Side, 0, $Side, 0)
     foreach ($view in $Ed.Live, $Ed.View) { $view.Padding = [System.Windows.Thickness]::new($Side - 5, 0, $Side - 5, 0) }
+    $Ed.Find.Rows.Margin = [System.Windows.Thickness]::new($Side, 0, $Side, 0)
+    $Ed.Hint.Margin = [System.Windows.Thickness]::new($Side + $script:textInset, 0, $Side, 0)
+}
+
+# 빈 본문의 예시 글자: 편집 · 원문 보기에서 글이 하나도 없을 때만 보인다(읽기 · 메모 없음에서는 숨김)
+function Update-WtMemoBodyHint($Ed) {
+    $empty = if ($Ed.Mode -eq 'source') { -not $Ed.Source.Text } else {
+        $Ed.Lines.Count -eq 1 -and -not $Ed.Lines[0] -and (-not $Ed.Island -or -not $Ed.IslandBox.Text)
+    }
+    $Ed.Hint.Visibility = if ($Ed.Enabled -and $Ed.Mode -ne 'read' -and $empty) { 'Visible' } else { 'Collapsed' }
+    # 글자 세로 자리를 그 보기의 입력칸에 맞춘다: 섬은 줄 높이 안 가운데 쪽(BlockLineHeight), 원문 칸은 위
+    $look = if ($Ed.Mode -eq 'source') { 'Memo.BodyHint.Source' } else { 'Memo.BodyHint' }
+    if ($Ed.HintLook -cne $look) { Set-WtStyle $Ed.Hint $look; $Ed.HintLook = $look }
 }
 
 # 줄($Line, 0부터)을 보기 맨 위로 옮긴다. 음수면 맨 위로. 커서도 그 줄 처음으로 옮긴다.
@@ -2192,6 +2223,8 @@ function New-WtMemoFindBar($Ed) {
     $regex = New-WtMemoFindOption $Ed 'regex' '.*' '정규식' 'Memo-Find-Regex' 'Alt+R'
     foreach ($option in $case, $regex) { [void](Add-WtChild $options $option) }
     $topActions = New-WtStack Horizontal
+    # 두 줄의 단추 칸은 폭을 같이 쓴다(아래 줄이 더 넓다). 위 줄도 오른쪽에 붙여 닫기와 「모두 바꾸기」의 오른쪽 끝을 맞춘다(11-22 실사용 18)
+    $topActions.HorizontalAlignment = 'Right'
     [System.Windows.Controls.Grid]::SetColumn($topActions, 2)
     [void]$top.Children.Add($topActions)
     $close = New-WtButton '' -Kind Icon -Icon 0xE711 -ToolTip '닫기 (Esc)'
@@ -2260,9 +2293,9 @@ function New-WtMemoFindBar($Ed) {
     $bar.Child = $rows
     $validation = [System.Windows.Data.Binding]::new('Value')
     $validation.Source = [pscustomobject]@{ Value = '' }
-    $Ed.Find = @{ Bar = $bar; Query = $sb.Box; Count = $count; ReplaceRow = $low; Replace = $rep; ReadIndex = -1
+    $Ed.Find = @{ Bar = $bar; Rows = $rows; Query = $sb.Box; Count = $count; ReplaceRow = $low; Replace = $rep; ReadIndex = -1
         Case = $case; Regex = $regex; One = $one; All = $all; Error = ''; LastMatch = $null; KeepFocus = $false
-        Total = 0; ReplaceTips = @($one.ToolTip, $all.ToolTip)
+        Total = 0; ReplaceTips = @($one.ToolTip, $all.ToolTip); CountedText = $null; RecountQueued = $false
         Validation = $sb.Box.SetBinding([System.Windows.FrameworkElement]::UidProperty, $validation) }
     Update-WtMemoReplaceButtons $Ed
     $bar
@@ -2479,13 +2512,30 @@ function Update-WtMemoFindCount($Ed, [int]$Current = -1, [int]$Total = -1) {
     $f = $Ed.Find
     if (-not $f.Query.Text) { $f.Total = 0; Set-WtMemoFindError $Ed; $f.Count.Text = ''; $f.LastMatch = $null; return }
     if ($Total -lt 0) {
-        $hits = Get-WtMemoFindHits $Ed ((Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")) -Read:($Ed.Mode -eq 'read')
+        $text = (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")
+        $hits = Get-WtMemoFindHits $Ed $text -Read:($Ed.Mode -eq 'read')
+        $f.CountedText = $text
         if ($f.Error) { return }
         $Total = $hits.Count
     }
     $f.Total = $Total
     Update-WtMemoReplaceButtons $Ed
     $f.Count.Text = if (-not $Total) { '0개' } elseif ($Current -ge 0) { "$($Current + 1)/$Total" } else { "${Total}개" }
+}
+
+# 글을 고친 뒤 찾기 개수를 다시 센다. 한가할 때 한 번만 센다(빠르게 칠 때 키마다 글 전체를 훑지 않게).
+# 그사이 찾기 · 바꾸기가 같은 글로 이미 셌으면 건너뛴다(「2/5」 · 「5개 바꿈」을 덮지 않게)
+function Request-WtMemoFindRecount($Ed) {
+    $f = $Ed.Find
+    if ($f.RecountQueued) { return }
+    $f.RecountQueued = $true
+    [void]$Ed.Root.Dispatcher.BeginInvoke([System.Action[object]] {
+            param($ed)
+            $ed.Find.RecountQueued = $false
+            if ($ed.Find.Bar.Visibility -ne 'Visible' -or -not $ed.Find.Query.Text) { return }
+            if ((Get-WtMemoEditorText $ed).Replace("`r`n", "`n") -ceq $ed.Find.CountedText) { return }
+            try { Update-WtMemoFindCount $ed } catch { Show-WtError $_ '찾기' }
+        }, [System.Windows.Threading.DispatcherPriority]::Background, [object[]]@($Ed))
 }
 
 # 다음(-Back이면 이전) 찾기. -Here: 고른 곳 시작부터 다시 찾기(찾는 글을 칠 때)
@@ -2499,6 +2549,7 @@ function Invoke-WtMemoFind($Ed, [switch]$Back, [switch]$Here) {
         if ($Ed.Mode -eq 'read') { Invoke-WtMemoFindRead $Ed $q -Back:$Back -Here:$Here; return }
         $text = (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")
         $hits = Get-WtMemoFindHits $Ed $text
+        $f.CountedText = $text
         if ($f.Error) { return }
         if (-not $hits.Count) { Update-WtMemoFindCount $Ed -1 0; return }
         $sel = Get-WtMemoSelectionOffsets $Ed $text
@@ -2582,6 +2633,7 @@ function Get-WtMemoReadPointer($Segments, [int]$Offset, $Fallback) {
 function Invoke-WtMemoFindRead($Ed, [string]$Query, [switch]$Back, [switch]$Here) {
     $f = $Ed.Find
     $hits = Get-WtMemoFindHits $Ed -Read
+    $f.CountedText = (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")
     if ($f.Error) { return }
     if (-not $hits.Count) { $f.ReadIndex = -1; Update-WtMemoFindCount $Ed -1 0; return }
     $k = if ($Here) { [Math]::Max(0, $f.ReadIndex) } elseif ($Back) { $f.ReadIndex - 1 } else { $f.ReadIndex + 1 }
@@ -2635,11 +2687,23 @@ function Invoke-WtMemoReplace($Ed, [switch]$All) {
             }
             $f.LastMatch = $null
             $f.NextFrom = $null
+            # 남은 일치로 바꾸기 단추를 맞춘다(보통 0개 → 꺼짐). 개수 자리에는 이번 결과 「n개 바꿈」을 둔다(11-22 실사용 7)
+            $after = (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")
+            [void](Get-WtMemoFindHits $Ed $after)
+            $f.CountedText = $after
+            Update-WtMemoReplaceButtons $Ed
             $f.Count.Text = "${n}개 바꿈"
             return
         }
         $sel = Get-WtMemoSelectionOffsets $Ed $text
         $hit = $hits | Where-Object { $_.Index -eq $sel[0] -and $_.Length -eq $sel[1] - $sel[0] } | Select-Object -First 1
+        $last = $f.LastMatch
+        if (-not $hit -and $Ed.Mode -eq 'live' -and -not $Ed.Island -and $last -and $last.Text -ceq $text -and $last.Query -ceq $q -and
+            $last.Case -eq $f.Case.IsChecked -and $last.Regex -eq $f.Regex.IsChecked) {
+            # 고치는 칸(섬)이 닫혀 선택이 사라졌다(창 전환으로 포커스가 나감 등). 막대가 마지막으로 찾아 보여 준 곳이
+            # 지금 글 · 식 그대로면 그곳이 「지금 찾은 것」이다. 바로 바꾸고 다음으로 간다(11-22 실사용 6)
+            $hit = $hits | Where-Object { $_.Index -eq $last.Index -and $_.Length -eq $last.Length } | Select-Object -First 1
+        }
         if ($hit) {
             $insert = if ($regexMode) { $hit.Result($rep) } else { $rep }
             Select-WtMemoTextRange $Ed $text $hit.Index $hit.Length -KeepFocus:($f.Bar.IsKeyboardFocusWithin)
@@ -2729,4 +2793,4 @@ Register-WtSettingHandler {
 }
 
 Export-ModuleMember -Function New-WtMemoEditor, Set-WtMemoEditorText, Get-WtMemoEditorText, Set-WtMemoEditorMode,
-    Set-WtMemoEditorEnabled, Set-WtMemoEditorFocus, Get-WtMemoEditorState, Set-WtMemoEditorState, Set-WtMemoEditorSide, Show-WtMemoEditorLine, Open-WtMemoFind
+    Set-WtMemoEditorEnabled, Set-WtMemoEditorFocus, Get-WtMemoEditorState, Set-WtMemoEditorState, Set-WtMemoEditorSide, Show-WtMemoEditorLine, Open-WtMemoFind, Close-WtMemoFind

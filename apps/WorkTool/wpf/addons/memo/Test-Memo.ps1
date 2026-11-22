@@ -1086,6 +1086,106 @@ try {
     & $addon.OnExit
     Assert-WtTest 'WPF 메모: 끝내기 전에 저장' (((Get-WtMemoItems) | Where-Object id -eq $new.id).body -eq '고치는 중 2')
 
+    # ---- 11-22 실사용 보고 회귀: 화면 (번호 = 보고서 번호) ----
+    $rectOf = { param($el) $el.TransformToAncestor($script:view).TransformBounds([System.Windows.Rect]::new([System.Windows.Point]::new(0, 0), $el.RenderSize)) }
+    $longTitle = '🚀🔥 [장애보고] 2026년 11월 전사 스토리지·네트워크·방화벽 이중화 절체 및 커널 튜닝 작업 결과 종합 보고서 아주긴제목1234567890'
+    $mLong = New-WtMemo; $mLong.id = 'long'; $mLong.title = $longTitle; $mLong.body = '긴 제목 본문'; $mLong.updated = '2026-10-25 10:00:00'
+    $mBlank = New-WtMemo; $mBlank.id = 'blank'; $mBlank.title = ''; $mBlank.body = ''; $mBlank.updated = '2026-10-24 10:00:00'
+    $mRename = New-WtMemo; $mRename.id = 'rename'; $mRename.title = '옛 이름'; $mRename.body = '이름 바꿀 메모'; $mRename.updated = '2026-10-23 10:00:00'
+    Save-WtMemoItems @($mLong, $mBlank, $mRename)
+    Set-WtSetting 'memo.tabs' $null
+    Show-TestView
+    # 1: 긴 제목 메모를 지우면 제목만 말줄임하고 실행 취소 단추는 칸 안에서 실제 좌표로 눌린다
+    & $memoModule { [void](Open-WtMemo 'long' 'here'); Remove-WtMemoCurrent }
+    $win.UpdateLayout(); & $findPump; $win.UpdateLayout()
+    $undoParts = & $memoModule { [pscustomobject]@{ Text = $script:ui.UndoText; Pane = $script:panes[0].Root; Button = @($script:ui.UndoBar.Children | Where-Object { $_ -is [System.Windows.Controls.Button] })[0] } }
+    $undoButtonRect = & $rectOf $undoParts.Button; $undoPaneRect = & $rectOf $undoParts.Pane
+    $undoRoute = Test-WtTestInputPath -View $view -Element $undoParts.Button -Target $undoParts.Button
+    Assert-WtTest 'UndoBar-LongTitle: 긴 제목은 말줄임 + 툴팁 · 실행 취소 단추는 칸 안에 보이고 실제 좌표로 눌린다 (1)' (
+        $undoButtonRect.Width -gt 0 -and $undoButtonRect.Left -ge $undoPaneRect.Left -and $undoButtonRect.Right -le $undoPaneRect.Right - 20 + 0.5 -and $undoRoute.Ok -and
+        $undoParts.Text.TextTrimming -eq 'CharacterEllipsis' -and [string]$undoParts.Text.ToolTip -ceq $longTitle) "단추=$undoButtonRect 칸=$undoPaneRect 경로=$($undoRoute.Path)"
+    $undoParts.Button.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+    Assert-WtTest 'UndoBar-LongTitle: 그 단추로 긴 제목 메모를 되살린다' ([bool]((Get-WtMemoItems) | Where-Object id -eq 'long') -and (Get-TestTabs).Current[0] -ceq 'long')
+    & $memoModule { [void](Open-WtMemo 'blank' 'here'); Remove-WtMemoCurrent }
+    $blankUndo = & $memoModule { @($script:ui.UndoBar.Children | Where-Object { $_ -is [System.Windows.Controls.TextBlock] } | ForEach-Object Text) -join '|' }
+    Assert-WtTest "UndoBar-LongTitle: 제목 없는 메모는 「'제목 없음' 삭제함」 (1)" ($blankUndo -ceq "' 삭제함|'제목 없음") $blankUndo
+    & $memoModule { Restore-WtMemoDeleted }
+    # 9①: 제목 없는 메모는 목록에 「제목 없음」(흐린 글자), 화면 읽기 이름도 같다
+    $list = & $memoModule { $script:ui.List }
+    $list.UpdateLayout()
+    $blankRow = @($list.Items | Where-Object { $_.Id -ceq 'blank' })[0]
+    $blankContainer = $list.ItemContainerGenerator.ContainerFromItem($blankRow)
+    $blankTitle = (Get-TestMemoRowVisual $blankContainer).Children[1]
+    Assert-WtTest 'MemoRow-Untitled: 제목 없는 메모는 목록에 「제목 없음」을 흐린 글자로 · 화면 읽기 이름도 같다 (9①)' (
+        $blankTitle.Text -ceq '제목 없음' -and $blankTitle.Foreground.Color -eq $view.FindResource('B.Text.Tertiary').Color -and
+        [System.Windows.Automation.AutomationProperties]::GetName($blankContainer) -ceq '제목 없음') "글=[$($blankTitle.Text)] 이름=[$([System.Windows.Automation.AutomationProperties]::GetName($blankContainer))]"
+    # 9②: 홈 바로 가기 이름은 지금 제목 (연 뒤 이름을 바꾼 메모)
+    & $memoModule { [void](Open-WtMemo 'rename' 'here') }
+    Wait-WtTestWrites
+    & $memoModule { $script:panes[0].TitleBox.Text = '새 이름'; [void](Save-WtMemoNow) }
+    Wait-WtTestWrites
+    $memoShortcuts = @(Get-WtShortcuts -Max 200 | Where-Object Page -ceq 'memo')
+    $renamedShortcut = @($memoShortcuts | Where-Object Key -ceq 'rename')[0]
+    $blankShortcut = @($memoShortcuts | Where-Object Key -ceq 'blank')[0]
+    Assert-WtTest 'HomeShortcut-CurrentTitle: 이름 바꾼 메모는 홈 바로 가기에 지금 제목 · 제목 없는 메모는 「제목 없음」 (9②)' (
+        $renamedShortcut.Title -ceq '새 이름' -and $blankShortcut.Title -ceq '제목 없음') "바꾼 메모=[$($renamedShortcut.Title)] 빈 제목=[$($blankShortcut.Title)]"
+    & $memoModule { [void](Open-WtMemo 'blank' 'here'); Remove-WtMemoCurrent }
+    Wait-WtTestWrites
+    Assert-WtTest 'HomeShortcut-CurrentTitle: 지운 메모는 바로 가기에서 빠진다 (9②)' (-not @(Get-WtShortcuts -Max 200 | Where-Object { $_.Page -ceq 'memo' -and $_.Key -ceq 'blank' }).Count)
+    & $memoModule { Restore-WtMemoDeleted }
+    # 8: 빠른 이동 면은 테두리가 보이고, 단축키 툴팁은 칸 위에 떠서 결과를 가리지 않는다
+    [void](Send-TestKey O Control)
+    $quickParts = & $memoModule { $script:ui.Quick }
+    $quickPanel = $quickParts.Box.Parent.Parent.Parent
+    $win.UpdateLayout()
+    Assert-WtTest 'QuickOpen-Popup: 떠 있는 면 선 1 B.Border.Default · 모서리 8 · 단축키 툴팁은 찾기 칸 위 (8)' (
+        $quickPanel -is [System.Windows.Controls.Border] -and $quickPanel.BorderThickness.Equals([System.Windows.Thickness]::new(1)) -and
+        $quickPanel.BorderBrush.Color -eq $view.FindResource('B.Border.Default').Color -and $quickPanel.Background.Color -eq $view.FindResource('B.Bg.Raised').Color -and
+        $quickPanel.CornerRadius.TopLeft -eq 8 -and [System.Windows.Controls.ToolTipService]::GetPlacement($quickParts.Box) -eq 'Top') "선=$($quickPanel.BorderThickness) 놓기=$([System.Windows.Controls.ToolTipService]::GetPlacement($quickParts.Box))"
+    [void](Send-TestKey Escape)
+    # 헤맨 곳: 새 메모 제목에서 Enter → 본문 첫 줄 · 제목 저장
+    & $memoModule { [void](Add-WtMemo -Edit) }
+    $titlePane = & $memoModule { $script:panes[0] }
+    $titleFocused = $titlePane.TitleBox.IsKeyboardFocused
+    $titlePane.TitleBox.Text = '제목 입력'
+    $titleEnter = Send-TestKey Return None $titlePane.TitleBox
+    $win.UpdateLayout(); & $findPump
+    $titleEd = $titlePane.Editor
+    Assert-WtTest 'TitleEnter-ToBody: 새 메모 제목에서 Enter → 본문 첫 줄에 커서 · 제목 저장 (헤맨 곳)' (
+        $titleFocused -and $titleEnter -and $titleEd.Island -and $titleEd.IslandBox.IsKeyboardFocused -and $titleEd.Island.Start -eq 0 -and
+        ((Get-WtMemoItems) | Where-Object id -eq $titlePane.Current.Id).title -ceq '제목 입력' -and $titleEd.Hint.Visibility -eq 'Visible') "제목포커스=$titleFocused Enter=$titleEnter 섬=$([bool]$titleEd.Island) 섬포커스=$($titleEd.IslandBox.IsKeyboardFocused)"
+    # 5: 메모 화면이 떠 있는데 포커스가 화면 밖(왼쪽 메뉴 · 창 자체)이어도 셸이 메모 단축키를 넘긴다. 화면 안이면 넘기지 않는다
+    $navButton = [System.Windows.Controls.RadioButton]::new(); $navButton.Content = '메모'
+    $outer = [System.Windows.Controls.DockPanel]::new()
+    [System.Windows.Controls.DockPanel]::SetDock($navButton, 'Left')
+    $win.Child = $null
+    [void]$outer.Children.Add($navButton); [void]$outer.Children.Add($view)
+    $win.Child = $outer
+    $win.UpdateLayout()
+    $savedShell = & $shellModule { @{ Current = $script:current; Ui = $script:ui } }
+    try {
+        & $shellModule { param($v) $script:current = 'memo'; $script:ui = @{ PageHost = [pscustomobject]@{ Content = $v } } } $view
+        [void]$navButton.Focus()
+        $navFocused = $navButton.IsKeyboardFocused
+        $countBefore = @(Get-WtMemoItems).Count
+        $pageN = & $shellModule { Invoke-WtPageKey ([System.Windows.Input.Key]::N) ([System.Windows.Input.ModifierKeys]::Control) }
+        $afterN = "$(@(Get-WtMemoItems).Count - $countBefore)|$(& $memoModule { $script:panes[0].TitleBox.IsKeyboardFocused })"
+        [void]$navButton.Focus()
+        $pageH = & $shellModule { Invoke-WtPageKey ([System.Windows.Input.Key]::H) ([System.Windows.Input.ModifierKeys]::Control) }
+        $pageBar = & $memoModule { $script:panes[0].Editor.Find.Bar }
+        $barOpened = $pageBar.Visibility -eq 'Visible'
+        [System.Windows.Input.Keyboard]::ClearFocus()   # 창을 다시 켜며 포커스를 되돌리지 못한 상태(포커스가 창 자체)
+        $pageEsc = & $shellModule { Invoke-WtPageKey ([System.Windows.Input.Key]::Escape) ([System.Windows.Input.ModifierKeys]::None) }
+        $barClosed = $pageBar.Visibility -eq 'Collapsed'
+        & $memoModule { [void]$script:ui.Search.Focus() }
+        $pageInside = & $shellModule { Invoke-WtPageKey ([System.Windows.Input.Key]::N) ([System.Windows.Input.ModifierKeys]::Control) }
+        Assert-WtTest 'PageKey-FocusOutside: 메뉴 · 창에 포커스가 있어도 Ctrl+N · Ctrl+H · Esc(찾기 막대 닫기)가 메모로 간다, 화면 안이면 넘기지 않는다 (5)' (
+            $navFocused -and $pageN -and $afterN -ceq '1|True' -and $pageH -and $barOpened -and $pageEsc -and $barClosed -and -not $pageInside) "메뉴포커스=$navFocused N=$pageN/$afterN H=$pageH/$barOpened Esc=$pageEsc/$barClosed 안=$pageInside"
+    } finally {
+        & $shellModule { param($s) $script:current = $s.Current; $script:ui = $s.Ui } $savedShell
+        $outer.Children.Clear(); $win.Child = $null
+    }
+
     # ---- 저장 실패: 작성 중인 글을 버리지 않는다 ----
     $one = New-WtMemo; $one.title = 'A'; $one.body = 'saved A'
     $two = New-WtMemo; $two.title = 'B'; $two.body = 'saved B'

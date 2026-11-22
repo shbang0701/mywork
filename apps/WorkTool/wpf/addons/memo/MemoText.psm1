@@ -446,6 +446,11 @@ function Get-WtMemoEnterEdit($s) {
         $q = $m.Groups[1].Value
         if ($col -lt $q.Length) { return $null }
         if ($m.Groups[2].Value.Trim()) { return New-WtMemoTextResult $pos $gap "$nl$q" ($pos + $nl.Length + $q.Length) }
+        # 빈 인용 줄: 접두어를 지워 인용 · 콜아웃을 끝낸다. 위 줄이 인용 안 글이면 이 줄을 빈 줄로 남기고 아래 새 줄로 간다.
+        # 인용 글 바로 아래에 붙여 쓴 줄은 그 문단에 이어지는(lazy) 줄이라 인용 안에 들어가기 때문이다(Obsidian · CommonMark)
+        $prev = Get-WtMemoTextPrevLine $t $line
+        $pm = if ($prev) { $script:mtQuote.Match($prev.Text) } else { $null }
+        if ($pm -and $pm.Success -and $pm.Groups[2].Value.Trim()) { return New-WtMemoTextResult $line.Start $line.Text.Length $nl ($line.Start + $nl.Length) }
         return New-WtMemoTextResult $line.Start $line.Text.Length '' $line.Start
     }
     $null
