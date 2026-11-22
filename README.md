@@ -31,7 +31,7 @@
     - 탭 하나 = `addons/<이름>/` 폴더 하나입니다. 탭의 도움말 · 단축키 · 검사(`Test-*.ps1`)도 그 폴더에 있어서, 폴더를 더하거나 지우는 것으로 탭을 더하고 뺍니다. 방법은 [WPF README](apps/WorkTool/wpf/README.md#탭애드온-더하기--빼기)
     - [전체 검사](apps/WorkTool/wpf/tests/Test-Core.ps1) — 코어 검사, 모든 탭을 함께 불러 겹침 확인, 탭 폴더의 검사, [셸 · 저장 안정성 검사](apps/WorkTool/wpf/tests/Test-Reliability.ps1)(중복 실행 차단, 저장 실패 때 묻는 흐름, 응답 없는 공유 폴더를 흉내 낸 데이터 폴더(저장 중 · 끝낼 때 기다림) · 끝낼 때 남은 작업), [알림 부품 검사](apps/WorkTool/wpf/tests/Test-Notice.ps1)(알람 창 · 소리 · 잠시 끄기, 창 · 소리 없이), 실행 파일 검사를 차례로 돌립니다.
     - [경량 성능 확인](apps/WorkTool/wpf/tests/Measure-WtPerformance.ps1) — 창 표시 없이 CPU·시간 예산 안에서 화면 구성 비용을 확인합니다. A~H 전체 판정은 하지 않습니다. [사용법](apps/WorkTool/wpf/README.md#성능-설정과-측정)
-    - [공통 화면 검사](apps/WorkTool/wpf/tests/Test-Ui.ps1) — 숨김 호스트에서 체크리스트의 완료 모양, 읽기·편집 표의 낱말 최소 폭, 이름 묻는 창의 모양 · 결과 · 좌표 경로를 확인합니다.
+    - [공통 화면 검사](apps/WorkTool/wpf/tests/Test-Ui.ps1) — 숨김 호스트에서 체크리스트의 완료 모양, 읽기·편집 표의 낱말 최소 폭, 이름 묻는 창 · 메뉴 항목의 모양 · 결과 · 좌표 경로를 확인합니다.
 - **[docs/guides/](docs/guides/)** — 읽는 가이드
   - [productivity/](docs/guides/productivity/) — 업무 효율·작업 환경
     - [WorkTool 사용 매뉴얼](docs/guides/productivity/worktool-manual.md) — 실제 화면으로 보는 시작 방법과 탭별 사용법

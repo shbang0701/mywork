@@ -160,11 +160,7 @@ function New-WtScheduleView {
     [Windows.Automation.AutomationProperties]::SetName($add, '새로 만들기')
     [Windows.Controls.DockPanel]::SetDock($add, 'Right'); $script:side.Header.Children.Insert(1, $add); $script:side.Add = $add
     $menu = New-WtHomePinContextMenu
-    foreach ($name in '새 일정', '새 루틴') {
-        $item = [Windows.Controls.MenuItem]::new(); $item.Header = $name; $item.Tag = $name
-        $item.Add_Click({ param($s, $e) Show-WtScheduleForm -Kind $(if ($s.Tag -eq '새 일정') { 'event' } else { 'routine' }) })
-        [void]$menu.Items.Add($item)
-    }
+    foreach ($spec in @('새 일정', 'event'), @('새 루틴', 'routine')) { [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($kind) Show-WtScheduleForm -Kind $kind } $spec[1])) }
     $add.ContextMenu = $menu
     $add.Add_Click({ param($s, $e) $s.ContextMenu.PlacementTarget = $s; $s.ContextMenu.Placement = 'Bottom'; $s.ContextMenu.IsOpen = $true })
     [void]$script:view.Side.Children.Add($side)
@@ -176,11 +172,6 @@ function New-WtScheduleView {
 }
 
 # ---- 3단계 머리줄 · 표 · 할 일 · 루틴 보기 (설계 14장, 디자인 README 「일정」) ---------------------------------
-
-# 메뉴 안의 묶음 이름(누를 수 없는 줄)
-function New-WtScheduleMenuCaption([string]$Text) {
-    $item = [Windows.Controls.MenuItem]::new(); $item.Header = $Text; $item.IsEnabled = $false; $item
-}
 
 # 오른쪽: 찾기 칸 · 깔때기 · 보기 전환 [할 일 n | 달력 | 표 | 루틴]. 왼쪽 표 보기의 ‹ 오늘 ›
 function Initialize-WtScheduleHeader {
@@ -305,11 +296,7 @@ function Initialize-WtScheduleLists {
             if ($node) { $node.IsSelected = $true; [void]$node.Focus() }
         })
     $menu = New-WtHomePinContextMenu
-    foreach ($name in '편집', '삭제') {
-        $item = [Windows.Controls.MenuItem]::new(); $item.Header = $name; $item.Tag = $name
-        $item.Add_Click({ param($s, $e) Invoke-WtScheduleRoutineAction ([string]$s.Tag) })
-        [void]$menu.Items.Add($item)
-    }
+    foreach ($name in '편집', '삭제') { [void]$menu.Items.Add((New-WtMenuItem $name { param($action) Invoke-WtScheduleRoutineAction ([string]$action) } $name)) }
     $routines.ContextMenu = $menu
     $routines.Add_ContextMenuOpening({ param($s, $e) if (-not $s.SelectedItem) { $e.Handled = $true } })
     $routines.Add_PreviewKeyDown({
@@ -570,19 +557,16 @@ function Update-WtScheduleFilterMenu($Menu) {
         }
     }
     $add = { param([string]$Header, [string]$Key, [string]$Term)
-        $item = [Windows.Controls.MenuItem]::new(); $on = $present.Contains($Key)
-        $item.Header = if ($on) { "✓ $Header" } else { $Header }; $item.Tag = $Term
-        $item.Add_Click({ param($s, $e) Switch-WtScheduleQueryTerm ([string]$s.Tag) })
-        [void]$Menu.Items.Add($item)
+        [void]$Menu.Items.Add((New-WtMenuItem $Header { param($v) Switch-WtScheduleQueryTerm ([string]$v) } $Term -Checked:($present.Contains($Key))))
     }
-    [void]$Menu.Items.Add((New-WtScheduleMenuCaption '상태'))
+    [void]$Menu.Items.Add((New-WtMenuCaption '상태'))
     & $add '안 끝낸 것' 'is:open' 'is:open'; & $add '끝낸 것' 'is:done' 'is:done'
-    [void]$Menu.Items.Add((New-WtScheduleMenuCaption '종류'))
+    [void]$Menu.Items.Add((New-WtMenuCaption '종류'))
     & $add '일정만' '-is:routine' '-is:routine'; & $add '루틴만' 'is:routine' 'is:routine'
     $data = Get-WtScheduleData
     $tags = @($data.Entries | Where-Object { $_.State -ceq 'ok' } | ForEach-Object { @($_.Tags) } | Where-Object { $_ } | Group-Object | Sort-Object -Property @{ Expression = 'Count'; Descending = $true }, Name | Select-Object -First 8)
     if ($tags.Count) {
-        [void]$Menu.Items.Add((New-WtScheduleMenuCaption '태그'))
+        [void]$Menu.Items.Add((New-WtMenuCaption '태그'))
         foreach ($tag in $tags) { & $add "#$($tag.Name)" "tag:$($tag.Name)" "#$($tag.Name)" }
     }
 }
@@ -607,10 +591,8 @@ function Switch-WtScheduleQueryTerm([string]$Term) {
 # 회사 휴무로 지정 또는 휴무일 해제. 휴무일은 코어(core\Calendar.psm1)에 저장한다. 개인 휴무는 설정 → 휴무일에서만 넣는다
 function Update-WtScheduleDayMenu($Button) {
     $menu = $Button.ContextMenu; $menu.Items.Clear(); $date = [datetime]$Button.DataContext
-    foreach ($name in '새 일정', '새 루틴') {
-        $item = [Windows.Controls.MenuItem]::new(); $item.Header = $name; $item.Tag = @{ Date = $date; Kind = $(if ($name -eq '새 일정') { 'event' } else { 'routine' }) }
-        $item.Add_Click({ param($s, $e) Set-WtScheduleDate $s.Tag.Date; Show-WtScheduleForm -Kind $s.Tag.Kind })
-        [void]$menu.Items.Add($item)
+    foreach ($spec in @('새 일정', 'event'), @('새 루틴', 'routine')) {
+        [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($v) Set-WtScheduleDate $v.Date; Show-WtScheduleForm -Kind $v.Kind } @{ Date = $date; Kind = $spec[1] }))
     }
     [void]$menu.Items.Add([Windows.Controls.Separator]::new())
     foreach ($entry in @(Get-WtDateMenuItems $date -Exclude 'schedule')) {
@@ -622,14 +604,9 @@ function Update-WtScheduleDayMenu($Button) {
     $holiday = Get-WtHolidayData
     $dateText = ConvertTo-WtDateText $date
     $here = @($holiday.Entries | Where-Object { $_.State -eq 'ok' -and $_.DateText -ceq $dateText })
-    $item = [Windows.Controls.MenuItem]::new()
-    if ($here.Count) {
-        $item.Header = '휴무일 해제'; $item.Tag = @{ Date = $dateText; Kinds = @($here.Kind | Select-Object -Unique); Name = '' }
-        $item.Add_Click({ param($s, $e) Set-WtScheduleHoliday $s.Tag.Date $s.Tag.Kinds $false })
-    } else {
-        $item.Header = '회사 휴무로 지정'; $item.Tag = @{ Date = $dateText; Kinds = @('company'); Name = '회사 휴무' }
-        $item.Add_Click({ param($s, $e) Set-WtScheduleHoliday $s.Tag.Date $s.Tag.Kinds $true $s.Tag.Name })
-    }
+    $item = if ($here.Count) {
+        New-WtMenuItem '휴무일 해제' { param($v) Set-WtScheduleHoliday $v.Date $v.Kinds $false } @{ Date = $dateText; Kinds = @($here.Kind | Select-Object -Unique) }
+    } else { New-WtMenuItem '회사 휴무로 지정' { param($v) Set-WtScheduleHoliday $v.Date $v.Kinds $true $v.Name } @{ Date = $dateText; Kinds = @('company'); Name = '회사 휴무' } }
     if ($holiday.Error) { $item.IsEnabled = $false; $item.ToolTip = $holiday.Error; [Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true) }
     [void]$menu.Items.Add($item)
 }
@@ -846,19 +823,19 @@ function New-WtRoutineList([datetime]$Date) {
             }
             $check.Add_Checked($onCheck); $check.Add_Unchecked($onCheck)
             $menu = New-WtHomePinContextMenu
+            # Row는 체크 상자의 Tag 그대로다. 줄을 다시 그리면 Update-WtRoutineList가 그 List를 화면의 목록으로 바꾼다
             foreach ($name in '편집', '삭제') {
-                $item = [Windows.Controls.MenuItem]::new(); $item.Header = $name; $item.Tag = @{ Id = $slot.Routine.Id; Action = $name; Date = $Date; List = $list }
-                $item.Add_Click({
-                    param($s, $e)
-                    if ($s.Tag.Action -eq '편집') {
-                        if ($script:view -and $script:view.Root.IsVisible) { Show-WtScheduleForm -Kind routine -Id $s.Tag.Id }
-                        else { Open-WtPage -Id schedule -Args @{ Date = $s.Tag.Date; RoutineId = $s.Tag.Id } }
-                    } else {
-                        $result = Set-WtRoutineDeleted -Id $s.Tag.Id
-                        if ($result.Success) { Update-WtRoutineList $s.Tag.List $s.Tag.Date }
-                    }
-                })
-                [void]$menu.Items.Add($item)
+                [void]$menu.Items.Add((New-WtMenuItem $name {
+                            param($v)
+                            $id = $v.Row.Slot.Routine.Id
+                            if ($v.Action -eq '편집') {
+                                if ($script:view -and $script:view.Root.IsVisible) { Show-WtScheduleForm -Kind routine -Id $id }
+                                else { Open-WtPage -Id schedule -Args @{ Date = $v.Row.Date; RoutineId = $id } }
+                            } else {
+                                $result = Set-WtRoutineDeleted -Id $id
+                                if ($result.Success) { Update-WtRoutineList $v.Row.List $v.Row.Date }
+                            }
+                        } @{ Action = $name; Row = $check.Tag }))
             }
             $check.ContextMenu = $menu; [void]$row.Children.Add($check); [void]$list.Children.Add($row)
         }
@@ -870,10 +847,7 @@ function Update-WtRoutineList($List, [datetime]$Date) {
     $replacement = New-WtRoutineList $Date; $List.Children.Clear()
     foreach ($child in @($replacement.Children)) {
         [void]$replacement.Children.Remove($child); [void]$List.Children.Add($child)
-        foreach ($check in @($child.Children | Where-Object { $_ -is [Windows.Controls.CheckBox] })) {
-            $check.Tag.List = $List
-            foreach ($item in $check.ContextMenu.Items) { $item.Tag.List = $List }
-        }
+        foreach ($check in @($child.Children | Where-Object { $_ -is [Windows.Controls.CheckBox] })) { $check.Tag.List = $List }
     }
     if ($List.Tag) { $List.Tag.Head.Content = New-WtCardHeader $List.Tag.Title (Get-WtRoutineCount $Date) }
     if ($List.DataContext -is [Windows.Controls.Border] -and -not @(Get-WtRoutineSlots -Date $Date).Count) { $List.DataContext.Visibility = 'Collapsed' }
@@ -1205,8 +1179,7 @@ function Update-WtScheduleLinks {
         if ($row.State -eq 'ok') { $actions = @(@('window', '새 창으로 보기'), @('open', "$name 탭에서 열기"), '-', @('remove', '연결 빼기')) } else { $actions = @(, @('remove', '연결 빼기')) }
         foreach ($a in $actions) {
             if ($a -is [string]) { [void]$menu.Items.Add([Windows.Controls.Separator]::new()); continue }
-            $item = [Windows.Controls.MenuItem]::new(); $item.Header = $a[1]; $item.Tag = @{ Action = $a[0]; Row = $row }
-            $item.Add_Click({ param($s, $e) Invoke-WtScheduleLinkAction $s.Tag.Action $s.Tag.Row }); [void]$menu.Items.Add($item)
+            [void]$menu.Items.Add((New-WtMenuItem $a[1] { param($v) Invoke-WtScheduleLinkAction $v.Action $v.Row } @{ Action = $a[0]; Row = $row }))
         }
         $button.ContextMenu = $menu
         [void]$box.Children.Add($button)
@@ -1220,10 +1193,7 @@ function Update-WtScheduleLinks {
             $content = New-WtStack Horizontal; $label = [Windows.Controls.TextBlock]::new(); $label.Text = "새 $($src.Name)"; $label.VerticalAlignment = 'Center'
             [void]$content.Children.Add($label); [void]$content.Children.Add((New-WtText ([string][char]0xE70D) 'Schedule.LinkChevron')); $new.Content = $content
             $menu = New-WtHomePinContextMenu
-            foreach ($t in $templates) {
-                $item = [Windows.Controls.MenuItem]::new(); $item.Header = $t.Name; $item.Tag = @{ Source = $src; Template = $t.Id }
-                $item.Add_Click({ param($s, $e) Invoke-WtScheduleLinkNew $s.Tag.Source $s.Tag.Template }); [void]$menu.Items.Add($item)
-            }
+            foreach ($t in $templates) { [void]$menu.Items.Add((New-WtMenuItem $t.Name { param($v) Invoke-WtScheduleLinkNew $v.Source $v.Template } @{ Source = $src; Template = $t.Id })) }
             $new.ContextMenu = $menu
             $new.Add_Click({ param($s, $e) $s.ContextMenu.PlacementTarget = $s; $s.ContextMenu.Placement = 'Bottom'; $s.ContextMenu.IsOpen = $true })
         } else {
@@ -1440,10 +1410,7 @@ function Save-WtScheduleForm([string]$Scope) {
                 end = $(if ($fields.allDay.IsChecked) { @{ date = $endDateText; time = $null } } elseif ($null -ne $end) { @{ date = $endDateText; time = $fields.end.Text } } else { $null }); repeat = $repeat; alarms = $alarms; tags = $tags }
             if ($f.Occurrence -and $f.Occurrence.Entry.Repeat -and -not $Scope) {
                 $menu = New-WtHomePinContextMenu
-                foreach ($name in '이 회차만', '이후 모두') {
-                    $item = [Windows.Controls.MenuItem]::new(); $item.Header = $name; $item.Tag = $name
-                    $item.Add_Click({ param($s, $e) Save-WtScheduleForm -Scope $s.Tag }); [void]$menu.Items.Add($item)
-                }
+                foreach ($name in '이 회차만', '이후 모두') { [void]$menu.Items.Add((New-WtMenuItem $name { param($scope) Save-WtScheduleForm -Scope $scope } $name)) }
                 $f.Save.ContextMenu = $menu; $menu.PlacementTarget = $f.Save; $menu.Placement = 'Top'; $menu.IsOpen = $true; return
             }
             if ($Scope -eq '이 회차만') {

@@ -1186,6 +1186,18 @@ try {
             $cards[1].HomeSlot -ceq 'main' -and $cards[1].HomeOrder -eq 10 -and $cards[2].HomeSlot -ceq 'side' -and $cards[2].HomeOrder -eq 20 -and (Get-WtTestTexts $routineCard) -contains '오늘 루틴')
         [void](Set-WtRoutineDeleted -Id $routine.Id)
         Assert-WtTest '오늘 루틴: 해당 루틴 없으면 카드 없음' ($null -eq (& $module { New-WtRoutineHomeCard }))
+        # 루틴 줄 우클릭 [삭제](공통 메뉴 항목): 체크로 줄을 다시 그린 뒤에도 그 루틴을 지우고, 화면에 붙은 같은 목록을 다시 그린다
+        $menuRoutine = New-WtRoutine -Title '메뉴 삭제 시험' -Freq daily -Start '2026-10-01'
+        $menuSection = & $module { New-WtRoutineSection '루틴' ([datetime]::Today) }
+        $findCheck = { param($List) @(foreach ($row in $List.Children) { @($row.Children | Where-Object { $_ -is [Windows.Controls.CheckBox] -and $_.Content.Text -clike '*메뉴 삭제 시험' }) })[0] }
+        & $module { param($c) $c.IsChecked = $true } (& $findCheck $menuSection.List)
+        $rowCheck = & $findCheck $menuSection.List
+        $rowMenu = @($rowCheck.ContextMenu.Items | ForEach-Object { [string]$_.Header }) -join ','
+        & $module { param($c) @($c.ContextMenu.Items | Where-Object { [string]$_.Header -ceq '삭제' })[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent)) } $rowCheck
+        $leftSlots = @(Get-WtRoutineSlots -Date ([datetime]::Today) | Where-Object { $_.Routine.Id -ceq $menuRoutine.Id }).Count
+        $shownRows = @(Get-WtTestTexts $menuSection.List | Where-Object { $_ -clike '*메뉴 삭제 시험' }).Count
+        Assert-WtTest '루틴 줄 메뉴(공통 메뉴 항목): 줄을 다시 그린 뒤에도 [삭제]가 그 루틴을 지우고 화면의 같은 목록을 다시 그린다' (
+            $rowMenu -ceq '편집,삭제' -and $leftSlots -eq 0 -and $shownRows -eq 0) "메뉴 $rowMenu · 남은 회차 $leftSlots · 남은 줄 $shownRows"
         # ---- 1단계: 일정 체크 · 여러 날 막대 · 기간 폼 · 달 고르기 · 휴무일 지정 ----
         $checkOne = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '체크 하루'; start = @{ date = '2026-11-03'; time = '10:00' } }
         $checkWeekly = Save-WtScheduleItem (Open-WtScheduleStore) @{ title = '체크 반복'; start = @{ date = '2026-11-02'; time = '09:00' }; repeat = @{ freq = 'weekly' } }
@@ -1337,6 +1349,24 @@ try {
         Assert-WtTest '날짜 우클릭 휴무일: 지정하면 칸 머리에 이름, 다시 열면 해제, 해제하면 계산에서 빠짐' (
             $menuHeaders -ceq '새 일정,새 루틴,회사 휴무로 지정' -and $afterSet -ceq '회사 휴무|True' -and $menuAfter -ceq '새 일정,새 루틴,휴무일 해제' -and
             -not (Get-WtHolidayDates).Contains('2026-11-27')) "$menuHeaders / $afterSet / $menuAfter"
+        # 메뉴 항목은 공통 New-WtMenuItem(core\Ui.psm1)이다. 항목을 눌러도 전과 같다: 휴무일 지정 · 해제, 그날 새 일정 폼, + 메뉴의 새 루틴 폼
+        $pressMenu = { param($Menu, [string]$Header) @($Menu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] -and [string]$_.Header -ceq $Header })[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent)) }
+        $keptDay = & $module { @{ Selected = $script:selected; Month = $script:month } }
+        & $module { param($b, $press) Update-WtScheduleDayMenu $b; & $press $b.ContextMenu '회사 휴무로 지정' } $cells[26].Button $pressMenu
+        $pressedSet = (Get-WtHolidayDates).Contains('2026-11-27')
+        $cells = & $module { ,$script:cells }
+        & $module { param($b, $press) Update-WtScheduleDayMenu $b; & $press $b.ContextMenu '휴무일 해제' } $cells[26].Button $pressMenu
+        $pressedClear = -not (Get-WtHolidayDates).Contains('2026-11-27')
+        $cells = & $module { ,$script:cells }
+        $pressedForms = & $module {
+            param($b, $press, $kept)
+            Update-WtScheduleDayMenu $b; & $press $b.ContextMenu '새 일정'; $event = "$($script:form.Kind) $($script:selected.ToString('yyyy-MM-dd'))"
+            & $press $script:side.Add.ContextMenu '새 루틴'; $routine = $script:form.Kind
+            $script:form = $null; $script:selected = $kept.Selected; $script:month = $kept.Month; Update-WtScheduleView
+            "$event|$routine"
+        } $cells[26].Button $pressMenu $keptDay
+        $cells = & $module { ,$script:cells }
+        Assert-WtTest '날짜 우클릭 · + 메뉴(공통 메뉴 항목): 눌러서 휴무일 지정 · 해제, 그날 새 일정 폼, 새 루틴 폼' ($pressedSet -and $pressedClear -and $pressedForms -ceq 'event 2026-11-27|routine') "$pressedSet / $pressedClear / $pressedForms"
         # 4단계(설계 15.6): 다른 탭이 코어에 등록한 날짜 메뉴 항목이 구분선과 휴무일 사이에 붙고, 누르면 그 탭의 동작을 부른 뒤 달력을 다시 그린다
         $global:wtTestDateMenuArg = $null
         Register-WtAddon -Id 'test-datemenu' -Title '가짜 근태' -NewView { [Windows.Controls.Border]::new() } -DateMenu {
@@ -1537,6 +1567,13 @@ try {
         $filterOff = & $module { $script:search.Box.Text }
         Assert-WtTest '깔때기: 조건을 찾기 칸 글에 넣고 다시 고르면 빼며, 메뉴는 상태 · 종류 · 많이 쓴 태그에 지금 조건 ✓' (
             $filterOn -ceq 'is:open #회의' -and $filterOff -ceq '' -and $menu3 -ceq '상태,✓ 안 끝낸 것,끝낸 것,종류,일정만,루틴만,태그,#작업,#점검,✓ #회의') "$filterOn / $menu3 / [$filterOff]"
+        $pressedFilter = & $module {
+            $press = { param($m, [string]$h) @($m.Items | Where-Object { [string]$_.Header -ceq $h })[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent)) }
+            $m = New-WtHomePinContextMenu
+            Update-WtScheduleFilterMenu $m; & $press $m '루틴만'; $on = $script:search.Box.Text
+            Update-WtScheduleFilterMenu $m; & $press $m '✓ 루틴만'; "$on|[$($script:search.Box.Text)]"
+        }
+        Assert-WtTest '깔때기 메뉴(공통 메뉴 항목): 항목을 누르면 찾기 칸에 조건을 넣고, ✓ 항목을 다시 누르면 뺀다' ($pressedFilter -ceq 'is:routine|[]') $pressedFilter
         & $module { Set-WtScheduleViewMode 'routines' }
         $routineItems = @(& $module { @($script:view.RoutineList.ItemsSource) })
         $routineShape = (@($routineItems | ForEach-Object { "$($_.Title):$($_.RuleText):$($_.TimeText):$($_.TodayText)" }) -join ',')

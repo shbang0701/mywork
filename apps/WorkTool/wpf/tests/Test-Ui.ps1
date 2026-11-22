@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창.
+    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 메뉴 항목.
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/tests/Test-Ui.ps1
 #>
@@ -173,6 +173,36 @@ try {
     $badRoute = Test-WtTestInputPath -View $root -Element $dialog.Save -Target $dialog.Save
     Assert-WtTest '이름 묻는 창 고장 대조군: 누름을 받지 않는 [저장]은 좌표 경로=False' ($badRoute.Point -and -not $badRoute.Ok) $badRoute.Path
     $root.Child = $null
+    # 메뉴 항목(New-WtMenuItem · New-WtMenuCaption): 메뉴는 부모를 가질 수 없어서 공통 메뉴를 숨김 호스트의 맨 위 요소로 두고 연 것처럼 배치한다.
+    # 누름은 UIA 누르기라 클릭과 같은 MenuItem 경로를 탄다. 팝업 창 · OS 입력은 보지 않는다
+    $menu = New-WtHomePinContextMenu
+    $menu.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $menu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    $global:uiMenuPicked = [Collections.Generic.List[object]]::new()
+    $menuItems = @((New-WtMenuCaption '정렬'), (New-WtMenuItem '제목' { param($v) $global:uiMenuPicked.Add($v) } 'title' -Checked),
+        (New-WtMenuItem '수정일' { param($v) $global:uiMenuPicked.Add($v.By) } @{ By = 'updated' }), (New-WtMenuItem '수동' { $global:uiMenuPicked.Add('값 없음') }))
+    foreach ($item in $menuItems) { [void]$menu.Items.Add($item) }
+    $invokeItem = { param($Item) ([Windows.Automation.Provider.IInvokeProvider]([Windows.Automation.Peers.MenuItemAutomationPeer]::new($Item).GetPattern([Windows.Automation.Peers.PatternInterface]::Invoke))).Invoke() }
+    $menuParameters = [Windows.Interop.HwndSourceParameters]::new('UI menu test'); $menuParameters.WindowStyle = 0; $menuParameters.Width = 300; $menuParameters.Height = 300
+    $menuSource = [Windows.Interop.HwndSource]::new($menuParameters)
+    try {
+        $menuSource.RootVisual = $menu
+        [void]$menu.ApplyTemplate(); $menu.Measure([Windows.Size]::new(300, 300)); $menu.Arrange([Windows.Rect]::new(0, 0, 300, 300)); $menu.UpdateLayout()
+        $headers = @($menuItems | ForEach-Object { [string]$_.Header }) -join ','
+        Assert-WtTest '공통 메뉴 항목: 묶음 이름은 누를 수 없는 흐린 줄, 고른 항목은 앞에 ✓, 줄 높이 32' (
+            $headers -ceq '정렬,✓ 제목,수정일,수동' -and -not $menuItems[0].IsEnabled -and @($menuItems[1..3] | Where-Object IsEnabled).Count -eq 3 -and
+            $menuItems[0].Foreground.Color -eq $menu.FindResource('B.Text.Disabled').Color -and -not @($menuItems | Where-Object { $_.ActualHeight -ne 32 }).Count) "$headers / 높이 $(@($menuItems | ForEach-Object ActualHeight) -join ',')"
+        foreach ($item in $menuItems[1..3]) {
+            $route = Test-WtTestInputPath -View $menu -Element $item -Target $item
+            Assert-WtTest "공통 메뉴 항목 숨김 좌표 경로: $($item.Header)" $route.Ok $route.Path
+        }
+        $captionRoute = Test-WtTestInputPath -View $menu -Element $menuItems[0] -Target $menuItems[0]
+        Assert-WtTest '공통 메뉴 항목: 묶음 이름 자리를 눌러도 그 줄에 닿지 않는다 (좌표 경로=False)' ($captionRoute.Point -and -not $captionRoute.Ok) $captionRoute.Path
+        foreach ($item in $menuItems[1..3]) { & $invokeItem $item }
+        [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
+        $captionBlocked = $false
+        try { & $invokeItem $menuItems[0] } catch { $captionBlocked = $true }
+        Assert-WtTest '공통 메뉴 항목: 누르면 그 항목의 값으로 한 번씩 부르고(값 없는 항목도), 묶음 이름은 누를 수 없다' (($global:uiMenuPicked -join ',') -ceq 'title,updated,값 없음' -and $captionBlocked) ($global:uiMenuPicked -join ',')
+    } finally { $menuSource.Dispose() }
     Write-Host '공통 화면 검사 PASS · FAIL 0'
 } finally {
     if ($hostSource) { $hostSource.Dispose() }

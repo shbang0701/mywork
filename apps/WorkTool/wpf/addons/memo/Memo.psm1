@@ -1552,64 +1552,50 @@ function Save-WtMemoCurrentView([string]$Name, [switch]$Update) {
     Update-WtMemoList
 }
 
-# ---- 목록: 메뉴 ---------------------------------------------------------------------------------
-
-function New-WtMemoMenuCaption([string]$Text) {
-    $item = [System.Windows.Controls.MenuItem]::new()
-    $item.Header = $Text; $item.IsEnabled = $false
-    $item
-}
-
-function New-WtMemoMenuItem([string]$Text, [scriptblock]$OnClick, $Value, [switch]$Checked) {
-    $item = [System.Windows.Controls.MenuItem]::new()
-    $item.Header = if ($Checked) { "✓ $Text" } else { $Text }
-    $item.Tag = @{ OnClick = $OnClick; Value = $Value }
-    $item.Add_Click({ param($s, $e) & $s.Tag.OnClick $s.Tag.Value })
-    $item
-}
+# ---- 목록: 메뉴 (항목은 core\Ui.psm1의 New-WtMenuItem · New-WtMenuCaption) ----------------------
 
 function Set-WtMemoViewMenu($Menu) {
     $Menu.Items.Clear()
     foreach ($spec in @(@('normal', '일반'), @('pinned', '고정'), @('recent', '최근 열기'), @('archived', '보관'), @('all', '모두'))) {
         $on = $script:listView -ceq $spec[0] -and -not $script:listSaved
-        [void]$Menu.Items.Add((New-WtMemoMenuItem $spec[1] { param($v) $script:listSaved = $null; $script:listView = $v; Update-WtMemoList } $spec[0] -Checked:$on))
+        [void]$Menu.Items.Add((New-WtMenuItem $spec[1] { param($v) $script:listSaved = $null; $script:listView = $v; Update-WtMemoList } $spec[0] -Checked:$on))
     }
     $views = @(try { Get-WtMemoViews } catch { })
     if ($views.Count) {
-        [void]$Menu.Items.Add((New-WtMemoMenuCaption '저장한 보기'))
+        [void]$Menu.Items.Add((New-WtMenuCaption '저장한 보기'))
         foreach ($view in $views) {
             $on = $script:listSaved -and [string]$script:listSaved.id -ceq [string]$view.id
-            [void]$Menu.Items.Add((New-WtMemoMenuItem ([string]$view.name) { param($v) Use-WtMemoSavedView $v } $view -Checked:$on))
+            [void]$Menu.Items.Add((New-WtMenuItem ([string]$view.name) { param($v) Use-WtMemoSavedView $v } $view -Checked:$on))
         }
     }
     $folders = @(try { Get-WtMemoFolders $script:memoStore } catch { })
     if ($folders.Count) {
-        [void]$Menu.Items.Add((New-WtMemoMenuCaption '폴더'))
+        [void]$Menu.Items.Add((New-WtMenuCaption '폴더'))
         foreach ($folder in $folders) {
-            [void]$Menu.Items.Add((New-WtMemoMenuItem ([string]$folder.name) { param($v) Add-WtMemoChip "folder:`"$v`"" "폴더: $v"; Update-WtMemoList } ([string]$folder.name)))
+            [void]$Menu.Items.Add((New-WtMenuItem ([string]$folder.name) { param($v) Add-WtMemoChip "folder:`"$v`"" "폴더: $v"; Update-WtMemoList } ([string]$folder.name)))
         }
     }
-    [void]$Menu.Items.Add((New-WtMemoMenuCaption '보기 저장'))
+    [void]$Menu.Items.Add((New-WtMenuCaption '보기 저장'))
     if ($script:listSaved) {
-        [void]$Menu.Items.Add((New-WtMemoMenuItem '보기 업데이트' { Save-WtMemoCurrentView ([string]$script:listSaved.name) -Update }))
-        [void]$Menu.Items.Add((New-WtMemoMenuItem '이 보기 삭제' { try { [void](Set-WtMemoViewDeleted -Id ([string]$script:listSaved.id)) } catch { Show-WtError $_ '보기 삭제'; return }; $script:listSaved = $null; Update-WtMemoList }))
+        [void]$Menu.Items.Add((New-WtMenuItem '보기 업데이트' { Save-WtMemoCurrentView ([string]$script:listSaved.name) -Update }))
+        [void]$Menu.Items.Add((New-WtMenuItem '이 보기 삭제' { try { [void](Set-WtMemoViewDeleted -Id ([string]$script:listSaved.id)) } catch { Show-WtError $_ '보기 삭제'; return }; $script:listSaved = $null; Update-WtMemoList }))
     }
-    [void]$Menu.Items.Add((New-WtMemoMenuItem '새 보기로 저장...' { $name = Read-WtName '보기 저장' '보기 이름'; if ($name) { Save-WtMemoCurrentView $name } }))
+    [void]$Menu.Items.Add((New-WtMenuItem '새 보기로 저장...' { $name = Read-WtName '보기 저장' '보기 이름'; if ($name) { Save-WtMemoCurrentView $name } }))
 }
 
 function Set-WtMemoFilterMenu($Menu) {
     $Menu.Items.Clear()
     $add = { param($v) Add-WtMemoChip $v ''; Update-WtMemoList }
-    [void]$Menu.Items.Add((New-WtMemoMenuCaption '수정일'))
-    foreach ($days in 1, 7, 30) { [void]$Menu.Items.Add((New-WtMemoMenuItem $(if ($days -eq 1) { '오늘' } else { "최근 ${days}일" }) $add "updated:${days}d")) }
-    [void]$Menu.Items.Add((New-WtMemoMenuCaption '상태'))
+    [void]$Menu.Items.Add((New-WtMenuCaption '수정일'))
+    foreach ($days in 1, 7, 30) { [void]$Menu.Items.Add((New-WtMenuItem $(if ($days -eq 1) { '오늘' } else { "최근 ${days}일" }) $add "updated:${days}d")) }
+    [void]$Menu.Items.Add((New-WtMenuCaption '상태'))
     foreach ($spec in @(@('고정', 'is:pinned'), @('연결 있음', 'has:link'), @('받은 연결 있음', 'has:backlink'), @('태그 없음', 'no:tag'))) {
-        [void]$Menu.Items.Add((New-WtMemoMenuItem $spec[0] $add $spec[1]))
+        [void]$Menu.Items.Add((New-WtMenuItem $spec[0] $add $spec[1]))
     }
     $tags = @($script:items | ForEach-Object { @($_.tags) } | Where-Object { $_ } | Group-Object | Sort-Object -Property @{ Expression = 'Count'; Descending = $true }, Name | Select-Object -First 8)
     if ($tags.Count) {
-        [void]$Menu.Items.Add((New-WtMemoMenuCaption '태그'))
-        foreach ($tag in $tags) { [void]$Menu.Items.Add((New-WtMemoMenuItem "#$($tag.Name)" $add "tag:`"$($tag.Name)`"")) }
+        [void]$Menu.Items.Add((New-WtMenuCaption '태그'))
+        foreach ($tag in $tags) { [void]$Menu.Items.Add((New-WtMenuItem "#$($tag.Name)" $add "tag:`"$($tag.Name)`"")) }
     }
 }
 
@@ -1617,13 +1603,13 @@ function Set-WtMemoSortMenu($Menu) {
     $Menu.Items.Clear()
     $use = { param($v) $script:listSort = $v; $script:listDir = ''; Update-WtMemoList }
     foreach ($spec in @(@('', '기본'), @('updated', '수정일'), @('created', '생성일'), @('title', '제목'), @('opened', '최근 열기'), @('backlinks', '받은 연결 수'))) {
-        [void]$Menu.Items.Add((New-WtMemoMenuItem $spec[1] $use $spec[0] -Checked:($script:listSort -ceq $spec[0])))
+        [void]$Menu.Items.Add((New-WtMenuItem $spec[1] $use $spec[0] -Checked:($script:listSort -ceq $spec[0])))
     }
     if ($script:listSort) {
         $dir = if ($script:listDir) { $script:listDir } elseif ($script:listSort -ceq 'title') { 'asc' } else { 'desc' }
-        [void]$Menu.Items.Add((New-WtMemoMenuCaption '방향'))
+        [void]$Menu.Items.Add((New-WtMenuCaption '방향'))
         foreach ($spec in @(@('desc', '내림차순'), @('asc', '오름차순'))) {
-            [void]$Menu.Items.Add((New-WtMemoMenuItem $spec[1] { param($v) $script:listDir = $v; Update-WtMemoList } $spec[0] -Checked:($dir -ceq $spec[0])))
+            [void]$Menu.Items.Add((New-WtMenuItem $spec[1] { param($v) $script:listDir = $v; Update-WtMemoList } $spec[0] -Checked:($dir -ceq $spec[0])))
         }
     }
 }
@@ -1634,8 +1620,8 @@ function Set-WtMemoActionItems($Menu, [string]$Id, $Pane) {
     $m = Get-WtMemoById $Id
     if (-not $m) { return }
     $pinned = $m.pinned -eq $true; $archived = $m.archived -eq $true
-    [void]$Menu.Items.Add((New-WtMemoMenuItem $(if ($pinned) { '고정 해제' } else { '고정' }) { param($v) Invoke-WtMemoAction pin $v.Id $v.Value } @{ Id = $Id; Value = -not $pinned }))
-    [void]$Menu.Items.Add((New-WtMemoMenuItem $(if ($archived) { '보관 해제' } else { '보관' }) { param($v) Invoke-WtMemoAction archive $v.Id $v.Value } @{ Id = $Id; Value = -not $archived }))
+    [void]$Menu.Items.Add((New-WtMenuItem $(if ($pinned) { '고정 해제' } else { '고정' }) { param($v) Invoke-WtMemoAction pin $v.Id $v.Value } @{ Id = $Id; Value = -not $pinned }))
+    [void]$Menu.Items.Add((New-WtMenuItem $(if ($archived) { '보관 해제' } else { '보관' }) { param($v) Invoke-WtMemoAction archive $v.Id $v.Value } @{ Id = $Id; Value = -not $archived }))
     $folders = @(try { Get-WtMemoFolders $script:memoStore } catch { })
     if ($folders.Count) {
         $move = [System.Windows.Controls.MenuItem]::new()
@@ -1644,10 +1630,10 @@ function Set-WtMemoActionItems($Menu, [string]$Id, $Pane) {
         [void]$Menu.Items.Add($move)
         foreach ($folder in @($folders) + @([pscustomobject]@{ id = ''; name = '폴더 없음' })) {
             $on = [string]$m.folder -ceq [string]$folder.id
-            [void]$move.Items.Add((New-WtMemoMenuItem ([string]$folder.name) { param($v) Invoke-WtMemoAction folder $v.Id $v.Value } @{ Id = $Id; Value = [string]$folder.id } -Checked:$on))
+            [void]$move.Items.Add((New-WtMenuItem ([string]$folder.name) { param($v) Invoke-WtMemoAction folder $v.Id $v.Value } @{ Id = $Id; Value = [string]$folder.id } -Checked:$on))
         }
     }
-    [void]$Menu.Items.Add((New-WtMemoMenuItem '삭제' { param($v) Remove-WtMemoItem $v.Id $v.Pane } @{ Id = $Id; Pane = $Pane }))
+    [void]$Menu.Items.Add((New-WtMenuItem '삭제' { param($v) Remove-WtMemoItem $v.Id $v.Pane } @{ Id = $Id; Pane = $Pane }))
 }
 
 # 목록 우클릭: 열기 · 홈 고정 + 정리 항목
@@ -1655,9 +1641,9 @@ function Set-WtMemoListMenu($Menu, [string]$Id) {
     Set-WtMemoActionItems $Menu $Id $null
     $Menu.Tag = $Id
     $open = @(
-        (New-WtMemoMenuItem '새 탭에서 열기' { param($v) [void](Open-WtMemo $v 'tab') } $Id),
-        (New-WtMemoMenuItem '오른쪽에 열기' { param($v) [void](Open-WtMemo $v 'side') } $Id),
-        (New-WtMemoMenuItem $(if (Test-WtHomePin -Page 'memo' -Key $Id) { '홈 고정 해제' } else { '홈에 고정' }) {
+        (New-WtMenuItem '새 탭에서 열기' { param($v) [void](Open-WtMemo $v 'tab') } $Id),
+        (New-WtMenuItem '오른쪽에 열기' { param($v) [void](Open-WtMemo $v 'side') } $Id),
+        (New-WtMenuItem $(if (Test-WtHomePin -Page 'memo' -Key $Id) { '홈 고정 해제' } else { '홈에 고정' }) {
             param($v) Set-WtHomePin -Page 'memo' -Key $v -Title (Get-WtMemoTitle $v) -Sub '메모' -Icon 0xE70B -Pinned:(-not (Test-WtHomePin -Page 'memo' -Key $v))
         } $Id))
     $open[0].InputGestureText = 'Ctrl+클릭'

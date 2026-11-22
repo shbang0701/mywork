@@ -2802,6 +2802,23 @@ function New-WtContextMenu {
     $menu
 }
 
+# 메뉴 항목 하나. 누르면 & $OnClick $Value (항목마다 다른 값은 -Value로 넘긴다). -Checked면 글 앞에 ✓
+# 모양은 넣는 메뉴(New-WtHomePinContextMenu)의 항목 모양을 따른다. 하위 메뉴를 여는 머리 항목에는 쓰지 않는다(하위 항목의 누름이 올라온다)
+function New-WtMenuItem([string]$Text, [scriptblock]$OnClick, $Value, [switch]$Checked) {
+    $item = [System.Windows.Controls.MenuItem]::new()
+    $item.Header = if ($Checked) { "✓ $Text" } else { $Text }
+    $item.Tag = @{ OnClick = $OnClick; Value = $Value }
+    $item.Add_Click({ param($s, $e) & $s.Tag.OnClick $s.Tag.Value })
+    $item
+}
+
+# 메뉴 안의 묶음 이름(누를 수 없는 줄)
+function New-WtMenuCaption([string]$Text) {
+    $item = [System.Windows.Controls.MenuItem]::new()
+    $item.Header = $Text; $item.IsEnabled = $false
+    $item
+}
+
 function Get-WtVisualChild($Root, [type]$Type) {
     if ($Root -is $Type) { return $Root }
     for ($i = 0; $i -lt [System.Windows.Media.VisualTreeHelper]::GetChildrenCount($Root); $i++) {
@@ -2812,7 +2829,7 @@ function Get-WtVisualChild($Root, [type]$Type) {
 }
 
 Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
-Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, New-WtMinuteInput, New-WtContextMenu, Get-WtVisualChild,
+Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
     New-WtPageHeader, New-WtPage, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
