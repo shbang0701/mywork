@@ -1361,6 +1361,153 @@ try {
     Assert-WtTest '메모 정리: 대소문자만 다른 id를 구분하고 다른 행을 덮지 않는다' (
         $caseAction.Ids.Count -eq 2 -and $caseAction.Upper.title -ceq '대문자 항목' -and -not $caseAction.Upper.pinned -and $caseAction.Lower.pinned -and $caseAction.Lower.body -ceq '아래 본문')
 
+    # ---- 탭 줄이 넘칠 때: Windows 탭(TabView)처럼 줄이고 · 스크롤한다 (디자인 3판 7절 「목록 줄·탭」) ----
+    # 값이 아니라 숨김 호스트의 실제 배치(TransformToAncestor)로 본다. 1280 = 검사 호스트 기본 폭,
+    # 968 = 창 1024에서 왼쪽 메뉴 48 · 오른쪽 여백 8을 뺀 내용 폭(창 1200 미만이라 목차는 레일로 접혀 시작)
+    $cap = & $memoModule { @((Get-WtMemoTabCap @(130, 200) 687 4 120 240), (Get-WtMemoTabCap @(74, 327, 327, 327) 687 4 120 240), (Get-WtMemoTabCap @(327, 327, 327, 327, 327, 327) 687 4 120 240)) }
+    Assert-WtTest 'MemoTabFit-Cap: 다 들어가면 최대 · 모자라면 좁은 탭은 두고 넓은 탭을 같은 폭으로 · 최소 폭으로도 넘치면 스크롤(-1)' (($cap -join ',') -ceq '240,183,-1') ($cap -join ',')
+    $tabMemos = @(foreach ($i in 1..22) {
+            $m = New-WtMemo; $m.id = "tab$i"; $m.body = "본문 $i"
+            $m.title = switch ($i % 3) { 0 { "아주 긴 제목 $i · 탭 폭보다 길어서 말줄임이 되는 메모" } 1 { "탭 $i" } default { "중간 길이 제목 $i" } }
+            $m
+        })
+    Save-WtMemoItems $tabMemos
+    Set-WtSetting 'memo.tabs' $null
+    Show-TestView
+    $tabPump = { $win.UpdateLayout(); & $findPump; $win.UpdateLayout() }
+    function Set-TestHostWidth([double]$Width) {
+        $win.Width = $Width
+        $win.Measure([System.Windows.Size]::new($Width, 720)); $win.Arrange([System.Windows.Rect]::new(0, 0, $Width, 720))
+        & $tabPump
+    }
+    function Get-TestRect($Element) { $Element.TransformToAncestor($script:view).TransformBounds([System.Windows.Rect]::new([System.Windows.Point]::new(0, 0), $Element.RenderSize)) }
+    # 칸 하나의 탭 줄을 실제 사각형으로 잰다: 보이는 탭 영역(스크롤 보기) · ‹ › · 보기 · More · 탭마다
+    function Get-TestTabBar([int]$Index) {
+        & $tabPump
+        $p = & $memoModule { param($i) $script:panes[$i] } $Index
+        $card = Get-TestRect $p.Root; $area = Get-TestRect $p.Scroll; $viewB = Get-TestRect $p.ViewButton; $moreB = Get-TestRect $p.More
+        $on = $p.ScrollLeft.IsVisible -and $p.ScrollRight.IsVisible
+        $off = $p.ScrollLeft.Visibility -eq 'Collapsed' -and $p.ScrollRight.Visibility -eq 'Collapsed' -and -not $p.ScrollLeft.IsVisible -and -not $p.ScrollRight.IsVisible
+        $tabs = @(foreach ($t in $p.Tabs) { [pscustomobject]@{ Id = [string]$t.Id; Rect = (Get-TestRect $t.Button); Width = $t.Button.ActualWidth; Current = [object]::ReferenceEquals($t, $p.Current) } })
+        $cur = @($tabs | Where-Object Current)[0]
+        $min = [double]$script:view.FindResource('F.MemoTab.MinWidth')
+        # 탭 영역과 › 단추는 보기 단추 왼쪽에서 끝나고(› 뒤 4), 보기 · More는 카드 안 오른쪽 끝(사이 4 · 끝 8)
+        $end = if ($on) { (Get-TestRect $p.ScrollRight).Right + 4 } else { $area.Right }
+        $clear = $area.Right -le $viewB.Left + 0.5 -and $end -le $viewB.Left + 0.5 -and
+            [Math]::Abs($moreB.Left - $viewB.Right - 4) -lt 0.5 -and [Math]::Abs($card.Right - $moreB.Right - 8) -lt 0.5 -and $viewB.Width -eq 28 -and $moreB.Width -eq 28
+        [pscustomobject]@{
+            Pane = $p; Area = $area; Tabs = $tabs; Current = $cur; ScrollOn = $on; ScrollOff = $off; Clear = $clear
+            CurrentInside = $cur -and $cur.Rect.Left -ge $area.Left - 0.5 -and $cur.Rect.Right -le $area.Right + 0.5
+            AllInside = @($tabs | Where-Object { $_.Rect.Left -lt $area.Left - 0.5 -or $_.Rect.Right -gt $area.Right + 0.5 }).Count -eq 0
+            MinOk = @($tabs | Where-Object { $_.Width -lt $min - 0.01 }).Count -eq 0
+            Detail = "칸 $Index 카드 $($card.Left)..$($card.Right) · 탭 영역 $($area.Left)..$($area.Right) · 보기 $($viewB.Left)..$($viewB.Right) · More $($moreB.Left)..$($moreB.Right) · 지금 탭 $($cur.Rect.Left)..$($cur.Rect.Right) · ‹› $($p.ScrollLeft.Visibility) · 탭 폭 $(@($tabs | ForEach-Object { [Math]::Round($_.Width, 1) }) -join ',')"
+        }
+    }
+
+    # 탭이 적으면: 스크롤 단추 없이 글자 폭대로(짧은 제목 120 · 중간 · 긴 제목 240) 모두 보인다
+    & $memoModule { $p = $script:panes[0]; foreach ($t in @($p.Tabs)) { [void](Close-WtMemoTab $p $t) }; foreach ($id in 'tab1', 'tab2', 'tab3') { [void](Open-WtMemo $id 'tab') } }
+    $bar = Get-TestTabBar 0
+    $w = @($bar.Tabs.Width)
+    Assert-WtTest 'MemoTabFit-Few: 탭 3개 · 1280 — 스크롤 단추 없음, 글자 폭대로(120 · 중간 · 240) 모두 보이고 보기 · More와 안 겹침' (
+        $bar.Tabs.Count -eq 3 -and $bar.ScrollOff -and $bar.Pane.Scroll.ScrollableWidth -eq 0 -and $bar.AllInside -and $bar.Clear -and
+        [Math]::Abs($w[0] - 120) -lt 0.5 -and $w[1] -gt 120.5 -and $w[1] -lt 239.5 -and [Math]::Abs($w[2] - 240) -lt 0.5) $bar.Detail
+
+    # 모자라면: 긴 제목 탭을 하나씩 열어 처음 넘친 수 - 1 = 줄여서 다 들어가는 가장 많은 수. 넓은 탭부터 같은 폭으로 줄고 스크롤은 없다
+    $overflowAt = & $memoModule {
+        $p = $script:panes[0]
+        foreach ($t in @($p.Tabs)) { [void](Close-WtMemoTab $p $t) }
+        $n = 0
+        foreach ($id in 'tab3', 'tab6', 'tab9', 'tab12', 'tab15', 'tab18', 'tab21') { [void](Open-WtMemo $id 'tab'); $n++; if ($p.ScrollLeft.Visibility -eq 'Visible') { break } }
+        [void](Close-WtMemoTab $p $p.Current)
+        $n
+    }
+    $bar = Get-TestTabBar 0
+    $w = @($bar.Tabs.Width)
+    Assert-WtTest "MemoTabFit-Shrink: 긴 제목 탭 $($overflowAt - 1)개 · 1280 — 같은 폭으로 줄어(120 이상 240 미만) 스크롤 없이 모두 보인다" (
+        $overflowAt -ge 3 -and $bar.Tabs.Count -eq $overflowAt - 1 -and $bar.ScrollOff -and $bar.AllInside -and $bar.MinOk -and $bar.Clear -and
+        ($w | Measure-Object -Maximum).Maximum - ($w | Measure-Object -Minimum).Minimum -lt 0.5 -and $w[0] -lt 239.5) "처음 넘친 수 $overflowAt · $($bar.Detail)"
+    # 탭 폭이 맞춘 값과 어긋나면(글자 크기 설정이 바뀐 때처럼) 탭 줄 크기가 바뀌어 다시 맞춘다: 줄인 폭을 지워 넘치게 해 본다
+    & $memoModule { foreach ($t in $script:panes[0].Tabs) { $t.Button.ClearValue([System.Windows.FrameworkElement]::WidthProperty); $t.Button.ClearValue([System.Windows.FrameworkElement]::MaxWidthProperty) } }
+    $refit = Get-TestTabBar 0
+    Assert-WtTest 'MemoTabFit-Refit: 탭 폭이 어긋나 넘쳐도 탭 줄 크기 변화로 다시 맞춘다(같은 폭 · 스크롤 없음 · 모두 보임)' (
+        $refit.ScrollOff -and $refit.AllInside -and (@($refit.Tabs.Width) -join ',') -ceq ($w -join ',')) $refit.Detail
+
+    # 최소 폭으로도 넘치면: 탭 20개 · 양 끝 ‹ › · 지금 탭(마지막에 연 탭)은 보이는 영역 안
+    & $memoModule { foreach ($i in 1..22) { if ($i % 3) { [void](Open-WtMemo "tab$i" 'tab') } } }
+    $bar = Get-TestTabBar 0
+    $p0 = $bar.Pane
+    Assert-WtTest 'MemoTabFit-Overflow: 탭 20개 · 1280 — 모두 최소 폭 이상, ‹ › 보임, 지금 탭은 보이는 영역 안, 탭 줄은 보기 · More와 안 겹침' (
+        $bar.Tabs.Count -eq 20 -and $bar.ScrollOn -and $bar.MinOk -and $bar.CurrentInside -and $bar.Clear -and
+        $bar.Current.Id -ceq $bar.Tabs[-1].Id -and -not $p0.ScrollRight.IsEnabled -and $p0.ScrollRight.ToolTip -ceq '더 오른쪽에 탭이 없습니다' -and $p0.ScrollLeft.IsEnabled) $bar.Detail
+    foreach ($spec in @(@($p0.ViewButton, '보기 단추'), @($p0.More, 'More 단추'), @($p0.ScrollLeft, '‹ 단추'), @($p0.Current.Button, '지금 탭'))) {
+        $route = Test-WtTestInputPath -View $script:view -Element $spec[0] -Target $spec[0]
+        Assert-WtTest "MemoTabFit-InputPath: 탭 20개 · $($spec[1]) 가운데 좌표가 그 요소에 닿는다(탭 줄에 가리지 않음)" $route.Ok $route.Path
+    }
+    # ‹ 한 번 = 탭 하나: 왼쪽에 가려진 탭 중 가장 가까운 탭이 보이는 영역 왼쪽 끝에 다 보인다
+    $hidden = @($bar.Tabs | Where-Object { $_.Rect.Left -lt $bar.Area.Left - 0.5 })[-1].Id
+    $before = $p0.Scroll.HorizontalOffset
+    $p0.ScrollLeft.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+    $bar = Get-TestTabBar 0
+    $shown = @($bar.Tabs | Where-Object Id -CEQ $hidden)[0]
+    Assert-WtTest 'MemoTabFit-ScrollButton: ‹ 한 번이면 가려졌던 탭 하나가 보이는 영역 왼쪽 끝에 다 보이고 › 가 켜진다' (
+        $p0.Scroll.HorizontalOffset -lt $before - 0.5 -and [Math]::Abs($shown.Rect.Left - $bar.Area.Left) -lt 0.5 -and $shown.Rect.Right -le $bar.Area.Right + 0.5 -and
+        $p0.ScrollRight.IsEnabled -and $p0.ScrollRight.ToolTip -ceq '오른쪽 탭 보기') "$hidden · $($bar.Detail)"
+    [void](Send-TestKey Tab Control)   # 마지막 탭에서 Ctrl+Tab → 첫 탭으로 돈다
+    $bar = Get-TestTabBar 0
+    Assert-WtTest 'MemoTabFit-CtrlTab: 끝에서 첫 탭으로 돌면 처음으로 스크롤 · ‹ 꺼짐(툴팁에 이유) · › 켜짐' (
+        $bar.Current.Id -ceq $bar.Tabs[0].Id -and $bar.CurrentInside -and $p0.Scroll.HorizontalOffset -eq 0 -and -not $p0.ScrollLeft.IsEnabled -and
+        $p0.ScrollLeft.ToolTip -ceq '더 왼쪽에 탭이 없습니다' -and $p0.ScrollRight.IsEnabled) $bar.Detail
+    $route = Test-WtTestInputPath -View $script:view -Element $p0.ScrollRight -Target $p0.ScrollRight
+    Assert-WtTest 'MemoTabFit-InputPath: 탭 20개 · › 단추 가운데 좌표가 그 단추에 닿는다' $route.Ok $route.Path
+    $wheel = [System.Windows.Input.MouseWheelEventArgs]::new([System.Windows.Input.Mouse]::PrimaryDevice, 0, -120)
+    $wheel.RoutedEvent = [System.Windows.UIElement]::PreviewMouseWheelEvent
+    $p0.Scroll.RaiseEvent($wheel)
+    $bar = Get-TestTabBar 0
+    Assert-WtTest 'MemoTabFit-Wheel: 탭 줄 위 휠 한 칸 = 오른쪽으로 120 · ‹ 켜짐' ($wheel.Handled -and [Math]::Abs($p0.Scroll.HorizontalOffset - 120) -lt 0.5 -and $p0.ScrollLeft.IsEnabled) $p0.Scroll.HorizontalOffset
+    # 고장 대조군: 휠로 지금 탭(첫 탭)을 밀어내면 같은 검사가 「보이는 영역 밖」을 잡는다
+    Assert-WtTest 'MemoTabFit-Control: 지금 탭이 보이는 영역 밖이면 검사가 잡는다(고장 대조군)' (-not $bar.CurrentInside -and $bar.Current.Rect.Right -le $bar.Area.Left + 0.5) $bar.Detail
+    Write-Host "대조군 탭 줄 : 지금 탭 $($bar.Current.Rect.Left)..$($bar.Current.Rect.Right) · 보이는 영역 $($bar.Area.Left)..$($bar.Area.Right) · 안=$($bar.CurrentInside)"
+
+    # 창 1024: 마지막 탭을 지금 탭으로 둔 채 다시 켜면(설정에서 탭 복원) 좁은 폭에서도 지금 탭까지 스크롤된다
+    & $memoModule { $p = $script:panes[0]; [void](Select-WtMemoTab $p $p.Tabs[$p.Tabs.Count - 1]) }
+    Set-WtSetting 'memo.tocCollapsed' $true
+    try {
+        Show-TestView
+        Set-TestHostWidth 968
+        $bar = Get-TestTabBar 0
+        Assert-WtTest 'MemoTabFit-1024: 창 1024 · 한 칸 — 다시 켜도 탭 20개, 최소 폭 이상, 마지막 지금 탭까지 스크롤, 보기 · More와 안 겹침' (
+            $bar.Tabs.Count -eq 20 -and $bar.ScrollOn -and $bar.MinOk -and $bar.CurrentInside -and $bar.Clear -and $bar.Current.Id -ceq $bar.Tabs[-1].Id -and
+            (& $memoModule { $script:ui.TocPanel.ActualWidth }) -eq 28) $bar.Detail
+        [void](Send-TestKey Oem5 Control)   # Ctrl+\: 지금 메모를 오른쪽 칸에 나눠 연다
+        $bar = Get-TestTabBar 1
+        Assert-WtTest 'MemoTabFit-Few: 창 1024 · 나눈 오른쪽 칸(탭 1개)은 스크롤 단추 없이 다 보인다' ($bar.Tabs.Count -eq 1 -and $bar.ScrollOff -and $bar.AllInside -and $bar.Clear) $bar.Detail
+        & $memoModule { foreach ($id in 'tab1', 'tab2', 'tab3', 'tab4', 'tab5', 'tab6', 'tab7') { [void](Open-WtMemo $id 'tab') } }
+        $paneWidths = [System.Collections.Generic.List[string]]::new()
+        foreach ($case in @(@(968, 0.5, '창 1024'), @(968, 0.2, '창 1024 · 왼쪽 칸 최소 280'), @(1280, 0.5, '1280'))) {
+            & $memoModule { param($r) $script:ratio = $r; Update-WtMemoSplit } $case[1]
+            Set-TestHostWidth $case[0]
+            foreach ($i in 0, 1) {
+                $bar = Get-TestTabBar $i
+                $paneWidths.Add("$($case[2]) 칸 $i $([Math]::Round((Get-TestRect $bar.Pane.Root).Width))")
+                Assert-WtTest "MemoTabFit-Split: 두 칸 · $($case[2]) · 칸 $i — 최소 폭 이상, ‹ › 보임, 지금 탭 보임, 보기 · More와 안 겹침" (
+                    $bar.Tabs.Count -eq @(20, 8)[$i] -and $bar.ScrollOn -and $bar.MinOk -and $bar.CurrentInside -and $bar.Clear) $bar.Detail
+            }
+        }
+        # 기존 동작 그대로: 가운데 클릭 · 닫기 단추로 닫아도 탭 줄을 다시 맞추고 지금 탭이 보인다
+        $p0 = & $memoModule { $script:panes[0] }
+        $middle = [System.Windows.Input.MouseButtonEventArgs]::new([System.Windows.Input.Mouse]::PrimaryDevice, 0, [System.Windows.Input.MouseButton]::Middle)
+        $middle.RoutedEvent = [System.Windows.UIElement]::PreviewMouseDownEvent
+        $p0.Tabs[3].Button.RaiseEvent($middle)
+        $p0.Tabs[3].Close.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+        $bar = Get-TestTabBar 0
+        Assert-WtTest 'MemoTabFit-Close: 가운데 클릭 · 닫기 단추로 탭 둘을 닫아도 지금 탭이 보이고 최소 폭 이상' ($bar.Tabs.Count -eq 18 -and $bar.MinOk -and $bar.CurrentInside -and $bar.Clear) $bar.Detail
+        Write-Host "탭 줄 배치 확인(칸 폭): $($paneWidths -join ' · ')"
+    } finally {
+        Set-WtSetting 'memo.tocCollapsed' $false
+        & $memoModule { $script:ratio = 0.5 }
+        $win.Width = 1280
+    }
+
     # ---- 큰 저장소: 직렬화 전부터 보유 · 연속 저장 · 실패 · 종료 확인 · 캐시 ----
     Wait-WtTestWrites 30000
     & $memoModule { foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } }; $script:ui = @{}; $script:panes.Clear() }

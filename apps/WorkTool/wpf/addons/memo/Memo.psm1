@@ -427,7 +427,9 @@ function New-WtMemoTabButton($Pane, $Tab) {
         })
     $Tab.Button = $b
     $Tab.Text = $text
+    $Tab.Close = $x
     $Tab.Style = 'Memo.Tab'
+    $Tab.NaturalKey = ''
     $b
 }
 
@@ -450,17 +452,143 @@ function Update-WtMemoTabStrip($Pane) {
     $Pane.Strip.Children.Clear()
     foreach ($t in $Pane.Tabs) { [void]$Pane.Strip.Children.Add((New-WtMemoTabButton $Pane $t)) }
     Update-WtMemoTabTexts
+    Update-WtMemoTabFit $Pane
     Update-WtMemoTabStyles
 }
 
 function Update-WtMemoTabTexts {
     foreach ($p in $script:panes) {
+        $changed = $false
         foreach ($t in $p.Tabs) {
             if (-not $t.Text) { continue }
             $title = Get-WtMemoTitle $t.Id
-            if ($t.Text.Text -cne $title) { $t.Text.Text = $title; $t.Button.ToolTip = $title }
+            if ($t.Text.Text -cne $title) { $t.Text.Text = $title; $t.Button.ToolTip = $title; $changed = $true }
         }
+        if ($changed) { Update-WtMemoTabFit $p }
     }
+}
+
+# 탭 줄의 탭 폭 상한. Windows 탭(TabView)처럼 다 들어가면 최대 폭(글자 폭대로), 모자라면 좁은 탭은 두고
+# 넓은 탭부터 같은 폭으로 줄인다(최소 폭까지). 최소 폭으로도 넘치면 -1: 최소 폭으로 두고 가로로 스크롤한다.
+# $Natural: 줄이지 않은 탭 폭 · $Room: 탭이 쓸 수 있는 폭 · $Gap: 탭마다 오른쪽에 붙는 간격
+function Get-WtMemoTabCap([double[]]$Natural, [double]$Room, [double]$Gap, [double]$Min, [double]$Max) {
+    $n = $Natural.Count
+    if (-not $n) { return $Max }
+    $free = $Room - $Gap * $n
+    # 창 크기를 끄는 동안 자주 불리므로 파이프라인 없이 정렬한다
+    $sorted = [double[]]::new($n)
+    $sum = 0.0
+    for ($k = 0; $k -lt $n; $k++) { $sorted[$k] = [Math]::Min($Max, [Math]::Max($Min, $Natural[$k])); $sum += $sorted[$k] }
+    [Array]::Sort($sorted)
+    if ($sum -le $free) { return $Max }
+    if ($Min * $n -gt $free) { return -1 }
+    $fixed = 0.0
+    for ($k = 0; $k -lt $n; $k++) {
+        $cap = ($free - $fixed) / ($n - $k)
+        if ($cap -le $sorted[$k]) { return [Math]::Max($Min, [Math]::Floor($cap)) }
+        $fixed += $sorted[$k]
+    }
+    $Max
+}
+
+# 줄이지 않았을 때의 탭 폭: 제목 글자 폭 + 탭 좌우 여백 + 닫기 영역 (최소 · 최대 폭은 Get-WtMemoTabCap이 맞춘다).
+# 제목 · 글꼴 · 화면 배율이 그대로면 다시 재지 않는다. 모양을 아직 못 받았으면 NaN
+function Get-WtMemoTabNatural($Tab) {
+    $t = $Tab.Text; $b = $Tab.Button
+    $dpi = [System.Windows.Media.VisualTreeHelper]::GetDpi($t).PixelsPerDip
+    $key = "$($t.Text)`n$($t.FontFamily)`n$($t.FontSize)`n$($t.FontWeight)`n$dpi`n$($b.Padding)`n$($Tab.Close.Width)"
+    if ($Tab.NaturalKey -cne $key) {
+        $face = [System.Windows.Media.Typeface]::new($t.FontFamily, $t.FontStyle, $t.FontWeight, $t.FontStretch)
+        $ft = [System.Windows.Media.FormattedText]::new($t.Text, [System.Globalization.CultureInfo]::CurrentUICulture,
+            [System.Windows.FlowDirection]::LeftToRight, $face, $t.FontSize, $t.Foreground, $dpi)
+        $Tab.Natural = [Math]::Ceiling($ft.WidthIncludingTrailingWhitespace) + $b.Padding.Left + $b.Padding.Right + $Tab.Close.Width
+        $Tab.NaturalKey = $key
+    }
+    [double]$Tab.Natural
+}
+
+# 탭 줄 폭 맞추기. 칸 폭 · 탭 수 · 제목이 바뀔 때 부른다(탭 줄 크기가 바뀌어도 다시 온다).
+# 다 들어가면 글자 폭대로, 모자라면 넓은 탭부터 최소 폭까지 줄이고(넘친 제목은 말줄임, 전체는 툴팁),
+# 최소 폭으로도 넘치면 양 끝 ‹ › 단추를 보이고 가로로 스크롤한다. 보기 · More 단추는 스크롤 밖 오른쪽 끝이라 늘 보인다
+function Update-WtMemoTabFit($Pane) {
+    $grid = $Pane.BarGrid
+    if (-not $grid -or $grid.ActualWidth -le 0) { return }
+    $min = $grid.TryFindResource('F.MemoTab.MinWidth'); $max = $grid.TryFindResource('F.MemoTab.MaxWidth')
+    if ($null -eq $min -or $null -eq $max) { return }
+    $tools = $Pane.BarTools
+    $room = $grid.ActualWidth - $tools.ActualWidth - $tools.Margin.Left - $tools.Margin.Right
+    $natural = [System.Collections.Generic.List[double]]::new()
+    $gap = 0.0
+    foreach ($t in $Pane.Tabs) {
+        if (-not $t.Button) { continue }
+        $w = Get-WtMemoTabNatural $t
+        if ([double]::IsNaN($w)) { return }   # 아직 모양을 못 받았다. 배치되면 탭 줄 크기가 바뀌어 다시 온다
+        $natural.Add($w)
+        $gap = $t.Button.Margin.Left + $t.Button.Margin.Right
+    }
+    $cap = Get-WtMemoTabCap $natural.ToArray() $room $gap ([double]$min) ([double]$max)
+    $overflow = $cap -lt 0
+    if ($overflow) { $cap = [double]$min }
+    $i = 0
+    foreach ($t in $Pane.Tabs) {
+        if (-not $t.Button) { continue }
+        # 제목이 상한보다 긴 탭은 모두 상한 폭(말줄임), 나머지는 글자 폭대로 둔다
+        $width = if ($natural[$i] -gt $cap) { $cap } else { [double]::NaN }
+        $i++
+        if ($t.Button.MaxWidth -ne $cap) { $t.Button.MaxWidth = $cap }
+        if (-not $t.Button.Width.Equals($width)) { $t.Button.Width = $width }
+    }
+    $vis = if ($overflow) { 'Visible' } else { 'Collapsed' }
+    foreach ($b in $Pane.ScrollLeft, $Pane.ScrollRight) { if ($b.Visibility -ne $vis) { $b.Visibility = $vis } }
+    Update-WtMemoTabScrollButtons $Pane
+    Show-WtMemoCurrentTab $Pane
+}
+
+# ‹ › 단추: 끝에 닿은 쪽은 끄고 이유를 툴팁에 둔다
+function Update-WtMemoTabScrollButtons($Pane) {
+    $sv = $Pane.Scroll
+    $canLeft = $sv.HorizontalOffset -gt 0.5
+    $canRight = $sv.HorizontalOffset -lt $sv.ScrollableWidth - 0.5
+    foreach ($spec in @(@($Pane.ScrollLeft, $canLeft, '왼쪽 탭 보기', '더 왼쪽에 탭이 없습니다'), @($Pane.ScrollRight, $canRight, '오른쪽 탭 보기', '더 오른쪽에 탭이 없습니다'))) {
+        $b = $spec[0]
+        if ($b.IsEnabled -ne $spec[1]) { $b.IsEnabled = $spec[1] }
+        $tip = if ($spec[1]) { $spec[2] } else { $spec[3] }
+        if ($b.ToolTip -cne $tip) { $b.ToolTip = $tip }
+    }
+}
+
+# ‹ › 한 번에 탭 하나: 가려진 다음 탭이 다 보이게(그 탭 끝을 보이는 영역 끝에 맞춰) 옮긴다
+function Move-WtMemoTabScroll($Pane, [int]$Step) {
+    $sv = $Pane.Scroll
+    $from = $sv.HorizontalOffset; $view = $sv.ViewportWidth
+    $to = if ($Step -gt 0) { $sv.ScrollableWidth } else { 0 }
+    $tabs = @($Pane.Tabs | Where-Object { $_.Button })
+    if ($Step -lt 0) { [array]::Reverse($tabs) }
+    foreach ($t in $tabs) {
+        $x = $t.Button.TransformToAncestor($Pane.Strip).Transform([System.Windows.Point]::new(0, 0)).X
+        if ($Step -gt 0) {
+            $end = $x + $t.Button.ActualWidth
+            if ($end -gt $from + $view + 0.5) { $to = $end - $view; break }
+        } elseif ($x -lt $from - 0.5) { $to = $x; break }
+    }
+    $sv.ScrollToHorizontalOffset([Math]::Max(0, [Math]::Min($sv.ScrollableWidth, $to)))
+}
+
+# 지금 탭이 탭 줄의 보이는 영역 안에 오게 스크롤한다. 스크롤 보기가 배치를 마친 뒤 실제 자리로 맞춘다
+function Show-WtMemoCurrentTab($Pane) {
+    if ($Pane.Current -and $Pane.Current.Button) { $Pane.Current.Button.BringIntoView() }
+}
+
+# 탭 줄 양 끝의 스크롤 단추. $Step -1 = 왼쪽(‹) · 1 = 오른쪽(›). 탭이 최소 폭으로도 넘칠 때만 보인다
+function New-WtMemoTabScrollButton($Pane, [int]$Step) {
+    $b = [System.Windows.Controls.Button]::new()
+    Set-WtStyle $b $(if ($Step -lt 0) { 'Memo.TabScroll' } else { 'Memo.TabScroll.End' })
+    $b.Content = [string][char]$(if ($Step -lt 0) { 0xE76B } else { 0xE76C })
+    $b.Tag = @{ Pane = $Pane; Step = $Step }
+    $b.Visibility = 'Collapsed'
+    [System.Windows.Automation.AutomationProperties]::SetName($b, $(if ($Step -lt 0) { '왼쪽 탭 보기' } else { '오른쪽 탭 보기' }))
+    $b.Add_Click({ param($s, $e) Move-WtMemoTabScroll $s.Tag.Pane $s.Tag.Step })
+    $b
 }
 
 # 선택된 탭 표시: 포커스가 있는 칸의 지금 탭만 강조색, 다른 칸의 지금 탭은 덜 강조
@@ -472,7 +600,7 @@ function Update-WtMemoTabStyles {
             $style = if (-not [object]::ReferenceEquals($t, $p.Current)) { 'Memo.Tab' } elseif ($i -eq $script:active) { 'Memo.Tab.Current' } else { 'Memo.Tab.Selected' }
             if ($t.Style -cne $style) { Set-WtStyle $t.Button $style; $t.Style = $style }
         }
-        if ($p.Current -and $p.Current.Button) { $p.Current.Button.BringIntoView() }
+        Show-WtMemoCurrentTab $p
     }
 }
 
@@ -485,26 +613,41 @@ function New-WtMemoPane {
     $card.Tag = $pane
     $card.Add_PreviewMouseDown({ param($s, $e) Set-WtMemoActivePane $s.Tag })
     $card.Add_GotKeyboardFocus({ param($s, $e) Set-WtMemoActivePane $s.Tag })
+    # 셸은 화면을 붙이기 전에 새로 고친다. 그때 다시 만든 탭은 모양을 못 받아 폭을 못 재므로, 붙은 뒤 탭 줄을 다시 맞춘다
+    $card.Add_Loaded({ param($s, $e) Update-WtMemoTabFit $s.Tag })
     $dock = [System.Windows.Controls.DockPanel]::new()
 
-    # 탭 줄: 넘치면 가로로 스크롤(마우스 휠로도), 오른쪽 끝에 +
+    # 탭 줄: ‹ · 탭(넘치면 가로 스크롤, 마우스 휠로도) · › · 보기 · More. 폭 맞추기는 Update-WtMemoTabFit
     $bar = [System.Windows.Controls.Border]::new()
     Set-WtStyle $bar 'Memo.TabBar'
     $barGrid = [System.Windows.Controls.Grid]::new()
-    $bc1 = [System.Windows.Controls.ColumnDefinition]::new()
-    $bc1.Width = [System.Windows.GridLength]::new(1, 'Star')
-    $bc2 = [System.Windows.Controls.ColumnDefinition]::new()
-    $bc2.Width = [System.Windows.GridLength]::Auto
-    $barGrid.ColumnDefinitions.Add($bc1)
-    $barGrid.ColumnDefinitions.Add($bc2)
+    foreach ($star in $false, $true, $false, $false) {
+        $col = [System.Windows.Controls.ColumnDefinition]::new()
+        $col.Width = if ($star) { [System.Windows.GridLength]::new(1, 'Star') } else { [System.Windows.GridLength]::Auto }
+        $barGrid.ColumnDefinitions.Add($col)
+    }
+    $barGrid.Tag = $pane
+    $barGrid.Add_SizeChanged({ param($s, $e) if ($e.WidthChanged) { Update-WtMemoTabFit $s.Tag } })
+    $scrollLeft = New-WtMemoTabScrollButton $pane -1
+    [void]$barGrid.Children.Add($scrollLeft)
     $scroll = [System.Windows.Controls.ScrollViewer]::new()
     $scroll.HorizontalScrollBarVisibility = 'Hidden'
     $scroll.VerticalScrollBarVisibility = 'Disabled'
     $scroll.Focusable = $false
+    $scroll.Tag = $pane
     $scroll.Add_PreviewMouseWheel({ param($s, $e) $s.ScrollToHorizontalOffset($s.HorizontalOffset - $e.Delta); $e.Handled = $true })
-    $strip = New-WtStack Horizontal
+    $scroll.Add_ScrollChanged({ param($s, $e) Update-WtMemoTabScrollButtons $s.Tag; $e.Handled = $true })
+    $strip = [System.Windows.Controls.StackPanel]::new()
+    Set-WtStyle $strip 'Memo.TabStrip'
+    $strip.Tag = $pane
+    # 탭을 열고 닫거나 제목 · 글자 크기 설정이 바뀌어 탭 줄 크기가 바뀌면 다시 맞춘다 (모양을 받은 뒤라 글자 폭을 잴 수 있다)
+    $strip.Add_SizeChanged({ param($s, $e) if ($e.WidthChanged) { Update-WtMemoTabFit $s.Tag } })
     $scroll.Content = $strip
+    [System.Windows.Controls.Grid]::SetColumn($scroll, 1)
     [void]$barGrid.Children.Add($scroll)
+    $scrollRight = New-WtMemoTabScrollButton $pane 1
+    [System.Windows.Controls.Grid]::SetColumn($scrollRight, 2)
+    [void]$barGrid.Children.Add($scrollRight)
     $viewButton = New-WtButton '' -Kind Icon -Icon 0xE70F -ToolTip '편집 보기 (Ctrl+E)'
     $viewButton.Tag = $pane
     $viewButton.Add_Click({ param($s, $e) Set-WtMemoActivePane $s.Tag; Switch-WtMemoView })
@@ -519,10 +662,10 @@ function New-WtMemoPane {
             Set-WtMemoActionItems $s.ContextMenu $p.Current.Id $p
             $s.ContextMenu.PlacementTarget = $s; $s.ContextMenu.Placement = 'Bottom'; $s.ContextMenu.IsOpen = $true
         })
-    $barTools = New-WtStack Horizontal 4
-    [void]$barTools.Children.Add($viewButton)
-    [void]$barTools.Children.Add($more)
-    [System.Windows.Controls.Grid]::SetColumn($barTools, 1)
+    $barTools = New-WtStack Horizontal 4   # 보기와 More 사이 4 (디자인 3판 8절 메모)
+    [void](Add-WtChild $barTools $viewButton)
+    [void](Add-WtChild $barTools $more)
+    [System.Windows.Controls.Grid]::SetColumn($barTools, 3)
     [void]$barGrid.Children.Add($barTools)
     $bar.Child = $barGrid
     [System.Windows.Controls.DockPanel]::SetDock($bar, 'Top')
@@ -603,6 +746,7 @@ function New-WtMemoPane {
     $card.Child = $dock
 
     $pane.Root = $card; $pane.Strip = $strip; $pane.Scroll = $scroll; $pane.Head = $head
+    $pane.BarGrid = $barGrid; $pane.BarTools = $barTools; $pane.ScrollLeft = $scrollLeft; $pane.ScrollRight = $scrollRight
     $pane.TitleText = $titleText; $pane.TitleBox = $titleBox; $pane.Meta = $meta; $pane.Tags = $tags; $pane.Status = $status
     $pane.Editor = $ed; $pane.Empty = $empty; $pane.EmptyText = $emptyText; $pane.EmptyQuick = $emptyQuick
     $pane.ViewButton = $viewButton; $pane.More = $more; $pane.UndoHost = $undoHost
