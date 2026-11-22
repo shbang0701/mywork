@@ -150,6 +150,17 @@ function Close-WtUtilityWindows {
     $script:utilityWindows.Count -eq 0
 }
 
+# 지금 화면이 떠 있는데 키보드 포커스가 화면 밖(왼쪽 메뉴 · 제목 줄 단추 · 창 자체)에 있으면, 셸이 처리하지 않은 키를
+# 그 탭의 PageKey 등록에 넘긴다. 화면 안에 포커스가 있으면 화면이 직접 받으므로 넘기지 않는다. 처리했으면 $true
+function Invoke-WtPageKey([System.Windows.Input.Key]$Key, [System.Windows.Input.ModifierKeys]$Modifiers) {
+    if (-not $script:current -or -not $script:ui) { return $false }
+    $view = $script:ui.PageHost.Content
+    if (-not $view -or $view.IsKeyboardFocusWithin) { return $false }
+    $addon = Get-WtAddon -Id $script:current
+    if (-not $addon -or -not $addon.PageKey) { return $false }
+    @(& $addon.PageKey $Key $Modifiers)[-1] -eq $true
+}
+
 # 공개된 Select-WtPage의 출력은 그대로 두고, 항목 열기는 전환 성공 여부까지 확인한다.
 function Invoke-WtPageSelection([string]$Id) {
     if ($script:selecting -or -not $Id) { return $false }
@@ -978,7 +989,9 @@ function Start-WtApp {
                     $idx = [int]$key - [int][System.Windows.Input.Key]::D1
                     if ($idx -lt $ids.Count) { Select-WtPage $ids[$idx] }
                     $e.Handled = $true
+                    return
                 }
+                if (Invoke-WtPageKey $key ([System.Windows.Input.Keyboard]::Modifiers)) { $e.Handled = $true }
             } catch { Show-WtError $_ '단축키' }
         })
 

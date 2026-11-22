@@ -23,6 +23,9 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   Refresh      { param($view) } → 화면을 열 때마다 부른다 (선택)
   OnOpen       { param($OpenArgs) } → Open-WtPage로 옮긴 뒤 인자를 받는다 (선택)
   ShortcutExists { param($Key) } → 바로 가기 대상이 남아 있으면 $true (선택)
+  ShortcutTitle  { param($Key) } → 바로 가기 대상의 지금 이름. 비거나 실패하면 연 때 남긴 이름을 쓴다 (선택)
+  PageKey      { param($Key, $Modifiers) } → 이 화면이 떠 있는데 키보드 포커스가 화면 밖(왼쪽 메뉴 · 제목 줄 · 창 자체)에 있을 때
+               셸이 처리하지 않은 키를 넘긴다. 처리했으면 $true (선택). 화면 안 키는 화면이 직접 받는다
   HomeCard     { } → 홈에 놓을 카드 요소(여러 개 가능)를 돌려준다 (선택)
   HomeSlot     main(기본) · side · head(제목 아래 줄). HomeOrder가 작을수록 먼저 놓는다
   HomeCards    @(@{ Slot = 'head'|'main'|'side'; Order = 숫자; Card = { } }, ...). 한 탭의 여러 자리 카드 (선택)
@@ -70,6 +73,8 @@ function Register-WtAddon {
         [scriptblock]$Refresh,
         [scriptblock]$OnOpen,
         [scriptblock]$ShortcutExists,
+        [scriptblock]$ShortcutTitle,
+        [scriptblock]$PageKey,
         [scriptblock]$HomeCard,
         [ValidateSet('head', 'main', 'side')][string]$HomeSlot = 'main',
         [int]$HomeOrder = 100,
@@ -124,7 +129,7 @@ function Register-WtAddon {
     }
     $script:addons.Add(@{
             Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Group = $Group; Badge = $Badge; BadgeToolTip = $BadgeToolTip; BadgeKind = $BadgeKind; StatusItems = $StatusItems; Required = [bool]$Required
-            NewView = $NewView; Refresh = $Refresh; OnOpen = $OnOpen; ShortcutExists = $ShortcutExists
+            NewView = $NewView; Refresh = $Refresh; OnOpen = $OnOpen; ShortcutExists = $ShortcutExists; ShortcutTitle = $ShortcutTitle; PageKey = $PageKey
             HomeCard = $HomeCard; HomeSlot = $HomeSlot; HomeOrder = $HomeOrder; CalendarHost = [bool]$CalendarHost
             HomeCards = $cards
             CalendarItems = $CalendarItems; ImportLegacy = $ImportLegacy; OnExit = $OnExit

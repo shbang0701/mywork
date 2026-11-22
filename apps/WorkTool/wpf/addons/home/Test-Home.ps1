@@ -44,6 +44,16 @@ try {
     $menuItem = New-WtHomePinMenuItem $last -OnChange { & (Get-Module Home) { Update-WtHomeView } }
     $menuItem.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
     Assert-WtTest '홈: 고정 메뉴는 저장하고 바로 다시 그린다' ((Test-WtHomePin $last.Page $last.Key) -and $layout.Main.Children[1].Child.Children[1].Children[0].Tag.Key -ceq $last.Key)
+    # 연 뒤 이름이 바뀐 항목: 탭이 -ShortcutTitle로 지금 이름을 알려 주면 그 이름을 그린다. 비거나 실패하면 연 때 이름(기록은 고치지 않음)
+    Register-WtAddon -Id 'test-named' -Title '이름' -NewView { New-WtText '가짜' } -ShortcutTitle { param($Key) switch ($Key) { 'renamed' { '바뀐 이름' } 'blank' { '' } 'broken' { throw '실패' } } }
+    foreach ($k in 'renamed', 'blank', 'broken') { Add-WtUse -Page test-named -Key $k -Title "연 때 $k" -Sub '시험' }
+    $named = @{}; foreach ($s in @(Get-WtShortcuts -Max 200 | Where-Object Page -ceq 'test-named')) { $named[$s.Key] = $s.Title }
+    & $module { Update-WtHomeView }
+    $namedTile = @($layout.Main.Children[1].Child.Children[1].Children | Where-Object { $_.Tag.Key -ceq 'renamed' })[0]
+    $stored = @((Open-WtStore 'shortcuts' 1).Items | Where-Object { $_.page -ceq 'test-named' -and $_.key -ceq 'renamed' })[0]
+    Assert-WtTest '홈 바로 가기: 탭이 알려 준 지금 이름으로 그림 · 비거나 실패하면 연 때 이름 · 기록은 그대로 (메모 이름 바꿈, 11-22 실사용 9)' (
+        $named.renamed -ceq '바뀐 이름' -and $named.blank -ceq '연 때 blank' -and $named.broken -ceq '연 때 broken' -and
+        $namedTile -and (@(Get-WtTestTexts $namedTile) -contains '바뀐 이름') -and $stored.title -ceq '연 때 renamed') "$($named.renamed) / $($named.blank) / $($named.broken)"
     # 빈 시간 막대 · 지금 선 · 두 겹/넘침은 가짜 대상으로만 본다.
     $date = [datetime]::Today
     $timeline = New-WtTimeline @() $date test-before

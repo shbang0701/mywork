@@ -87,7 +87,12 @@ function Get-WtShortcuts {
         try { if ($addon.ShortcutExists -and -not (& $addon.ShortcutExists $item.key)) { continue } } catch { continue }
         $uses = @(Get-WtShortcutUses $item $now | Sort-Object { (ConvertFrom-WtStamp $_).UtcTicks })
         if (-not $item.pinned -and -not $uses.Count) { continue }
-        [pscustomobject]@{ Page = $item.page; Key = $item.key; Title = $item.title; Sub = [string]$item.sub; Icon = $item.icon
+        # 이름은 연 때 남긴 것이다. 탭이 지금 이름을 알려 주면 그것을 쓴다(연 뒤 이름을 바꾼 항목). 기록은 고치지 않는다
+        $title = $item.title
+        if ($addon.ShortcutTitle) {
+            try { $named = @(& $addon.ShortcutTitle $item.key)[-1]; if ($named -is [string] -and $named) { $title = $named } } catch { }
+        }
+        [pscustomobject]@{ Page = $item.page; Key = $item.key; Title = $title; Sub = [string]$item.sub; Icon = $item.icon
             Pinned = $item.pinned; Count = $uses.Count; PinOrder = $item.pinOrder
             Last = $(if ($uses.Count) { (ConvertFrom-WtStamp $uses[-1]).UtcTicks } else { 0 }) }
     }
