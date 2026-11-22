@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    셸 · 저장의 안정성을 임시 데이터로 검사한다: 중복 실행 차단 · 설정 저장 실패 · 저장 실패 때 묻는 흐름 · 예전 WinForms 종료 저장.
+    셸 · 저장의 안정성을 임시 데이터로 검사한다: 중복 실행 차단 · 설정 저장 실패 · 저장 실패 때 묻는 흐름 · 끝내기 전 탭이 묻기(순서 · 겹침 없음) · 예전 WinForms 종료 저장.
 
 .DESCRIPTION
     묻는 흐름은 가짜 탭을 등록해서 본다. 탭마다의 저장 실패 · 조회 취소는 그 탭 폴더의 검사(addons\<이름>\Test-*.ps1)가 맡는다.
@@ -185,6 +185,56 @@ try { $lease = Open-WtDataLock; $lease.Dispose(); exit 0 } catch { exit 23 }
     $pending.Saved = $false
     $allowed = & $shellModule { $script:exiting = $false; $script:frame = [pscustomobject]@{ Continue = $true }; $script:testAsked = @(); $script:testChoices.Enqueue('proceed'); Stop-WtApp }
     Assert-WtTest '안정성: 저장하지 못해도 [끝내기]를 고르면 정리하고 끝낸다' ($allowed -and $exitCounter.Count -eq 2 -and -not (& $shellModule { $script:frame.Continue }) -and (& $shellModule { $script:testAsked -join ',' }) -eq 'exit')
+
+    # ---- 끝내기 전에 탭이 묻기(Register-WtAddon -ConfirmExit, 가짜 탭) ----
+    # 순서: 탭 묻기 → 저장 통로 마무리(SavePending, 실패면 셸이 묻기) → 쓰지 못한 내용 확인. 탭에서 취소하면 뒤는 묻지 않아 창이 겹치지 않는다.
+    # 묻는 동안 또 끝내기가 오면(트레이 종료 등) 겹쳐 묻지 않는다. 물을 것이 없으면 묻지 않는다. 물을 탭의 화면을 먼저 보인다(떠나는 화면의 저장 확인 없이)
+    $global:wtExitTrace = [System.Collections.Generic.List[string]]::new()
+    $exitAsk = [pscustomobject]@{ Pending = $true; Answer = $false; Nested = $false; NestedResult = $null; PageWhenAsked = $null }
+    Register-WtAddon -Id 'test-exit-ask' -Title '묻는 탭' -Order 0 -NewView { [System.Windows.Controls.Border]::new() } -ConfirmExit @{
+        Pending = { $exitAsk.Pending }.GetNewClosure()
+        Confirm = {
+            $global:wtExitTrace.Add('탭')
+            $exitAsk.PageWhenAsked = & (Get-Module Shell) { $script:current }
+            if ($exitAsk.Nested) { $exitAsk.NestedResult = & (Get-Module Shell) { Stop-WtApp } }
+            $exitAsk.Answer
+        }.GetNewClosure()
+    }
+    & $shellModule { function script:Show-WtPendingChoice { param($Purpose, $Title) $script:testAsked += $Purpose; if ($null -ne $global:wtExitTrace) { $global:wtExitTrace.Add("셸:$Purpose") }; if ($script:testChoices.Count) { $script:testChoices.Dequeue() } else { 'cancel' } } }
+    $exitTry = { param([bool]$Answer, [bool]$Nested = $false)
+        $exitAsk.Answer = $Answer; $exitAsk.Nested = $Nested; $exitAsk.NestedResult = $null; $exitAsk.PageWhenAsked = $null; $global:wtExitTrace.Clear()
+        $allowed = & $shellModule { $script:exiting = $false; $script:frame = [pscustomobject]@{ Continue = $true }; $script:testAsked = @(); Stop-WtApp }
+        "$allowed|$($global:wtExitTrace -join ',')"
+    }
+    try {
+        $pending.Saved = $false   # 저장 통로 마무리가 실패해 셸이 묻는 상태
+        $calls = $pending.Calls; $exits = $exitCounter.Count
+        $cancelled = & $exitTry $false
+        $cancelState = "$($pending.Calls - $calls)|$($exitCounter.Count - $exits)|$(& $shellModule { $script:frame.Continue })"
+        $nested = & $exitTry $false $true
+        $nestedResult = $exitAsk.NestedResult
+        $proceedThenShell = & $exitTry $true
+        Assert-WtTest '안정성: 끝내기 전에 탭이 먼저 묻고, [취소]면 저장 마무리 · 셸 확인 · 정리 없이 멈추며, 묻는 중 또 끝내기가 와도 겹쳐 묻지 않는다' (
+            $cancelled -ceq 'False|탭' -and $cancelState -ceq '0|0|True' -and $nested -ceq 'False|탭' -and $nestedResult -is [bool] -and -not $nestedResult -and
+            $proceedThenShell -ceq 'False|탭,셸:exit') "$cancelled / $cancelState / $nested / 겹친 끝내기 $nestedResult / $proceedThenShell"
+        $pending.Saved = $true
+        $exitAsk.Pending = $false
+        $quiet = & $exitTry $false
+        $exitAsk.Pending = $true
+        $proceed = & $exitTry $true
+        Assert-WtTest '안정성: 물을 것이 없는 탭은 묻지 않고 끝내고, 탭이 끝내도 된다고 하면 이어서 저장 마무리 · 정리하고 끝낸다' ($quiet -ceq 'True|' -and $proceed -ceq 'True|탭') "$quiet / $proceed"
+        # 물을 탭 화면을 먼저 보인다: 떠나는 화면(저장 실패 중)의 이동 확인은 묻지 않는다(그 저장은 바로 뒤 끝내기 저장 단계가 묻는다)
+        & $shellModule { $script:ui = @{ PageHost = [System.Windows.Controls.ContentControl]::new() }; $script:current = 'test-pending'; $script:navButtons = @{} }
+        $pending.Saved = $false
+        $shown = & $exitTry $false
+        Assert-WtTest '안정성: 끝내기 전에 물을 탭 화면을 보이되 떠나는 화면의 이동 확인은 건너뛰고, [취소]면 그 화면에 머문다' (
+            $shown -ceq 'False|탭' -and $exitAsk.PageWhenAsked -ceq 'test-exit-ask' -and (& $shellModule { $script:current }) -ceq 'test-exit-ask') "$shown / 물을 때 화면 $($exitAsk.PageWhenAsked)"
+    } finally {
+        & $shellModule { $script:ui = $null; $script:current = 'test-pending'; $script:exiting = $false }
+        & (Get-Module Addons) { param($i) for ($n = $script:addons.Count - 1; $n -ge 0; $n--) { if ($script:addons[$n].Id -ceq $i) { $script:addons.RemoveAt($n) } } } 'test-exit-ask'
+        Remove-Variable wtExitTrace -Scope Global -ErrorAction SilentlyContinue
+        $pending.Saved = $false
+    }
 
     # ---- 저장 통로에 아직 파일에 쓰이지 않은 내용이 있을 때 (데이터 폴더가 늦게 답하거나 늦게 실패함) ----
     # 실제 저장 통로 · 버전 · 셸 흐름을 그대로 돌리고 대답 창만 바꾼다

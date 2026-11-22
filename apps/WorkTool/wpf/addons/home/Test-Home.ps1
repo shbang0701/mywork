@@ -107,6 +107,52 @@ try {
         }
         Assert-WtTest "시간 막대 이름: 폭 $width 에서 같은 줄 간격 12 이상 · 넓은 창 마지막 이름 생략 유지" ($gapOk -and ($width -ne 856 -or $captions.Tag.Events[3].Caption.Visibility -eq 'Collapsed'))
     }
+    # 11-22 실사용 보고 3: 20시 가까이 · 범위 밖 일정 이름은 오른쪽 끝에 맞추고, 두 줄 다 겹치면 생략, +n · 알람 종도 막대 범위 안.
+    # 1분마다 다시 놓아도 같은 자리여야 한다(접힌 이름을 폭 0으로 재면 다시 놓을 때마다 보이는 이름이 번갈아 바뀌었다).
+    # 값이 아니라 배치(Measure · Arrange) 뒤 글 · 아이콘이 실제로 놓인 자리로 본다
+    $endItems = @(
+        @('17:23', '17:53', '백업 로그 일일 점검', $false), @('18:38', '19:38', 'SRV-01 펌웨어 적용 및 서비스 확인', $true),
+        @('19:30', '20:30', 'SRV-03 디스크 교체', $true), @('19:53', '20:20', '방화벽 정책 변경 검토', $false), @('21:03', '21:30', '주간 인프라 운영 보고', $false)
+    ) | ForEach-Object { [pscustomobject]@{ Id = $_[0]; Title = $_[2]; Start = $date.Add([timespan]::Parse($_[0])); End = $date.Add([timespan]::Parse($_[1])); AllDay = $false; Alarm = $_[3]; ToolTip = $_[2] } }
+    $placeOf = { param($Element) $p = $Element.TranslatePoint([Windows.Point]::new(0, 0), $endLine); [pscustomobject]@{ L = $p.X; R = $p.X + $Element.ActualWidth; T = $p.Y } }
+    $readEnd = {
+        $s = $endLine.Tag
+        $names = @($s.Events | Where-Object { $_.Caption.Visibility -eq 'Visible' } | ForEach-Object { $r = & $placeOf $_.Caption; $r | Add-Member Id $_.Entry.Id -PassThru })
+        $bells = @($s.Events | Where-Object { $_.Alarm -and $_.Alarm.Visibility -eq 'Visible' } | ForEach-Object { $r = & $placeOf $_.Alarm; $r | Add-Member Id $_.Entry.Id -PassThru })
+        $more = if ($s.More.Visibility -eq 'Visible') { & $placeOf $s.More }
+        [pscustomobject]@{ Names = $names; Bells = $bells; More = $more
+            Key = (@($names | ForEach-Object { "$($_.Id)@$([Math]::Round($_.L, 1)),$($_.T)" }) + @($bells | ForEach-Object { "종$($_.Id)@$([Math]::Round($_.L, 1))" }) + @("+n@$(if ($more) { [Math]::Round($more.L, 1) })")) -join ' ' }
+    }
+    $endProblems = [System.Collections.Generic.List[string]]::new()
+    $endAligned = 0   # 오른쪽 끝을 넘을 이름을 끝에 맞춰 보인 횟수(끝 맞춤이 실제로 일어났는지)
+    # 보고 그림의 두 경우: 19:30 일정이 없으면 21:03 막대가 둘째 줄에 보이고, 있으면 셋째라 +1로 묶인다
+    foreach ($set in @(@($endItems | Where-Object Id -ne '19:30'), $endItems)) {
+      $endLine = (New-WtTimeline $set $date test-before).Timeline
+      $endLine.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $endLine.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+      foreach ($width in 600, 1000, 1500) {
+        foreach ($now in '18:53', '18:54', '19:28', '19:38') {
+            $endLine.Measure([Windows.Size]::new($width, 116)); $endLine.Arrange([Windows.Rect]::new(0, 0, $width, 116)); $endLine.UpdateLayout()
+            Update-WtTimelineNow $endLine $date.Add([timespan]::Parse($now)); $endLine.UpdateLayout()
+            $first = & $readEnd
+            Set-WtTimelineLayout $endLine; $endLine.UpdateLayout(); $second = & $readEnd
+            Set-WtTimelineLayout $endLine; $endLine.UpdateLayout(); $third = & $readEnd
+            $where = "일정 $($set.Count)개 폭 $width $now"
+            $endAligned += @($second.Names | Where-Object { [Math]::Abs($_.R - $width) -lt 0.5 }).Count
+            if ($first.Key -cne $second.Key -or $second.Key -cne $third.Key) { $endProblems.Add("$where 다시 놓으면 바뀜: [$($first.Key)] → [$($second.Key)] → [$($third.Key)]") }
+            foreach ($n in $second.Names) { if ($n.L -lt -0.5 -or $n.R -gt $width + 0.5) { $endProblems.Add("$where 이름 $($n.Id) 범위 밖 $([Math]::Round($n.L, 1))..$([Math]::Round($n.R, 1))") } }
+            foreach ($line in @($second.Names | Group-Object T)) {
+                $row = @($line.Group | Sort-Object L)
+                for ($i = 1; $i -lt $row.Count; $i++) { if ($row[$i].L - $row[$i - 1].R -lt 11.5) { $endProblems.Add("$where 이름 $($row[$i - 1].Id)·$($row[$i].Id) 간격 $([Math]::Round($row[$i].L - $row[$i - 1].R, 1))") } }
+                if ($second.More -and [Math]::Abs([double]$line.Name - $second.More.T) -lt 0.5) {
+                    foreach ($n in $row) { if ($n.R + 11.5 -gt $second.More.L) { $endProblems.Add("$where 이름 $($n.Id)가 +n에 붙음 $([Math]::Round($n.R, 1)) / +n $([Math]::Round($second.More.L, 1))") } }
+                }
+            }
+            if ($second.More -and $second.More.R -gt $width + 0.5) { $endProblems.Add("$where +n 범위 밖") }
+            foreach ($b in $second.Bells) { if ($b.L -lt -0.5 -or $b.R -gt $width + 0.5) { $endProblems.Add("$where 알람 종 $($b.Id) 범위 밖 $([Math]::Round($b.L, 1))..$([Math]::Round($b.R, 1))") } }
+        }
+      }
+    }
+    Assert-WtTest '시간 막대 끝(보고 3): 20시 근처 · 범위 밖 이름은 끝 맞춤 · 겹치면 생략, +n · 알람 종도 막대 안, 1분마다 다시 놓아도 같은 자리' (-not $endProblems.Count -and $endAligned -gt 0) "끝 맞춤 $endAligned · $($endProblems -join ' | ')"
     $next = New-WtNextEventLine $day
     Update-WtNextEventLine $next $date.AddHours(12).AddMinutes(20)
     $soon = "$($next.Tag.Pill.Child.Text)|$($next.Tag.Title.Text)"

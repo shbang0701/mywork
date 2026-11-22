@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 메뉴 항목 · 빈 화면 안내 · 설정 · 도움말 하위 탭의 첫 포커스.
+    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 저장 묻는 창(겹쳐 묻지 않음) · 폼 칸 값 · 입력칸 오류 · 단추 메뉴 자리 · 메뉴 항목 · 빈 화면 안내 · 설정 · 도움말 하위 탭의 첫 포커스.
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/tests/Test-Ui.ps1
 #>
@@ -172,6 +172,92 @@ try {
     $dialog.Save.IsHitTestVisible = $false; $root.Child = $content; Set-UiLayout 480 400
     $badRoute = Test-WtTestInputPath -View $root -Element $dialog.Save -Target $dialog.Save
     Assert-WtTest '이름 묻는 창 고장 대조군: 누름을 받지 않는 [저장]은 좌표 경로=False' ($badRoute.Point -and -not $badRoute.Ok) $badRoute.Path
+    $root.Child = $null
+    # 저장 묻는 창(Read-WtSaveChoice, 고친 폼을 떠날 때): 띄우지 않고 만든 내용을 숨김 호스트에 붙여 모양 · 단추 순서 · 결과 · 좌표 경로를 본다
+    # 제목 = 질문 「변경 내용을 저장할까요?」, [저장](주 · Enter) [저장 안 함] [취소](Esc), 주 버튼이 왼쪽(apps/design.md 13장). 실제 창 · OS 입력은 보지 않는다
+    foreach ($case in @(@{ Pick = 'save'; Button = 'Save' }, @{ Pick = 'discard'; Button = 'Discard' })) {
+        $choice = & (Get-Module Ui) { New-WtSaveChoiceDialog '「점검」 일정에서 고친 내용이 저장되지 않았습니다.' }
+        $window = $choice.Window; $content = $window.Content; $window.Content = $null; $root.Child = $content; Set-UiLayout 480 300
+        $buttons = @($choice.Buttons.Children)
+        $save = Get-UiBounds $choice.Save; $discard = Get-UiBounds $choice.Discard; $cancel = Get-UiBounds $choice.Cancel; $heading = Get-UiBounds $content.Children[0]
+        Assert-WtTest "저장 묻는 창: 제목 질문 · 한 문장 · [저장] 주 버튼(Enter) · [저장 안 함] · [취소](Esc) 순서로 오른쪽 끝에 사이 8 · 처음 답은 취소" (
+            $window.Title -ceq '변경 내용을 저장할까요?' -and $content.Children[0].Text -ceq '변경 내용을 저장할까요?' -and
+            (@(Get-WtTestTexts $choice.Body) -join '|') -ceq '「점검」 일정에서 고친 내용이 저장되지 않았습니다.' -and
+            $buttons.Count -eq 3 -and (@($buttons | ForEach-Object { [string]$_.Content }) -join ',') -ceq '저장,저장 안 함,취소' -and
+            $choice.Save.Style -eq $styles['Btn.Primary'] -and $choice.Discard.Style -eq $styles['Btn'] -and $choice.Cancel.Style -eq $styles['Btn'] -and
+            $choice.Save.IsDefault -and -not $choice.Save.IsCancel -and $choice.Cancel.IsCancel -and -not $choice.Discard.IsDefault -and -not $choice.Discard.IsCancel -and
+            $save.Right + 8 -eq $discard.Left -and $discard.Right + 8 -eq $cancel.Left -and $cancel.Right -eq $heading.Right -and $window.Tag.Choice -ceq 'cancel') "저장=$save 안 함=$discard 취소=$cancel"
+        foreach ($target in $choice.Save, $choice.Discard, $choice.Cancel) {
+            $route = Test-WtTestInputPath -View $root -Element $target -Target $target
+            Assert-WtTest "저장 묻는 창 숨김 좌표 경로: $($target.Content)" $route.Ok $route.Path
+        }
+        [void]$render.Invoke($window, @([EventArgs]::Empty))
+        $focused = $choice.Save.IsFocused
+        # 띄우지 않은 창이라 닫기(DialogResult)에서 멈춘다. 그 앞에서 답을 남겼는지 본다
+        $closing = $false
+        try { & $press $choice[$case.Button] } catch { $closing = $_.Exception.Message -match 'DialogResult' }
+        Assert-WtTest "저장 묻는 창: 열리면 [저장]에 포커스 · [$($choice[$case.Button].Content)] 누르면 답 $($case.Pick) · 닫기" ($focused -and $window.Tag.Choice -ceq $case.Pick -and $closing) "포커스=$focused 답=$($window.Tag.Choice) 닫기=$closing"
+        $root.Child = $null
+    }
+    # 저장 묻는 창이 떠 있는 동안 또 물으면(트레이 → 종료 · 창이 뜨기 전에 온 클릭) 겹쳐 띄우지 않고 취소로 답한다.
+    # 창은 띄우지 않는 가짜로 바꾼다: 가짜 창이 떠 있는 동안 한 번 더 묻고, 닫힌 뒤 다시 물으면 평소대로 창을 만든다
+    $overlap = & (Get-Module Ui) {
+        $realDialog = (Get-Item function:New-WtSaveChoiceDialog).ScriptBlock
+        $script:fakeMade = 0; $script:fakeDepth = 0; $script:fakeNested = @()
+        function script:New-WtSaveChoiceDialog([string]$Text) {
+            $script:fakeMade++
+            $fakeWindow = [pscustomobject]@{ Tag = @{ Choice = 'save' } }
+            $fakeWindow | Add-Member ScriptMethod ShowDialog { $script:fakeDepth++; if ($script:fakeDepth -le 1) { $script:fakeNested += Read-WtSaveChoice '또 묻기' } }
+            [pscustomobject]@{ Window = $fakeWindow }
+        }
+        try { $first = Read-WtSaveChoice '처음'; $later = Read-WtSaveChoice '닫힌 뒤'; "$first|$($script:fakeNested -join ',')|$later|$script:fakeMade" }
+        finally { Set-Item function:script:New-WtSaveChoiceDialog $realDialog; $script:saveChoiceOpen = $false }
+    }
+    Assert-WtTest '저장 묻는 창: 떠 있는 동안 또 물으면 겹쳐 띄우지 않고 취소, 닫힌 뒤에는 다시 묻는다' ($overlap -ceq 'save|cancel|save|2') $overlap
+    # 편집 폼 칸 값(Get-WtFormState, 고친 폼인지 볼 때): 이름 순 「이름=값」 줄. 고르기 칸은 고른 항목, 체크 상자 묶음은 고른 Tag
+    $stateText = [Windows.Controls.TextBox]::new(); $stateText.Text = '점검'
+    $stateCombo = [Windows.Controls.ComboBox]::new(); [void]$stateCombo.Items.Add('근무'); [void]$stateCombo.Items.Add('휴가'); $stateCombo.SelectedIndex = 1
+    $stateCheck = [Windows.Controls.CheckBox]::new(); $stateCheck.IsChecked = $true
+    $stateDays = [Windows.Controls.WrapPanel]::new()
+    foreach ($tag in 'mon', 'tue', 'wed') { $dayCheck = [Windows.Controls.CheckBox]::new(); $dayCheck.Tag = $tag; $dayCheck.IsChecked = $tag -cne 'tue'; [void]$stateDays.Children.Add($dayCheck) }
+    $stateFields = @{ title = $stateText; kind = $stateCombo; allDay = $stateCheck; days = $stateDays }
+    $stateBefore = Get-WtFormState $stateFields
+    $stateDays.Children[1].IsChecked = $true; $stateAfter = Get-WtFormState $stateFields
+    Assert-WtTest '편집 폼 칸 값(Get-WtFormState): 이름 순 · 글 칸 · 고른 항목 · 체크 · 묶음의 고른 Tag, 체크 하나만 바꿔도 달라진다' (
+        $stateBefore -ceq "allDay=True`ndays=mon,wed`nkind=휴가`ntitle=점검" -and $stateAfter -ceq "allDay=True`ndays=mon,tue,wed`nkind=휴가`ntitle=점검") "$stateBefore / $stateAfter"
+    # 입력칸 오류(Set-WtInputError): 글 바인딩이 없는 칸도 빨간 선 · 칸 안 오른쪽 오류 아이콘 · 이유 툴팁, 빈 문구로 지운다. 글 칸이 아니면 그대로
+    $errorBox = [Windows.Controls.TextBox]::new(); Set-WtStyle $errorBox 'Input'; $errorBox.Width = 240
+    $plainCombo = [Windows.Controls.ComboBox]::new()
+    $errorPanel = New-WtStack; [void](Add-WtChild $errorPanel $errorBox); [void](Add-WtChild $errorPanel $plainCombo)
+    $root.Child = $errorPanel; Set-UiLayout 480 200
+    Set-WtInputError $errorBox '시각을 확인하세요. 예: 09:00'; Set-WtInputError $plainCombo '고르세요.'; Set-UiLayout 480 200
+    $icon = $errorBox.Template.FindName('ErrorIcon', $errorBox); $boxRect = Get-UiBounds $errorBox; $iconRect = Get-UiBounds $icon
+    $marked = [Windows.Controls.Validation]::GetHasError($errorBox) -and $icon.Visibility -eq 'Visible' -and $errorBox.BorderBrush.Color -eq $root.FindResource('B.Status.Error.Icon').Color -and
+        [string]$errorBox.ToolTip -ceq '시각을 확인하세요. 예: 09:00' -and $iconRect.Left -gt $boxRect.Left + $boxRect.Width / 2 -and $iconRect.Right -le $boxRect.Right -and -not [Windows.Controls.Validation]::GetHasError($plainCombo)
+    Set-WtInputError $errorBox ''; Set-UiLayout 480 200
+    Assert-WtTest '입력칸 오류: 빨간 선 · 칸 안 오른쪽 오류 아이콘 · 이유 툴팁, 빈 문구로 지움, 글 칸이 아니면 그대로' (
+        $marked -and -not [Windows.Controls.Validation]::GetHasError($errorBox) -and $icon.Visibility -eq 'Collapsed' -and $errorBox.BorderBrush.Color -eq $root.FindResource('B.Border.Control').Color) "선=$($errorBox.BorderBrush) 아이콘=$($icon.Visibility) 칸=$boxRect 아이콘자리=$iconRect"
+    $root.Child = $null
+    # 단추 펼침 메뉴 자리(Set-WtButtonMenuPlacement): 오른쪽 끝 단추는 메뉴 오른쪽 끝을 단추 오른쪽 끝에 맞춰 단추 바로 아래. 팝업은 띄우지 않고 WPF가 쓰는 배치 함수로 계산한다
+    $edgeButton = New-WtButton '' -Kind Icon -Icon 0xE710; $edgeButton.HorizontalAlignment = 'Right'; $edgeButton.VerticalAlignment = 'Top'
+    $edgeButton.ContextMenu = New-WtHomePinContextMenu
+    foreach ($name in '새 일정', '새 루틴') { [void]$edgeButton.ContextMenu.Items.Add((New-WtMenuItem $name { })) }
+    $edgeHost = [Windows.Controls.Grid]::new(); [void]$edgeHost.Children.Add($edgeButton)
+    $root.Child = $edgeHost; Set-UiLayout 400 300
+    $edgeMenu = $edgeButton.ContextMenu
+    $edgeMenu.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $edgeMenu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    $sizeParameters = [Windows.Interop.HwndSourceParameters]::new('UI menu size'); $sizeParameters.WindowStyle = 0; $sizeParameters.Width = 300; $sizeParameters.Height = 300
+    $sizeSource = [Windows.Interop.HwndSource]::new($sizeParameters)
+    try { $sizeSource.RootVisual = $edgeMenu; $edgeMenu.Measure([Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)); $edgeSize = $edgeMenu.DesiredSize }
+    finally { $sizeSource.RootVisual = $null; $sizeSource.Dispose() }
+    $edge = Get-UiBounds $edgeButton
+    Set-WtButtonMenuPlacement $edgeButton -Right
+    $placedRight = @($edgeMenu.CustomPopupPlacementCallback.Invoke($edgeSize, [Windows.Size]::new($edgeButton.ActualWidth, $edgeButton.ActualHeight), [Windows.Point]::new(0, 0)))[0].Point
+    $rightOk = $edgeMenu.Placement -eq 'Custom' -and [object]::ReferenceEquals($edgeMenu.PlacementTarget, $edgeButton) -and
+        [Math]::Abs($edge.Left + $placedRight.X + $edgeSize.Width - $edge.Right) -lt 0.5 -and [Math]::Abs($placedRight.Y - $edgeButton.ActualHeight) -lt 0.5 -and $edge.Left + $placedRight.X + $edgeSize.Width -le 400
+    Set-WtButtonMenuPlacement $edgeButton
+    Assert-WtTest '단추 펼침 메뉴 자리: -Right면 메뉴 오른쪽 끝을 단추 오른쪽 끝에 맞춰 바로 아래(창 안), 없으면 단추 아래(Bottom)' (
+        $rightOk -and $edgeMenu.Placement -eq 'Bottom' -and $edge.Left + $edgeSize.Width -gt 400) "단추=$edge 메뉴=$edgeSize 자리=$placedRight"
     $root.Child = $null
     # 메뉴 항목(New-WtMenuItem · New-WtMenuCaption): 메뉴는 부모를 가질 수 없어서 공통 메뉴를 숨김 호스트의 맨 위 요소로 두고 연 것처럼 배치한다.
     # 누름은 UIA 누르기라 클릭과 같은 MenuItem 경로를 탄다. 팝업 창 · OS 입력은 보지 않는다
