@@ -2996,7 +2996,7 @@ function New-WtThemeDictionary {
     $d
 }
 Export-ModuleMember -Function ConvertFrom-WtHex, Get-WtMixedColor, Get-WtLuminance, Get-WtContrast, Get-WtPalette,
-    Get-WtThemeColors, Update-WtThemeDictionary, New-WtThemeDictionary, Get-WtFontSize, Get-WtFontName
+    Get-WtThemeColors, Update-WtThemeDictionary, New-WtThemeDictionary, Get-WtFontScale, Get-WtFontSize, Get-WtFontName
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Theme.psm1 끝 ----
 
@@ -3239,9 +3239,7 @@ $script:stylesXaml = @'
     </Style.Triggers>
   </Style>
   <Style x:Key="Sidebar.Collapse" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="VerticalAlignment" Value="Center"/></Style>
-  <Style x:Key="Workflows.HelpCard" TargetType="Border" BasedOn="{StaticResource Card}"><Setter Property="Padding" Value="0"/></Style>
-  <Style x:Key="Workflows.HelpHeader" TargetType="DockPanel"><Setter Property="Height" Value="40"/><Setter Property="Margin" Value="8,0"/></Style>
-  <Style x:Key="Workflows.HelpTitle" TargetType="TextBlock" BasedOn="{StaticResource T.H2}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="4,0,0,0"/></Style>
+  <!-- 업무 오른쪽 설명: 공용 보조 칸(Shell.SidePanel) 안의 내용. 안쪽 좌우 16 -->
   <Style x:Key="Workflows.HelpBody" TargetType="StackPanel"><Setter Property="Margin" Value="16,0,16,12"/></Style>
   <Style x:Key="Btn.Chrome" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
     <Setter Property="Width" Value="46"/>
@@ -3880,7 +3878,11 @@ $script:stylesXaml = @'
     <Setter Property="VerticalAlignment" Value="Top"/>
     <Setter Property="Margin" Value="0,24,0,0"/>
   </Style>
+  <!-- 떠 있는 면: B.Bg.Raised · 선 1 B.Border.Default · 모서리 8 (값 문서 8절 메모 「빠른 이동」). 뒤 화면과 경계가 보이게 -->
   <Style x:Key="Memo.QuickPanel" TargetType="Border" BasedOn="{StaticResource Card}">
+    <Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/>
+    <Setter Property="BorderThickness" Value="1"/>
     <Setter Property="CornerRadius" Value="{DynamicResource F.Radius.Overlay}"/>
     <Setter Property="Padding" Value="12"/>
   </Style>
@@ -4136,6 +4138,15 @@ $script:stylesXaml = @'
       </Setter.Value>
     </Setter>
   </Style>
+  <!-- 설정 · 도움말 하위 탭 하나의 스크롤 면. 탭을 누르면 WPF가 내용의 첫 포커스 자리로 포커스를 옮기는데,
+       이 면이 그 자리가 되어 맨 위(스크롤 0)에서 시작한다. 중간의 단추가 포커스를 받아 스크롤이 내려가지 않게(11-22 실사용 보고 12) -->
+  <Style x:Key="Page.TabScroll" TargetType="ScrollViewer" BasedOn="{StaticResource {x:Type ScrollViewer}}">
+    <Setter Property="Focusable" Value="True"/>
+    <Setter Property="IsTabStop" Value="True"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+    <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+  </Style>
 
   <!-- 값 고르기 막대(Slider, 가로): 높이 4 막대 + 지름 20 손잡이. 고른 쪽은 강조색 -->
   <Style x:Key="Range.Fill" TargetType="RepeatButton">
@@ -4209,6 +4220,27 @@ $script:stylesXaml = @'
     <Setter Property="Foreground" Value="{DynamicResource B.Text}"/>
     <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
     <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+  </Style>
+  <!-- 빈 메모 본문의 예시 글자: 본문 글자와 같은 크기 · 줄 높이, 예시 글자 색(값 문서 8절 메모) -->
+  <Style x:Key="Memo.BodyHint" TargetType="TextBlock">
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
+    <Setter Property="LineHeight" Value="{DynamicResource F.Memo.Body.LineHeight}"/>
+    <Setter Property="LineStackingStrategy" Value="BlockLineHeight"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
+    <Setter Property="TextWrapping" Value="NoWrap"/>
+    <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    <Setter Property="VerticalAlignment" Value="Top"/>
+    <Setter Property="HorizontalAlignment" Value="Left"/>
+    <Setter Property="IsHitTestVisible" Value="False"/>
+  </Style>
+  <!-- 원문 보기: 원문 칸(Editor)처럼 줄 높이 안에서 글자를 위에 붙인다 -->
+  <Style x:Key="Memo.BodyHint.Source" TargetType="TextBlock" BasedOn="{StaticResource Memo.BodyHint}">
+    <Setter Property="LineStackingStrategy" Value="MaxHeight"/>
+  </Style>
+  <!-- 메모 편집 · 읽기 보기: 문서처럼 읽고 이어 쓰는 면이라 바깥 포커스 네모를 그리지 않는다(원문 칸 · 섬과 같음, 값 문서 7절 입력칸) -->
+  <Style x:Key="Memo.View" TargetType="RichTextBox" BasedOn="{StaticResource Md.View}">
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
   </Style>
   <Style x:Key="Md.Doc" TargetType="FlowDocument">
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
@@ -4631,13 +4663,14 @@ $script:stylesXaml = @'
     </Style.Triggers>
   </Style>
   <!-- 표 칸: 바탕은 행이 칠한다. 활성 작업 · 근태가 같이 쓴다 -->
+  <!-- 칸 포커스는 키보드로 옮겼을 때만 칸 안쪽에 그린다(FocusVisualStyle). 줄을 누르면 줄 선택만 보인다(11-22 실사용 보고 23) -->
   <Style x:Key="Task.Cell" TargetType="DataGridCell">
     <Setter Property="Padding" Value="12,0"/>
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
     <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="DataGridCell"><Border Padding="{TemplateBinding Padding}" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"><ContentPresenter VerticalAlignment="Center"/></Border></ControlTemplate></Setter.Value></Setter>
-    <Style.Triggers><Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderThickness" Value="2"/><Setter Property="BorderBrush" Value="{DynamicResource B.Text.Primary}"/></Trigger></Style.Triggers>
   </Style>
   <Style x:Key="Task.CheckCell" TargetType="DataGridCell" BasedOn="{StaticResource Task.Cell}"><Setter Property="Padding" Value="20,0,0,0"/></Style>
   <!-- 표 머리: 바탕 없이 작은 글자 + 아래 선. 활성 작업 · 근태가 같이 쓴다 -->
@@ -4715,6 +4748,12 @@ $script:stylesXaml = @'
   <Style x:Key="Row.TwoLine" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.Row2}"/>
 
+  </Style>
+  <!-- 업무 「최근 실행」: 두 줄 행(배지 + 시각 줄) 48. 행 안쪽 12 + 목록 테두리 안쪽 1만큼 좌우로 내밀어 글자가 「최근 실행」 제목과 같은 x에서
+       시작한다. 위 12는 제목과의 사이(설명 패널의 사이 12와 같음). 이 여백을 쓰려면 패널에 Add-WtChild 없이 넣는다(Add-WtChild는 여백을 직접 정함) -->
+  <Style x:Key="Workflows.RunList" TargetType="ListBox" BasedOn="{StaticResource List}">
+    <Setter Property="Margin" Value="-13,12,-13,0"/>
+    <Setter Property="ItemContainerStyle" Value="{StaticResource Row.TwoLine}"/>
   </Style>
   <Style x:Key="Memo.Row" TargetType="ListBoxItem" BasedOn="{StaticResource Row}">
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.MemoRow}"/>
@@ -4958,6 +4997,8 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.Add" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.SideBody" TargetType="DockPanel"><Setter Property="Margin" Value="16,0,16,16"/></Style>
   <Style x:Key="Schedule.Form" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
+  <!-- 편집 폼 단추 줄(삭제 · 저장 · 취소): 칸 스크롤 밖 아래에 고정하고 스크롤 영역과 사이 12. 펼친 칸이 단추 바로 뒤에서 잘려 겹쳐 보이지 않게(디자인 8절 일정) -->
+  <Style x:Key="Schedule.FormButtons" TargetType="DockPanel"><Setter Property="Margin" Value="0,12,0,0"/></Style>
   <Style x:Key="Schedule.Field" TargetType="StackPanel"><Setter Property="Margin" Value="0,0,0,12"/></Style>
   <Style x:Key="Schedule.FieldLabel" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,0,8"/></Style>
   <Style x:Key="Schedule.RangeDash" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="8,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
@@ -5184,10 +5225,10 @@ $script:stylesXaml = @'
     </DataTemplate.Triggers>
   </DataTemplate>
   <Style x:Key="Schedule.TableList" TargetType="ListBox" BasedOn="{StaticResource List}"><Setter Property="ItemContainerStyle" Value="{StaticResource Schedule.TableRow}"/><Setter Property="ItemTemplate" Value="{StaticResource Schedule.TableItem}"/></Style>
-  <!-- 루틴 보기 줄: 이름(나머지) · 규칙 220 · 시각 72 · 오늘 72 · 메모 60 -->
+  <!-- 루틴 보기 줄: 이름(나머지) · 규칙 220 · 시각 72 · 오늘 88 · 메모 60. 오늘 88은 「오늘 없음」이 글자 크게에서도 잘리지 않는 폭 -->
   <DataTemplate x:Key="Schedule.RoutineItem">
     <Grid MinHeight="32">
-      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="220"/><ColumnDefinition Width="72"/><ColumnDefinition Width="72"/><ColumnDefinition Width="60"/></Grid.ColumnDefinitions>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="220"/><ColumnDefinition Width="72"/><ColumnDefinition Width="88"/><ColumnDefinition Width="60"/></Grid.ColumnDefinitions>
       <DockPanel Margin="12,0"><TextBlock Text="&#xE8EE;" Style="{DynamicResource Schedule.TableRoutineIcon}"/><TextBlock x:Name="RoutineName" Text="{Binding Title}" Style="{DynamicResource Table.Cell}" Margin="0"/></DockPanel>
       <TextBlock Grid.Column="1" Text="{Binding RuleText}" Style="{DynamicResource Table.CellSub}"/>
       <TextBlock Grid.Column="2" Text="{Binding TimeText}" Style="{DynamicResource Table.CellSub}"/>
@@ -5726,6 +5767,70 @@ function New-WtNameDialog([string]$Title, [string]$Label, [string]$Note, [string
     $dialog
 }
 
+# 고친 내용을 버리게 되는 동작 앞에서 묻는 창(apps/design.md 13장): 제목 = 질문, [저장] [저장 안 함] [취소] (주 버튼이 왼쪽).
+# 'save' · 'discard' · 'cancel' 중 하나를 돌려준다. Enter = 저장, Esc · 창 닫기 = 취소. -Text: 제목 아래 한 문장(무엇을 고쳤는지)
+# 이 창이 떠 있는 동안 또 물으면(트레이 → 종료 · 창이 뜨기 전에 온 클릭) 겹쳐 띄우지 않고 'cancel'로 답한다
+$script:saveChoiceOpen = $false
+function Read-WtSaveChoice([string]$Text) {
+    if ($script:saveChoiceOpen) { return 'cancel' }
+    $script:saveChoiceOpen = $true
+    try {
+        $dialog = New-WtSaveChoiceDialog $Text
+        [void]$dialog.Window.ShowDialog()
+        [string]$dialog.Window.Tag.Choice
+    } finally { $script:saveChoiceOpen = $false }
+}
+
+# Read-WtSaveChoice의 창을 띄우지 않고 만들기만 한다. 검사는 이 내용을 숨김 호스트에 붙여 본다
+function New-WtSaveChoiceDialog([string]$Text) {
+    $dialog = New-WtModal '변경 내용을 저장할까요?'
+    if ($Text) { $line = New-WtText $Text; $line.TextWrapping = 'Wrap'; [void](Add-WtChild $dialog.Body $line) }
+    $save = New-WtButton '저장' -Kind Primary; $save.IsDefault = $true
+    $discard = New-WtButton '저장 안 함'
+    $cancel = New-WtButton '취소'; $cancel.IsCancel = $true
+    $dialog.Window.Tag = @{ Choice = 'cancel'; Focus = $save }
+    foreach ($pair in @(@($save, 'save'), @($discard, 'discard'))) {
+        $pair[0].Tag = @{ Window = $dialog.Window; Choice = $pair[1] }
+        $pair[0].Add_Click({ param($s, $e) $s.Tag.Window.Tag.Choice = $s.Tag.Choice; $s.Tag.Window.DialogResult = $true })
+    }
+    foreach ($button in $save, $discard, $cancel) { [void](Add-WtChild $dialog.Buttons $button) }
+    $dialog.Window.Add_ContentRendered({ param($s, $e) [void]$s.Tag.Focus.Focus() })
+    $dialog.Save = $save; $dialog.Discard = $discard; $dialog.Cancel = $cancel
+    $dialog
+}
+
+# 입력칸 오류 표시(디자인 7절 「입력칸」): 선과 오른쪽 오류 아이콘(EB90)을 B.Status.Error.Icon으로, 이유는 툴팁. 문구가 비면 지운다.
+# 모양은 Input 스타일의 Validation.HasError 트리거가 그린다. 글이 바인딩되지 않은 칸도 쓸 수 있게 Uid에 빈 바인딩을 걸어 오류를 단다
+# (근태 · 메모 찾기와 같은 방식). 글 칸이 아닌 것(고르기 칸 · 체크 상자 묶음)은 그대로 둔다. 칸 아래 문구는 부르는 탭이 쓴다
+function Set-WtInputError($Box, [string]$Message) {
+    if ($Box -isnot [System.Windows.Controls.TextBox]) { return }
+    $expression = $Box.GetBindingExpression([System.Windows.Controls.TextBox]::TextProperty)
+    if (-not $expression) { $expression = $Box.GetBindingExpression([System.Windows.FrameworkElement]::UidProperty) }
+    if (-not $expression) {
+        if (-not $Message) { return }
+        $binding = [System.Windows.Data.Binding]::new('Value'); $binding.Source = [pscustomobject]@{ Value = '' }
+        $expression = $Box.SetBinding([System.Windows.FrameworkElement]::UidProperty, $binding)
+    }
+    if ($Message) {
+        [System.Windows.Controls.Validation]::MarkInvalid($expression,
+            [System.Windows.Controls.ValidationError]::new([System.Windows.Controls.ExceptionValidationRule]::new(), $expression, $Message, $null))
+    } else { [System.Windows.Controls.Validation]::ClearInvalid($expression) }
+}
+
+# 편집 폼 칸들의 지금 값(글 칸 · 고르기 칸 · 체크 상자 · 체크 상자 묶음)을 한 글로. 열 때 값과 비교해 고친 것이 있는지 본다
+# (고친 폼을 떠날 때 Read-WtSaveChoice로 물을지). $Fields = @{ 이름 = 칸 }
+function Get-WtFormState([hashtable]$Fields) {
+    @(foreach ($key in @($Fields.Keys | Sort-Object)) {
+            $c = $Fields[$key]
+            $value = if ($c -is [System.Windows.Controls.TextBox]) { $c.Text }
+            elseif ($c -is [System.Windows.Controls.ComboBox]) { [string]$c.SelectedItem }
+            elseif ($c -is [System.Windows.Controls.Primitives.ToggleButton]) { [string]$c.IsChecked }
+            elseif ($c -is [System.Windows.Controls.Panel]) { @($c.Children | Where-Object { $_ -is [System.Windows.Controls.CheckBox] -and $_.IsChecked } | ForEach-Object { [string]$_.Tag }) -join ',' }
+            else { '' }
+            "$key=$value"
+        }) -join "`n"
+}
+
 function New-WtMinuteInput([int]$Value) {
     $row = New-WtStack Horizontal 12
     $box = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $box 'Input'
@@ -5832,6 +5937,29 @@ function New-WtMenuItem([string]$Text, [scriptblock]$OnClick, $Value, [switch]$C
     $item
 }
 
+# 단추의 펼침 메뉴(단추의 ContextMenu)를 단추 아래에 둔다. -Right: 메뉴 오른쪽 끝을 단추 오른쪽 끝에 맞춘다.
+# 창 오른쪽 끝 단추의 메뉴가 창 밖으로 나가지 않게 쓴다(디자인 7절 「메뉴」). 열기는 Open-WtButtonMenu, 이 함수는 자리만 정한다
+function Set-WtButtonMenuPlacement($Button, [switch]$Right) {
+    $menu = $Button.ContextMenu
+    $menu.PlacementTarget = $Button
+    $menu.HorizontalOffset = 0; $menu.VerticalOffset = 0
+    if (-not $Right) { $menu.Placement = 'Bottom'; return }
+    # 크기는 WPF가 넘겨 주는 단위 그대로 쓴다(배율에서 단위가 달라도 같은 단위끼리 빼므로 맞는다)
+    if (-not $script:rightBelowPlacement) {
+        $script:rightBelowPlacement = [System.Windows.Controls.Primitives.CustomPopupPlacementCallback]{
+            param([System.Windows.Size]$PopupSize, [System.Windows.Size]$TargetSize, [System.Windows.Point]$Offset)
+            , [System.Windows.Controls.Primitives.CustomPopupPlacement[]]@(
+                [System.Windows.Controls.Primitives.CustomPopupPlacement]::new([System.Windows.Point]::new($TargetSize.Width - $PopupSize.Width, $TargetSize.Height), 'Horizontal'))
+        }
+    }
+    $menu.CustomPopupPlacementCallback = $script:rightBelowPlacement
+    $menu.Placement = 'Custom'
+}
+function Open-WtButtonMenu($Button, [switch]$Right) {
+    Set-WtButtonMenuPlacement $Button -Right:$Right
+    $Button.ContextMenu.IsOpen = $true
+}
+
 # 메뉴 안의 묶음 이름(누를 수 없는 줄)
 function New-WtMenuCaption([string]$Text) {
     $item = [System.Windows.Controls.MenuItem]::new()
@@ -5849,7 +5977,8 @@ function Get-WtVisualChild($Root, [type]$Type) {
 }
 
 Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
-Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption, Get-WtVisualChild,
+Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, Read-WtSaveChoice, Set-WtInputError, Get-WtFormState, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption,
+    Set-WtButtonMenuPlacement, Open-WtButtonMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
     New-WtPageHeader, New-WtPage, New-WtEmptyState, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
@@ -6139,7 +6268,7 @@ function New-WtTimeline([object[]]$Items, [datetime]$Date, [string]$Page, [strin
         }
         [void]$canvas.Children.Add($button)
         $caption = New-WtText ($entry.Start.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) + ' ' + $entry.Title) 'T.Sub'
-        $caption.TextWrapping = 'NoWrap'; $caption.IsHitTestVisible = $false; [void]$canvas.Children.Add($caption)
+        $caption.TextWrapping = 'NoWrap'; $caption.TextTrimming = 'CharacterEllipsis'; $caption.IsHitTestVisible = $false; [void]$canvas.Children.Add($caption)
         $alarm = $null
         if ($entry.Alarm) {
             $alarm = New-WtIcon 0xEA8F; $alarm.FontSize = 12; Set-WtResource $alarm Foreground 'B.Accent'; $alarm.ToolTip = $entry.ToolTip
@@ -6164,6 +6293,15 @@ function New-WtTimeline([object[]]$Items, [datetime]$Date, [string]$Page, [strin
     @{ Card = $card; Timeline = $canvas }
 }
 
+# 시간 막대 글 · 아이콘의 폭. 접힌(Collapsed) 요소는 폭을 0으로 재므로 숨김(Hidden)으로 바꾼 뒤 잰다.
+# 전에는 앞 배치에서 숨긴 이름이 폭 0으로 들어가 끝 맞춤 · 겹침 판단을 비껴갔다: 오른쪽 끝을 넘어 잘리고,
+# 1분마다 다시 놓을 때 숨긴 이름과 보인 이름이 번갈아 바뀌었다(11-22 실사용 보고 3)
+function Measure-WtTimelinePart($Element, [System.Windows.Size]$Size) {
+    if ($Element.Visibility -eq 'Collapsed') { $Element.Visibility = 'Hidden' }
+    $Element.Measure($Size)
+    $Element.DesiredSize.Width
+}
+
 function Set-WtTimelineLayout($Timeline) {
     $state = $Timeline.Tag
     $width = if ($Timeline.ActualWidth -gt 0) { $Timeline.ActualWidth } else { 584 }
@@ -6176,10 +6314,12 @@ function Set-WtTimelineLayout($Timeline) {
         [System.Windows.Controls.Canvas]::SetLeft($tick.Text, [Math]::Clamp($x - 12, 0, $width - 24))
     }
     # 막대는 두 줄까지 쌓고, 넘치면 숨긴 뒤 오른쪽에 +n으로 묶는다.
-    $ends = @([double]::NegativeInfinity, [double]::NegativeInfinity); $hidden = [System.Collections.Generic.List[string]]::new(); $placed = [System.Collections.Generic.List[object]]::new()
+    # [Math]::Max · Min의 첫 값은 0.0처럼 실수로 쓴다: PowerShell은 Max(0, 636.67)을 정수 판으로 불러 637을 돌려주고,
+    # 올림된 이름 자리가 오른쪽 끝을 넘어 숨겨졌다(11-22 재확인, 배율 150%)
+    $ends =@([double]::NegativeInfinity, [double]::NegativeInfinity); $hidden = [System.Collections.Generic.List[string]]::new(); $placed = [System.Collections.Generic.List[object]]::new()
     foreach ($event in $state.Events) {
         $left = [Math]::Clamp($event.Start, $state.Start, $state.End); $right = [Math]::Clamp($event.End, $state.Start, $state.End)
-        $barWidth = [Math]::Max(10, $width * ($right - $left) / $span)
+        $barWidth = [Math]::Max(10.0, $width * ($right - $left) / $span)
         $x = [Math]::Min($width - $barWidth, $width * ($left - $state.Start) / $span)
         $lane = if ($x -ge $ends[0]) { 0 } elseif ($x -ge $ends[1]) { 1 } else { -1 }
         if ($lane -lt 0) {
@@ -6192,26 +6332,48 @@ function Set-WtTimelineLayout($Timeline) {
         $placed.Add(@{ Event = $event; X = $x; Width = $barWidth; Lane = $lane })
     }
     $stacked = @($placed | Where-Object { $_.Lane -eq 1 }).Count -gt 0
-    $captionEnds = @([double]::NegativeInfinity, [double]::NegativeInfinity)
     $infinite = [System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)
+    # +n은 이름 첫 줄의 오른쪽 끝이다. 첫 줄 이름은 +n 앞 12까지만 쓰고, 둘째 줄은 막대 오른쪽 끝까지 쓴다
+    $state.More.Text = "+$($hidden.Count)"; $state.More.ToolTip = $hidden -join "`n`n"
+    $limits = @($width, $width)
+    if ($hidden.Count) { $limits[0] = $width - (Measure-WtTimelinePart $state.More $infinite) - 12 }
+    $state.More.Visibility = if ($hidden.Count) { 'Visible' } else { 'Collapsed' }
+    $captionEnds = @([double]::NegativeInfinity, [double]::NegativeInfinity)
     foreach ($item in $placed) {
         $event = $item.Event; $button = $event.Button
         $button.Width = $item.Width; $button.Height = if ($stacked) { 8 } else { 14 }
         if ($button.Content) { $button.Content.Width = $item.Width }  # 범위 밖 표시를 양 끝에 맞춘다.
         $top = if ($stacked) { 46 + $item.Lane * 8 } else { 47 }
         [System.Windows.Controls.Canvas]::SetLeft($button, $item.X); [System.Windows.Controls.Canvas]::SetTop($button, $top)
-        if ($event.Alarm) { [System.Windows.Controls.Canvas]::SetLeft($event.Alarm, $item.X + $item.Width); [System.Windows.Controls.Canvas]::SetTop($event.Alarm, $top - 2) }
-        $event.Caption.Measure($infinite); $captionWidth = $event.Caption.DesiredSize.Width
-        $captionX = [Math]::Max(0, [Math]::Min($item.X, $width - $captionWidth))
-        $line = if ($captionX -ge $captionEnds[0]) { 0 } elseif ($captionX -ge $captionEnds[1]) { 1 } else { -1 }
+        if ($event.Alarm) {
+            # 알람 종은 막대 바로 뒤다. 막대가 오른쪽 끝까지 가서 자리가 없으면 막대 바로 앞에 두고,
+            # 앞도 같은 줄의 다른 막대에 걸리면 그리지 않는다(알람은 툴팁에 있다). 막대 범위 밖으로 나가지 않는다
+            $alarm = $event.Alarm
+            $alarmWidth = Measure-WtTimelinePart $alarm $infinite
+            $alarmX = $item.X + $item.Width
+            if ($alarmX + $alarmWidth -gt $width + 0.01) {
+                $alarmX = $item.X - $alarmWidth
+                $blocked = $alarmX -lt -0.01 -or @($placed | Where-Object { $_.Lane -eq $item.Lane -and -not [object]::ReferenceEquals($_, $item) -and
+                        $_.X -lt $item.X -and $_.X + $_.Width -gt $alarmX + 0.01 }).Count
+                if ($blocked) { $alarmX = $null }
+            }
+            $alarm.Visibility = if ($null -eq $alarmX) { 'Collapsed' } else { 'Visible' }
+            if ($null -ne $alarmX) { [System.Windows.Controls.Canvas]::SetLeft($alarm, $alarmX); [System.Windows.Controls.Canvas]::SetTop($alarm, $top - 2) }
+        }
+        # 이름은 막대 시작에 두고, 오른쪽 끝(첫 줄은 +n 앞)을 넘으면 끝에 맞춘다. 앞 이름과 12 안으로 붙으면 둘째 줄, 둘째 줄도 겹치면 쓰지 않는다
+        $event.Caption.MaxWidth = $width
+        $captionWidth = Measure-WtTimelinePart $event.Caption $infinite
+        $line = -1; $captionX = 0
+        for ($l = 0; $l -lt 2 -and $line -lt 0; $l++) {
+            $x = [Math]::Max(0.0, [Math]::Min($item.X, $limits[$l] - $captionWidth))
+            if ($x -ge $captionEnds[$l] -and $x + $captionWidth -le $limits[$l] + 0.01) { $line = $l; $captionX = $x }
+        }
         $event.Caption.Visibility = if ($line -lt 0) { 'Collapsed' } else { 'Visible' }
         if ($line -ge 0) {
             $captionEnds[$line] = $captionX + $captionWidth + 12
             [System.Windows.Controls.Canvas]::SetLeft($event.Caption, $captionX); [System.Windows.Controls.Canvas]::SetTop($event.Caption, 70 + $line * 18)
         }
     }
-    $state.More.Visibility = if ($hidden.Count) { 'Visible' } else { 'Collapsed' }
-    $state.More.Text = "+$($hidden.Count)"; $state.More.ToolTip = $hidden -join "`n`n"
     $minute = ($state.Now - $state.Date.Date).TotalMinutes
     $visible = $minute -ge $state.Start -and $minute -le $state.End
     $state.Line.Visibility = $state.Label.Visibility = if ($visible) { 'Visible' } else { 'Collapsed' }
@@ -6323,7 +6485,25 @@ function Set-WtDocumentTablesLayout($View) {
     }
     Update-DocumentBlocks $View.Document.Blocks
 }
-Export-ModuleMember -Function Register-WtTableHead, Update-WtTableHead, Set-WtDocumentTableWidths, Set-WtDocumentTablesLayout
+
+# 표(DataGrid)의 고정 폭 열을 글자 크기 배율만큼 넓히거나 좁힌다(디자인 5절 · 7절 표: 글자를 키우면 칸도 같은 비율로).
+# 처음 부를 때의 폭(XAML에 적은 배율 1 기준값)을 열마다 기억한다. 나머지 폭(*) 열은 남는 폭을 그대로 쓴다.
+# 열은 시각 트리 밖이라 DynamicResource로 묶을 수 없어서, 표를 만들 때 · 글자 크기가 바뀔 때 부른다
+$script:columnBase = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
+function Set-WtTableColumnScale($Table) {
+    $scale = Get-WtFontScale
+    foreach ($column in $Table.Columns) {
+        $base = $null
+        if (-not $script:columnBase.TryGetValue($column, [ref]$base)) {
+            if (-not $column.Width.IsAbsolute) { continue }
+            $base = [double]$column.Width.Value
+            $script:columnBase.Add($column, $base)
+        }
+        $width = [Math]::Round([double]$base * $scale)
+        if ($column.Width.Value -ne $width -or -not $column.Width.IsAbsolute) { $column.Width = [System.Windows.Controls.DataGridLength]::new($width) }
+    }
+}
+Export-ModuleMember -Function Register-WtTableHead, Update-WtTableHead, Set-WtDocumentTableWidths, Set-WtDocumentTablesLayout, Set-WtTableColumnScale
 
 # 지난 일정은 흐리게, 다음 일정은 진하게, 그 뒤는 옅게 칠한다.
 function Update-WtTimelineNow($Timeline, [datetime]$Now = (Get-Date)) {
@@ -9883,6 +10063,9 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   Refresh      { param($view) } → 화면을 열 때마다 부른다 (선택)
   OnOpen       { param($OpenArgs) } → Open-WtPage로 옮긴 뒤 인자를 받는다 (선택)
   ShortcutExists { param($Key) } → 바로 가기 대상이 남아 있으면 $true (선택)
+  ShortcutTitle  { param($Key) } → 바로 가기 대상의 지금 이름. 비거나 실패하면 연 때 남긴 이름을 쓴다 (선택)
+  PageKey      { param($Key, $Modifiers) } → 이 화면이 떠 있는데 키보드 포커스가 화면 밖(왼쪽 메뉴 · 제목 줄 · 창 자체)에 있을 때
+               셸이 처리하지 않은 키를 넘긴다. 처리했으면 $true (선택). 화면 안 키는 화면이 직접 받는다
   HomeCard     { } → 홈에 놓을 카드 요소(여러 개 가능)를 돌려준다 (선택)
   HomeSlot     main(기본) · side · head(제목 아래 줄). HomeOrder가 작을수록 먼저 놓는다
   HomeCards    @(@{ Slot = 'head'|'main'|'side'; Order = 숫자; Card = { } }, ...). 한 탭의 여러 자리 카드 (선택)
@@ -9891,6 +10074,11 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   OnExit       { } → 끝내기 직전(SavePending 확인 뒤) 타이머·조회 등 실행 자원을 정리한다 (선택)
   SavePending  { } → 이 화면을 떠날 때 · 끝낼 때 저장. 실패하면 $false를 돌려준다.
                      그러면 셸이 다시 시도 · 저장하지 않고 이동(끝내기) · 취소를 묻는다 (선택)
+  ConfirmExit  끝내면 사라질 내용(저장하지 않은 편집 폼 등)이 있을 때 끝내기 전에 사용자에게 묻는 자리 (선택)
+               @{ Pending = { } → 물을 것이 있으면 $true. 묻지 않고 빨리 판단만 한다
+                  Confirm = { } → 묻고, 끝내도 되면 $true · 취소(또는 저장 실패)면 $false. Pending이 $true일 때만 부른다 }
+               셸은 끝낼 때(트레이 종료 · 닫기 = 끝내기 · Alt+F4) 맨 먼저, 저장 통로 마무리(SavePending) · 쓰지 못한 내용 확인보다 앞에
+               탭 순서대로 부른다. Confirm 앞에 창을 띄우고 그 탭 화면을 보인다. 하나라도 $false면 끝내지 않고 뒤 단계도 묻지 않는다
   Help         도움말 「이 버전」에 넣을 설명 문단들 (선택)
   Shortcuts    도움말 「단축키」에 넣을 @('키', '설명') 목록. 키 처리는 탭 화면이 직접 한다 (선택)
                하나만 줄 때는 앞에 쉼표를 붙인다: -Shortcuts (, @('F5', '새로 고침'))
@@ -9930,6 +10118,8 @@ function Register-WtAddon {
         [scriptblock]$Refresh,
         [scriptblock]$OnOpen,
         [scriptblock]$ShortcutExists,
+        [scriptblock]$ShortcutTitle,
+        [scriptblock]$PageKey,
         [scriptblock]$HomeCard,
         [ValidateSet('head', 'main', 'side')][string]$HomeSlot = 'main',
         [int]$HomeOrder = 100,
@@ -9938,6 +10128,7 @@ function Register-WtAddon {
         [scriptblock]$ImportLegacy,
         [scriptblock]$OnExit,
         [scriptblock]$SavePending,
+        [hashtable]$ConfirmExit,
         [ValidateSet('', 'View', 'Full')][string]$WarmUp = '',
         [string]$Description = '',
         [string[]]$Help = @(),
@@ -9970,6 +10161,13 @@ function Register-WtAddon {
         $relatedEntry = [pscustomobject]@{ Name = $Related.Name.Trim(); Templates = $templates
             Find = $Related.Find; Pick = $Related.Pick; New = $Related.New; Window = $Related.Window }
     }
+    $exitEntry = $null
+    if ($ConfirmExit) {
+        foreach ($key in 'Pending', 'Confirm') {
+            if ($ConfirmExit[$key] -isnot [scriptblock]) { throw "애드온 '$Id'의 ConfirmExit에는 $key(함수)가 필요합니다." }
+        }
+        $exitEntry = [pscustomobject]@{ Pending = $ConfirmExit.Pending; Confirm = $ConfirmExit.Confirm }
+    }
     $cards = @($HomeCards)
     if (-not $PSBoundParameters.ContainsKey('HomeCards') -and $HomeCard) {
         $cards = @(@{ Slot = $HomeSlot; Order = $HomeOrder; Card = $HomeCard })
@@ -9984,12 +10182,12 @@ function Register-WtAddon {
     }
     $script:addons.Add(@{
             Id = $Id; Title = $Title; Icon = $Icon; Order = $Order; Group = $Group; Badge = $Badge; BadgeToolTip = $BadgeToolTip; BadgeKind = $BadgeKind; StatusItems = $StatusItems; Required = [bool]$Required
-            NewView = $NewView; Refresh = $Refresh; OnOpen = $OnOpen; ShortcutExists = $ShortcutExists
+            NewView = $NewView; Refresh = $Refresh; OnOpen = $OnOpen; ShortcutExists = $ShortcutExists; ShortcutTitle = $ShortcutTitle; PageKey = $PageKey
             HomeCard = $HomeCard; HomeSlot = $HomeSlot; HomeOrder = $HomeOrder; CalendarHost = [bool]$CalendarHost
             HomeCards = $cards
             CalendarItems = $CalendarItems; ImportLegacy = $ImportLegacy; OnExit = $OnExit
             Description = $Description
-            SavePending = $SavePending; WarmUp = $WarmUp
+            SavePending = $SavePending; ConfirmExit = $exitEntry; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
             Related = $relatedEntry; DateMenu = $DateMenu
             Tick = $Tick; TickSeconds = $TickSeconds; SettingRows = $SettingRows
@@ -10288,7 +10486,12 @@ function Get-WtShortcuts {
         try { if ($addon.ShortcutExists -and -not (& $addon.ShortcutExists $item.key)) { continue } } catch { continue }
         $uses = @(Get-WtShortcutUses $item $now | Sort-Object { (ConvertFrom-WtStamp $_).UtcTicks })
         if (-not $item.pinned -and -not $uses.Count) { continue }
-        [pscustomobject]@{ Page = $item.page; Key = $item.key; Title = $item.title; Sub = [string]$item.sub; Icon = $item.icon
+        # 이름은 연 때 남긴 것이다. 탭이 지금 이름을 알려 주면 그것을 쓴다(연 뒤 이름을 바꾼 항목). 기록은 고치지 않는다
+        $title = $item.title
+        if ($addon.ShortcutTitle) {
+            try { $named = @(& $addon.ShortcutTitle $item.key)[-1]; if ($named -is [string] -and $named) { $title = $named } } catch { }
+        }
+        [pscustomobject]@{ Page = $item.page; Key = $item.key; Title = $title; Sub = [string]$item.sub; Icon = $item.icon
             Pinned = $item.pinned; Count = $uses.Count; PinOrder = $item.pinOrder
             Last = $(if ($uses.Count) { (ConvertFrom-WtStamp $uses[-1]).UtcTicks } else { 0 }) }
     }
@@ -10425,26 +10628,32 @@ function New-WtThemeCard {
     }
     [void](Add-WtChild $col (New-WtSettingRow '닫기 버튼 (X)' $close '트레이 아이콘을 우클릭한 뒤 종료를 누르세요.'))
 
-    # 알림 묶음(디자인 8절 「설정·도움말」): 탭이 등록한 행(Get-WtAddonSettingRows) → 코어 알림 부품의 행
+    # 알림 묶음(디자인 8절 「설정·도움말」): 알람 잠시 끄기 → 탭이 등록한 행(Get-WtAddonSettingRows) → 코어 알림 부품의 나머지 행.
+    # 잠시 끄기는 기본 창 크기(960 × 680)에서도 스크롤 없이 보이게 묶음 맨 위에 둔다(11-22 실사용 보고)
     [void](Add-WtChild $col (New-WtText '알림' 'Setting.Group'))
+    $noticeRows = @(New-WtNoticeSettingRows)
+    [void](Add-WtChild $col $noticeRows[0])
     foreach ($row in @(Get-WtAddonSettingRows '알림')) {
         if ($row.Error) { [void](Add-WtChild $col (New-WtText "$($row.Label) 설정 행을 만들지 못했습니다. $($row.Error)" 'T.Error')); continue }
         [void](Add-WtChild $col (New-WtSettingRow $row.Label $row.Control $row.Note))
     }
-    foreach ($row in @(New-WtNoticeSettingRows)) { [void](Add-WtChild $col $row) }
+    foreach ($row in @($noticeRows | Select-Object -Skip 1)) { [void](Add-WtChild $col $row) }
 
     $card.Child = $col
     $card
 }
 
-# ---- 설정 → 일반 → 알림: 다시 알림 · 알람 소리 · 소리 · 볼륨 · 알람 잠시 끄기 (값은 core\Notice.psm1이 읽는다) ----
+# ---- 설정 → 일반 → 알림: 알람 잠시 끄기 · 다시 알림 · 알람 소리 · 소리 · 볼륨 (값은 core\Notice.psm1이 읽는다) ----
 $script:noticeUi = $null        # 처리기가 쓰는 칸 묶음(처리기 안에서는 $script: 변수와 Tag만 쓴다)
 $script:volumeTimer = $null
 $script:pendingVolume = 70
 $script:noticeHandler = $false
 
+# 맨 앞은 알람 잠시 끄기 행이다. 설정 화면은 이 행을 묶음 맨 위(탭이 등록한 행보다 앞)에 둔다
 function New-WtNoticeSettingRows {
     $rows = [System.Collections.Generic.List[object]]::new()
+    $pauseBox = New-WtStack Horizontal 8
+    $rows.Add((New-WtSettingRow '알람 잠시 끄기' $pauseBox))
     $snooze = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $snooze 'Setting.Combo'
     $current = [int](Get-WtSetting 'notice.snooze')
     $choices = @(5, 10, 15, 30)
@@ -10494,8 +10703,6 @@ function New-WtNoticeSettingRows {
     foreach ($child in $slider, $volumeText, $preview) { [void](Add-WtChild $volumeRow $child) }
     $rows.Add((New-WtSettingRow '볼륨' $volumeRow))
 
-    $pauseBox = New-WtStack Horizontal 8
-    $rows.Add((New-WtSettingRow '알람 잠시 끄기' $pauseBox))
     $script:noticeUi = @{ SoundOn = $soundOn; File = $file; Volume = $slider; VolumeText = $volumeText; Preview = $preview; Pause = $pauseBox }
     Update-WtNoticeSoundRow
     Update-WtNoticePauseRow
@@ -10634,10 +10841,10 @@ function New-WtTabbedPage([string]$Title, [object[]]$Sections) {
         $item = [System.Windows.Controls.TabItem]::new()
         Set-WtStyle $item 'Tab'
         $item.Header = $section[0]
+        # 탭을 누르면 내용의 첫 포커스 자리로 포커스가 간다. 스크롤 면이 그 자리라 탭 맨 위(스크롤 0)부터 보인다 (Page.TabScroll)
         $scroll = [System.Windows.Controls.ScrollViewer]::new()
-        $scroll.VerticalScrollBarVisibility = 'Auto'
-        $scroll.HorizontalScrollBarVisibility = 'Disabled'
-        $scroll.Focusable = $false
+        Set-WtStyle $scroll 'Page.TabScroll'
+        [System.Windows.Automation.AutomationProperties]::SetName($scroll, [string]$section[0])
         $scroll.Content = $section[1]
         $item.Content = $scroll
         [void]$tabs.Items.Add($item)
@@ -11228,6 +11435,7 @@ $script:warmEnabled = $false  # WORKTOOL_WARMUP=1인 진단 세션에서만 켠�
 $script:warmStarted = $false  # ContentRendered가 다시 와도 세션당 한 번만 예약
 $script:forceOpaque = $false  # WORKTOOL_FORCE_OPAQUE=1: 설정을 저장하지 않는 불투명 창
 $script:writingDropped = $false   # 끝낼 때 사용자가 「저장을 기다리지 않고 끝내기」를 골랐는지
+$script:exitAsking = $false       # 끝내기 전에 묻는 중(그사이 트레이 종료 등이 또 와도 겹쳐 묻지 않게)
 
 $script:shellXaml = Get-WtShellXaml
 
@@ -11339,13 +11547,25 @@ function Close-WtUtilityWindows {
     $script:utilityWindows.Count -eq 0
 }
 
+# 지금 화면이 떠 있는데 키보드 포커스가 화면 밖(왼쪽 메뉴 · 제목 줄 단추 · 창 자체)에 있으면, 셸이 처리하지 않은 키를
+# 그 탭의 PageKey 등록에 넘긴다. 화면 안에 포커스가 있으면 화면이 직접 받으므로 넘기지 않는다. 처리했으면 $true
+function Invoke-WtPageKey([System.Windows.Input.Key]$Key, [System.Windows.Input.ModifierKeys]$Modifiers) {
+    if (-not $script:current -or -not $script:ui) { return $false }
+    $view = $script:ui.PageHost.Content
+    if (-not $view -or $view.IsKeyboardFocusWithin) { return $false }
+    $addon = Get-WtAddon -Id $script:current
+    if (-not $addon -or -not $addon.PageKey) { return $false }
+    @(& $addon.PageKey $Key $Modifiers)[-1] -eq $true
+}
+
 # 공개된 Select-WtPage의 출력은 그대로 두고, 항목 열기는 전환 성공 여부까지 확인한다.
-function Invoke-WtPageSelection([string]$Id) {
+# -NoSave: 떠나는 화면의 저장 확인을 건너뛴다(끝낼 때 물을 탭 화면을 보일 때. 그 저장은 바로 뒤 끝내기 저장 단계가 맡는다)
+function Invoke-WtPageSelection([string]$Id, [switch]$NoSave) {
     if ($script:selecting -or -not $Id) { return $false }
     $script:selecting = $true
     try {
         # 떠나는 화면에 저장하지 못한 내용이 있으면 묻는다 (다른 화면의 저장 상태는 그 화면을 떠날 때 묻는다)
-        if ($script:current -and $Id -ne $script:current -and -not (Save-WtPendingChanges -Purpose switch -Only $script:current)) { return $false }
+        if (-not $NoSave -and $script:current -and $Id -ne $script:current -and -not (Save-WtPendingChanges -Purpose switch -Only $script:current)) { return $false }
         $page = Get-WtPageView $Id
         if (-not $page) { return $false }
         if ($page.Addon -and $page.Addon.Refresh) { [void](& $page.Addon.Refresh $page.View) }
@@ -11944,20 +12164,48 @@ function Confirm-WtDataWrites([switch]$NoCancel) {
     $true
 }
 
+<#
+끝내기 전에 탭에 묻는다(Register-WtAddon -ConfirmExit). 끝내면 사라질 내용(저장하지 않은 편집 폼 등)이 있는 탭만 Pending이 $true다.
+물을 탭이 있으면 트레이에 숨은 창을 띄우고 그 탭 화면을 보인 뒤 Confirm을 부른다(고칠 곳 · 저장 오류가 보이게).
+화면을 옮길 때 떠나는 화면의 저장 확인은 건너뛴다: 그 저장은 바로 뒤 끝내기 저장 단계(Save-WtPendingChanges)가 맡고, 여기서 물으면 순서가 바뀐다.
+하나라도 $false(취소 · 저장 실패)면 $false. 탭의 함수가 실패하면 알리고 끝내기를 막지 않는다(끌 수 없는 상태를 만들지 않는다)
+#>
+function Confirm-WtAddonExit {
+    foreach ($a in @(Get-WtAddon -All)) {
+        if (-not $a.ConfirmExit) { continue }
+        $pending = $false
+        try { $pending = (@(& $a.ConfirmExit.Pending) | Select-Object -Last 1) -eq $true } catch { Show-WtError $_ "끝내기 확인: $($a.Title)" }
+        if (-not $pending) { continue }
+        if ($script:window -and -not $script:window.IsVisible) { Show-WtMainWindow }
+        if ($script:ui -and $script:current -ne $a.Id -and (Get-WtAddon -Id $a.Id)) { [void](Invoke-WtPageSelection $a.Id -NoSave) }
+        $ok = $true
+        try { $ok = (@(& $a.ConfirmExit.Confirm) | Select-Object -Last 1) -ne $false } catch { Show-WtError $_ "끝내기 확인: $($a.Title)" }
+        if (-not $ok) { return $false }
+    }
+    $true
+}
+
 # 저장을 확인한 뒤에만(또는 저장하지 않고 끝내기를 고른 뒤에만) 트레이·타이머를 정리하고 메시지 돌리기를 멈춘다.
 # 탭의 OnExit 뒤에 남은 화면 밖 작업(응답 없는 공유 폴더 조회 등)은 기다리지 않고 모두 버린다 (core\Work.psm1)
+# 묻는 순서: 탭이 묻기(고친 폼: 저장 · 저장 안 함 · 취소) → 저장 통로 마무리(SavePending, 실패면 다시 시도 · 끝내기) → 보조 창 닫기 →
+# 쓰는 중 · 쓰지 못한 내용 확인. 앞에서 취소하면 뒤는 묻지 않아 창이 겹치지 않는다. 묻는 동안 또 끝내기가 오면(트레이 종료 등) 바로 $false
 function Stop-WtApp {
     if (-not $script:exiting) {
-        $script:writingDropped = $false
-        if (-not (Save-WtPendingChanges -Purpose exit)) { return $false }
-        # 보조 창 위치를 저장한 쓰기도 종료 확인에 포함한다.
-        if (-not (Close-WtUtilityWindows)) { return $false }
-        if (-not (Confirm-WtDataWrites)) { return $false }
-        foreach ($a in @(Get-WtAddon -All)) {
-            if ($a.OnExit) { try { [void](& $a.OnExit) } catch { Show-WtError $_ "끝내기 전 저장: $($a.Title)" } }
-        }
-        # 정리 중에 시작한 저장(실행 기록 등)도 같다. 정리는 이미 했으니 취소는 없다
-        [void](Confirm-WtDataWrites -NoCancel)
+        if ($script:exitAsking) { return $false }
+        $script:exitAsking = $true
+        try {
+            $script:writingDropped = $false
+            if (-not (Confirm-WtAddonExit)) { return $false }
+            if (-not (Save-WtPendingChanges -Purpose exit)) { return $false }
+            # 보조 창 위치를 저장한 쓰기도 종료 확인에 포함한다.
+            if (-not (Close-WtUtilityWindows)) { return $false }
+            if (-not (Confirm-WtDataWrites)) { return $false }
+            foreach ($a in @(Get-WtAddon -All)) {
+                if ($a.OnExit) { try { [void](& $a.OnExit) } catch { Show-WtError $_ "끝내기 전 저장: $($a.Title)" } }
+            }
+            # 정리 중에 시작한 저장(실행 기록 등)도 같다. 정리는 이미 했으니 취소는 없다
+            [void](Confirm-WtDataWrites -NoCancel)
+        } finally { $script:exitAsking = $false }
     }
     $script:exiting = $true
     if ($script:writingDropped) { try { Stop-WtDataWrites } catch { } }   # 사용자가 기다리지 않고 끝내기를 골랐다
@@ -12167,7 +12415,9 @@ function Start-WtApp {
                     $idx = [int]$key - [int][System.Windows.Input.Key]::D1
                     if ($idx -lt $ids.Count) { Select-WtPage $ids[$idx] }
                     $e.Handled = $true
+                    return
                 }
+                if (Invoke-WtPageKey $key ([System.Windows.Input.Keyboard]::Modifiers)) { $e.Handled = $true }
             } catch { Show-WtError $_ '단축키' }
         })
 
@@ -12911,7 +13161,8 @@ function New-WtAttTableRow($Entry, [datetime]$Month, $DayOff) {
         Start = $(if ($range) { $range[0].ToString('HH:mm', $script:inv) } elseif ($Entry.HasTime) { $Entry.Start.ToString('HH:mm', $script:inv) } else { '' })
         End = $(if ($range) { $range[1].ToString('HH:mm', $script:inv) } elseif ($Entry.HasTime -and $Entry.HasEnd) { $Entry.End.ToString('HH:mm', $script:inv) } else { '' })
         Place = $(if ($Entry.Kind -ceq 'work' -or ($Entry.Kind -ceq 'overtime' -and $Entry.How -ceq 'onsite')) { '작업장' } elseif ($Entry.Kind -ceq 'overtime' -and $Entry.How -ceq 'remote') { '원격' } else { '—' })
-        Travel = $(if ($Entry.Kind -ceq 'overtime' -and $Entry.Travel -gt 0) { $Entry.Travel.ToString($script:inv) } else { '' })
+        # 이동은 옆 시간 칸 · 사이드바 합계와 같은 h:mm (폼의 가는 길 · 오는 길만 분)
+        Travel = $(if ($Entry.Kind -ceq 'overtime' -and $Entry.Travel -gt 0) { Format-WtHours $Entry.Travel } else { '' })
         Duration = $(if ($Entry.Kind -ceq 'leave') { "$(Format-WtDays (Get-WtLeaveDays $Entry $Month $last $DayOff))일" } elseif ($Entry.Kind -ceq 'leave-grant') { "+$(Format-WtDays $Entry.LeaveDays)일" }
             elseif ($null -ne $Entry.Minutes) { Format-WtHours $Entry.Minutes } else { '' })
         Note = $Entry.Note; Problem = $(if ($Entry.Problem) { $Entry.Problem } elseif ($Entry.Kind -ceq 'work' -and -not $Entry.HasEnd) { '퇴근 기록 없음' } else { '' }); Entry = $Entry
@@ -12941,7 +13192,7 @@ function New-WtAttendanceView {
     $script:monthLabel = New-WtText '' 'Attendance.Month'
     foreach ($button in $previous, $next) {
         [Windows.Automation.AutomationProperties]::SetName($button, [string]$button.ToolTip)
-        $button.Add_Click({ param($s, $e) $script:month = $script:month.AddMonths([int]$s.Tag); $script:form = $null; Update-WtAttendanceView })
+        $button.Add_Click({ param($s, $e) if (-not (Confirm-WtAttFormLeave)) { return }; $script:month = $script:month.AddMonths([int]$s.Tag); $script:form = $null; Update-WtAttendanceView })
     }
     [void]$script:view.Nav.Children.Add($previous); [void]$script:view.Nav.Children.Add($script:monthLabel); [void]$script:view.Nav.Children.Add($next)
     foreach ($spec in @(@('출근','work-start'), @('퇴근','work-end'), @('업무외 시작','over'), @('','new'))) {
@@ -12952,6 +13203,7 @@ function New-WtAttendanceView {
         $script:view[$spec[1]] = $button; [void](Add-WtChild $script:view.Actions $button)
     }
     $script:table = (Get-WtStyleDictionary)['Attendance.TableView'].LoadContent(); $script:view.TableHost.Content = $script:table
+    Set-WtTableColumnScale $script:table
     $script:table.Add_SelectionChanged({ param($s, $e) if (-not $script:refreshing -and $s.SelectedItem) { Show-WtAttForm $s.SelectedItem.Entry } })
     # 취소 후 같은 선택 행을 다시 눌러도 폼을 연다. 선택 변경만으로는 이 클릭을 받지 못한다.
     $script:table.Add_PreviewMouseUp({
@@ -13007,7 +13259,9 @@ function Update-WtAttendanceView {
         $script:monthLabel.Text = Format-WtDate $script:month 'yyyy년 M월'
         $dayOff = Get-WtHolidayDates $script:month $script:month.AddMonths(1).AddDays(-1)
         $rows = @(foreach ($entry in @($script:data.Entries | Where-Object { Test-WtAttInMonth $_ $script:month } | Sort-Object Start, Id)) { New-WtAttTableRow $entry $script:month $dayOff })
+        Set-WtTableColumnScale $script:table
         $script:table.ItemsSource = $rows
+        if ($script:form) { Select-WtAttRow }   # 다른 곳에서 자료가 바뀌어 표를 새로 그려도 고치는 기록의 줄을 계속 보인다
         $script:view.Empty.Visibility = if ($rows.Count) { 'Collapsed' } else { 'Visible' }
         $script:table.ToolTip = @($script:data.Error, $holidays.Error, @($script:data.Entries | Where-Object { $_.State -cin 'broken','readonly' } | ForEach-Object Problem)) | Where-Object { $_ } | Join-String -Separator "`n"
         $today = @($script:data.Entries | Where-Object { $_.State -ceq 'ok' -and $_.Kind -ceq 'work' -and $_.StartDate -eq [datetime]::Today })
@@ -13028,6 +13282,7 @@ function Update-WtAttendanceView {
     } finally { $script:refreshing = $false }
 }
 function Invoke-WtAttClock([string]$Action) {
+    if (-not (Confirm-WtAttFormLeave)) { return }   # 찍으면 폼을 닫으므로 고친 내용이 있으면 먼저 묻는다(취소면 찍지 않음)
     try {
         $store = $script:data.Store
         if ($Action -ceq 'work-start') { $result = Start-WtAttendanceRecord $store }
@@ -13100,15 +13355,18 @@ function Set-WtAttFormKind {
 }
 # Entry = 고칠 기록. 새 기록이면 Date(yyyy-MM-dd) · Kind(work · leave …)로 처음 값을 정할 수 있다(일정 우클릭 「여러 날 · 다른 종류…」)
 function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
+    # 고친 폼이 있으면 먼저 묻는다(다른 행 · 직접 입력 · 다른 탭에서 열기). 취소하면 폼을 두고 표 선택도 그 폼의 줄로 되돌린다
+    if (-not (Confirm-WtAttFormLeave)) { Select-WtAttRow; return }
     $body = [Windows.Controls.DockPanel]::new(); Set-WtStyle $body 'Attendance.Body'
     $buttons = [Windows.Controls.DockPanel]::new(); [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
-    $delete = New-WtButton '삭제'; $delete.Visibility = if ($Entry -and $Entry.State -ceq 'ok') { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
+    $delete = New-WtButton '삭제' -Kind Danger; $delete.Visibility = if ($Entry -and $Entry.State -ceq 'ok') { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
     $actions = New-WtStack Horizontal 8; $actions.HorizontalAlignment = 'Right'
     $save = New-WtButton '저장' Primary; $cancel = New-WtButton '취소'
     [void](Add-WtChild $actions $save); [void](Add-WtChild $actions $cancel); [void]$buttons.Children.Add($actions); [void]$body.Children.Add($buttons)
     $scroll = [Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'
     $col = New-WtStack
     $script:form = @{ Entry = $Entry; Store = $script:data.Store; Fields = @{}; Errors = @{}; Rows = @{}; Panel = $col; ChangingKind = $true; LeaveCodes = @{} }
+    Select-WtAttRow   # 떠나기 전에 [저장]해 표를 새로 그렸어도 이 기록의 줄을 고른다(새 기록이면 선택 없음)
     $day = if ($Entry) { $Entry.StartDate } elseif ($Date) { ConvertFrom-WtDateText $Date } else { $null }
     if (-not $day) { $day = if ($script:month.Year -eq [datetime]::Today.Year -and $script:month.Month -eq [datetime]::Today.Month) { [datetime]::Today } else { $script:month } }
     Add-WtAttField date '날짜' (New-WtAttInput (ConvertTo-WtDateText $day))
@@ -13132,6 +13390,7 @@ function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     Add-WtAttField back '이동 오는 길 분' (New-WtAttInput $(if ($Entry -and $Entry.TravelBack) { [string]$Entry.TravelBack } else { '' }))
     $note = New-WtAttInput $(if ($Entry) { $Entry.Note } else { '' }); Set-WtStyle $note 'Attendance.Note'; Add-WtAttField note '메모' $note
     Set-WtAttFormKind; $script:form.ChangingKind = $false
+    $script:form.Initial = Get-WtFormState $script:form.Fields   # 떠날 때 이 값과 다르면 묻는다
     $script:form.Fields.kind.Add_SelectionChanged({ Set-WtAttFormKind })
     $script:form.Fields.leaveType.Add_SelectionChanged({ Set-WtAttFormKind })
     $cancel.Add_Click({ Show-WtAttSummary })
@@ -13142,23 +13401,37 @@ function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     })
     $save.IsEnabled = -not $Entry -or $Entry.State -ceq 'ok'
     if ($Entry -and $Entry.Problem) { $save.ToolTip = $Entry.Problem }
-    $scroll.Content = $col; [void]$body.Children.Add($scroll); $script:detail.Content = $body; $script:side.Title.Text = '기록 편집'
+    # 새로 적는 폼은 「새 기록」이고 표 선택을 푼다. 고치는 폼은 「기록 편집」이고 그 기록의 줄을 고른다(11-22 실사용 보고 23)
+    $scroll.Content = $col; [void]$body.Children.Add($scroll); $script:detail.Content = $body; $script:side.Title.Text = if ($Entry) { '기록 편집' } else { '새 기록' }
+    Select-WtAttRow
     if ($script:side.Rail.Visibility -eq 'Visible') { $script:side.Open.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent)) }
+}
+
+# 같은 기록인지(표를 새로 그리면 기록 객체가 바뀌므로 id로 본다. id가 없는 기록은 같은 객체일 때만)
+function Test-WtAttSameEntry($A, $B) {
+    if ($null -eq $A -or $null -eq $B) { return $false }
+    if ($A.Id -and $B.Id) { return $A.Id -ceq $B.Id }
+    [object]::ReferenceEquals($A, $B)
+}
+# 표 선택을 지금 폼에 맞춘다: 고치는 기록의 줄, 새 기록이면 선택 없음. 코드로 바꾸는 동안의 선택 변경은 폼을 열지 않는다
+function Select-WtAttRow {
+    if (-not $script:table) { return }
+    $target = $null
+    if ($script:form -and $script:form.Entry) { $target = @($script:table.ItemsSource | Where-Object { Test-WtAttSameEntry $_.Entry $script:form.Entry }) | Select-Object -First 1 }
+    if ([object]::ReferenceEquals($script:table.SelectedItem, $target)) { return }
+    $was = $script:refreshing; $script:refreshing = $true
+    try { $script:table.SelectedItem = $target } finally { $script:refreshing = $was }
 }
 function Set-WtAttFormError([string]$Key, [string]$Message) {
     $script:form.Errors[$Key].Text = $Message; $script:form.Errors[$Key].Visibility = 'Visible'
     [Windows.Automation.AutomationProperties]::SetHelpText($script:form.Fields[$Key], $Message)
-    if ($script:form.Fields[$Key] -is [Windows.Controls.TextBox]) {
-        $binding = $script:form.Fields[$Key].GetBindingExpression([Windows.Controls.TextBox]::TextProperty)
-        $errorInfo = [Windows.Controls.ValidationError]::new([Windows.Controls.ExceptionValidationRule]::new(), $binding, $Message, $null)
-        [Windows.Controls.Validation]::MarkInvalid($binding, $errorInfo)
-    }
+    Set-WtInputError $script:form.Fields[$Key] $Message   # 빨간 선 · 오류 아이콘 · 툴팁(일정 · 메모와 같은 공통 표시, 글 칸만)
 }
 function Save-WtAttForm {
     $fields = $script:form.Fields; $old = $script:form.Entry
     foreach ($key in $script:form.Errors.Keys) {
         $script:form.Errors[$key].Text = ''; $script:form.Errors[$key].Visibility = 'Collapsed'; [Windows.Automation.AutomationProperties]::SetHelpText($fields[$key], '')
-        if ($fields[$key] -is [Windows.Controls.TextBox]) { [Windows.Controls.Validation]::ClearInvalid($fields[$key].GetBindingExpression([Windows.Controls.TextBox]::TextProperty)) }
+        Set-WtInputError $fields[$key] ''
     }
     $date = ConvertFrom-WtDateText $fields.date.Text
     if (-not $date) { Set-WtAttFormError date '날짜는 yyyy-MM-dd 형식으로 입력하세요.' }
@@ -13233,6 +13506,25 @@ function Save-WtAttForm {
         $script:form = $null; $script:viewKey = $null; Update-WtAttendanceView
     } catch { Set-WtAttFormError note $_.Exception.Message }
 }
+# ---- 폼을 떠날 때 묻기 (11-22 실사용 보고, 일정 폼과 같음) ----------------------------------------------
+# 폼을 닫는 길(달 이동 · 다른 행 · 직접 입력 · 출근 · 퇴근 · 업무외 · 다른 탭에서 열기 · 앱 끝내기)은 먼저 Confirm-WtAttFormLeave를 부른다.
+# 탭 이동 · 사이드바 접기는 폼이 그대로 남으므로 묻지 않는다. 폼의 [취소] 단추는 묻지 않고 닫는다
+function Test-WtAttFormDirty {
+    $f = $script:form
+    [bool]($f -and $null -ne $f.Initial -and (Get-WtFormState $f.Fields) -cne $f.Initial)
+}
+# 폼을 닫아도 되면 $true. 고친 것이 없으면 묻지 않는다. [저장]은 저장이 끝났을 때만(틀린 칸이 있으면 폼에 남음),
+# [저장 안 함]은 버리고 이번 달 요약으로, [취소] · Esc는 폼을 그대로 두고 부른 동작을 하지 않는다
+function Confirm-WtAttFormLeave {
+    if (-not (Test-WtAttFormDirty)) { return $true }
+    $entry = $script:form.Entry
+    $text = if ($entry) { "「$(Format-WtDate $entry.StartDate 'M/d (ddd)') $(Get-WtAttKindName $entry)」 기록에서 고친 내용이 저장되지 않았습니다." } else { '새 기록에 쓴 내용이 저장되지 않았습니다.' }
+    switch (Read-WtSaveChoice $text) {
+        'save' { Save-WtAttForm; return $null -eq $script:form }
+        'discard' { Show-WtAttSummary; return $true }
+        default { return $false }
+    }
+}
 # 다른 탭(일정)의 날짜 칸 우클릭 항목(설계 15.6). 그날 휴가가 있으면 「휴가 보기 · 종류」(근태 탭의 그 기록), 없으면 「휴가 넣기 ›」
 function Get-WtAttDateMenu([datetime]$Date) {
     $data = Get-WtAttendanceData
@@ -13257,8 +13549,9 @@ function Add-WtAttQuickLeave($Arg) {
 function Open-WtAttArgs($OpenArgs) {
     if (-not $script:view -or $null -eq $OpenArgs) { return }
     $entry = $null; $newDate = $null
+    $find = { @((Get-WtAttendanceData).Entries | Where-Object { $_.Id -ceq [string]$OpenArgs.Id -and $_.State -ne 'deleted' }) | Select-Object -First 1 }
     if ($OpenArgs.Id) {
-        $entry = @((Get-WtAttendanceData).Entries | Where-Object { $_.Id -ceq [string]$OpenArgs.Id -and $_.State -ne 'deleted' }) | Select-Object -First 1
+        $entry = & $find
         if (-not $entry) { return }
         $target = $entry.StartDate
     } elseif ($OpenArgs.NewLeave) {
@@ -13266,10 +13559,14 @@ function Open-WtAttArgs($OpenArgs) {
         if (-not $newDate) { return }
         $target = $newDate
     } else { return }
+    if (-not (Confirm-WtAttFormLeave)) { return }   # 고친 폼이 있으면 먼저 묻는다(취소면 달 · 폼을 그대로 둔다)
+    if ($entry) { $entry = & $find; if (-not $entry) { return } }   # [저장]했으면 같은 기록이라도 저장한 뒤 값으로 연다
     $script:month = [datetime]::new($target.Year, $target.Month, 1); $script:form = $null; $script:viewKey = $null
     Update-WtAttendanceView
     if ($entry) { Show-WtAttForm $entry } else { Show-WtAttForm $null -Date (ConvertTo-WtDateText $newDate) -Kind 'leave' }
 }
+# 글자 크기를 바꾸면 표의 고정 폭 열도 같은 비율로 바꾼다(화면이 떠 있는 동안에도). 열은 시각 트리 밖이라 자원으로 묶이지 않는다
+Register-WtSettingHandler { param($key, $value) if ($key -ceq 'ui.fontScale' -and $script:table) { Set-WtTableColumnScale $script:table } }
 Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -Order 30 -WarmUp Full `
     -Badge {
         $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }
@@ -13279,6 +13576,7 @@ Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -
     } `
     -BadgeKind dot -BadgeToolTip '오늘 안 찍음' -NewView { New-WtAttendanceView } -Refresh { param($view) Update-WtAttendanceView } `
     -OnOpen { param($OpenArgs) Open-WtAttArgs $OpenArgs } `
+    -ConfirmExit @{ Pending = { Test-WtAttFormDirty }; Confirm = { Confirm-WtAttFormLeave } } `
     -DateMenu { param([datetime]$Date) Get-WtAttDateMenu $Date } `
     -CalendarItems { param([datetime]$From, [datetime]$To) $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }; Get-WtAttendanceCalendarItems $From $To $data.Entries } `
     -ImportLegacy { param($folder) Import-WtAttendanceLegacy $folder } `
@@ -14815,6 +15113,7 @@ $script:rowGetters = [scriptblock[]]@(
     { if ($this.Snippet) { "$($this.Stamp) · $($this.Snippet)" } else { $this.Stamp } }
 )
 $script:quickOpen = $false
+$script:listRefreshQueued = $false   # 목록 다시 그리기를 예약했는지 (Request-WtMemoListUpdate)
 $script:memoIndex = $null    # 검색 색인. 다 만들어지기 전에는 $script:indexBuild가 들고 있다
 $script:indexBuild = $null
 $script:indexTimer = $null
@@ -14835,6 +15134,8 @@ $script:tocKey = ''
 $script:openedStore = $null
 $script:openedAt = @{}
 $script:shortcutIds = $null   # 바로 가기 확인용 메모 id. memo.json 표식이 같으면 다시 읽지 않는다
+$script:shortcutItems = $null # 그 id를 만든 메모들. 지금 제목(Get-WtMemoShortcutTitle)을 처음 물을 때 id → 제목 사전을 만든다
+$script:shortcutTitles = $null
 $script:shortcutStamp = ''
 $script:listPage = 40        # 한 번에 만드는 목록 줄 수
 
@@ -14889,7 +15190,8 @@ function Open-WtMemoRowToolTip($Element) {
     if (-not $row -or -not $row.PSObject.Properties['SnippetSource']) { return }
     $date = [datetime]::MinValue
     $stamp = if ([datetime]::TryParse([string]$row.Updated, [ref]$date)) { Format-WtDate $date 'yyyy-MM-dd HH:mm' } else { $row.Updated }
-    $Element.ToolTip = "$($row.Title)`n수정일 $stamp`n$($row.Snippet)"
+    $title = if ([string]$row.Title) { $row.Title } else { '제목 없음' }
+    $Element.ToolTip = "$title`n수정일 $stamp`n$($row.Snippet)"
 }
 
 function Get-WtMemoStamp([datetime]$When) {
@@ -14917,10 +15219,11 @@ function Get-WtMemoTags([string]$Body) {
     $seen.ToArray()
 }
 
-# 메모 하나의 제목 · 본문을 바꾼다. 제목이 비면 저장 시각을 제목으로 쓴다 (예전 WorkTool과 같음)
+# 메모 하나의 제목 · 본문을 바꾼다. 제목이 비면 저장 시각을 제목으로 쓴다 (예전 WorkTool과 같음).
+# 본문도 비었으면 시각을 채우지 않고 빈 메모로 둔다: 빈 메모는 닫힐 때 지운다(Remove-WtMemoIfEmpty)
 function Set-WtMemoContent($Memo, [string]$Title, [string]$Body, [datetime]$When = (Get-Date)) {
     $t = $Title.Trim()
-    if (-not $t) { $t = $When.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
+    if (-not $t -and $Body.Trim()) { $t = $When.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
     $Memo.title = $t
     $Memo.body = $Body
     $Memo | Add-Member -NotePropertyName tags -NotePropertyValue @(Get-WtMemoTags $Body) -Force   # 예전 데이터엔 tags가 없을 수 있다
@@ -15464,6 +15767,16 @@ function New-WtMemoPane {
     $titleBox.Tag = $pane
     $titleBox.Add_TextChanged({ param($s, $e) Set-WtMemoDirty $s.Tag })
     $titleBox.Add_LostKeyboardFocus({ [void](Save-WtMemoNow) })
+    # 제목에서 Enter: 본문 첫 줄로 간다(제목은 한 줄이다, 11-22 실사용 「헤맨 곳」). 포커스가 나가며 제목을 저장한다
+    $titleBox.Add_PreviewKeyDown({
+            param($s, $e)
+            if ($e.Key -ne [System.Windows.Input.Key]::Return -or (Get-WtMemoModifiers) -ne [System.Windows.Input.ModifierKeys]::None) { return }
+            $p = $s.Tag
+            if (-not $p.Current) { return }
+            $e.Handled = $true
+            $null = Set-WtMemoEditorState $p.Editor @{ Line = 0; Col = 0; Scroll = 0 }
+            $null = Set-WtMemoEditorFocus $p.Editor
+        })
     $metaRow = [System.Windows.Controls.DockPanel]::new()
     $status = [System.Windows.Controls.Label]::new()
     Set-WtResource $status 'FontFamily' 'Font.UI'
@@ -15599,8 +15912,10 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
     $existing = $Pane.Tabs | Where-Object { $_.Id -eq $Id } | Select-Object -First 1
     if ($existing) { return Select-WtMemoTab $Pane $existing }
     Save-WtMemoPaneState $Pane
+    $replaced = ''
     if ($How -eq 'here' -and $Pane.Current) {
         $tab = $Pane.Current
+        $replaced = [string]$tab.Id
         if ($History) { $tab.Back.Add($tab.Id); $tab.Forward.Clear() }
         $tab.Id = $Id
         $tab.State = $null
@@ -15619,7 +15934,46 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
     Save-WtMemoTabs
     Add-WtMemoUse $Id
     Add-WtMemoOpened $Id
+    # 같은 탭에서 다른 메모를 열면 앞 메모는 닫힌 것이다. 빈 메모면 지운다(목록 고르기 중일 수 있어 목록은 그 뒤에 다시 그린다)
+    if ($replaced -and $replaced -cne $Id -and (Remove-WtMemoIfEmpty $replaced)) { Request-WtMemoListUpdate }
     $true
+}
+
+# 제목 · 본문이 모두 비었는가(공백 · 빈 줄만 있는 것도 빈 것). 이런 메모는 닫힐 때 지운다(11-22 승호 결정)
+function Test-WtMemoEmpty($Memo) {
+    $null -ne $Memo -and -not ([string]$Memo.title).Trim() -and -not ([string]$Memo.body).Trim()
+}
+
+# 닫힌 빈 메모를 조용히 지운다. 지울 내용이 없으니 실행 취소 알림 줄은 띄우지 않는다.
+# 다른 칸 · 탭에 아직 열려 있으면 두고, 마지막 탭이 닫힐 때만 지운다. 지웠으면 $true (목록은 부른 쪽이 다시 그린다)
+function Remove-WtMemoIfEmpty([string]$Id) {
+    $m = Get-WtMemoById $Id
+    if (-not (Test-WtMemoEmpty $m)) { return $false }
+    foreach ($p in $script:panes) { foreach ($t in $p.Tabs) { if ([string]$t.Id -ceq $Id) { return $false } } }
+    $next = @($script:items | Where-Object { -not [object]::ReferenceEquals($_, $m) })
+    try { Save-WtMemoItems $next } catch { return $false }   # 못 지우면 빈 메모가 남을 뿐이다
+    $script:items = $next
+    $script:viewStamp = Get-WtMemoViewStamp
+    Update-WtMemoIndexItem $m -Removed
+    $script:rowCache.Remove([string]$m.id)
+    $true
+}
+
+# 끝낼 때: 열린 탭 가운데 빈 메모의 탭을 닫는다. 마지막 탭이 닫히며 메모도 지워진다(OnExit, 저장한 뒤)
+function Close-WtMemoEmptyTabs {
+    foreach ($p in @($script:panes)) {
+        foreach ($t in @($p.Tabs)) {
+            if (-not $script:panes.Contains($p) -or -not $p.Tabs.Contains($t)) { continue }
+            if (Test-WtMemoEmpty (Get-WtMemoById $t.Id)) { [void](Close-WtMemoTab $p $t -NoHistory) }
+        }
+    }
+}
+
+# 목록을 지금 처리(목록에서 고르는 중 등)가 끝난 뒤 한 번 다시 그린다
+function Request-WtMemoListUpdate {
+    if ($script:listRefreshQueued -or -not $script:ui.List) { return }
+    $script:listRefreshQueued = $true
+    [void]$script:ui.List.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Normal, [Action] { $script:listRefreshQueued = $false; Update-WtMemoList })
 }
 
 function Select-WtMemoTab($Pane, $Tab) {
@@ -15655,11 +16009,13 @@ function Close-WtMemoTab($Pane, $Tab, [switch]$NoHistory) {
     if ($wasCurrent) {
         $Pane.Current = if ($Pane.Tabs.Count) { $Pane.Tabs[[Math]::Min($i, $Pane.Tabs.Count - 1)] } else { $null }
     }
+    # 제목 · 본문이 모두 빈 메모는 마지막 탭이 닫힐 때 지운다(실행 취소 알림 없음)
+    $removed = Remove-WtMemoIfEmpty ([string]$Tab.Id)
     Update-WtMemoTabStrip $Pane
     Update-WtMemoPaneLayout
     if ($wasCurrent -and $script:panes.Contains($Pane)) { Show-WtMemoPane $Pane }
     Update-WtMemoTabStyles
-    Sync-WtMemoListSelection
+    if ($removed) { Update-WtMemoList } else { Sync-WtMemoListSelection }
     Save-WtMemoTabs
     $true
 }
@@ -15731,6 +16087,7 @@ function Move-WtMemoHistory([int]$Step) {
     Save-WtMemoPaneState $p
     $target = $from[$from.Count - 1]
     $from.RemoveAt($from.Count - 1)
+    $replaced = [string]$tab.Id
     $to.Add($tab.Id)
     $tab.Id = $target
     $tab.State = $null
@@ -15738,6 +16095,8 @@ function Move-WtMemoHistory([int]$Step) {
     Update-WtMemoTabTexts
     Sync-WtMemoListSelection
     Save-WtMemoTabs
+    # 같은 탭에서 다른 메모로 갔다: 앞 메모가 빈 메모면 지운다(되돌아갈 때는 건너뛴다)
+    if ($replaced -cne [string]$target -and (Remove-WtMemoIfEmpty $replaced)) { Update-WtMemoList }
 }
 
 # 지운 메모의 탭을 모든 칸에서 닫는다 (저장은 이미 한 뒤). 지금 탭이 바뀐 칸만 다시 채운다
@@ -15939,7 +16298,9 @@ function Remove-WtMemoItem([string]$Id, $Pane) {
     $bar = $script:ui.UndoBar
     if ($bar.Parent) { $bar.Parent.Content = $null }
     $script:panes[[Math]::Max(0, [Math]::Min($paneIndex, $script:panes.Count - 1))].UndoHost.Content = $bar
-    $script:ui.UndoText.Text = "'$($m.title)' 삭제함"
+    $title = if ([string]$m.title) { [string]$m.title } else { '제목 없음' }
+    $script:ui.UndoText.Text = "'$title"
+    $script:ui.UndoText.ToolTip = $title
     $bar.Visibility = 'Visible'
     $script:undoTimer.Stop()
     $script:undoTimer.Start()
@@ -16659,6 +17020,20 @@ function Invoke-WtMemoKey([System.Windows.Input.Key]$Key, [System.Windows.Input.
     $false
 }
 
+# 메모 화면이 떠 있는데 키보드 포커스가 화면 밖(왼쪽 메뉴 · 제목 줄 · 창 자체)에 있을 때 셸이 넘기는 키 (등록 -PageKey).
+# 메뉴로 메모를 연 직후 · 창을 다시 켜며 포커스를 되돌리지 못했을 때도 메모 단축키와 찾기 막대 Esc가 먹게 한다(11-22 실사용 5)
+function Invoke-WtMemoPageKey([System.Windows.Input.Key]$Key, [System.Windows.Input.ModifierKeys]$Modifiers) {
+    if (-not $script:ui.Count) { return $false }
+    if (@(Invoke-WtMemoKey $Key $Modifiers)[-1] -eq $true) { return $true }
+    $pane = Get-WtMemoActivePane
+    if ($Key -eq [System.Windows.Input.Key]::Escape -and $Modifiers -eq [System.Windows.Input.ModifierKeys]::None -and
+        $pane -and $pane.Current -and $pane.Editor.Find.Bar.Visibility -eq 'Visible') {
+        Close-WtMemoFind $pane.Editor
+        return $true
+    }
+    $false
+}
+
 # ---- 화면 만들기 ------------------------------------------------------------------------------
 
 function New-WtMemoView {
@@ -16789,8 +17164,13 @@ function New-WtMemoView {
     # 공통 한 줄 행과 글자 스타일을 쓰고, 메모의 한 줄 배치만 이 탭에 둔다.
     $rowStyle = [System.Windows.Style]::new([System.Windows.Controls.ListBoxItem], (Get-WtStyleDictionary)['Row'])
     $rowStyle.Setters.Add([System.Windows.Setter]::new([System.Windows.FrameworkElement]::ToolTipProperty, ''))
-    # 화면 읽기 이름은 메모 제목(없으면 행 객체 글 「@{Id=…}」이 읽힌다, 11-17 실제 화면 시험)
+    # 화면 읽기 이름은 메모 제목(없으면 행 객체 글 「@{Id=…}」이 읽힌다, 11-17 실제 화면 시험). 제목이 빈 메모는 탭 · 목차처럼 「제목 없음」
     $rowStyle.Setters.Add([System.Windows.Setter]::new([System.Windows.Automation.AutomationProperties]::NameProperty, [System.Windows.Data.Binding]::new('Title')))
+    $untitled = [System.Windows.DataTrigger]::new()
+    $untitled.Binding = [System.Windows.Data.Binding]::new('Title')
+    $untitled.Value = ''
+    $untitled.Setters.Add([System.Windows.Setter]::new([System.Windows.Automation.AutomationProperties]::NameProperty, '제목 없음'))
+    $rowStyle.Triggers.Add($untitled)
     # 툴팁 이벤트는 Direct이므로 가상화로 만든 행 자신에게 연결한다. 표시 내용은 아직 만들지 않는다.
     $rowStyle.Setters.Add([System.Windows.EventSetter]::new([System.Windows.Controls.ToolTipService]::ToolTipOpeningEvent,
         [System.Windows.Controls.ToolTipEventHandler]{ param($s, $e) Open-WtMemoRowToolTip $s }))
@@ -16804,8 +17184,14 @@ function New-WtMemoView {
       <TextBlock Text="&#xE718;" Visibility="{Binding PinShown}" Style="{DynamicResource T.Icon}" FontSize="{DynamicResource F.Caption}" Foreground="{DynamicResource B.Text.Tertiary}" Margin="0,0,4,0"/>
       <TextBlock Text="{Binding Stamp}" Style="{DynamicResource T.CaptionMuted}" TextWrapping="NoWrap"/>
     </StackPanel>
-    <TextBlock Text="{Binding Title}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+    <TextBlock x:Name="Title" Text="{Binding Title}" Style="{DynamicResource T.Body}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
   </DockPanel>
+  <DataTemplate.Triggers>
+    <DataTrigger Binding="{Binding Title}" Value="">
+      <Setter TargetName="Title" Property="Text" Value="제목 없음"/>
+      <Setter TargetName="Title" Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/>
+    </DataTrigger>
+  </DataTemplate.Triggers>
 </DataTemplate>
 '@
     $list.AddHandler([System.Windows.Controls.ScrollViewer]::ScrollChangedEvent, [System.Windows.Controls.ScrollChangedEventHandler] {
@@ -16900,15 +17286,25 @@ function New-WtMemoView {
     [System.Windows.Controls.Grid]::SetColumn($right, 2)
     [void]$grid.Children.Add($right)
 
-    # 실행 취소 막대: 지운 칸 아래에 붙인다
-    $undoBar = New-WtStack Horizontal 8
+    # 실행 취소 막대: 지운 칸 아래에 붙인다. 「'제목' 삭제함 [실행 취소]」에서 넘치는 것은 제목뿐이다:
+    # 단추 · 「' 삭제함」을 먼저 오른쪽에 대고 제목이 남는 폭을 쓴다. 막대는 왼쪽 맞춤이라 짧은 제목이면 단추가 글 바로 옆에 온다(11-22 실사용 1)
+    $undoBar = [System.Windows.Controls.DockPanel]::new()
+    $undoBar.HorizontalAlignment = 'Left'
     $undoBar.Visibility = 'Collapsed'
+    $undo = New-WtButton '실행 취소' -Kind Link -Icon 0xE7A7 -ToolTip '삭제 되돌리기'
+    $undo.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
+    $undo.Add_Click({ Restore-WtMemoDeleted })
+    [System.Windows.Controls.DockPanel]::SetDock($undo, 'Right')
+    [void]$undoBar.Children.Add($undo)
+    $undoSuffix = New-WtText "' 삭제함" 'T.Sub'
+    $undoSuffix.VerticalAlignment = 'Center'
+    [System.Windows.Controls.DockPanel]::SetDock($undoSuffix, 'Right')
+    [void]$undoBar.Children.Add($undoSuffix)
     $undoText = New-WtText '' 'T.Sub'
     $undoText.VerticalAlignment = 'Center'
-    $undo = New-WtButton '실행 취소' -Kind Link -Icon 0xE7A7 -ToolTip '삭제 되돌리기'
-    $undo.Add_Click({ Restore-WtMemoDeleted })
-    [void](Add-WtChild $undoBar $undoText)
-    [void](Add-WtChild $undoBar $undo)
+    $undoText.TextWrapping = 'NoWrap'
+    $undoText.TextTrimming = 'CharacterEllipsis'
+    [void]$undoBar.Children.Add($undoText)
 
     # 빠른 이동 (Ctrl+O): 화면 위에 겹쳐 뜬다
     $qHost = [System.Windows.Controls.Grid]::new()
@@ -16923,6 +17319,8 @@ function New-WtMemoView {
     $qDock = [System.Windows.Controls.DockPanel]::new()
     $qsb = New-WtSearchBox '메모 이름으로 이동'
     $qsb.Box.ToolTip = 'Enter 열기 · Ctrl+Enter 새 탭 · Esc 닫기'
+    # 툴팁은 칸 위에 띄운다. 기본(마우스 아래)이면 열자마자 첫 결과를 가린다(11-22 실사용 8)
+    [System.Windows.Controls.ToolTipService]::SetPlacement($qsb.Box, [System.Windows.Controls.Primitives.PlacementMode]::Top)
     $qsb.Box.Add_TextChanged({ Update-WtMemoQuickResults })
     [System.Windows.Controls.DockPanel]::SetDock($qsb.Root, 'Top')
     [void]$qDock.Children.Add($qsb.Root)
@@ -17008,19 +17406,37 @@ function Start-WtMemoQueryWarmUp {
 # 바로 가기의 메모가 남아 있는지. 홈을 그릴 때 줄마다 불리므로 memo.json이 바뀌었을 때만 다시 읽고,
 # 메모 화면이 같은 내용을 들고 있으면 파일을 읽지 않는다.
 # 다시 읽을 때는 저장 핸들도 함께 바꾼다. id 확인에는 편집용 항목 사본이 필요하지 않다.
-function Test-WtMemoShortcut([string]$Key) {
+function Update-WtMemoShortcutCache {
     $stamp = Get-WtStoreStamp 'memo'
-    if (-not $script:shortcutIds -or $script:shortcutStamp -cne $stamp) {
-        $fresh = $script:viewStamp -ceq "$stamp|$([datetime]::Today.Ticks)"
-        if ($fresh) { $items = $script:items }
-        else {
-            Read-WtMemoStore
-            $items = if ($script:preparedMemo) { $script:preparedMemo.Live } else { Get-WtMemoLiveItems $script:memoStore.Items }
-        }
-        $script:shortcutIds = [Collections.Generic.HashSet[string]]::new([Collections.Generic.IEnumerable[string]](Get-WtMemoIdArray $items), [StringComparer]::Ordinal)
-        $script:shortcutStamp = $stamp
+    if ($script:shortcutIds -and $script:shortcutStamp -ceq $stamp) { return }
+    $fresh = $script:viewStamp -ceq "$stamp|$([datetime]::Today.Ticks)"
+    if ($fresh) { $items = $script:items }
+    else {
+        Read-WtMemoStore
+        $items = if ($script:preparedMemo) { $script:preparedMemo.Live } else { Get-WtMemoLiveItems $script:memoStore.Items }
     }
+    $script:shortcutIds = [Collections.Generic.HashSet[string]]::new([Collections.Generic.IEnumerable[string]](Get-WtMemoIdArray $items), [StringComparer]::Ordinal)
+    $script:shortcutItems = $items
+    $script:shortcutTitles = $null
+    $script:shortcutStamp = $stamp
+}
+
+function Test-WtMemoShortcut([string]$Key) {
+    Update-WtMemoShortcutCache
     $script:shortcutIds.Contains($Key)
+}
+
+# 바로 가기에 쓸 지금 제목. 연 뒤 이름을 바꿨으면 바뀐 이름, 제목이 빈 메모는 탭 · 목록처럼 「제목 없음」. 없는 메모는 $null
+function Get-WtMemoShortcutTitle([string]$Key) {
+    Update-WtMemoShortcutCache
+    if (-not $script:shortcutTitles) {
+        $titles = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+        foreach ($m in @($script:shortcutItems)) { if ($null -ne $m) { $titles[[string]$m.id] = [string]$m.title } }
+        $script:shortcutTitles = $titles
+    }
+    $title = $null
+    if (-not $script:shortcutTitles.TryGetValue($Key, [ref]$title)) { return $null }
+    if ($title) { $title } else { '제목 없음' }
 }
 
 # ---- 다른 탭과 잇기 (일정 2단계, 설계 13.5). 코어 등록 목록 -Related로만 불린다 ----------------------
@@ -17366,9 +17782,11 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
         Window = { param($Key) [void](Show-WtMemoWindow $Key) }
     } `
     -ShortcutExists { param($Key) Test-WtMemoShortcut $Key } `
+    -ShortcutTitle { param($Key) Get-WtMemoShortcutTitle $Key } `
+    -PageKey { param($Key, $Modifiers) Invoke-WtMemoPageKey $Key $Modifiers } `
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
     -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
-    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
+    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow); Close-WtMemoEmptyTabs }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
     -Help @('마크다운 메모를 탭과 두 칸으로 엽니다.', 'Ctrl+E로 편집 · 원문 · 읽기를 차례로 바꿉니다.', '찾기 칸에 #태그 · folder:업무 · updated:7d 같은 조건을 쓸 수 있습니다.',
         '백틱은 한 줄 선택을 인라인 코드로, 여러 줄 선택을 코드 블록으로 감싸며 빈 짝을 넣습니다. 닫는 백틱은 건너뛰고, 빈 짝 직후 Backspace는 둘 다 지웁니다.',
         '편집기 찾기 막대에서 Alt+C는 대소문자 구분, Alt+R은 정규식을 켜고 끕니다.',
@@ -17382,7 +17800,7 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
         @('Ctrl + B / Ctrl + I', '굵게 / 기울임 (다시 누르면 풀기)'), @('Ctrl + K', '링크 만들기'), @('Alt + Shift + 5', '취소선'),
         @('`', '한 줄은 인라인 코드 · 여러 줄은 코드 블록 · 빈 짝 넣기 · 닫는 짝 넘기기 (빈 짝 직후 Backspace = 둘 다 삭제)'),
         @('```', '줄 맨 앞에 치면 닫는 ``` 를 자동으로'),
-        @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)'), @('Enter', '목록 · 할 일 이어 쓰기 (빈 항목에서 Enter = 목록 끝)'),
+        @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)'), @('Enter', '목록 · 할 일 · 인용 이어 쓰기 (빈 항목 · 빈 인용 줄에서 Enter = 빈 줄을 두고 끝)'),
         @('Tab / Shift + Tab', '목록 들여쓰기 / 내어쓰기'), @('Ctrl + L', '할 일 체크박스 넣기 · 완료 / 해제'),
         @('Alt + ↑ / Alt + ↓', '줄 옮기기'), @('Ctrl + F / Ctrl + H / F3', '찾기 / 바꾸기 / 다음 찾기'),
         @('Alt + C / Alt + R', '찾기 막대에서 대소문자 구분 / 정규식'),
@@ -18870,6 +19288,7 @@ $ErrorActionPreference = 'Stop'
 $script:editors = [System.Collections.Generic.List[System.WeakReference]]::new()
 $script:undoPause = [TimeSpan]::FromMilliseconds(1200)   # 이만큼 쉬었다 치면 실행 취소 단위를 새로 나눈다
 $script:undoLimit = 200
+$script:textInset = 2   # 입력칸(TextBox) 안 글자가 안쪽 여백에서 더 들어가는 폭(WPF 글자 상자 기본 2). 빈 본문 예시 글자를 첫 글자 자리에 맞춘다
 Register-WtSettingDefault 'memo.find.case' $false
 Register-WtSettingDefault 'memo.find.regex' $false
 
@@ -18906,7 +19325,8 @@ function New-WtMemoEditor {
         $f = $s.Tag.Find
         if ($f.KeepFocus -and $f.Bar.Visibility -eq 'Visible' -and $f.Bar.IsKeyboardFocusWithin) { $e.Handled = $true }
     })
-    $body.Add_PreviewMouseDown({ param($s, $e) $s.Tag.Find.KeepFocus = $false; $s.Tag.FocusPending = $null })
+    # 본문을 누르면 커서를 옮긴 것이다. 막대가 마지막으로 찾은 곳은 더 이상 「지금 찾은 것」이 아니다(바꾸기는 커서부터 다시 찾는다)
+    $body.Add_PreviewMouseDown({ param($s, $e) $s.Tag.Find.KeepFocus = $false; $s.Tag.FocusPending = $null; $s.Tag.Find.LastMatch = $null })
     $body.Add_PreviewDrop({ param($s, $e) $s.Tag.Find.KeepFocus = $false; $s.Tag.FocusPending = $null })
     [void]$root.Children.Add($body)
     $ed.Body = $body
@@ -18928,6 +19348,7 @@ function New-WtMemoEditor {
 
     # 실시간 모드 보기 (단위별로 그린 문서 + 섬)
     $live = New-WtMarkdownView -Scroll -OnLink { param($link, $st) Invoke-WtMemoEditorLink $link $st } -OnTask { param($line, $el) Invoke-WtMemoTaskClick $line $el }
+    Set-WtStyle $live 'Memo.View'   # 문서 면: 바깥 포커스 네모 없음
     $live.Tag.Editor = $ed
     # 문서에서 블록을 빼고 넣을 때 RichTextBox가 실행 취소용으로 뺀 요소를 XAML로 저장하려 한다.
     # 섬(Tag에 편집기 상태)을 저장하다 끝없이 파고들어 멈추므로 끈다. 실행 취소는 편집기가 따로 든다
@@ -18944,6 +19365,7 @@ function New-WtMemoEditor {
 
     # 읽기 모드 보기 (문서 전체를 한 번에 그림)
     $view = New-WtMarkdownView -Scroll -OnLink { param($link, $st) Invoke-WtMemoEditorLink $link $st } -OnTask { param($line, $el) Invoke-WtMemoTaskClick $line $el }
+    Set-WtStyle $view 'Memo.View'   # 문서 면: 바깥 포커스 네모 없음 (11-22 실사용 16)
     $view.Tag.Editor = $ed
     $view.IsInactiveSelectionHighlightEnabled = $true
     [void]$body.Children.Add($view)
@@ -18971,6 +19393,10 @@ function New-WtMemoEditor {
     Add-WtMemoBoxHandlers $island -Island
     $island.Add_PreviewMouseWheel({ param($s, $e) Invoke-WtMemoIslandWheel $s $e })
     $ed.IslandBox = $island
+    # 빈 본문의 예시 글자(값 문서 8절 메모). 첫 줄 글자 자리에 겹쳐 두고 누름 · 입력은 아래 본문이 받는다
+    $hint = New-WtText '내용을 입력하세요' 'Memo.BodyHint'
+    [void]$body.Children.Add($hint)
+    $ed.Hint = $hint
     # 자동 완성 팝업은 미리 붙여 둔다 (막 붙인 팝업은 그려지기 전까지 열기가 미뤄진다)
     [void](Get-WtMemoSuggestUi $ed)
 
@@ -19082,6 +19508,8 @@ function Invoke-WtMemoContextAction($Ed, [string]$Action) {
 }
 
 function Invoke-WtMemoEditorChanged($Ed) {
+    Update-WtMemoBodyHint $Ed
+    if ($Ed.Find.Bar.Visibility -eq 'Visible') { Request-WtMemoFindRecount $Ed }
     if ($Ed.OnChanged) { & $Ed.OnChanged $Ed }
 }
 
@@ -19142,6 +19570,8 @@ function Invoke-WtMemoTaskClick([int]$Line, $El) {
             $ed.ReadText = $null
             Update-WtMemoRead $ed
             if ($sv) { $ed.View.UpdateLayout(); $sv.ScrollToVerticalOffset($y) }
+            # 누른 체크 표시(링크)가 포커스를 가진 채 문서와 함께 버려진다. 보기에 포커스를 돌려 놓아야 메모 단축키 · 스크롤 키가 먹는다(11-22 실사용 5)
+            [void]$ed.View.Focus()
             Invoke-WtMemoEditorChanged $ed
         }
     } finally { $ed.Busy-- }
@@ -19199,6 +19629,9 @@ function Set-WtMemoEditorText($Ed, [AllowEmptyString()][string]$Text) {
             switch ($Ed.Mode) { 'source' { [void]$Ed.Source.Focus() } 'live' { [void]$Ed.Live.Focus() } 'read' { [void]$Ed.View.Focus() } }
         }
     } finally { $Ed.Loading = $false; $Ed.Busy-- }
+    Update-WtMemoBodyHint $Ed
+    # 열린 찾기 막대는 새 글로 다시 센다. 앞 메모의 「5개 바꿈」 · 켜진 바꾸기 단추가 남지 않게(11-22 실사용 7)
+    if ($Ed.Find.Bar.Visibility -eq 'Visible') { Update-WtMemoFindCount $Ed }
 }
 
 # 줄 나누기는 마크다운 블록 나누기(Get-WtMarkdownUnits)와 같은 규칙: \r\n · \r · \n 모두 줄바꿈
@@ -19253,6 +19686,7 @@ function Update-WtMemoEditorMode($Ed) {
     $Ed.Source.Visibility = if ($Ed.Mode -eq 'source') { 'Visible' } else { 'Collapsed' }
     $Ed.Live.Visibility = if ($Ed.Mode -eq 'live') { 'Visible' } else { 'Collapsed' }
     $Ed.View.Visibility = if ($Ed.Mode -eq 'read') { 'Visible' } else { 'Collapsed' }
+    Update-WtMemoBodyHint $Ed
 }
 
 function Update-WtMemoRead($Ed) {
@@ -19265,6 +19699,7 @@ function Update-WtMemoRead($Ed) {
 function Set-WtMemoEditorEnabled($Ed, [bool]$Enabled) {
     $Ed.Enabled = $Enabled
     $Ed.Root.IsEnabled = $Enabled
+    Update-WtMemoBodyHint $Ed
 }
 
 function Set-WtMemoEditorFocus($Ed, [switch]$End) {
@@ -19332,9 +19767,23 @@ function Set-WtMemoEditorState($Ed, $State) {
 }
 
 # 글 좌우 여백. 보기는 Md.View의 -5를 더해 원문과 글 시작을 맞춘다.
+# 찾기 막대 · 빈 본문 예시 글자도 같은 여백 안에 둔다(제목 · 본문 글과 왼쪽 끝을 맞춤, 11-22 실사용 18). 막대 아래 선은 칸 끝까지
 function Set-WtMemoEditorSide($Ed, [double]$Side) {
     $Ed.Source.Padding = [System.Windows.Thickness]::new($Side, 0, $Side, 0)
     foreach ($view in $Ed.Live, $Ed.View) { $view.Padding = [System.Windows.Thickness]::new($Side - 5, 0, $Side - 5, 0) }
+    $Ed.Find.Rows.Margin = [System.Windows.Thickness]::new($Side, 0, $Side, 0)
+    $Ed.Hint.Margin = [System.Windows.Thickness]::new($Side + $script:textInset, 0, $Side, 0)
+}
+
+# 빈 본문의 예시 글자: 편집 · 원문 보기에서 글이 하나도 없을 때만 보인다(읽기 · 메모 없음에서는 숨김)
+function Update-WtMemoBodyHint($Ed) {
+    $empty = if ($Ed.Mode -eq 'source') { -not $Ed.Source.Text } else {
+        $Ed.Lines.Count -eq 1 -and -not $Ed.Lines[0] -and (-not $Ed.Island -or -not $Ed.IslandBox.Text)
+    }
+    $Ed.Hint.Visibility = if ($Ed.Enabled -and $Ed.Mode -ne 'read' -and $empty) { 'Visible' } else { 'Collapsed' }
+    # 글자 세로 자리를 그 보기의 입력칸에 맞춘다: 섬은 줄 높이 안 가운데 쪽(BlockLineHeight), 원문 칸은 위
+    $look = if ($Ed.Mode -eq 'source') { 'Memo.BodyHint.Source' } else { 'Memo.BodyHint' }
+    if ($Ed.HintLook -cne $look) { Set-WtStyle $Ed.Hint $look; $Ed.HintLook = $look }
 }
 
 # 줄($Line, 0부터)을 보기 맨 위로 옮긴다. 음수면 맨 위로. 커서도 그 줄 처음으로 옮긴다.
@@ -20662,7 +21111,7 @@ function Get-WtMemoKey($E) {
 }
 
 # 커서 줄이 내용 없는 들여 쓴 목록 항목인지 (예: '  - ')
-function Test-WtMemoEmptyItem($State) {
+function Test-WtMemoEmptyItem($State, [switch]$Top) {
     if ($State.Length) { return $false }
     $t = $State.Text
     $i = $State.Start
@@ -20670,7 +21119,8 @@ function Test-WtMemoEmptyItem($State) {
     $le = $t.IndexOf("`n", $i)
     if ($le -lt 0) { $le = $t.Length }
     $line = $t.Substring($ls, $le - $ls).TrimEnd("`r")
-    $line -match '^\s+([-*+]|\d{1,9}[.)])\s*(\[[ xX]\]\s*)?$'
+    # -Top: 들여쓰기 없는 빈 항목, 없으면 들여쓴 빈 항목
+    $line -match $(if ($Top) { '^([-*+]|\d{1,9}[.)])\s*(\[[ xX]\]\s*)?$' } else { '^\s+([-*+]|\d{1,9}[.)])\s*(\[[ xX]\]\s*)?$' })
 }
 
 # 한글 조합 중에 누른 키는 입력기가 먼저 처리한다. 확정이 끝난 뒤(Background)에 할 일을 남긴다
@@ -20770,6 +21220,9 @@ function Invoke-WtMemoBoxKey($S, $E) {
                     if (-not $shift) {
                         # 빈 안쪽 항목에서 Enter(내어쓰기)는 부모 표지를 봐야 하므로 섬을 목록 전체로 넓힌다
                         if (Test-WtMemoEmptyItem $st) { $S = Expand-WtMemoIslandFor $S 'List'; $st = Get-WtMemoBoxState $S }
+                        # 들여쓰기 없는 빈 항목(목록 끝내기)은 위 줄이 글이면 빈 줄을 남긴다. 섬이 그 항목 하나면 위 줄이 안 보여
+                        # 표지만 지웠으므로(11-22 재확인: 다음 줄이 앞 항목 안으로 들어감) 바로 위 단위까지 넓힌다
+                        elseif (Test-WtMemoEmptyItem $st -Top) { $S = Expand-WtMemoIslandFor $S 'Up'; $st = Get-WtMemoBoxState $S }
                         $edit = Get-WtMemoEnterEdit $st
                         $handled = [bool]$edit
                     }
@@ -21023,6 +21476,8 @@ function New-WtMemoFindBar($Ed) {
     $regex = New-WtMemoFindOption $Ed 'regex' '.*' '정규식' 'Memo-Find-Regex' 'Alt+R'
     foreach ($option in $case, $regex) { [void](Add-WtChild $options $option) }
     $topActions = New-WtStack Horizontal
+    # 두 줄의 단추 칸은 폭을 같이 쓴다(아래 줄이 더 넓다). 위 줄도 오른쪽에 붙여 닫기와 「모두 바꾸기」의 오른쪽 끝을 맞춘다(11-22 실사용 18)
+    $topActions.HorizontalAlignment = 'Right'
     [System.Windows.Controls.Grid]::SetColumn($topActions, 2)
     [void]$top.Children.Add($topActions)
     $close = New-WtButton '' -Kind Icon -Icon 0xE711 -ToolTip '닫기 (Esc)'
@@ -21091,9 +21546,9 @@ function New-WtMemoFindBar($Ed) {
     $bar.Child = $rows
     $validation = [System.Windows.Data.Binding]::new('Value')
     $validation.Source = [pscustomobject]@{ Value = '' }
-    $Ed.Find = @{ Bar = $bar; Query = $sb.Box; Count = $count; ReplaceRow = $low; Replace = $rep; ReadIndex = -1
+    $Ed.Find = @{ Bar = $bar; Rows = $rows; Query = $sb.Box; Count = $count; ReplaceRow = $low; Replace = $rep; ReadIndex = -1
         Case = $case; Regex = $regex; One = $one; All = $all; Error = ''; LastMatch = $null; KeepFocus = $false
-        Total = 0; ReplaceTips = @($one.ToolTip, $all.ToolTip)
+        Total = 0; ReplaceTips = @($one.ToolTip, $all.ToolTip); CountedText = $null; RecountQueued = $false
         Validation = $sb.Box.SetBinding([System.Windows.FrameworkElement]::UidProperty, $validation) }
     Update-WtMemoReplaceButtons $Ed
     $bar
@@ -21310,13 +21765,30 @@ function Update-WtMemoFindCount($Ed, [int]$Current = -1, [int]$Total = -1) {
     $f = $Ed.Find
     if (-not $f.Query.Text) { $f.Total = 0; Set-WtMemoFindError $Ed; $f.Count.Text = ''; $f.LastMatch = $null; return }
     if ($Total -lt 0) {
-        $hits = Get-WtMemoFindHits $Ed ((Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")) -Read:($Ed.Mode -eq 'read')
+        $text = (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")
+        $hits = Get-WtMemoFindHits $Ed $text -Read:($Ed.Mode -eq 'read')
+        $f.CountedText = $text
         if ($f.Error) { return }
         $Total = $hits.Count
     }
     $f.Total = $Total
     Update-WtMemoReplaceButtons $Ed
     $f.Count.Text = if (-not $Total) { '0개' } elseif ($Current -ge 0) { "$($Current + 1)/$Total" } else { "${Total}개" }
+}
+
+# 글을 고친 뒤 찾기 개수를 다시 센다. 한가할 때 한 번만 센다(빠르게 칠 때 키마다 글 전체를 훑지 않게).
+# 그사이 찾기 · 바꾸기가 같은 글로 이미 셌으면 건너뛴다(「2/5」 · 「5개 바꿈」을 덮지 않게)
+function Request-WtMemoFindRecount($Ed) {
+    $f = $Ed.Find
+    if ($f.RecountQueued) { return }
+    $f.RecountQueued = $true
+    [void]$Ed.Root.Dispatcher.BeginInvoke([System.Action[object]] {
+            param($ed)
+            $ed.Find.RecountQueued = $false
+            if ($ed.Find.Bar.Visibility -ne 'Visible' -or -not $ed.Find.Query.Text) { return }
+            if ((Get-WtMemoEditorText $ed).Replace("`r`n", "`n") -ceq $ed.Find.CountedText) { return }
+            try { Update-WtMemoFindCount $ed } catch { Show-WtError $_ '찾기' }
+        }, [System.Windows.Threading.DispatcherPriority]::Background, [object[]]@($Ed))
 }
 
 # 다음(-Back이면 이전) 찾기. -Here: 고른 곳 시작부터 다시 찾기(찾는 글을 칠 때)
@@ -21330,6 +21802,7 @@ function Invoke-WtMemoFind($Ed, [switch]$Back, [switch]$Here) {
         if ($Ed.Mode -eq 'read') { Invoke-WtMemoFindRead $Ed $q -Back:$Back -Here:$Here; return }
         $text = (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")
         $hits = Get-WtMemoFindHits $Ed $text
+        $f.CountedText = $text
         if ($f.Error) { return }
         if (-not $hits.Count) { Update-WtMemoFindCount $Ed -1 0; return }
         $sel = Get-WtMemoSelectionOffsets $Ed $text
@@ -21413,6 +21886,7 @@ function Get-WtMemoReadPointer($Segments, [int]$Offset, $Fallback) {
 function Invoke-WtMemoFindRead($Ed, [string]$Query, [switch]$Back, [switch]$Here) {
     $f = $Ed.Find
     $hits = Get-WtMemoFindHits $Ed -Read
+    $f.CountedText = (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")
     if ($f.Error) { return }
     if (-not $hits.Count) { $f.ReadIndex = -1; Update-WtMemoFindCount $Ed -1 0; return }
     $k = if ($Here) { [Math]::Max(0, $f.ReadIndex) } elseif ($Back) { $f.ReadIndex - 1 } else { $f.ReadIndex + 1 }
@@ -21466,11 +21940,23 @@ function Invoke-WtMemoReplace($Ed, [switch]$All) {
             }
             $f.LastMatch = $null
             $f.NextFrom = $null
+            # 남은 일치로 바꾸기 단추를 맞춘다(보통 0개 → 꺼짐). 개수 자리에는 이번 결과 「n개 바꿈」을 둔다(11-22 실사용 7)
+            $after = (Get-WtMemoEditorText $Ed).Replace("`r`n", "`n")
+            [void](Get-WtMemoFindHits $Ed $after)
+            $f.CountedText = $after
+            Update-WtMemoReplaceButtons $Ed
             $f.Count.Text = "${n}개 바꿈"
             return
         }
         $sel = Get-WtMemoSelectionOffsets $Ed $text
         $hit = $hits | Where-Object { $_.Index -eq $sel[0] -and $_.Length -eq $sel[1] - $sel[0] } | Select-Object -First 1
+        $last = $f.LastMatch
+        if (-not $hit -and $Ed.Mode -eq 'live' -and -not $Ed.Island -and $last -and $last.Text -ceq $text -and $last.Query -ceq $q -and
+            $last.Case -eq $f.Case.IsChecked -and $last.Regex -eq $f.Regex.IsChecked) {
+            # 고치는 칸(섬)이 닫혀 선택이 사라졌다(창 전환으로 포커스가 나감 등). 막대가 마지막으로 찾아 보여 준 곳이
+            # 지금 글 · 식 그대로면 그곳이 「지금 찾은 것」이다. 바로 바꾸고 다음으로 간다(11-22 실사용 6)
+            $hit = $hits | Where-Object { $_.Index -eq $last.Index -and $_.Length -eq $last.Length } | Select-Object -First 1
+        }
         if ($hit) {
             $insert = if ($regexMode) { $hit.Result($rep) } else { $rep }
             Select-WtMemoTextRange $Ed $text $hit.Index $hit.Length -KeepFocus:($f.Bar.IsKeyboardFocusWithin)
@@ -21560,7 +22046,7 @@ Register-WtSettingHandler {
 }
 
 Export-ModuleMember -Function New-WtMemoEditor, Set-WtMemoEditorText, Get-WtMemoEditorText, Set-WtMemoEditorMode,
-    Set-WtMemoEditorEnabled, Set-WtMemoEditorFocus, Get-WtMemoEditorState, Set-WtMemoEditorState, Set-WtMemoEditorSide, Show-WtMemoEditorLine, Open-WtMemoFind
+    Set-WtMemoEditorEnabled, Set-WtMemoEditorFocus, Get-WtMemoEditorState, Set-WtMemoEditorState, Set-WtMemoEditorSide, Show-WtMemoEditorLine, Open-WtMemoFind, Close-WtMemoFind
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\memo\MemoEditor.psm1 끝 ----
 
@@ -21988,7 +22474,13 @@ function Get-WtMemoEnterEdit($s) {
         }
         $from = $line.Start + $info.Q.Length
         if (-not $info.Ind) {
-            # 들여쓰기 없는 빈 항목: 표지를 지워 목록을 끝낸다
+            # 들여쓰기 없는 빈 항목: 표지를 지워 목록을 끝낸다. 위 줄이 같은 인용 안의 글(앞 항목)이면 이 줄을 빈 줄로 남기고
+            # 아래 새 줄로 간다. 바로 붙여 쓴 줄은 앞 항목 문단에 이어지는(lazy) 줄이라 목록 안에 들어가기 때문이다(인용 끝내기와 같은 규칙)
+            $prev = Get-WtMemoTextPrevLine $t $line
+            if ($prev -and $prev.Text.StartsWith($info.Q, [StringComparison]::Ordinal) -and $prev.Text.Substring($info.Q.Length).Trim()) {
+                $ins = $nl + $info.Q
+                return New-WtMemoTextResult $from ($line.End - $from) $ins ($from + $ins.Length)
+            }
             return New-WtMemoTextResult $from ($line.End - $from) '' $from
         }
         # 들여쓴 빈 항목: 한 단계 내어쓰기. 부모(더 얕은 목록 줄)의 다음 형제가 된다
@@ -22014,6 +22506,11 @@ function Get-WtMemoEnterEdit($s) {
         $q = $m.Groups[1].Value
         if ($col -lt $q.Length) { return $null }
         if ($m.Groups[2].Value.Trim()) { return New-WtMemoTextResult $pos $gap "$nl$q" ($pos + $nl.Length + $q.Length) }
+        # 빈 인용 줄: 접두어를 지워 인용 · 콜아웃을 끝낸다. 위 줄이 인용 안 글이면 이 줄을 빈 줄로 남기고 아래 새 줄로 간다.
+        # 인용 글 바로 아래에 붙여 쓴 줄은 그 문단에 이어지는(lazy) 줄이라 인용 안에 들어가기 때문이다(Obsidian · CommonMark)
+        $prev = Get-WtMemoTextPrevLine $t $line
+        $pm = if ($prev) { $script:mtQuote.Match($prev.Text) } else { $null }
+        if ($pm -and $pm.Success -and $pm.Groups[2].Value.Trim()) { return New-WtMemoTextResult $line.Start $line.Text.Length $nl ($line.Start + $nl.Length) }
         return New-WtMemoTextResult $line.Start $line.Text.Length '' $line.Start
     }
     $null
@@ -22392,7 +22889,8 @@ function New-WtScheduleView {
     $menu = New-WtHomePinContextMenu
     foreach ($spec in @('새 일정', 'event'), @('새 루틴', 'routine')) { [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($kind) Show-WtScheduleForm -Kind $kind } $spec[1])) }
     $add.ContextMenu = $menu
-    $add.Add_Click({ param($s, $e) $s.ContextMenu.PlacementTarget = $s; $s.ContextMenu.Placement = 'Bottom'; $s.ContextMenu.IsOpen = $true })
+    # +는 사이드바 제목 줄 오른쪽 끝(창 오른쪽 끝)이라 메뉴를 오른쪽에 맞춰 창 안쪽으로 연다
+    $add.Add_Click({ param($s, $e) Open-WtButtonMenu $s -Right })
     [void]$script:view.Side.Children.Add($side)
     $mode = [string](Get-WtSetting 'schedule.view')
     $script:viewMode = if ($mode -cin $script:viewModes) { $mode } else { 'calendar' }
@@ -22463,7 +22961,7 @@ function Initialize-WtScheduleLists {
     }
     $v.TableHead.Child = $head
     $routineHead = [Windows.Controls.Grid]::new()
-    foreach ($width in 0, 220, 72, 72, 60) {
+    foreach ($width in 0, 220, 72, 88, 60) {   # 줄 모양(core\Ui.psm1 Schedule.RoutineItem)과 같은 폭
         $column = [Windows.Controls.ColumnDefinition]::new(); $column.Width = if ($width) { [Windows.GridLength]::new($width) } else { [Windows.GridLength]::new(1, 'Star') }
         $routineHead.ColumnDefinitions.Add($column)
     }
@@ -22554,9 +23052,12 @@ function Invoke-WtScheduleSearch {
     Update-WtScheduleView
 }
 
-# 표 보기 ‹ 오늘 ›: 앞 · 뒤 달, 0이면 이번 달 · 오늘
+# 표 보기 ‹ 오늘 ›: 앞 · 뒤 달, 0이면 이번 달 · 오늘(폼을 닫으므로 고친 내용이 있으면 먼저 묻는다)
 function Move-WtScheduleTableMonth([int]$Step) {
-    if ($Step -eq 0) { $script:selected = [datetime]::Today; $script:month = [datetime]::new([datetime]::Today.Year, [datetime]::Today.Month, 1); $script:form = $null }
+    if ($Step -eq 0) {
+        if (-not (Confirm-WtScheduleFormLeave)) { return }
+        $script:selected = [datetime]::Today; $script:month = [datetime]::new([datetime]::Today.Year, [datetime]::Today.Month, 1); $script:form = $null
+    }
     else { $script:month = $script:month.AddMonths($Step) }
     Update-WtScheduleView
 }
@@ -22586,6 +23087,10 @@ function Update-WtScheduleDueTab {
     $v.ViewTabs['due'].ToolTip = if ($null -ne $dueCount) { "할 일 $dueCount개 (기한 지남 · 오늘 · 마감 임박)" } else { '할 일' }
 }
 
+# 메뉴 개수와 창 아래 상태 줄(다음 일정 · 남은 일)을 지금 자료로 다시 쓴다. 일정 · 루틴 · 휴무일을 저장하거나 지운 바로 뒤에 부른다.
+# 보기의 「할 일」 숫자는 화면을 다시 그릴 때 바뀌므로, 이것을 빼면 상태 줄만 1분 타이머까지 앞 숫자로 남는다(11-22 실사용 보고 10)
+function Update-WtScheduleBadges { if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges } }
+
 # 사이드바 · 홈에서 루틴을 체크한 뒤: 보고 있는 표 · 할 일 · 루틴 보기와 숫자를 맞춘다(사이드바 목록은 체크한 곳이 이미 다시 그림)
 function Update-WtScheduleAfterRoutineCheck {
     if ($script:view) {
@@ -22603,7 +23108,13 @@ function Get-WtScheduleRangeText($Row) {
     "$($first.ToString('M월 d일', $script:inv)) ~ $end"
 }
 
+# 남은 일 수: 안 끝낸 일정 줄 + 오늘 차례가 남은 루틴(시간마다는 루틴 하나). 할 일 제목 · 묶음 머리 배지 · 메뉴 · 상태 줄이 같은 셈이다
+function Get-WtScheduleLeftCount([object[]]$Rows) {
+    @($Rows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count + @($Rows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count
+}
+
 # 줄 → 표에 그릴 값. 할 일은 묶음 머리를 끼우고, 접은 묶음의 줄은 뺀다. 같은 날 둘째 줄부터 날짜를 비운다(여러 날은 늘 기간)
+# 묶음 머리 배지는 그 묶음에서 남은 일 수다(끝낸 줄은 보이지만 세지 않는다. 배지 합 = 할 일 수)
 function ConvertTo-WtScheduleTableItems([object[]]$Rows, [switch]$Due) {
     $today = [datetime]::Today; $prev = $null; $group = $null
     $names = @{ overdue = '기한 지남'; today = '오늘'; soon = '마감 임박' }
@@ -22611,7 +23122,7 @@ function ConvertTo-WtScheduleTableItems([object[]]$Rows, [switch]$Due) {
         if ($Due -and $row.Group -cne $group) {
             $group = $row.Group; $prev = $null
             $closed = $script:collapsed.Contains($group)
-            [pscustomobject]@{ IsHead = $true; Group = $group; HeadName = $names[$group]; HeadCount = [string]@($Rows | Where-Object Group -CEQ $group).Count
+            [pscustomobject]@{ IsHead = $true; Group = $group; HeadName = $names[$group]; HeadCount = [string](Get-WtScheduleLeftCount @($Rows | Where-Object Group -CEQ $group))
                 HeadGlyph = [string][char]$(if ($closed) { 0xE76C } else { 0xE70D }); Key = "head:$group"; Done = $false; CanCheck = $false; Row = $null
                 DateText = ''; TimeText = ''; Title = $names[$group]; Tags = @(); DueText = ''; DueWarn = 'Collapsed'; DueStrong = $false; DueKind = ''
                 RoutineShown = 'Collapsed'; MemoShown = 'Collapsed'; MemoCount = ''; Progress = ''; ProgressShown = 'Collapsed'; CheckTip = ''; CheckName = '' }
@@ -22661,7 +23172,7 @@ function Update-WtScheduleTable {
     $rows = if ($result) { @($result.Rows) } else { @() }
     # 할 일 제목의 숫자는 할 일 수와 같은 셈(안 끝낸 일정 + 오늘 차례가 남은 루틴, 시간마다는 루틴 하나)
     if ($title -ceq '찾기 결과') { $count = [string]$result.Count }
-    elseif ($title) { $count = [string](@($rows | Where-Object { $_.Kind -ceq 'event' -and -not $_.Done }).Count + @($rows | Where-Object { $_.Kind -ceq 'routine' -and -not $_.RoutineDone } | ForEach-Object RoutineId | Select-Object -Unique).Count) }
+    elseif ($title) { $count = [string](Get-WtScheduleLeftCount $rows) }
     Update-WtScheduleHeader $title $count
     $items = @(ConvertTo-WtScheduleTableItems $rows -Due:($mode -ceq 'due'))
     $script:tableItems = $items
@@ -22699,6 +23210,8 @@ function Open-WtScheduleTableItem($Item) {
         $script:focusKey = $Item.Key; Update-WtScheduleTable; return
     }
     $row = $Item.Row
+    # 고른 날을 바꾸기 전에 묻는다(취소하면 고친 폼과 사이드바 제목을 그대로 둔다)
+    if (-not (Confirm-WtScheduleFormLeave)) { return }
     $script:selected = $row.Date
     $script:side.Title.Text = Format-WtDate $script:selected 'M월 d일 dddd'
     if ($row.Kind -ceq 'event') { Show-WtScheduleForm -Kind event -Occurrence $row.Occurrence } else { Show-WtScheduleForm -Kind routine -Id $row.RoutineId }
@@ -22771,7 +23284,11 @@ function Invoke-WtScheduleRoutineAction([string]$Action) {
     if ($Action -ceq '편집') { Show-WtScheduleForm -Kind routine -Id ([string]$item.Id); return }
     $result = Set-WtRoutineDeleted -Id ([string]$item.Id)
     if (-not $result.Success) { $script:view.RoutineNote.Text = "루틴을 지우지 못했습니다. $($result.Reason)"; $script:view.RoutineNote.Visibility = 'Visible'; return }
-    $script:form = $null; Update-WtScheduleView
+    # 지운 루틴의 폼만 닫는다. 다른 일정 · 루틴을 고치던 폼은 그대로 두고(고친 내용을 말없이 버리지 않음), 저장이 거부되지 않게 새 핸들로 바꾼다
+    if ($script:form -and [string]$script:form.Id -ceq [string]$item.Id) { $script:form = $null }
+    elseif ($script:form) { $data = Get-WtScheduleData; if (-not $data.Error) { $script:form.Store = $data.Store } }
+    Update-WtScheduleView
+    Update-WtScheduleBadges
 }
 
 # 깔때기: 상태 · 종류 · 태그(많이 쓴 순 8). 고르면 찾기 칸 글에 더하고, 이미 있으면 뺀다. 지금 식에 있는 조건은 앞에 ✓
@@ -22822,7 +23339,8 @@ function Switch-WtScheduleQueryTerm([string]$Term) {
 function Update-WtScheduleDayMenu($Button) {
     $menu = $Button.ContextMenu; $menu.Items.Clear(); $date = [datetime]$Button.DataContext
     foreach ($spec in @('새 일정', 'event'), @('새 루틴', 'routine')) {
-        [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($v) Set-WtScheduleDate $v.Date; Show-WtScheduleForm -Kind $v.Kind } @{ Date = $date; Kind = $spec[1] }))
+        # 고친 폼이 있으면 한 번만 묻는다(저장 · 저장 안 함 뒤에는 폼이 비어 아래 두 단계가 다시 묻지 않는다)
+        [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($v) if (Confirm-WtScheduleFormLeave) { Set-WtScheduleDate $v.Date; Show-WtScheduleForm -Kind $v.Kind } } @{ Date = $date; Kind = $spec[1] }))
     }
     [void]$menu.Items.Add([Windows.Controls.Separator]::new())
     foreach ($entry in @(Get-WtDateMenuItems $date -Exclude 'schedule')) {
@@ -22869,9 +23387,12 @@ function Set-WtScheduleHoliday([string]$Date, [string[]]$Kinds, [bool]$Enabled, 
         }
     } catch { Show-WtMessage "휴무일을 저장하지 못했습니다. $($_.Exception.Message)" 'WorkTool' 'Warning' }
     Update-WtScheduleView
+    Update-WtScheduleBadges
 }
 
+# 날짜를 고르면 오른쪽은 그날 목록이 된다(폼을 닫는다). 고친 폼이 있으면 먼저 묻고, 취소하면 아무것도 바꾸지 않는다
 function Set-WtScheduleDate([datetime]$Date) {
+    if (-not (Confirm-WtScheduleFormLeave)) { return }
     $script:selected = $Date.Date; $script:month = [datetime]::new($Date.Year, $Date.Month, 1); $script:form = $null
     Update-WtScheduleView
 }
@@ -23063,7 +23584,7 @@ function New-WtRoutineList([datetime]$Date) {
                                 else { Open-WtPage -Id schedule -Args @{ Date = $v.Row.Date; RoutineId = $id } }
                             } else {
                                 $result = Set-WtRoutineDeleted -Id $id
-                                if ($result.Success) { Update-WtRoutineList $v.Row.List $v.Row.Date }
+                                if ($result.Success) { Update-WtRoutineList $v.Row.List $v.Row.Date; Update-WtScheduleAfterRoutineCheck }
                             }
                         } @{ Action = $name; Row = $check.Tag }))
             }
@@ -23489,15 +24010,18 @@ function Invoke-WtScheduleLinkAction([string]$Action, $Row) {
 }
 
 function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Occurrence, [string]$Id) {
+    # 다른 폼으로 바꾸기 전에 지금 폼의 고친 내용을 묻는다(새로 만들기 · 표 · 루틴 보기 · 다른 탭에서 열기)
+    if (-not (Confirm-WtScheduleFormLeave)) { return }
     $store = (Get-WtScheduleData).Store; $entry = $null
     if ($Kind -eq 'routine' -and $Id) { $entry = @($store.Items | Where-Object id -CEQ $Id)[0] }
     if ($Occurrence) { $Id = $Occurrence.Entry.Id }
     $body = [Windows.Controls.DockPanel]::new(); Set-WtStyle $body 'Schedule.SideBody'
     $buttons = [Windows.Controls.DockPanel]::new(); [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
-    $delete = New-WtButton '삭제'; $delete.Visibility = if ($Id) { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
+    $delete = New-WtButton '삭제' -Kind Danger; $delete.Visibility = if ($Id) { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
     $actions = New-WtStack Horizontal 8; $actions.HorizontalAlignment = 'Right'
     $save = New-WtButton '저장' Primary; $cancel = New-WtButton '취소'
     [void](Add-WtChild $actions $save); [void](Add-WtChild $actions $cancel); [void]$buttons.Children.Add($actions); [void]$body.Children.Add($buttons)
+    Set-WtStyle $buttons 'Schedule.FormButtons'   # 단추 줄은 칸 스크롤 영역과 12 띄운다(디자인 8절 일정)
     $scroll = [Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'
     $col = New-WtStack; Set-WtStyle $col 'Schedule.Form'; $scroll.Content = $col; [void]$body.Children.Add($scroll)
     $script:form = @{ Kind = $Kind; Id = $Id; Occurrence = $Occurrence; Store = $store; Fields = @{}; Errors = @{}; Rows = @{}; Panel = $col; Save = $save }
@@ -23548,10 +24072,50 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
     $f0.LinkSubject = if ($Occurrence) { [string]$Occurrence.Title } elseif ($entry) { [string]$entry.title } else { '' }
     $f0.LinkBox = New-WtStack; Set-WtStyle $f0.LinkBox 'Schedule.LinkSection'; [void]$col.Children.Add($f0.LinkBox)
     Update-WtScheduleLinks
+    # [취소]는 고친 내용을 버리는 단추라 묻지 않는다
     $save.Add_Click({ Save-WtScheduleForm }); $cancel.Add_Click({ Show-WtScheduleDay }); $delete.Add_Click({ Remove-WtScheduleForm })
     Update-WtScheduleFormFields; $script:detail.Content = $body
+    $script:form.Initial = Get-WtScheduleFormState   # 떠날 때 이 값과 다르면 묻는다
     if ($script:side.Rail.Visibility -eq 'Visible') { $script:side.Open.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent)) }
-    [void]$script:form.Fields.title.Focus()
+    # 제목 칸에 커서를 둔다. 지금은 칸이 아직 화면에 붙기 전이라 Focus()가 듣지 않고, + 메뉴로 열면 메뉴가 닫히며 포커스를 + 단추로 돌려준다.
+    # 그래서 배치가 끝난 뒤(입력 차례)에 둔다. 그사이 다른 폼으로 바뀌었으면 그 폼의 제목 칸이다
+    [void]$script:detail.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Input, [Action]{
+            $f = $script:form
+            if ($f -and $f.Fields.title.IsVisible -and -not $f.Fields.title.IsKeyboardFocusWithin) { [void]$f.Fields.title.Focus() }
+        })
+}
+
+# ---- 폼을 떠날 때 묻기 (11-22 실사용 보고 2) ----------------------------------------------------
+# 폼을 닫는 길(다른 날짜 · 여러 날 막대 · 달 고르기 「오늘」 · 표 ‹오늘› · 새로 만들기 · 표 · 루틴 줄 · 다른 탭에서 열기)은
+# 떠나기 전에 Confirm-WtScheduleFormLeave를 부른다. 보기 전환 · 달 이동 · 사이드바 접기 · 탭 이동은 폼을 그대로 두므로 묻지 않는다.
+# 앱을 끝낼 때는 셸이 등록(-ConfirmExit)을 통해 같은 함수를 부른다(취소 · 저장 실패면 끝내지 않음)
+
+# 폼 칸의 지금 값(core Get-WtFormState, 근태 폼과 같음). 열 때 값과 비교해 고친 것이 있는지 본다. 관련 메모는 붙이고 빼는 즉시 저장되므로 넣지 않는다
+function Get-WtScheduleFormState {
+    $f = $script:form; if (-not $f) { return '' }
+    Get-WtFormState $f.Fields
+}
+function Test-WtScheduleFormDirty {
+    $f = $script:form
+    [bool]($f -and $null -ne $f.Initial -and (Get-WtScheduleFormState) -cne $f.Initial)
+}
+
+# 폼을 닫아도 되면 $true. 고친 것이 없으면 묻지 않는다.
+# [저장]: 저장이 끝났을 때만 떠난다(틀린 칸이 있거나 반복 일정의 「이 회차만 · 이후 모두」를 고르는 중이면 폼에 남는다).
+# [저장 안 함]: 고친 내용을 버리고 떠난다. [취소] · Esc: 폼과 고친 내용을 그대로 두고, 부른 동작을 하지 않는다
+function Confirm-WtScheduleFormLeave {
+    if (-not (Test-WtScheduleFormDirty)) { return $true }
+    $f = $script:form
+    $kindName = if ($f.Kind -eq 'routine') { '루틴' } else { '일정' }
+    $original = if ($f.Occurrence) { [string]$f.Occurrence.Title } elseif ($f.Id) { [string]$f.LinkSubject } else { '' }
+    # 한글 앞의 변수는 ${}로 감싼다(PowerShell은 한글도 변수 이름에 넣는다)
+    $text = if ($f.Id -and $original) { "「$original」 ${kindName}에서 고친 내용이 저장되지 않았습니다." } else { "새 ${kindName}에 쓴 내용이 저장되지 않았습니다." }
+    switch (Read-WtSaveChoice $text) {
+        'save' { Save-WtScheduleForm; return $null -eq $script:form }
+        # 부른 동작이 오른쪽을 다시 그리지 않고 끝나도(열 일정을 못 찾음 등) 버린 폼이 남아 보이지 않게 그날 목록으로 돌린다
+        'discard' { Show-WtScheduleDay; return $true }
+        default { return $false }
+    }
 }
 function Update-WtScheduleFormFields {
     if (-not $script:form) { return }; $f = $script:form
@@ -23582,13 +24146,17 @@ function Update-WtScheduleFormFields {
         foreach ($key in 'every', 'start', 'end') { $f.Rows[$key].Visibility = if ($f.Fields.freq.SelectedItem -eq '시간마다') { 'Visible' } else { 'Collapsed' } }
     }
 }
-function Set-WtScheduleFormError([string]$Key, [string]$Message) {
+# 칸 오류: 칸 아래 한 줄 + 글 칸이면 빨간 선 · 오류 아이콘 · 툴팁(근태 · 메모와 같은 공통 표시, core\Ui.psm1 Set-WtInputError).
+# -Notice: 칸 탓이 아닌 알림(저장 실패 등)은 제목 칸 아래 글만 쓰고 칸을 빨갛게 하지 않는다
+function Set-WtScheduleFormError([string]$Key, [string]$Message, [switch]$Notice) {
     $script:form.Errors[$Key].Text = $Message; $script:form.Errors[$Key].Visibility = 'Visible'
     [Windows.Automation.AutomationProperties]::SetHelpText($script:form.Fields[$Key], $Message)
+    if (-not $Notice) { Set-WtInputError $script:form.Fields[$Key] $Message }
 }
 function Save-WtScheduleForm([string]$Scope) {
     $f = $script:form; if (-not $f) { return }
     foreach ($errorText in $f.Errors.Values) { $errorText.Text = ''; $errorText.Visibility = 'Collapsed' }
+    foreach ($field in $f.Fields.Values) { Set-WtInputError $field '' }
     $fields = $f.Fields
     if (-not $fields.title.Text.Trim()) { Set-WtScheduleFormError title '제목을 입력하세요.'; return }
     try {
@@ -23677,18 +24245,20 @@ function Save-WtScheduleForm([string]$Scope) {
             $patch = @{ title = $fields.title.Text; routine = $rule }; if (-not $f.Id) { $patch.start = @{ date = ConvertTo-WtDateText $script:selected } }
             $result = Save-WtRoutine $f.Store $patch -Id $f.Id -From ([datetime]::Today)
         }
-        if (-not $result.Success) { Set-WtScheduleFormError title $result.Reason; return }
+        if (-not $result.Success) { Set-WtScheduleFormError title $result.Reason -Notice; return }
         if ($f.Kind -eq 'event') { $script:selected = $date; $script:month = [datetime]::new($date.Year, $date.Month, 1) }
         $script:form = $null; Update-WtScheduleView
-    } catch { Set-WtScheduleFormError title $_.Exception.Message }
+        Update-WtScheduleBadges
+    } catch { Set-WtScheduleFormError title $_.Exception.Message -Notice }
 }
 function Remove-WtScheduleForm {
     $f = $script:form; if (-not $f -or -not $f.Id) { return }
     try {
         $result = if ($f.Kind -eq 'routine') { Set-WtRoutineDeleted $f.Store -Id $f.Id } else { Set-WtScheduleDeleted $f.Store -Id $f.Id }
-        if (-not $result.Success) { Set-WtScheduleFormError title $result.Reason; return }
+        if (-not $result.Success) { Set-WtScheduleFormError title $result.Reason -Notice; return }
         $script:form = $null; Update-WtScheduleView
-    } catch { Set-WtScheduleFormError title $_.Exception.Message }
+        Update-WtScheduleBadges
+    } catch { Set-WtScheduleFormError title $_.Exception.Message -Notice }
 }
 
 # 홈 「오늘 일정」 · 다음 일정 줄. 끝낸 회차는 제목 앞에 ✓를 붙이고(Done), 다음 일정 줄 · 메뉴 개수에서는 뺀다
@@ -23756,6 +24326,8 @@ function New-WtRoutineHomeCard {
 }
 function Open-WtScheduleArgs($OpenArgs) {
     if (-not $script:view) { return }
+    # 다른 탭(홈 시간 막대 · 작은 달력 · 상태 줄 · 알람 창)에서 날짜 · 일정을 열면 폼을 닫는다. 고친 내용이 있으면 먼저 묻고, 취소하면 보기도 그대로 둔다
+    if (($OpenArgs.Id -or $OpenArgs.Date) -and -not (Confirm-WtScheduleFormLeave)) { return }
     if ($OpenArgs.View -cin $script:viewModes) {
         # 상태 줄에서 여는 오늘·할 일은 전에 남긴 찾기 조건 없이 연다.
         $script:search.Box.Text = ''
@@ -23929,7 +24501,7 @@ function Save-WtScheduleAllDaySetting($Box) {
 }
 
 # 메뉴 개수 = 할 일 수(기한 지남 + 오늘 남은 일정 · 루틴 + 마감 임박, 설계 14.5). 보기 단추의 숫자와 같다
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -Tick { param($Now) [void](Invoke-WtScheduleAlarmTick $Now) } -TickSeconds 15 -SettingRows { New-WtScheduleAlarmSettingRows } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder }-Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ConfirmExit @{ Pending = { Test-WtScheduleFormDirty }; Confirm = { Confirm-WtScheduleFormLeave } } -Tick { param($Now) [void](Invoke-WtScheduleAlarmTick $Now) } -TickSeconds 15 -SettingRows { New-WtScheduleAlarmSettingRows } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder }-Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
 Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel, Invoke-WtScheduleAlarmTick, Format-WtScheduleAlarmWhen
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\schedule\Schedule.psm1 끝 ----
@@ -25725,13 +26297,11 @@ $script:filling = $false     # 코드로 트리를 고르는 중
 $script:outputKey = $null    # 출력 칸에 보이는 것이 어느 스크립트 · 업무의 것인지 ('script:경로' | 'flow:id')
 $script:shown = 0            # 출력 칸에 붙인 줄 수 (화면에 안 보여도 직접 센다)
 $script:encoding = $null     # 출력 문자 코드 (Get-WtFlowEncoding)
-$script:threeColumns = 896   # 세 칸이 다 들어가는 폭: 목록 240 + 가운데 최소 360 + 설명 280 + 사이 8 × 2
-$script:helpNarrow = $false  # 창이 좁아 설명을 가운데 위에 겹쳐 여는 중인지 (Update-WtFlowHelp)
-$script:helpOverlay = $false # 좁을 때 겹쳐 연 설명이 열려 있는지
 
 Register-WtSettingDefault 'workflows.roots' @()   # 사용자가 [폴더 추가]한 스크립트 폴더 목록
 Register-WtSettingDefault 'workflows.hiddenRoots' @()   # 사용자가 목록에서 뺀 기본 스크립트 폴더 (다시 넣지 않는다)
-Register-WtSettingDefault 'workflows.help' $true  # 오른쪽 설명 패널을 펼침
+# 오른쪽 설명은 공용 보조 칸이 접힘을 workflows.sidebar.collapsed에 남긴다. 예전 키(펼침 = $true)로 접어 둔 사람만 화면을 만들 때 한 번 옮긴다
+Register-WtSettingDefault 'workflows.help' $true
 $script:defaultRoots = $null # 기본 스크립트 폴더 (Get-WtFlowDefaultRoots, 앱 · 데이터 폴더가 같으면 다시 찾지 않음)
 $script:madeRoot = $null     # 이번에 만든(있는지 본) 데이터 폴더의 scripts
 # 스크립트 폴더 · 파일은 공유 폴더일 수 있어서 화면 밖(core\Work.psm1)에서 읽는다. 로컬 폴더는 기다리는 시간 안에 끝나 바로 보인다
@@ -27277,31 +27847,8 @@ function Select-WtFlowScriptAgain {
 function Update-WtFlowHelp {
     $u = $script:ui
     if (-not $u.Count) { return }
-    # 세 칸이 다 안 들어가면 설명은 접어 두고, 펼치면 가운데 위에 겹쳐 연다.
-    # 이때 펼치고 접는 것은 설정에 남기지 않는다 (창을 넓히면 설정대로 돌아간다)
-    $script:helpNarrow = Test-WtFlowNarrow $u.PageGrid.ActualWidth
-    if (-not $script:helpNarrow) { $script:helpOverlay = $false }
-    $show = if ($script:helpNarrow) { $script:helpOverlay } else { [bool](Get-WtSetting 'workflows.help') }
-    $u.HelpColumn.Width = [System.Windows.GridLength]::new($(if ($show -and -not $script:helpNarrow) { 280 } else { 0 }))
-    $box = $u.HelpHost
-    if ($script:helpNarrow) {
-        [System.Windows.Controls.Grid]::SetColumn($box, 1)
-        $box.HorizontalAlignment = 'Right'
-        $box.Width = 280
-        $box.Margin = [System.Windows.Thickness]::new(0)
-        [System.Windows.Controls.Panel]::SetZIndex($box, 1)
-    } else {
-        [System.Windows.Controls.Grid]::SetColumn($box, 2)
-        $box.HorizontalAlignment = 'Stretch'
-        $box.Width = [double]::NaN
-        $box.Margin = [System.Windows.Thickness]::new(16, 0, 0, 0)
-        [System.Windows.Controls.Panel]::SetZIndex($box, 0)
-    }
-    $u.HelpShadow.Visibility = if ($script:helpNarrow) { 'Visible' } else { 'Collapsed' }
-    $box.Visibility = if ($show) { 'Visible' } else { 'Collapsed' }
-    $u.HelpOpen.Visibility = if ($show) { 'Collapsed' } else { 'Visible' }
+    # 접고 펼치기 · 좁은 창(1200 미만)의 레일 · 겹쳐 열기는 공용 보조 칸(New-WtSidePanel)이 맡는다. 여기서는 내용만 채운다
     $panel = $u.HelpPanel
-    if (-not $show) { $panel.Children.Clear(); $script:helpKey = $null; $script:helpList = $null; return }
     $key = ConvertTo-Json -Compress -Depth 10 -InputObject @((Get-WtStoreStamp 'workflow-runs'), $script:info, (Get-WtSetting 'theme.color'), (Get-WtSetting 'ui.fontScale'))
     if ($script:helpKey -ceq $key) {
         if ($script:helpList) { $script:helpList.SelectedItem = $null }
@@ -27349,7 +27896,8 @@ function Update-WtFlowHelp {
     $runs = @(Get-WtFlowRuns | Where-Object { -not $info -or $_.script -eq $info.Path } | Select-Object -First 10)
     if (-not $runs.Count) { [void](Add-WtChild $panel (New-WtText '아직 실행 기록이 없습니다.' 'T.Sub')); $script:helpKey = $key; return }
     $list = [System.Windows.Controls.ListBox]::new()
-    Set-WtStyle $list 'List'
+    # 두 줄 행 48: 배지 · 시각 줄이 행 안 위아래 가운데라 앞 행 구분선에 붙지 않고, 글자는 「최근 실행」 제목과 같은 x에서 시작한다
+    Set-WtStyle $list 'Workflows.RunList'
     [System.Windows.Controls.ScrollViewer]::SetVerticalScrollBarVisibility($list, 'Disabled')
     foreach ($r in $runs) {
         $look = Get-WtFlowStatusLook ([string]$r.status) ([bool]$r.whatIf)
@@ -27367,26 +27915,13 @@ function Update-WtFlowHelp {
         [void]$list.Items.Add($item)
     }
     $list.Add_SelectionChanged({ param($s, $e) if ($s.SelectedItem) { Show-WtFlowRecordTail $s.SelectedItem.Tag } })
-    [void](Add-WtChild $panel $list)
+    [void]$panel.Children.Add($list)   # 위 사이 · 좌우로 내민 폭은 스타일 여백(Workflows.RunList)이 정한다
     $script:helpList = $list; $script:helpKey = $key
 }
 
-# 가운데 · 양옆 패널이 놓일 폭이 세 칸에 모자라는지 (아직 배치 전이라 폭이 0이면 모자라지 않은 것으로 본다)
-function Test-WtFlowNarrow([double]$Width) { $Width -gt 0 -and $Width -lt $script:threeColumns }
-
-# [설명 펼치기] · [접기]. 넓으면 설정을 바꾸고, 좁으면 겹쳐 연 것만 열고 닫는다
-function Open-WtFlowHelp {
-    if ($script:helpNarrow) { $script:helpOverlay = $true } else { Set-WtSetting 'workflows.help' $true }
-    Update-WtFlowHelp
-}
-
-function Close-WtFlowHelp {
-    if ($script:helpNarrow) { $script:helpOverlay = $false } else { Set-WtSetting 'workflows.help' $false }
-    Update-WtFlowHelp
-}
-
-# 폼 높이: 남는 높이(제목 · 명령 · 결과 · 알림을 뺀 것)의 60%나 출력 칸에 240을 남긴 높이 중 큰 쪽까지 쓰고,
-# 출력 칸에는 적어도 120을 남긴다. 넘으면 폼만 스크롤한다. 칸이 적으면 폼은 칸 높이만큼만 쓰고, 실행 명령은 폼 바로 아래에 붙는다
+# 폼 높이: 폼 전체가 출력 칸에 120을 남기고 들어가면 다 보인다(칸이 반쯤 잘려 보이지 않게, 글자를 키워 칸이 커져도. 11-22 실사용 보고 14).
+# 안 들어가면 남는 높이(제목 · 명령 · 결과 · 알림을 뺀 것)의 60%나 출력 칸에 240을 남긴 높이 중 큰 쪽까지 쓰고 폼만 스크롤한다.
+# 칸이 적으면 폼은 칸 높이만큼만 쓰고, 실행 명령은 폼 바로 아래에 붙는다
 function Update-WtFlowFormHeight {
     $u = $script:ui
     if (-not $u.Count) { return }
@@ -27395,7 +27930,11 @@ function Update-WtFlowFormHeight {
     $fixed = 0
     foreach ($i in 0, 2, 3, 4) { $fixed += $g.RowDefinitions[$i].ActualHeight }
     $avail = $g.ActualHeight - $fixed
-    $u.FormScroll.MaxHeight = [Math]::Max(80, [Math]::Floor([Math]::Min([Math]::Max($avail * 0.6, $avail - 240), $avail - 120)))
+    $most = [Math]::Floor($avail - 120)
+    $max = [Math]::Max($avail * 0.6, $avail - 240)
+    $need = [Math]::Ceiling($u.Form.DesiredSize.Height)
+    if ($need -gt $max -and $need -le $most) { $max = $need }
+    $u.FormScroll.MaxHeight = [Math]::Max(80, [Math]::Floor([Math]::Min($max, $most)))
 }
 
 # 기록을 고르면 그때의 출력 마지막 줄을 출력 칸에 보여 준다 (실행 중이면 바꾸지 않는다)
@@ -27430,7 +27969,7 @@ function New-WtFlowsView {
     $grid = [System.Windows.Controls.Grid]::new()
     $c1 = [System.Windows.Controls.ColumnDefinition]::new(); $c1.Width = [System.Windows.GridLength]::new(240)
     $c2 = [System.Windows.Controls.ColumnDefinition]::new(); $c2.Width = [System.Windows.GridLength]::new(1, 'Star'); $c2.MinWidth = 360
-    $c3 = [System.Windows.Controls.ColumnDefinition]::new(); $c3.Width = [System.Windows.GridLength]::new(280)
+    $c3 = [System.Windows.Controls.ColumnDefinition]::new(); $c3.Width = [System.Windows.GridLength]::Auto   # 공용 보조 칸이 폭(280 · 레일 28)을 정한다
     foreach ($c in @($c1, $c2, $c3)) { $grid.ColumnDefinitions.Add($c) }
 
     # 왼쪽: 저장한 업무 + 스크립트 폴더
@@ -27493,13 +28032,11 @@ function New-WtFlowsView {
     $saveFlow = New-WtButton '업무로 저장' -Icon 0xE74E
     [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($saveFlow, $true)
     $saveFlow.Add_Click({ Save-WtFlowFromForm })
-    $deleteFlow = New-WtButton '업무 삭제' -Kind Link -Icon 0xE74D
+    # 삭제는 다른 탭의 삭제 · 닫기와 같은 위험 단추(Btn.Danger, 디자인 7절)
+    $deleteFlow = New-WtButton '업무 삭제' -Kind Danger -Icon 0xE74D
     $deleteFlow.ToolTip = '저장한 업무를 지웁니다 (스크립트 파일은 그대로)'
     $deleteFlow.Add_Click({ Remove-WtFlowCurrent })
-    $helpOpen = New-WtButton '설명 펼치기' -Kind Link -Icon 0xE946
-    $helpOpen.ToolTip = '오른쪽에 스크립트 도움말과 최근 실행을 보여 줍니다'
-    $helpOpen.Add_Click({ Open-WtFlowHelp })
-    foreach ($b in @($deleteFlow, $saveFlow, $helpOpen)) { [void](Add-WtChild $headActions $b) }
+    foreach ($b in @($deleteFlow, $saveFlow)) { [void](Add-WtChild $headActions $b) }
     [System.Windows.Controls.DockPanel]::SetDock($headActions, 'Right')
     [void]$head.Children.Add($headActions)
     $titleStack = New-WtStack Vertical 4
@@ -27536,19 +28073,21 @@ function New-WtFlowsView {
     [void]$cgrid.Children.Add($empty)
 
     # 실행 명령: [실행] [미리보기] [취소] 실행 방식. 좁으면 실행 방식이 다음 줄로 내려간다
+    # 줄 높이는 그 줄에서 가장 높은 것(실행 방식 묶음)을 따르므로, 단추는 세로 가운데에 두어 늘어나지 않게 한다(높이 32, 디자인 8절 업무)
     $commands = [System.Windows.Controls.WrapPanel]::new()
     $commands.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0)
     $runButton = New-WtButton '실행' -Kind Primary -Icon 0xE768
     $runButton.Add_Click({ Invoke-WtFlowRun })
     $preview = New-WtButton '미리보기' -Icon 0xE7B3
     $preview.Add_Click({ Invoke-WtFlowRun -WhatIf })
-    $cancel = New-WtButton '취소' -Icon 0xE711
+    $cancel = New-WtButton '취소' -Icon 0xE71A
     $cancel.Add_Click({ Stop-WtFlowRun })
     $mode = New-WtSegmented @(@('app', '앱 안에서'), @('console', '콘솔 창에서')) 'app' 'WtFlowMode' { param($value) Set-WtFlowModeChoice $value; Update-WtFlowCommands }
     $mode.ToolTip = '앱 안: 출력을 아래 칸에 보여 줍니다 · 콘솔 창: 자기 화면이 있거나 키 입력을 받는 스크립트'
     foreach ($b in @($runButton, $preview, $cancel, $mode)) {
         [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($b, $true)
         $b.Margin = [System.Windows.Thickness]::new(0, 0, 8, 8)
+        $b.VerticalAlignment = 'Center'
         [void]$commands.Children.Add($b)
     }
     [System.Windows.Controls.Grid]::SetRow($commands, 2)
@@ -27604,29 +28143,15 @@ function New-WtFlowsView {
     [void]$outArea.Children.Add($outHint)
     [System.Windows.Controls.Grid]::SetRow($outArea, 5)
     [void]$cgrid.Children.Add($outArea)
-    # 폼 최대 높이는 가운데 높이나 다른 줄(제목 · 명령 · 결과 · 알림)의 높이가 바뀔 때마다 다시 잰다
-    foreach ($x in @($cgrid, $head, $commands, $statusStack, $noteRow)) { $x.Add_SizeChanged({ Update-WtFlowFormHeight }) }
+    # 폼 최대 높이는 가운데 높이나 다른 줄(제목 · 명령 · 결과 · 알림)의 높이, 폼 칸 전체 높이가 바뀔 때마다 다시 잰다
+    foreach ($x in @($cgrid, $head, $commands, $statusStack, $noteRow, $form)) { $x.Add_SizeChanged({ Update-WtFlowFormHeight }) }
     $center.Child = $cgrid
     [System.Windows.Controls.Grid]::SetColumn($center, 1)
     [void]$grid.Children.Add($center)
 
-    # 오른쪽: 설명 · 최근 실행. 머리글의 [접기]는 늘 같은 자리에 둔다.
-    # 창이 좁으면 가운데 위에 겹쳐 연다 (Update-WtFlowHelp). 그때만 뒤에 그림자를 깐다
-    $right = New-WtCard
-    Set-WtStyle $right 'Workflows.HelpCard'
-    $rdock = [System.Windows.Controls.DockPanel]::new()
-    $rhead = [System.Windows.Controls.DockPanel]::new()
-    Set-WtStyle $rhead 'Workflows.HelpHeader'
-    $helpClose = New-WtButton '' -Kind Icon -Icon 0xE76C -ToolTip '설명 접기'
-    Set-WtStyle $helpClose 'Sidebar.Collapse'
-    [System.Windows.Automation.AutomationProperties]::SetName($helpClose, '설명 접기')
-    $helpClose.Add_Click({ Close-WtFlowHelp })
-    [System.Windows.Controls.DockPanel]::SetDock($helpClose, 'Left')
-    [void]$rhead.Children.Add($helpClose)
-    $rtitle = New-WtText '설명' 'Workflows.HelpTitle'
-    [void]$rhead.Children.Add($rtitle)
-    [System.Windows.Controls.DockPanel]::SetDock($rhead, 'Top')
-    [void]$rdock.Children.Add($rhead)
+    # 오른쪽: 설명 · 최근 실행. 일정 · 근태 · 메모와 같은 공용 보조 칸이다(디자인 6절): 머리 왼쪽 접기 단추, 접으면 폭 28 레일,
+    # 창 폭 1200 미만이면 저장값과 상관없이 레일로 시작하고 펼치면 가운데 위에 겹친다. Ctrl+Shift+B로도 접고 편다
+    if (-not [bool](Get-WtSetting 'workflows.help')) { Set-WtSetting 'workflows.sidebar.collapsed' $true; Set-WtSetting 'workflows.help' $true }
     $helpScroll = [System.Windows.Controls.ScrollViewer]::new()
     $helpScroll.VerticalScrollBarVisibility = 'Auto'
     $helpScroll.HorizontalScrollBarVisibility = 'Disabled'
@@ -27634,26 +28159,15 @@ function New-WtFlowsView {
     $helpPanel = New-WtStack Vertical 12
     Set-WtStyle $helpPanel 'Workflows.HelpBody'
     $helpScroll.Content = $helpPanel
-    [void]$rdock.Children.Add($helpScroll)
-    $right.Child = $rdock
-    $helpShadow = [System.Windows.Controls.Border]::new()
-    Set-WtStyle $helpShadow 'Overlay.Shadow'
-    $helpShadow.Visibility = 'Collapsed'
-    $helpHost = [System.Windows.Controls.Grid]::new()
-    $helpHost.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
-    [void]$helpHost.Children.Add($helpShadow)
-    [void]$helpHost.Children.Add($right)
-    [System.Windows.Controls.Grid]::SetColumn($helpHost, 2)
-    [void]$grid.Children.Add($helpHost)
-    # 좁고 넓음이 바뀔 때만 설명 자리를 다시 정한다
-    $grid.Add_SizeChanged({ param($s, $e) if ((Test-WtFlowNarrow $s.ActualWidth) -ne $script:helpNarrow) { Update-WtFlowHelp } })
+    $helpSide = New-WtSidePanel -Content $helpScroll -Side Right -Key 'workflows.sidebar.collapsed' -Title '설명' -Width 280
+    [System.Windows.Controls.Grid]::SetColumn($helpSide, 2)
+    [void]$grid.Children.Add($helpSide)
     [void]$page.Panel.Children.Add($grid)
 
     # 업무 화면 안 단축키
     $page.Root.Add_PreviewKeyDown({
             param($s, $e)
             if ($e.Key -eq 'F5') { Update-WtFlowTree; Set-WtFlowNote '스크립트 목록을 새로 읽었습니다.'; $e.Handled = $true }
-            elseif ($e.Key -eq 'Escape' -and $script:helpOverlay) { Close-WtFlowHelp; $e.Handled = $true }
         })
 
     $script:ui = @{
@@ -27662,10 +28176,8 @@ function New-WtFlowsView {
         SaveFlow = $saveFlow; DeleteFlow = $deleteFlow; RunButton = $runButton; Preview = $preview; Cancel = $cancel
         Status = $statusStack; RunStatus = $runStatus; Elapsed = $elapsed; Busy = $busy; NoteRow = $noteRow; Note = $note; Undo = $undo
         Output = $output; OutputHint = $outHint; OutArea = $outArea
-        PageGrid = $grid; HelpColumn = $c3; HelpHost = $helpHost; HelpShadow = $helpShadow; HelpPanel = $helpPanel; HelpOpen = $helpOpen
+        PageGrid = $grid; Center = $center; HelpSide = $helpSide; HelpPanel = $helpPanel
     }
-    $script:helpNarrow = $false
-    $script:helpOverlay = $false
     # 화면을 새로 만들면 고른 것의 수명도 끝난다 (오는 중인 읽기 결과는 새 화면에 넣지 않는다)
     $script:selection = $null
     $script:readSeq++
