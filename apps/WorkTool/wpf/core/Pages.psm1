@@ -120,8 +120,123 @@ function New-WtThemeCard {
     }
     [void](Add-WtChild $col (New-WtSettingRow '닫기 버튼 (X)' $close '트레이 아이콘을 우클릭한 뒤 종료를 누르세요.'))
 
+    # 알림 묶음(디자인 8절 「설정·도움말」): 탭이 등록한 행(Get-WtAddonSettingRows) → 코어 알림 부품의 행
+    [void](Add-WtChild $col (New-WtText '알림' 'Setting.Group'))
+    foreach ($row in @(Get-WtAddonSettingRows '알림')) {
+        if ($row.Error) { [void](Add-WtChild $col (New-WtText "$($row.Label) 설정 행을 만들지 못했습니다. $($row.Error)" 'T.Error')); continue }
+        [void](Add-WtChild $col (New-WtSettingRow $row.Label $row.Control $row.Note))
+    }
+    foreach ($row in @(New-WtNoticeSettingRows)) { [void](Add-WtChild $col $row) }
+
     $card.Child = $col
     $card
+}
+
+# ---- 설정 → 일반 → 알림: 다시 알림 · 알람 소리 · 소리 · 볼륨 · 알람 잠시 끄기 (값은 core\Notice.psm1이 읽는다) ----
+$script:noticeUi = $null        # 처리기가 쓰는 칸 묶음(처리기 안에서는 $script: 변수와 Tag만 쓴다)
+$script:volumeTimer = $null
+$script:pendingVolume = 70
+$script:noticeHandler = $false
+
+function New-WtNoticeSettingRows {
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $snooze = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $snooze 'Setting.Combo'
+    $current = [int](Get-WtSetting 'notice.snooze')
+    $choices = @(5, 10, 15, 30)
+    foreach ($m in $choices) { [void]$snooze.Items.Add("${m}분 뒤") }
+    if ($choices -notcontains $current) { [void]$snooze.Items.Add("${current}분 뒤") }
+    $snooze.SelectedItem = "${current}분 뒤"
+    $snooze.Add_SelectionChanged({ param($s, $e) if ($s.SelectedItem) { Set-WtSetting 'notice.snooze' ([int](([string]$s.SelectedItem) -replace '분 뒤$', '')) } })
+    [System.Windows.Automation.AutomationProperties]::SetName($snooze, '다시 알림')
+    $rows.Add((New-WtSettingRow '다시 알림' $snooze))
+
+    $soundOn = [System.Windows.Controls.CheckBox]::new(); Set-WtStyle $soundOn 'Check'
+    $soundOn.Content = '켜기'; $soundOn.IsChecked = [bool](Get-WtSetting 'notice.sound')
+    $soundOn.Add_Click({ param($s, $e) Set-WtSetting 'notice.sound' ([bool]$s.IsChecked); Update-WtNoticeSoundRow })
+    [System.Windows.Automation.AutomationProperties]::SetName($soundOn, '알람 소리 켜기')
+    $rows.Add((New-WtSettingRow '알람 소리' $soundOn))
+
+    $file = [System.Windows.Controls.ComboBox]::new(); Set-WtStyle $file 'Setting.ComboWide'
+    foreach ($name in @(Get-WtNoticeSounds)) { [void]$file.Items.Add([System.IO.Path]::GetFileNameWithoutExtension($name)) }
+    $selected = [System.IO.Path]::GetFileNameWithoutExtension((Get-WtNoticeSoundName))
+    if ($selected -and -not $file.Items.Contains($selected)) { [void]$file.Items.Add($selected) }
+    $file.SelectedItem = $selected
+    $file.Add_SelectionChanged({ param($s, $e) if ($s.SelectedItem) { Set-WtSetting 'notice.soundFile' ("$($s.SelectedItem).wav") } })
+    [System.Windows.Automation.AutomationProperties]::SetName($file, '알람 소리 파일')
+    $rows.Add((New-WtSettingRow '소리' $file))
+
+    # 볼륨: 끌면 글자만 바로 바꾸고, 손을 떼고 잠시 뒤 저장한다(불투명도와 같음)
+    $volumeRow = New-WtStack Horizontal 12
+    $slider = [System.Windows.Controls.Slider]::new(); Set-WtStyle $slider 'Range'
+    [System.Windows.Automation.AutomationProperties]::SetName($slider, '알람 볼륨')
+    $slider.Minimum = 0; $slider.Maximum = 100; $slider.TickFrequency = 5; $slider.IsSnapToTickEnabled = $true
+    $slider.Width = 240; $slider.VerticalAlignment = 'Center'
+    $slider.Value = [double](Get-WtSetting 'notice.volume')
+    $volumeText = New-WtText ('{0}%' -f [int]$slider.Value) 'T.Strong'; $volumeText.VerticalAlignment = 'Center'
+    $preview = New-WtButton '들어 보기'
+    $preview.Add_Click({ param($s, $e) $ui = $script:noticeUi; [void](Invoke-WtNoticeSound -File ("$($ui.File.SelectedItem).wav") -Volume $ui.Volume.Value -Force) })
+    if (-not $script:volumeTimer) {
+        $script:volumeTimer = [System.Windows.Threading.DispatcherTimer]::new()
+        $script:volumeTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+        $script:volumeTimer.Add_Tick({ param($s, $e) $s.Stop(); Set-WtSetting 'notice.volume' ([int]$script:pendingVolume) })
+    }
+    $slider.Add_ValueChanged({
+            param($s, $e)
+            $script:pendingVolume = [int]$e.NewValue
+            if ($script:noticeUi) { $script:noticeUi.VolumeText.Text = '{0}%' -f $script:pendingVolume }
+            $script:volumeTimer.Stop(); $script:volumeTimer.Start()
+        })
+    foreach ($child in $slider, $volumeText, $preview) { [void](Add-WtChild $volumeRow $child) }
+    $rows.Add((New-WtSettingRow '볼륨' $volumeRow))
+
+    $pauseBox = New-WtStack Horizontal 8
+    $rows.Add((New-WtSettingRow '알람 잠시 끄기' $pauseBox))
+    $script:noticeUi = @{ SoundOn = $soundOn; File = $file; Volume = $slider; VolumeText = $volumeText; Preview = $preview; Pause = $pauseBox }
+    Update-WtNoticeSoundRow
+    Update-WtNoticePauseRow
+    if (-not $script:noticeHandler) {
+        # 트레이 · 상태 줄 · 알람 창에서 잠시 끄거나 켜도 열린 설정 창의 줄을 맞춘다
+        Register-WtSettingHandler { param($key, $value) if ($key -ceq 'notice.pausedUntil') { Update-WtNoticePauseRow } }
+        $script:noticeHandler = $true
+    }
+    $rows.ToArray()
+}
+
+# 알람 소리를 끄면 소리 · 볼륨 · 들어 보기는 비활성, 이유는 툴팁
+function Update-WtNoticeSoundRow {
+    $ui = $script:noticeUi
+    if (-not $ui) { return }
+    $on = [bool]$ui.SoundOn.IsChecked
+    foreach ($control in $ui.File, $ui.Volume, $ui.Preview) {
+        $control.IsEnabled = $on
+        $control.ToolTip = if ($on) { $null } else { '알람 소리를 켜면 바꿀 수 있습니다.' }
+        [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($control, $true)
+    }
+}
+
+# 켜져 있으면 1시간 · 오늘 하루 · 다시 켤 때까지, 끈 동안은 「알람 꺼짐 ~ 15:30」 + 다시 켜기
+function Update-WtNoticePauseRow {
+    $ui = $script:noticeUi
+    if (-not $ui) { return }
+    $box = $ui.Pause
+    $box.Children.Clear()
+    $state = Get-WtNoticePause
+    if ($state.Paused) {
+        $box.Tag = [double]12
+        $text = New-WtText $state.Text 'T.Body'; $text.VerticalAlignment = 'Center'
+        [void](Add-WtChild $box $text)
+        $resume = New-WtButton '다시 켜기'
+        $resume.Add_Click({ [void](Set-WtNoticePause off) })
+        [void](Add-WtChild $box $resume)
+        return
+    }
+    $box.Tag = [double]8
+    foreach ($mode in @(@('hour', '1시간'), @('today', '오늘 하루'), @('manual', '다시 켤 때까지'))) {
+        $button = New-WtButton $mode[1]
+        $button.Tag = $mode[0]
+        $button.Add_Click({ param($s, $e) [void](Set-WtNoticePause ([string]$s.Tag)) })
+        [void](Add-WtChild $box $button)
+    }
 }
 
 function New-WtMenuCard {

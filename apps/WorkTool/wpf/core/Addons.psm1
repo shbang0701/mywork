@@ -48,6 +48,11 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   DateMenu     { param([datetime]$Date) } → 다른 탭(일정 등)의 날짜 칸 우클릭에 붙일 항목들 (선택). 설계 15.6
                항목 = @{ Header = '글'; Action = { param($Arg) }; Arg = 넘길 값; ToolTip; IsEnabled = $false(끔); Items = @(항목 | '-') }
                Items가 있으면 하위 메뉴다. 메뉴를 그리는 탭은 Get-WtDateMenuItems로 받는다. 탭끼리 서로 부르지 않는다
+  Tick         { param([datetime]$Now) } → 앱이 떠 있는 동안 TickSeconds(기본 60, 5~3600)마다 부른다 (선택). 설계 16
+               화면에 묶지 않아서 트레이로 숨거나 최소화하거나 다른 탭을 볼 때도 돈다. 꺼진 탭은 부르지 않는다.
+               실패는 그 탭 기록(Get-WtAddonTickError)에만 남기고 다음 틱을 막지 않는다(대화상자를 띄우지 않는다)
+  SettingRows  { } → 설정 화면에 넣을 행 @(@{ Group = '알림'; Label = '라벨'; Control = 화면 요소; Note = '툴팁' }) (선택)
+               지금 받는 묶음은 일반 탭의 '알림'뿐이다. 켜진 탭만, 탭 순서대로 코어 행 앞에 놓는다
 #>
 function Register-WtAddon {
     param(
@@ -80,7 +85,10 @@ function Register-WtAddon {
         [scriptblock]$HelpCard,
         [object[]]$HomeCards = @(),
         [hashtable]$Related,
-        [scriptblock]$DateMenu
+        [scriptblock]$DateMenu,
+        [scriptblock]$Tick,
+        [ValidateRange(5, 3600)][int]$TickSeconds = 60,
+        [scriptblock]$SettingRows
     )
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
@@ -124,6 +132,7 @@ function Register-WtAddon {
             SavePending = $SavePending; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
             Related = $relatedEntry; DateMenu = $DateMenu
+            Tick = $Tick; TickSeconds = $TickSeconds; SettingRows = $SettingRows
         })
     # 같은 탭을 다시 등록하면서 표시 함수를 뺐으면 옛 등록도 없앤다.
     Register-WtCalendarSource -Id "addon:$Id" -Page $Id -CalendarItems $CalendarItems
@@ -163,6 +172,53 @@ function Get-WtDateMenuItems([datetime]$Date, [string]$Exclude = '') {
                 if ($null -ne $item) { [pscustomobject]@{ Page = $addon.Id; Title = $addon.Title; Item = $item; Error = '' } }
             }
         } catch { [pscustomobject]@{ Page = $addon.Id; Title = $addon.Title; Item = $null; Error = $_.Exception.Message } }
+    }
+}
+
+# ---- 앱이 떠 있는 동안 도는 작업(Tick, 설계 16) ---------------------------------------------------
+$script:tickTimers = [System.Collections.Generic.List[object]]::new()
+$script:tickErrors = @{}
+
+# 한 탭의 Tick을 부른다. 꺼졌거나 Tick이 없으면 $false. 실패는 그 탭 기록에만 남긴다
+function Invoke-WtAddonTick([string]$Id, [datetime]$Now = (Get-Date)) {
+    $addon = Get-WtAddon -Id $Id
+    if (-not $addon -or -not $addon.Tick) { return $false }
+    try { [void](& $addon.Tick $Now); [void]$script:tickErrors.Remove($Id); $true }
+    catch { $script:tickErrors[$Id] = $_.Exception.Message; $false }
+}
+function Get-WtAddonTickError([string]$Id) { $script:tickErrors[$Id] }
+
+# 셸이 앱을 띄울 때 부른다. Tick을 등록한 탭마다 타이머 하나(꺼진 탭은 틱마다 건너뜀). 만든 타이머 수를 돌려준다
+function Start-WtAddonTicks {
+    Stop-WtAddonTicks
+    foreach ($addon in @(Get-WtAddon -All)) {
+        if (-not $addon.Tick) { continue }
+        $timer = [System.Windows.Threading.DispatcherTimer]::new()
+        $timer.Interval = [TimeSpan]::FromSeconds($addon.TickSeconds)
+        $timer.Tag = $addon.Id
+        $timer.Add_Tick({ param($s, $e) [void](Invoke-WtAddonTick ([string]$s.Tag)) })
+        $timer.Start()
+        $script:tickTimers.Add($timer)
+    }
+    $script:tickTimers.Count
+}
+function Stop-WtAddonTicks {
+    foreach ($timer in $script:tickTimers) { $timer.Stop() }
+    $script:tickTimers.Clear()
+}
+
+# 설정 화면 묶음(Group)에 넣을 탭의 행. 켜진 탭만 탭 순서대로. 한 탭이 실패하면 그 탭의 오류 줄 하나(Error)로 바꾼다
+function Get-WtAddonSettingRows([string]$Group) {
+    foreach ($addon in @(Get-WtAddon)) {
+        if (-not $addon.SettingRows) { continue }
+        try {
+            $rows = @(foreach ($row in @(& $addon.SettingRows)) {
+                    if ($null -eq $row -or [string]$row.Group -cne $Group) { continue }
+                    if (-not ($row.Label -is [string] -and $row.Label) -or $row.Control -isnot [System.Windows.UIElement]) { throw '설정 행은 Label(글) · Control(화면 요소)이 필요합니다.' }
+                    [pscustomobject]@{ Page = $addon.Id; Label = $row.Label; Control = $row.Control; Note = [string]$row.Note; Error = '' }
+                })
+            $rows
+        } catch { [pscustomobject]@{ Page = $addon.Id; Label = $addon.Title; Control = $null; Note = ''; Error = $_.Exception.Message } }
     }
 }
 
@@ -277,4 +333,4 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
 }
 
 Export-ModuleMember -Function Get-WtCalendarStores, Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource,
-    Get-WtDateMenuItems, Test-WtCalendarPartDay
+    Get-WtDateMenuItems, Test-WtCalendarPartDay, Invoke-WtAddonTick, Get-WtAddonTickError, Start-WtAddonTicks, Stop-WtAddonTicks, Get-WtAddonSettingRows

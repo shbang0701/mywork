@@ -18,12 +18,29 @@ $script:searchTimer = $null
 $script:collapsed = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)   # 할 일에서 접은 묶음
 $script:tableItems = @()
 $script:tableUpdating = $false
+$script:ko = [Globalization.CultureInfo]::GetCultureInfo('ko-KR')
 Register-WtSettingDefault 'schedule.view' 'calendar'
+# 알람 전역 값(설정 → 일반 → 알림, 설계 16장). 다시 알림 · 소리는 코어 알림 부품의 설정(notice.*)이다
+Register-WtSettingDefault 'schedule.alarmDefault' 10   # 새 일정 기본 알람(분 전), -1 = 없음
+Register-WtSettingDefault 'schedule.alarmAllDay' ''    # 하루 종일 일정의 알람 기준 시각 HH:mm, 비면 그날 업무 시작
+Register-WtSettingDefault 'schedule.alarmLate' 30      # 늦게 켰을 때 시작 뒤 몇 분까지 울릴지, 0 = 울리지 않음
+# 폼의 알람 선택지 = 설정 「새 일정 기본 알람」 선택지(디자인 8절 일정)
+$script:alarmChoices = [ordered]@{ '없음' = -1; '정시' = 0; '5분 전' = 5; '10분 전' = 10; '15분 전' = 15; '30분 전' = 30; '1시간 전' = 60 }
+$script:snoozeChoices = @(5, 10, 15, 30)
+$script:lateChoices = [ordered]@{ '울리지 않음' = 0; '10분' = 10; '30분' = 30; '1시간' = 60 }
+# 알람 확인 틱(설계 16장): 앞 틱 시각 · 알람 상태 핸들 · 이번 실행에서 알린 "키|울릴 시각"(상태 파일을 못 써도 두 번 띄우지 않게)
+$script:alarmPrevious = $null
+$script:alarmState = $null
+$script:alarmSeen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 
 function Format-WtAlarm($Minutes) {
     if ($null -eq $Minutes -or "$Minutes" -eq '') { return $null }
     $m = [int]$Minutes
     if ($m -eq 0) { '정시' } elseif ($m -eq 1440) { '하루 전' } elseif ($m % 60 -eq 0) { "$($m / 60)시간 전" } else { "${m}분 전" }
+}
+function Get-WtScheduleDefaultAlarmText {
+    $m = [int](Get-WtSetting 'schedule.alarmDefault')
+    if ($m -lt 0) { '없음' } else { Format-WtAlarm $m }
 }
 
 # 반복 규칙(ConvertFrom-WtScheduleItem의 Repeat) → 짧은 이름
@@ -960,13 +977,15 @@ function Set-WtScheduleCheck($Check) {
     }
 }
 
-function Add-WtScheduleField([string]$Key, [string]$Label, $Control) {
+function Add-WtScheduleField([string]$Key, [string]$Label, $Control, $Parent) {
     $field = New-WtStack; Set-WtStyle $field 'Schedule.Field'
     if ($Label) { [void]$field.Children.Add((New-WtText $Label 'Schedule.FieldLabel')) }
     [void]$field.Children.Add($Control); $errorText = New-WtText '' 'Schedule.Error'; $errorText.Visibility = 'Collapsed'; [void]$field.Children.Add($errorText)
     [Windows.Automation.AutomationProperties]::SetName($Control, $(if ($Label) { $Label } else { [string]$Control.Content }))
     [Windows.Automation.AutomationProperties]::SetAutomationId($Control, "Schedule-$Key")
-    $script:form.Fields[$Key] = $Control; $script:form.Errors[$Key] = $errorText; $script:form.Rows[$Key] = $field; [void]$script:form.Panel.Children.Add($field)
+    $script:form.Fields[$Key] = $Control; $script:form.Errors[$Key] = $errorText; $script:form.Rows[$Key] = $field
+    $target = if ($Parent) { $Parent } else { $script:form.Panel }
+    [void]$target.Children.Add($field)
 }
 # 「시작 ~ 끝」 두 칸을 한 줄에 둔다(날짜 · 시각). 칸마다 이름과 자동화 id를 따로 단다. 오류는 같은 줄 아래에 쓴다
 function Add-WtScheduleRange([string]$Key, [string]$EndKey, [string]$Label, [string]$From, [string]$To, [string]$FromName, [string]$ToName) {
@@ -993,6 +1012,118 @@ function New-WtScheduleCombo([string[]]$Values, [string]$Selected) {
 }
 function New-WtScheduleCheck([string]$Label, [bool]$Checked) {
     $checkBox = [Windows.Controls.CheckBox]::new(); Set-WtStyle $checkBox Check; $checkBox.Content = $Label; $checkBox.IsChecked = $Checked; $checkBox
+}
+
+# ---- 알람 자세히 (설계 16.4 · 디자인 8절 일정) ------------------------------------------------------
+# 알람 칸 아래 접힌 줄. 펼치면 소리 · 다시 알림 · 늦게 켰을 때 · (하루 종일만) 기준 시각. 비워 둔 값(전역 따름)은 $null로 저장한다.
+# 회차(이 회차만)의 알람 목록은 일정의 목록을 통째로 대신하므로, 이 회차만 저장할 때는 네 값을 모두 적는다(보이는 값 그대로)
+
+function Get-WtScheduleLateLabel([int]$Minutes) {
+    if ($Minutes -le 0) { '울리지 않음' } elseif ($Minutes % 60 -eq 0) { "$($Minutes / 60)시간" } else { "${Minutes}분" }
+}
+
+# 회차(또는 일정)의 첫 알람에 적힌 덮어쓰기 값. 새 일정 · 알람 없음이면 모두 $null(전역 따름)
+function Get-WtScheduleAlarmOptionValues($Occurrence) {
+    $opt = if ($Occurrence -and @($Occurrence.AlarmOptions).Count) { @($Occurrence.AlarmOptions)[0] } else { $null }
+    if (-not $opt) { return @{ Sound = $null; Snooze = $null; Late = $null; AllDayAt = $null } }
+    @{ Sound = $opt.Sound; Snooze = $opt.Snooze; Late = $opt.Late
+        AllDayAt = $(if ($null -ne $opt.AllDayAt) { $opt.AllDayAt.ToString('hh\:mm', $script:inv) } else { $null }) }
+}
+
+function Add-WtScheduleAlarmMore($Occurrence) {
+    $f = $script:form
+    $values = Get-WtScheduleAlarmOptionValues $Occurrence
+    $f.AlarmOptions = $values
+    # 알람 칸 묶음(라벨 · 고르기 칸 · 오류 줄) 끝에 넣어 알람 칸 아래 4에 놓는다
+    $row = $f.Rows.alarm
+    $toggle = [Windows.Controls.Button]::new(); Set-WtStyle $toggle 'Schedule.AlarmMore'
+    # 남는 폭을 요약이 쓰고, 넘치면 요약 끝을 말줄임한다(사이드바 폭 안)
+    $line = [Windows.Controls.DockPanel]::new(); $line.LastChildFill = $true
+    $chevron = New-WtIcon 0xE76C; Set-WtStyle $chevron 'Schedule.AlarmMoreIcon'
+    $summary = New-WtText '' 'Schedule.AlarmMoreSummary'
+    foreach ($child in $chevron, (New-WtText '알람 자세히' 'Schedule.AlarmMoreText')) { [Windows.Controls.DockPanel]::SetDock($child, 'Left'); [void]$line.Children.Add($child) }
+    [void]$line.Children.Add($summary)
+    $toggle.Content = $line
+    [Windows.Automation.AutomationProperties]::SetName($toggle, '알람 자세히')
+    [Windows.Automation.AutomationProperties]::SetAutomationId($toggle, 'Schedule-alarmMore')
+    $toggle.Add_Click({ Switch-WtScheduleAlarmMore })
+    $panel = New-WtStack; Set-WtStyle $panel 'Schedule.AlarmMorePanel'; $panel.Visibility = 'Collapsed'
+    [void]$row.Children.Add($toggle); [void]$row.Children.Add($panel)
+    $f.AlarmMore = @{ Toggle = $toggle; Chevron = $chevron; Summary = $summary; Panel = $panel; Open = $false }
+
+    $globalSound = if ([bool](Get-WtSetting 'notice.sound')) { '켬' } else { '끔' }
+    $soundItems = @("전역 따름 ($globalSound)", '켬', '끔')
+    $soundPick = if ($values.Sound -eq $true) { '켬' } elseif ($values.Sound -eq $false) { '끔' } else { $soundItems[0] }
+    Add-WtScheduleField alarmSound '소리' (New-WtScheduleCombo $soundItems $soundPick) $panel
+    $snoozeItems = @("전역 따름 ($([int](Get-WtSetting 'notice.snooze'))분)") + @($script:snoozeChoices | ForEach-Object { "${_}분" })
+    $snoozePick = if ($null -ne $values.Snooze) { "$($values.Snooze)분" } else { $snoozeItems[0] }
+    if ($snoozePick -notin $snoozeItems) { $snoozeItems += $snoozePick }
+    Add-WtScheduleField alarmSnooze '다시 알림' (New-WtScheduleCombo $snoozeItems $snoozePick) $panel
+    $lateItems = @("전역 따름 ($(Get-WtScheduleLateLabel ([int](Get-WtSetting 'schedule.alarmLate'))))") + @($script:lateChoices.Keys)
+    $latePick = if ($null -ne $values.Late) { Get-WtScheduleLateLabel $values.Late } else { $lateItems[0] }
+    if ($latePick -notin $lateItems) { $lateItems += $latePick }
+    Add-WtScheduleField alarmLate '늦게 켰을 때' (New-WtScheduleCombo $lateItems $latePick) $panel
+    # 기준 시각: 비우면 전역 따름(예시 글자). 하루 종일 일정만 보인다
+    $dayBox = New-WtScheduleInput $(if ($values.AllDayAt) { $values.AllDayAt } else { '' }); $dayBox.Width = 120
+    $dayHost = [Windows.Controls.Grid]::new(); $dayHost.HorizontalAlignment = 'Left'
+    $hint = New-WtText '전역 따름' 'Input.Hint'
+    [void]$dayHost.Children.Add($dayBox); [void]$dayHost.Children.Add($hint)
+    $dayBox.Tag = $hint; $hint.Visibility = if ($dayBox.Text) { 'Collapsed' } else { 'Visible' }
+    $dayBox.ToolTip = '비우면 설정의 하루 종일 알람 기준(기본 업무 시작)을 따릅니다. 예: 08:30'
+    $dayBox.Add_TextChanged({ param($s, $e) $s.Tag.Visibility = if ($s.Text) { 'Collapsed' } else { 'Visible' }; Update-WtScheduleAlarmSummary })
+    Add-WtScheduleField alarmDayAt '기준 시각' $dayHost $panel
+    $f.Fields.alarmDayAt = $dayBox
+    [Windows.Automation.AutomationProperties]::SetName($dayBox, '기준 시각'); [Windows.Automation.AutomationProperties]::SetAutomationId($dayBox, 'Schedule-alarmDayAt')
+    foreach ($key in 'alarm', 'alarmSound', 'alarmSnooze', 'alarmLate') { $f.Fields[$key].Add_SelectionChanged({ Update-WtScheduleFormFields }) }
+}
+
+function Switch-WtScheduleAlarmMore {
+    $more = $script:form.AlarmMore
+    if (-not $more) { return }
+    $more.Open = -not $more.Open
+    $more.Panel.Visibility = if ($more.Open) { 'Visible' } else { 'Collapsed' }
+    $more.Chevron.Text = [string][char]$(if ($more.Open) { 0xE70D } else { 0xE76C })
+}
+
+# 지금 고른 값(전역 따름 = $null). 기준 시각은 글 그대로(검사는 저장할 때)
+function Get-WtScheduleFormAlarmOptions {
+    $fields = $script:form.Fields
+    $soundText = [string]$fields.alarmSound.SelectedItem
+    $snoozeText = [string]$fields.alarmSnooze.SelectedItem
+    $lateText = [string]$fields.alarmLate.SelectedItem
+    $dayText = $fields.alarmDayAt.Text.Trim()
+    @{
+        Sound = $(if ($soundText -ceq '켬') { $true } elseif ($soundText -ceq '끔') { $false } else { $null })
+        Snooze = $(if ($snoozeText -match '^(\d+)분$') { [int]$Matches[1] } else { $null })
+        Late = $(if ($lateText -like '전역 따름*') { $null } elseif ($lateText -ceq '울리지 않음') { 0 } elseif ($lateText -match '^(\d+)시간$') { [int]$Matches[1] * 60 } elseif ($lateText -match '^(\d+)분$') { [int]$Matches[1] } else { $null })
+        AllDayAt = $(if ($dayText) { $dayText } else { $null })
+    }
+}
+
+# 접힌 줄 뒤 요약: 덮어쓴 값만 「 · 소리 끔 · 다시 알림 10분」처럼
+function Update-WtScheduleAlarmSummary {
+    $f = $script:form
+    if (-not $f -or -not $f.AlarmMore) { return }
+    if (-not $f.AlarmMore.Toggle.IsEnabled) { $f.AlarmMore.Summary.Text = ''; return }
+    $now = Get-WtScheduleFormAlarmOptions
+    $parts = @(
+        $(if ($null -ne $now.Sound) { if ($now.Sound) { '소리 켬' } else { '소리 끔' } })
+        $(if ($null -ne $now.Snooze) { "다시 알림 $($now.Snooze)분" })
+        $(if ($null -ne $now.Late) { "늦게 켰을 때 $(Get-WtScheduleLateLabel $now.Late)" })
+        $(if ($f.Fields.allDay.IsChecked -and $now.AllDayAt) { "기준 $($now.AllDayAt)" })
+    ) | Where-Object { $_ }
+    $f.AlarmMore.Summary.Text = if ($parts) { ' · ' + ($parts -join ' · ') } else { '' }
+}
+
+# 저장할 알람 칸: 일정 저장은 바뀐 칸만, 회차 저장(-All)은 네 칸 모두. 칸 이름은 저장 형식 그대로(sound · snooze · late · allDayAt)
+function Get-WtScheduleAlarmOptionPatch([hashtable]$Loaded, [hashtable]$Chosen, [bool]$AllDay, [switch]$All) {
+    $patch = @{}
+    foreach ($pair in @(@('Sound', 'sound'), @('Snooze', 'snooze'), @('Late', 'late'), @('AllDayAt', 'allDayAt'))) {
+        if ($pair[0] -ceq 'AllDayAt' -and -not $AllDay -and -not $All) { continue }   # 시각 일정은 기준 시각을 건드리지 않는다
+        $value = $Chosen[$pair[0]]
+        if ($All -or "$value" -cne "$($Loaded[$pair[0]])") { $patch[$pair[1]] = $value }
+    }
+    $patch
 }
 # ---- 관련 메모 (2단계, 설계 13장). 다른 탭은 코어 등록 목록(Get-WtRelatedSource)으로만 부른다 ----
 
@@ -1182,9 +1313,11 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
         $repeatOptions = @('없음', '매일', '매주', '격주', '매월'); if ($repeat -notin $repeatOptions) { $repeatOptions += $repeat }
         Add-WtScheduleField repeat '반복' (New-WtScheduleCombo $repeatOptions $repeat)
         Add-WtScheduleField until '끝나는 날' (New-WtScheduleInput $(if ($Occurrence -and $Occurrence.Entry.Repeat.Until) { ConvertTo-WtDateText $Occurrence.Entry.Repeat.Until } else { '' }))
-        $alarm = if ($Occurrence -and @($Occurrence.Alarms).Count) { Format-WtAlarm $Occurrence.Alarms[0] } else { '없음' }
-        $alarmOptions = @('없음', '5분 전', '10분 전', '30분 전', '1시간 전'); if ($alarm -notin $alarmOptions) { $alarmOptions += $alarm }
+        # 새 일정은 설정 「새 일정 기본 알람」, 기존 일정은 저장된 첫 알람(없으면 없음)
+        $alarm = if (-not $Occurrence) { Get-WtScheduleDefaultAlarmText } elseif (@($Occurrence.Alarms).Count) { Format-WtAlarm $Occurrence.Alarms[0] } else { '없음' }
+        $alarmOptions = @($script:alarmChoices.Keys); if ($alarm -notin $alarmOptions) { $alarmOptions += $alarm }
         Add-WtScheduleField alarm '알람' (New-WtScheduleCombo $alarmOptions $alarm)
+        Add-WtScheduleAlarmMore $Occurrence
         # 태그(설계 14.1): 계열 전체의 칸. 쉼표 · 공백으로 나누고 #은 없어도 된다
         Add-WtScheduleField tags '태그' (New-WtScheduleInput $(if ($Occurrence) { @($Occurrence.Entry.Tags) -join ', ' } else { '' }))
         $script:form.Fields.tags.ToolTip = '쉼표로 나눠 씁니다. 예: 점검, 작업'
@@ -1234,6 +1367,15 @@ function Update-WtScheduleFormFields {
         } else { $f.Fields.allDay.IsEnabled = $true; $f.Fields.allDay.ToolTip = $null }
         foreach ($key in 'start', 'end') { $f.Fields[$key].IsEnabled = -not $f.Fields.allDay.IsChecked }
         $f.Rows.until.Visibility = if ($f.Fields.repeat.SelectedItem -ne '없음') { 'Visible' } else { 'Collapsed' }
+        if ($f.AlarmMore) {
+            # 알람이 없음이면 알람 자세히를 접고 끈다(이유는 툴팁). 기준 시각은 하루 종일 일정만
+            $none = [string]$f.Fields.alarm.SelectedItem -ceq '없음'
+            if ($none -and $f.AlarmMore.Open) { Switch-WtScheduleAlarmMore }
+            $f.AlarmMore.Toggle.IsEnabled = -not $none
+            $f.AlarmMore.Toggle.ToolTip = if ($none) { '알람을 고르면 바꿀 수 있습니다.' } else { $null }
+            $f.Rows.alarmDayAt.Visibility = if ($f.Fields.allDay.IsChecked) { 'Visible' } else { 'Collapsed' }
+            Update-WtScheduleAlarmSummary
+        }
     } else {
         $f.Rows.days.Visibility = if ($f.Fields.freq.SelectedItem -eq '요일') { 'Visible' } else { 'Collapsed' }
         $f.Rows.time.Visibility = if ($f.Fields.freq.SelectedItem -ne '시간마다') { 'Visible' } else { 'Collapsed' }
@@ -1281,7 +1423,17 @@ function Save-WtScheduleForm([string]$Scope) {
             }
             $alarms = if ($fields.alarm.SelectedItem -eq '없음') { @() } elseif ($f.Occurrence -and $fields.alarm.SelectedItem -eq (Format-WtAlarm @($f.Occurrence.Alarms)[0])) {
                 @($f.Occurrence.Alarms | ForEach-Object { @{ before = $_ } })
-            } else { @(@{ before = $(switch ($fields.alarm.SelectedItem) { '5분 전' { 5 }; '10분 전' { 10 }; '30분 전' { 30 }; '1시간 전' { 60 } }) }) }
+            } else { @(@{ before = [int]$script:alarmChoices[[string]$fields.alarm.SelectedItem] }) }
+            # 알람 자세히(설계 16.4): 일정 저장은 바뀐 칸만, 이 회차만은 보이는 네 칸 모두(회차 목록이 일정 목록을 대신함)
+            if ($f.AlarmMore -and $alarms.Count) {
+                $chosen = Get-WtScheduleFormAlarmOptions
+                if ($fields.allDay.IsChecked -and $chosen.AllDayAt -and $null -eq (ConvertFrom-WtTimeText $chosen.AllDayAt)) {
+                    if (-not $f.AlarmMore.Open) { Switch-WtScheduleAlarmMore }
+                    Set-WtScheduleFormError alarmDayAt '기준 시각은 HH:mm 형식으로 입력하세요.'; return
+                }
+                $optionPatch = Get-WtScheduleAlarmOptionPatch $f.AlarmOptions $chosen ([bool]$fields.allDay.IsChecked) -All:($Scope -eq '이 회차만')
+                foreach ($a in $alarms) { foreach ($k in $optionPatch.Keys) { $a[$k] = $optionPatch[$k] } }
+            }
             $dayText = ConvertTo-WtDateText $date
             $tags = @(ConvertFrom-WtScheduleTagText $fields.tags.Text)
             $patch = @{ title = $fields.title.Text; start = @{ date = $dayText; time = $(if ($null -ne $start) { $fields.start.Text } else { $null }) }
@@ -1422,6 +1574,163 @@ function Open-WtScheduleArgs($OpenArgs) {
     } elseif ($date) { Set-WtScheduleDate $date; if ($OpenArgs.RoutineId) { Show-WtScheduleForm -Kind routine -Id $OpenArgs.RoutineId } }
 }
 
+# ---- 알람 울리기 (설계 16장) ----------------------------------------------------------------------
+# 코어가 15초마다 부른다(Register-WtAddon -Tick). 화면에 묶지 않아서 트레이로 숨거나 다른 탭을 볼 때도 돈다.
+# 판정은 ScheduleData의 Get-WtScheduleAlarms, 알림 창 · 소리는 코어 알림 부품(Show-WtNotice). 잠시 끈 동안 울릴 알람은 기록만 남겨 버린다.
+# 돌려주는 값: 이번 틱에 받아들인 알람 목록(검사용)
+function Invoke-WtScheduleAlarmTick([datetime]$Now = (Get-Date)) {
+    $stamp = Get-WtStamp $Now
+    $data = Get-WtScheduleData
+    if ($data.Error) { throw $data.Error }
+    if (-not $script:alarmState) { $script:alarmState = Open-WtScheduleAlarmStore }
+    # 상태 파일을 못 읽으면 기록 없이 판정한다(이번 실행 안에서는 alarmSeen이 두 번 울리지 않게 막는다)
+    $state = if ($script:alarmState.State -eq 'error') { $null } else { $script:alarmState }
+    $done = try { Get-WtEventDone } catch { $null }   # 체크 기록을 못 읽어도 알람은 울린다
+    $result = Get-WtScheduleAlarms -Now $stamp -Previous $script:alarmPrevious -Entries $data.Entries -StateStore $state -Done $done `
+        -Late ([int](Get-WtSetting 'schedule.alarmLate')) -AllDayAt ([string](Get-WtSetting 'schedule.alarmAllDay'))
+    $script:alarmPrevious = $stamp
+    if (-not $result.Success) { return @() }   # 시계가 뒤로 갔으면 이번 틱만 건너뛴다(다음 틱은 새 시각부터)
+    $paused = (Get-WtNoticePause $Now).Paused
+    $accepted = [System.Collections.Generic.List[object]]::new()
+    foreach ($alarm in $result.Alarms) {
+        if (-not $script:alarmSeen.Add("$($alarm.Key)|$($alarm.Due.Ticks)")) { continue }
+        $accepted.Add($alarm)
+        if (-not $paused) { [void](Show-WtNotice (New-WtScheduleAlarmNotice $alarm) $Now) }
+    }
+    if ($accepted.Count -and $state) {
+        try { $script:alarmState = (Save-WtScheduleAlarms $state $accepted.ToArray() -At $stamp).Store }
+        catch { $script:alarmState = $null; throw }   # 다음 틱에 다시 연다
+    }
+    $accepted.ToArray()
+}
+
+# 알림 창의 시각 줄(디자인 7절 「알람 창」): 14:00 · 10분 뒤 / 지금 / 5분 지남, 하루 종일, 오늘이 아니면 날짜를 앞에
+function Format-WtScheduleAlarmWhen([datetime]$Start, [bool]$AllDay, [datetime]$Now = (Get-Date)) {
+    $day = if ($Start.Date -eq $Now.Date) { '' } else { $Start.ToString('M월 d일 (ddd) ', $script:ko) }
+    if ($AllDay) { return "${day}하루 종일" }
+    $span = $Start - $Now
+    $relative = if ($span.TotalSeconds -gt 0) {
+        $minutes = [int][Math]::Ceiling($span.TotalMinutes)
+        if ($minutes -lt 60) { "${minutes}분 뒤" }
+        elseif ($minutes -lt 1440) { $h = [Math]::Floor($minutes / 60); $m = $minutes % 60; if ($m) { "${h}시간 ${m}분 뒤" } else { "${h}시간 뒤" } }
+        else { "$([Math]::Floor($minutes / 1440))일 뒤" }
+    } elseif (-$span.TotalMinutes -lt 1) { '지금' }
+    else {
+        $minutes = [int][Math]::Floor(-$span.TotalMinutes)
+        if ($minutes -lt 60) { "${minutes}분 지남" } else { $h = [Math]::Floor($minutes / 60); $m = $minutes % 60; if ($m) { "${h}시간 ${m}분 지남" } else { "${h}시간 지남" } }
+    }
+    "$day$($Start.ToString('HH:mm', $script:inv)) · $relative"
+}
+
+# 알람 하나 → 알림 창 내용(core\Notice.psm1 Show-WtNotice의 Spec). 소리 · 다시 알림은 알람의 덮어쓰기 값, 없으면 전역
+function New-WtScheduleAlarmNotice($Alarm) {
+    $sound = if ($null -ne $Alarm.Sound) { [bool]$Alarm.Sound } else { [bool](Get-WtSetting 'notice.sound') }
+    @{
+        Key = [string]$Alarm.Key; Title = [string]$Alarm.Title
+        Data = @{ Start = $Alarm.Start; AllDay = [bool]$Alarm.AllDay; Id = [string]$Alarm.Id; OriginalDate = [string]$Alarm.OriginalDate; Restore = $null }
+        Refresh = { param($Data, $When) Format-WtScheduleAlarmWhen $Data.Start $Data.AllDay $When }
+        Open = @{ Id = 'schedule'; Args = @{ Date = $Alarm.Start.Date; Id = [string]$Alarm.Id } }
+        Snooze = $Alarm.Snooze
+        Sound = $sound
+        Menu = @(@{ Header = '이 일정 알람 끄기'; Action = { param($Notice) Disable-WtScheduleNoticeAlarm $Notice } })
+    }
+}
+
+# 알림 창 더 보기의 「이 일정 알람 끄기」: 그 일정의 알람을 없음으로(반복이면 계열 전체 = 이후 모두, 지난 회차는 어차피 울리지 않음).
+# 알람 칸의 다른 값(소리 등)은 남기고 before만 끈다. 실행 취소는 끄기 전 before를 되돌린다
+function Disable-WtScheduleNoticeAlarm($Notice) {
+    $id = [string]$Notice.Spec.Data.Id
+    $data = Get-WtScheduleData
+    $item = @($data.Items | Where-Object { (Test-WtRecordObject $_) -and [string](Get-WtField $_ 'id') -ceq $id }) | Select-Object -First 1
+    if (-not $item) { Set-WtNoticeMessage $Notice '일정을 찾지 못했습니다.'; return }
+    $stored = Get-WtField $item 'alarms'   # 목록 값은 한 덩어리로 돌려받는다(@()로 감싸면 한 겹 더 싸임)
+    $befores = @(foreach ($alarmItem in @($stored)) { if (Test-WtRecordObject $alarmItem) { Get-WtField $alarmItem 'before' } else { $null } })
+    try { $r = Save-WtScheduleItem $data.Store @{ alarms = @() } -Id $id } catch { Set-WtNoticeMessage $Notice $_.Exception.Message; return }
+    if (-not $r.Success) { Set-WtNoticeMessage $Notice $r.Reason; return }
+    $Notice.Spec.Data.Restore = $befores
+    Set-WtNoticeMessage $Notice '이 일정 알람을 껐습니다.' -Undo { param($Target) Restore-WtScheduleNoticeAlarm $Target }
+    if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges }
+}
+function Restore-WtScheduleNoticeAlarm($Notice) {
+    $id = [string]$Notice.Spec.Data.Id
+    $patch = @(foreach ($before in @($Notice.Spec.Data.Restore)) { @{ before = $before } })
+    $r = Save-WtScheduleItem (Get-WtScheduleData).Store @{ alarms = $patch } -Id $id
+    if (-not $r.Success) { return $r.Reason }
+    '알람을 다시 켰습니다.'
+}
+
+# 설정 → 일반 → 알림에 넣는 일정 탭의 행(Register-WtAddon -SettingRows): 새 일정 기본 알람 · 하루 종일 알람 기준 · 늦게 켰을 때
+function New-WtScheduleAlarmSettingRows {
+    $default = [Windows.Controls.ComboBox]::new(); Set-WtStyle $default 'Setting.Combo'
+    foreach ($name in $script:alarmChoices.Keys) { [void]$default.Items.Add($name) }
+    $current = Get-WtScheduleDefaultAlarmText
+    if (-not $default.Items.Contains($current)) { [void]$default.Items.Add($current) }
+    $default.SelectedItem = $current
+    $default.Add_SelectionChanged({
+            param($s, $e)
+            $text = [string]$s.SelectedItem
+            $minutes = if ($script:alarmChoices.Contains($text)) { [int]$script:alarmChoices[$text] } elseif ($text -match '^(\d+)분 전$') { [int]$Matches[1] } else { return }
+            Set-WtSetting 'schedule.alarmDefault' $minutes
+        })
+    [Windows.Automation.AutomationProperties]::SetName($default, '새 일정 기본 알람')
+
+    # 하루 종일 알람 기준: 업무 시작 시각(그날 규칙) · 직접(시각 입력, 직접일 때만 켬). 틀린 시각은 칸 아래 오류 줄
+    $dayRow = New-WtStack Vertical 4
+    $dayLine = New-WtStack Horizontal 8
+    $direct = [string](Get-WtSetting 'schedule.alarmAllDay')
+    $mode = [Windows.Controls.ComboBox]::new(); Set-WtStyle $mode 'Setting.Combo'
+    foreach ($name in '업무 시작 시각', '직접') { [void]$mode.Items.Add($name) }
+    $timeBox = [Windows.Controls.TextBox]::new(); Set-WtStyle $timeBox 'Setting.Time'
+    $timeBox.Text = if ($direct) { $direct } else { [string](Get-WtWorkHours)['work.start'] }
+    [Windows.Automation.AutomationProperties]::SetName($timeBox, '하루 종일 알람 기준 시각')
+    $dayError = New-WtText '' 'T.Error'; $dayError.Visibility = 'Collapsed'
+    $mode.Tag = @{ Time = $timeBox; Error = $dayError }
+    $timeBox.Tag = @{ Mode = $mode; Error = $dayError }
+    $mode.SelectedItem = if ($direct) { '직접' } else { '업무 시작 시각' }
+    $timeBox.IsEnabled = [bool]$direct
+    $mode.ToolTip = '하루 종일 일정의 「10분 전」은 이 시각의 10분 전입니다.'
+    $mode.Add_SelectionChanged({
+            param($s, $e)
+            $t = $s.Tag
+            if ([string]$s.SelectedItem -ceq '직접') { $t.Time.IsEnabled = $true; Save-WtScheduleAllDaySetting $t.Time; return }
+            $t.Time.IsEnabled = $false; $t.Error.Visibility = 'Collapsed'
+            $t.Time.Text = [string](Get-WtWorkHours)['work.start']
+            Set-WtSetting 'schedule.alarmAllDay' ''
+        })
+    $timeBox.Add_LostFocus({ param($s, $e) if ($s.IsEnabled) { Save-WtScheduleAllDaySetting $s } })
+    $timeBox.Add_KeyDown({ param($s, $e) if ($e.Key -eq [Windows.Input.Key]::Enter) { Save-WtScheduleAllDaySetting $s } })
+    [void](Add-WtChild $dayLine $mode); [void](Add-WtChild $dayLine $timeBox)
+    [void](Add-WtChild $dayRow $dayLine); [void](Add-WtChild $dayRow $dayError)
+
+    $late = [Windows.Controls.ComboBox]::new(); Set-WtStyle $late 'Setting.ComboWide'
+    $lateNames = [ordered]@{ '울리지 않음' = 0; '시작 뒤 10분까지 울림' = 10; '시작 뒤 30분까지 울림' = 30; '시작 뒤 1시간까지 울림' = 60 }
+    foreach ($name in $lateNames.Keys) { [void]$late.Items.Add($name) }
+    $lateNow = [int](Get-WtSetting 'schedule.alarmLate')
+    $latePick = @($lateNames.Keys | Where-Object { $lateNames[$_] -eq $lateNow }) | Select-Object -First 1
+    if (-not $latePick) { $latePick = "시작 뒤 $(Get-WtScheduleLateLabel $lateNow)까지 울림"; [void]$late.Items.Add($latePick) }
+    $late.SelectedItem = $latePick
+    $late.Add_SelectionChanged({
+            param($s, $e)
+            $text = [string]$s.SelectedItem
+            $minutes = if ($text -ceq '울리지 않음') { 0 } elseif ($text -match '(\d+)시간') { [int]$Matches[1] * 60 } elseif ($text -match '(\d+)분') { [int]$Matches[1] } else { return }
+            Set-WtSetting 'schedule.alarmLate' $minutes
+        })
+    [Windows.Automation.AutomationProperties]::SetName($late, '늦게 켰을 때')
+    @(
+        @{ Group = '알림'; Label = '새 일정 기본 알람'; Control = $default }
+        @{ Group = '알림'; Label = '하루 종일 알람 기준'; Control = $dayRow }
+        @{ Group = '알림'; Label = '늦게 켰을 때'; Control = $late; Note = '앱이 꺼져 있는 동안 지난 알람을 나중에 울릴지 정합니다.' }
+    )
+}
+function Save-WtScheduleAllDaySetting($Box) {
+    $text = $Box.Text.Trim()
+    if ($null -eq (ConvertFrom-WtTimeText $text)) {
+        $Box.Tag.Error.Text = '시각은 HH:mm 형식으로 입력하세요.'; $Box.Tag.Error.Visibility = 'Visible'; return
+    }
+    $Box.Tag.Error.Visibility = 'Collapsed'
+    if ([string](Get-WtSetting 'schedule.alarmAllDay') -cne $text) { Set-WtSetting 'schedule.alarmAllDay' $text }
+}
+
 # 메뉴 개수 = 할 일 수(기한 지남 + 오늘 남은 일정 · 루틴 + 마감 임박, 설계 14.5). 보기 단추의 숫자와 같다
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder } -Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
-Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -Tick { param($Now) [void](Invoke-WtScheduleAlarmTick $Now) } -TickSeconds 15 -SettingRows { New-WtScheduleAlarmSettingRows } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder }-Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
+Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel, Invoke-WtScheduleAlarmTick, Format-WtScheduleAlarmWhen

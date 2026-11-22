@@ -1650,6 +1650,10 @@ $script:stylesXaml = @'
   <Style x:Key="Setting.Row" TargetType="Grid"><Setter Property="Margin" Value="0,6"/><Setter Property="MinHeight" Value="{DynamicResource F.Height.Control}"/></Style>
   <Style x:Key="Setting.Label" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,0,12,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Setting.Time" TargetType="TextBox" BasedOn="{StaticResource Input}"><Setter Property="Width" Value="120"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="FontFamily" Value="{DynamicResource Font.Mono}"/></Style>
+  <!-- 설정 묶음 이름(일반 탭의 「알림」): 위 행과 사이 24(행 아래 6 + 18), F.BodyStrong -->
+  <Style x:Key="Setting.Group" TargetType="TextBlock" BasedOn="{StaticResource T.Strong}"><Setter Property="Margin" Value="0,18,0,0"/></Style>
+  <Style x:Key="Setting.Combo" TargetType="ComboBox" BasedOn="{StaticResource Combo}"><Setter Property="Width" Value="160"/><Setter Property="HorizontalAlignment" Value="Left"/></Style>
+  <Style x:Key="Setting.ComboWide" TargetType="ComboBox" BasedOn="{StaticResource Combo}"><Setter Property="Width" Value="240"/><Setter Property="HorizontalAlignment" Value="Left"/></Style>
   <Style x:Key="Btn.Compact" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.Compact}"/>
 
@@ -1944,6 +1948,26 @@ $script:stylesXaml = @'
   <Style x:Key="Schedule.RangeDash" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="8,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
   <Style x:Key="Schedule.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/><Setter Property="Margin" Value="0,4,0,0"/></Style>
   <Style x:Key="Schedule.Separator" TargetType="Border"><Setter Property="Height" Value="16"/></Style>
+  <!-- 알람 자세히(디자인 8절 일정): 알람 칸 아래 4의 접힌 줄 28 · 바탕 없음 · Surface 조작색 · 모서리 4, 펼치면 아래 8부터 칸 넷 -->
+  <Style x:Key="Schedule.AlarmMore" TargetType="Button">
+    <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Height" Value="{DynamicResource F.Height.Compact}"/><Setter Property="Margin" Value="0,4,0,0"/>
+    <Setter Property="Padding" Value="4,0,8,0"/><Setter Property="HorizontalAlignment" Value="Stretch"/><Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+      <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}" Padding="{TemplateBinding Padding}">
+        <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False"/>
+      </Border>
+    </ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Schedule.AlarmMoreIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="FontSize" Value="10"/><Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/></Style>
+  <Style x:Key="Schedule.AlarmMoreText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Margin" Value="4,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/></Style>
+  <Style x:Key="Schedule.AlarmMoreSummary" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="TextWrapping" Value="NoWrap"/></Style>
+  <Style x:Key="Schedule.AlarmMorePanel" TargetType="StackPanel"><Setter Property="Margin" Value="0,8,0,0"/></Style>
   <Style x:Key="Schedule.EventRow" TargetType="Button" BasedOn="{StaticResource Btn}">
     <Setter Property="Height" Value="Auto"/><Setter Property="MinHeight" Value="32"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
@@ -1991,6 +2015,30 @@ $script:stylesXaml = @'
   <Style x:Key="Memo.PickEmpty" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="IsHitTestVisible" Value="False"/></Style>
   <!-- 메모 새 창(New-WtSideWindow): 창 바탕 위 흰 카드(가장자리 8, 위 4), 글 위 24 · 좌우 44(창이 480보다 좁으면 20), 제목 F.Memo.H1 -->
   <Style x:Key="SideWindow.Body" TargetType="Border" BasedOn="{StaticResource Panel.Surface}"><Setter Property="Margin" Value="8,4,8,8"/></Style>
+  <!-- 알람 창(core\Notice.psm1, 디자인 7절 「알람 창」): 폭 360 · B.Bg.Raised · 선 1 B.Border.Default · 머리 32 · 누르는 본문 · 단추 줄.
+       선 1 안쪽 기준이라 창 가장자리 값에서 1을 뺀다: 머리 왼쪽 16 → 15 · 오른쪽 8 → 7, 본문 좌우 8 → 7, 단추 오른쪽 · 아래 16 → 15 -->
+  <Style x:Key="Notice.Frame" TargetType="Border"><Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/><Setter Property="BorderBrush" Value="{DynamicResource B.Border.Default}"/><Setter Property="BorderThickness" Value="1"/></Style>
+  <Style x:Key="Notice.Head" TargetType="DockPanel"><Setter Property="Height" Value="32"/><Setter Property="Margin" Value="15,0,7,0"/></Style>
+  <Style x:Key="Notice.HeadIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="Foreground" Value="{DynamicResource B.Accent}"/></Style>
+  <Style x:Key="Notice.HeadText" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="Notice.HeadButton" TargetType="Button" BasedOn="{StaticResource Btn.Icon}"><Setter Property="Margin" Value="4,0,0,0"/></Style>
+  <Style x:Key="Notice.Body" TargetType="Button">
+    <Setter Property="Background" Value="Transparent"/><Setter Property="Margin" Value="7,0,7,0"/><Setter Property="Padding" Value="8,4"/>
+    <Setter Property="Cursor" Value="Hand"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Outside}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+      <Border Background="{TemplateBinding Background}" CornerRadius="{DynamicResource F.Radius.Control}" Padding="{TemplateBinding Padding}">
+        <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" RecognizesAccessKey="False"/>
+      </Border>
+    </ControlTemplate></Setter.Value></Setter>
+    <Style.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <Trigger Property="IsPressed" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/></Trigger>
+    </Style.Triggers>
+  </Style>
+  <Style x:Key="Notice.Title" TargetType="TextBlock" BasedOn="{StaticResource T.Dialog}"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Notice.Detail" TargetType="TextBlock" BasedOn="{StaticResource T.Body}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/><Setter Property="Margin" Value="0,4,0,0"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/></Style>
+  <Style x:Key="Notice.Buttons" TargetType="StackPanel"><Setter Property="Orientation" Value="Horizontal"/><Setter Property="HorizontalAlignment" Value="Right"/><Setter Property="Margin" Value="0,12,15,15"/></Style>
+  <Style x:Key="Notice.Button" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Margin" Value="8,0,0,0"/></Style>
   <Style x:Key="SideWindow.ToolText" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0,0,0"/></Style>
   <Style x:Key="SideWindow.ToolIcon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}"><Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/></Style>
   <Style x:Key="MemoWindow.Text" TargetType="StackPanel"><Setter Property="Margin" Value="44,24,44,24"/><Setter Property="MaxWidth" Value="680"/></Style>

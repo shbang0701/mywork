@@ -19,6 +19,12 @@ $script:defaults = @{
     'work.lunchEnd'   = '13:00'
     'work.halfDay'    = ''       # 반차 나누는 시각 HH:mm. 비면 정규 시간(점심 뺌)의 절반 지점
     'work.periods'    = @()      # 뒤 규칙들 @{ from = 'yyyy-MM-dd'; days; start; end; lunchStart; lunchEnd; halfDay }
+    # 알림(core\Notice.psm1, 디자인 8절 「설정·도움말」의 알림 묶음)
+    'notice.sound'    = $true    # 알람 소리 켜기
+    'notice.soundFile' = ''      # Windows 소리 폴더(C:\Windows\Media)의 .wav 이름. 비면 있는 것 중 기본(Get-WtNoticeSoundName)
+    'notice.volume'   = 70       # 알람 소리 볼륨 0~100
+    'notice.snooze'   = 5        # 다시 알림 간격(분) 5 · 10 · 15 · 30
+    'notice.pausedUntil' = ''    # 알람 잠시 끄기: '' 켬 · 'manual' 다시 켤 때까지 · 앱 시각(그때까지)
 }
 # 규칙 하나를 이루는 키. 기간 원소의 칸 이름은 앞의 'work.'을 뗀 것이다
 $script:workKeys = @('work.days', 'work.start', 'work.end', 'work.lunchStart', 'work.lunchEnd', 'work.halfDay')
