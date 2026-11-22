@@ -37,6 +37,7 @@ $script:rowGetters = [scriptblock[]]@(
     { if ($this.Snippet) { "$($this.Stamp) · $($this.Snippet)" } else { $this.Stamp } }
 )
 $script:quickOpen = $false
+$script:listRefreshQueued = $false   # 목록 다시 그리기를 예약했는지 (Request-WtMemoListUpdate)
 $script:memoIndex = $null    # 검색 색인. 다 만들어지기 전에는 $script:indexBuild가 들고 있다
 $script:indexBuild = $null
 $script:indexTimer = $null
@@ -142,10 +143,11 @@ function Get-WtMemoTags([string]$Body) {
     $seen.ToArray()
 }
 
-# 메모 하나의 제목 · 본문을 바꾼다. 제목이 비면 저장 시각을 제목으로 쓴다 (예전 WorkTool과 같음)
+# 메모 하나의 제목 · 본문을 바꾼다. 제목이 비면 저장 시각을 제목으로 쓴다 (예전 WorkTool과 같음).
+# 본문도 비었으면 시각을 채우지 않고 빈 메모로 둔다: 빈 메모는 닫힐 때 지운다(Remove-WtMemoIfEmpty)
 function Set-WtMemoContent($Memo, [string]$Title, [string]$Body, [datetime]$When = (Get-Date)) {
     $t = $Title.Trim()
-    if (-not $t) { $t = $When.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
+    if (-not $t -and $Body.Trim()) { $t = $When.ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
     $Memo.title = $t
     $Memo.body = $Body
     $Memo | Add-Member -NotePropertyName tags -NotePropertyValue @(Get-WtMemoTags $Body) -Force   # 예전 데이터엔 tags가 없을 수 있다
@@ -834,8 +836,10 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
     $existing = $Pane.Tabs | Where-Object { $_.Id -eq $Id } | Select-Object -First 1
     if ($existing) { return Select-WtMemoTab $Pane $existing }
     Save-WtMemoPaneState $Pane
+    $replaced = ''
     if ($How -eq 'here' -and $Pane.Current) {
         $tab = $Pane.Current
+        $replaced = [string]$tab.Id
         if ($History) { $tab.Back.Add($tab.Id); $tab.Forward.Clear() }
         $tab.Id = $Id
         $tab.State = $null
@@ -854,7 +858,46 @@ function Open-WtMemo([string]$Id, [string]$How = 'here', $Pane, [switch]$History
     Save-WtMemoTabs
     Add-WtMemoUse $Id
     Add-WtMemoOpened $Id
+    # 같은 탭에서 다른 메모를 열면 앞 메모는 닫힌 것이다. 빈 메모면 지운다(목록 고르기 중일 수 있어 목록은 그 뒤에 다시 그린다)
+    if ($replaced -and $replaced -cne $Id -and (Remove-WtMemoIfEmpty $replaced)) { Request-WtMemoListUpdate }
     $true
+}
+
+# 제목 · 본문이 모두 비었는가(공백 · 빈 줄만 있는 것도 빈 것). 이런 메모는 닫힐 때 지운다(11-22 승호 결정)
+function Test-WtMemoEmpty($Memo) {
+    $null -ne $Memo -and -not ([string]$Memo.title).Trim() -and -not ([string]$Memo.body).Trim()
+}
+
+# 닫힌 빈 메모를 조용히 지운다. 지울 내용이 없으니 실행 취소 알림 줄은 띄우지 않는다.
+# 다른 칸 · 탭에 아직 열려 있으면 두고, 마지막 탭이 닫힐 때만 지운다. 지웠으면 $true (목록은 부른 쪽이 다시 그린다)
+function Remove-WtMemoIfEmpty([string]$Id) {
+    $m = Get-WtMemoById $Id
+    if (-not (Test-WtMemoEmpty $m)) { return $false }
+    foreach ($p in $script:panes) { foreach ($t in $p.Tabs) { if ([string]$t.Id -ceq $Id) { return $false } } }
+    $next = @($script:items | Where-Object { -not [object]::ReferenceEquals($_, $m) })
+    try { Save-WtMemoItems $next } catch { return $false }   # 못 지우면 빈 메모가 남을 뿐이다
+    $script:items = $next
+    $script:viewStamp = Get-WtMemoViewStamp
+    Update-WtMemoIndexItem $m -Removed
+    $script:rowCache.Remove([string]$m.id)
+    $true
+}
+
+# 끝낼 때: 열린 탭 가운데 빈 메모의 탭을 닫는다. 마지막 탭이 닫히며 메모도 지워진다(OnExit, 저장한 뒤)
+function Close-WtMemoEmptyTabs {
+    foreach ($p in @($script:panes)) {
+        foreach ($t in @($p.Tabs)) {
+            if (-not $script:panes.Contains($p) -or -not $p.Tabs.Contains($t)) { continue }
+            if (Test-WtMemoEmpty (Get-WtMemoById $t.Id)) { [void](Close-WtMemoTab $p $t -NoHistory) }
+        }
+    }
+}
+
+# 목록을 지금 처리(목록에서 고르는 중 등)가 끝난 뒤 한 번 다시 그린다
+function Request-WtMemoListUpdate {
+    if ($script:listRefreshQueued -or -not $script:ui.List) { return }
+    $script:listRefreshQueued = $true
+    [void]$script:ui.List.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Normal, [Action] { $script:listRefreshQueued = $false; Update-WtMemoList })
 }
 
 function Select-WtMemoTab($Pane, $Tab) {
@@ -890,11 +933,13 @@ function Close-WtMemoTab($Pane, $Tab, [switch]$NoHistory) {
     if ($wasCurrent) {
         $Pane.Current = if ($Pane.Tabs.Count) { $Pane.Tabs[[Math]::Min($i, $Pane.Tabs.Count - 1)] } else { $null }
     }
+    # 제목 · 본문이 모두 빈 메모는 마지막 탭이 닫힐 때 지운다(실행 취소 알림 없음)
+    $removed = Remove-WtMemoIfEmpty ([string]$Tab.Id)
     Update-WtMemoTabStrip $Pane
     Update-WtMemoPaneLayout
     if ($wasCurrent -and $script:panes.Contains($Pane)) { Show-WtMemoPane $Pane }
     Update-WtMemoTabStyles
-    Sync-WtMemoListSelection
+    if ($removed) { Update-WtMemoList } else { Sync-WtMemoListSelection }
     Save-WtMemoTabs
     $true
 }
@@ -966,6 +1011,7 @@ function Move-WtMemoHistory([int]$Step) {
     Save-WtMemoPaneState $p
     $target = $from[$from.Count - 1]
     $from.RemoveAt($from.Count - 1)
+    $replaced = [string]$tab.Id
     $to.Add($tab.Id)
     $tab.Id = $target
     $tab.State = $null
@@ -973,6 +1019,8 @@ function Move-WtMemoHistory([int]$Step) {
     Update-WtMemoTabTexts
     Sync-WtMemoListSelection
     Save-WtMemoTabs
+    # 같은 탭에서 다른 메모로 갔다: 앞 메모가 빈 메모면 지운다(되돌아갈 때는 건너뛴다)
+    if ($replaced -cne [string]$target -and (Remove-WtMemoIfEmpty $replaced)) { Update-WtMemoList }
 }
 
 # 지운 메모의 탭을 모든 칸에서 닫는다 (저장은 이미 한 뒤). 지금 탭이 바뀐 칸만 다시 채운다
@@ -2662,7 +2710,7 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
     -PageKey { param($Key, $Modifiers) Invoke-WtMemoPageKey $Key $Modifiers } `
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
     -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
-    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow) }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
+    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow); Close-WtMemoEmptyTabs }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
     -Help @('마크다운 메모를 탭과 두 칸으로 엽니다.', 'Ctrl+E로 편집 · 원문 · 읽기를 차례로 바꿉니다.', '찾기 칸에 #태그 · folder:업무 · updated:7d 같은 조건을 쓸 수 있습니다.',
         '백틱은 한 줄 선택을 인라인 코드로, 여러 줄 선택을 코드 블록으로 감싸며 빈 짝을 넣습니다. 닫는 백틱은 건너뛰고, 빈 짝 직후 Backspace는 둘 다 지웁니다.',
         '편집기 찾기 막대에서 Alt+C는 대소문자 구분, Alt+R은 정규식을 켜고 끕니다.',
@@ -2676,7 +2724,7 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
         @('Ctrl + B / Ctrl + I', '굵게 / 기울임 (다시 누르면 풀기)'), @('Ctrl + K', '링크 만들기'), @('Alt + Shift + 5', '취소선'),
         @('`', '한 줄은 인라인 코드 · 여러 줄은 코드 블록 · 빈 짝 넣기 · 닫는 짝 넘기기 (빈 짝 직후 Backspace = 둘 다 삭제)'),
         @('```', '줄 맨 앞에 치면 닫는 ``` 를 자동으로'),
-        @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)'), @('Enter', '목록 · 할 일 · 인용 이어 쓰기 (빈 항목에서 Enter = 목록 끝, 빈 인용 줄은 빈 줄을 두고 인용 끝)'),
+        @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)'), @('Enter', '목록 · 할 일 · 인용 이어 쓰기 (빈 항목 · 빈 인용 줄에서 Enter = 빈 줄을 두고 끝)'),
         @('Tab / Shift + Tab', '목록 들여쓰기 / 내어쓰기'), @('Ctrl + L', '할 일 체크박스 넣기 · 완료 / 해제'),
         @('Alt + ↑ / Alt + ↓', '줄 옮기기'), @('Ctrl + F / Ctrl + H / F3', '찾기 / 바꾸기 / 다음 찾기'),
         @('Alt + C / Alt + R', '찾기 막대에서 대소문자 구분 / 정규식'),

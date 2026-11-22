@@ -214,6 +214,8 @@ try {
 - 할 일 #주간
 '@ $when)
     Assert-WtTest '메모: 빈 제목은 저장 시각' ($nm.title -eq '2026-10-22 11:20')
+    $emptyNm = Set-WtMemoContent (New-WtMemo $when) '  ' "  `n `n" $when
+    Assert-WtTest 'EmptyMemo-NoStampTitle: 제목 · 본문이 다 비면(공백 · 빈 줄만) 저장 시각을 채우지 않고 빈 메모로 둔다' ($emptyNm.title -ceq '' -and (& $memoModule { param($m) Test-WtMemoEmpty $m } $emptyNm)) $emptyNm.title
     Assert-WtTest '메모: 본문 #태그를 모은다 (코드 안 · 중복 제외)' ((@($nm.tags) -join ',') -eq '서버,주간') (@($nm.tags) -join ',')
     $legacyMemo = $memos | Where-Object id -eq 'a2'
     $legacyMemo.PSObject.Properties.Remove('tags')
@@ -464,7 +466,8 @@ try {
                 Assert-WtTest "5a 문화권: $cultureName ${field}:7d 오늘 포함 7일" ((Get-MemoResultIds (Find-WtMemo -Index $dateIndex -Query "${field}:7d")) -ceq 'd0,d1,d2,d3,d4,d5,d6')
             }
             $cultureMemo = New-WtMemo $when
-            Assert-WtTest "5a 문화권: $cultureName 앱 시각/제목 그레고리력" ($cultureMemo.created -ceq $expectedStamp -and (Set-WtMemoContent $cultureMemo '' '' $when).title -ceq '2026-10-22 11:20')
+            # 본문이 있어야 빈 제목을 저장 시각으로 채운다(제목 · 본문이 다 빈 메모는 빈 채로 두고 닫힐 때 지움, 11-22)
+            Assert-WtTest "5a 문화권: $cultureName 앱 시각/제목 그레고리력" ($cultureMemo.created -ceq $expectedStamp -and (Set-WtMemoContent $cultureMemo '' '본문' $when).title -ceq '2026-10-22 11:20')
         }
     } finally { [Globalization.CultureInfo]::CurrentCulture = $cultureBefore; [Globalization.CultureInfo]::CurrentUICulture = $uiCultureBefore }
 
@@ -1090,7 +1093,8 @@ try {
     $rectOf = { param($el) $el.TransformToAncestor($script:view).TransformBounds([System.Windows.Rect]::new([System.Windows.Point]::new(0, 0), $el.RenderSize)) }
     $longTitle = '🚀🔥 [장애보고] 2026년 11월 전사 스토리지·네트워크·방화벽 이중화 절체 및 커널 튜닝 작업 결과 종합 보고서 아주긴제목1234567890'
     $mLong = New-WtMemo; $mLong.id = 'long'; $mLong.title = $longTitle; $mLong.body = '긴 제목 본문'; $mLong.updated = '2026-10-25 10:00:00'
-    $mBlank = New-WtMemo; $mBlank.id = 'blank'; $mBlank.title = ''; $mBlank.body = ''; $mBlank.updated = '2026-10-24 10:00:00'
+    # 제목만 빈 메모(본문 있음). 제목 · 본문이 다 빈 메모는 닫힐 때 지워지므로(아래 EmptyMemo) 본문을 둔다
+    $mBlank = New-WtMemo; $mBlank.id = 'blank'; $mBlank.title = ''; $mBlank.body = '제목 없는 본문'; $mBlank.updated = '2026-10-24 10:00:00'
     $mRename = New-WtMemo; $mRename.id = 'rename'; $mRename.title = '옛 이름'; $mRename.body = '이름 바꿀 메모'; $mRename.updated = '2026-10-23 10:00:00'
     Save-WtMemoItems @($mLong, $mBlank, $mRename)
     Set-WtSetting 'memo.tabs' $null
@@ -1185,6 +1189,65 @@ try {
         & $shellModule { param($s) $script:current = $s.Current; $script:ui = $s.Ui } $savedShell
         $outer.Children.Clear(); $win.Child = $null
     }
+
+    # ---- 빈 메모 자동 삭제 (11-22 승호 결정): 제목 · 본문이 모두 빈(공백 · 빈 줄만도) 메모는 닫힐 때 실행 취소 알림 없이 지운다 ----
+    $mKeep = New-WtMemo; $mKeep.id = 'keep'; $mKeep.title = '남길 메모'; $mKeep.body = '내용 있음'; $mKeep.updated = '2026-10-25 10:00:00'
+    $mOther = New-WtMemo; $mOther.id = 'other'; $mOther.title = '다른 메모'; $mOther.body = '다른 내용'; $mOther.updated = '2026-10-24 10:00:00'
+    Save-WtMemoItems @($mKeep, $mOther)
+    Set-WtSetting 'memo.tabs' $null
+    Show-TestView
+    & $memoModule { $script:lastDeleted = $null; $script:ui.UndoBar.Visibility = 'Collapsed' }
+    $memoIds = { @(Get-WtMemoItems | ForEach-Object { [string]$_.id }) }
+    $undoQuiet = { & $memoModule { $script:ui.UndoBar.Visibility -ne 'Visible' -and -not $script:lastDeleted } }
+    $listIds = { @(& $memoModule { @($script:ui.List.Items | ForEach-Object { [string]$_.Id }) }) }
+    # 탭 닫기: 새 메모를 열고 아무것도 안 쓰고 닫으면 지운다. 바로 가기 · 빠른 이동 · 최근 목록에서도 빠진다(지우는 길이 같다)
+    $empty1 = & $memoModule { @(Add-WtMemo -Edit)[-1].id }
+    & $findPump; Wait-WtTestWrites   # 열람 기록(최근 목록)은 한가할 때 남는다
+    & $memoModule { $script:listView = 'recent'; Update-WtMemoList }
+    $recentBefore = (& $listIds) -contains $empty1
+    & $memoModule { $script:listView = 'normal'; Update-WtMemoList }
+    $shortcutBefore = @(Get-WtShortcuts -Max 200 | Where-Object { $_.Page -ceq 'memo' -and $_.Key -ceq $empty1 }).Count -eq 1
+    [void](Send-TestKey W Control)
+    Wait-WtTestWrites
+    & $memoModule { $script:listView = 'recent'; Update-WtMemoList }
+    $recentAfter = (& $listIds) -contains $empty1
+    & $memoModule { $script:listView = 'normal'; Update-WtMemoList }
+    $quickIds = @(& $memoModule { @(Find-WtMemoQuick $script:items '') | ForEach-Object { [string]$_.id } })
+    Assert-WtTest 'EmptyMemo-AutoDelete: 빈 새 메모 탭을 닫으면 지운다 · 실행 취소 알림 없음 · 바로 가기 · 빠른 이동 · 최근 목록 · 목록에서 빠진다' (
+        $recentBefore -and $shortcutBefore -and (& $memoIds) -notcontains $empty1 -and (& $undoQuiet) -and -not $recentAfter -and
+        -not @(Get-WtShortcuts -Max 200 | Where-Object { $_.Page -ceq 'memo' -and $_.Key -ceq $empty1 }).Count -and $quickIds -notcontains $empty1 -and
+        (& $listIds) -notcontains $empty1) "최근(전/후)=$recentBefore/$recentAfter 바로가기(전)=$shortcutBefore 남음=$((& $memoIds) -contains $empty1) 알림없음=$(& $undoQuiet)"
+    # 공백 · 빈 줄만 있어도 빈 메모다 (고친 내용을 저장한 뒤 닫기)
+    $empty2 = & $memoModule { @(Add-WtMemo -Edit)[-1].id }
+    & $memoModule { $script:panes[0].TitleBox.Text = '   ' }
+    Set-TestBody 0 "  `n`n  "
+    [void](Send-TestKey W Control)
+    Wait-WtTestWrites
+    $spaceDeleted = (& $memoIds) -notcontains $empty2
+    # 같은 탭에서 다른 메모를 열면(목록 클릭) 앞의 빈 메모를 지우고, 목록도 다시 그린다
+    $empty3 = & $memoModule { @(Add-WtMemo -Edit)[-1].id }
+    & $memoModule { Select-WtMemoItem 'other' }
+    & $findPump; Wait-WtTestWrites
+    $replaceDeleted = (& $memoIds) -notcontains $empty3 -and (Get-TestTabs).Current[0] -ceq 'other' -and (& $listIds) -notcontains $empty3
+    # 두 칸에 열린 빈 메모는 마지막 칸이 닫힐 때만 지운다
+    $empty4 = & $memoModule { @(Add-WtMemo -Edit)[-1].id }
+    [void](Send-TestKey Oem5 Control)
+    $split = (Get-TestTabs).Panes -eq 2 -and (Get-TestTabs).Tabs[1] -ceq $empty4
+    & $memoModule { $p = $script:panes[1]; [void](Close-WtMemoTab $p $p.Current) }
+    $keptWhileOpen = (& $memoIds) -contains $empty4
+    & $memoModule { param($id) $p = $script:panes[0]; $t = @($p.Tabs | Where-Object { $_.Id -ceq $id })[0]; [void](Close-WtMemoTab $p $t) } $empty4
+    Wait-WtTestWrites
+    $lastPaneDeleted = (& $memoIds) -notcontains $empty4
+    # 내용 있는 메모는 닫아도 남는다
+    & $memoModule { [void](Open-WtMemo 'keep' 'tab'); Close-WtMemoCurrentTab }
+    $keepStays = (& $memoIds) -contains 'keep'
+    # 앱을 끝낼 때(OnExit — 트레이 → 종료도 Stop-WtApp에서 같은 길): 열린 빈 메모를 지운다
+    $empty5 = & $memoModule { @(Add-WtMemo -Edit)[-1].id }
+    & $addon.OnExit
+    Wait-WtTestWrites
+    $exitDeleted = (& $memoIds) -notcontains $empty5
+    Assert-WtTest 'EmptyMemo-AutoDelete: 공백만 · 같은 탭에서 다른 메모 열기 · 두 칸(마지막 칸에서만) · 끝낼 때 지우고, 내용 있는 메모는 남긴다' (
+        $spaceDeleted -and $replaceDeleted -and $split -and $keptWhileOpen -and $lastPaneDeleted -and $keepStays -and $exitDeleted -and (& $undoQuiet)) "공백=$spaceDeleted 같은탭=$replaceDeleted 나눔=$split/$keptWhileOpen/$lastPaneDeleted 내용=$keepStays 끝=$exitDeleted 알림없음=$(& $undoQuiet)"
 
     # ---- 저장 실패: 작성 중인 글을 버리지 않는다 ----
     $one = New-WtMemo; $one.title = 'A'; $one.body = 'saved A'

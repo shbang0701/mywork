@@ -420,7 +420,13 @@ function Get-WtMemoEnterEdit($s) {
         }
         $from = $line.Start + $info.Q.Length
         if (-not $info.Ind) {
-            # 들여쓰기 없는 빈 항목: 표지를 지워 목록을 끝낸다
+            # 들여쓰기 없는 빈 항목: 표지를 지워 목록을 끝낸다. 위 줄이 같은 인용 안의 글(앞 항목)이면 이 줄을 빈 줄로 남기고
+            # 아래 새 줄로 간다. 바로 붙여 쓴 줄은 앞 항목 문단에 이어지는(lazy) 줄이라 목록 안에 들어가기 때문이다(인용 끝내기와 같은 규칙)
+            $prev = Get-WtMemoTextPrevLine $t $line
+            if ($prev -and $prev.Text.StartsWith($info.Q, [StringComparison]::Ordinal) -and $prev.Text.Substring($info.Q.Length).Trim()) {
+                $ins = $nl + $info.Q
+                return New-WtMemoTextResult $from ($line.End - $from) $ins ($from + $ins.Length)
+            }
             return New-WtMemoTextResult $from ($line.End - $from) '' $from
         }
         # 들여쓴 빈 항목: 한 단계 내어쓰기. 부모(더 얕은 목록 줄)의 다음 형제가 된다

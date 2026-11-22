@@ -201,8 +201,14 @@ Test-MtCase 'Enter: 번호 구분자 ) 유지' '메모¶1) a|' $enter '메모¶1
 Test-MtCase 'Enter: 체크박스는 [ ]로' '메모¶  - [x] a|' $enter '메모¶  - [x] a¶  - [ ] |'
 Test-MtCase 'Enter: * 표지 유지' '메모¶* a|' $enter '메모¶* a¶* |'
 Test-MtCase 'Enter: 커서가 표지 안쪽이면 그대로' '메모¶-| a' $enter '<null>'
-Test-MtCase 'Enter: 들여쓰기 없는 빈 항목은 목록 끝' '- a¶- |' $enter '- a¶|'
-Test-MtCase 'Enter: 빈 체크박스 항목도 목록 끝' '- [ ] a¶- [ ] |' $enter '- [ ] a¶|'
+# 빈 항목 Enter는 기호를 지우고 빈 줄을 남겨 목록을 끝낸다(11-22 바꿈). 예전처럼 기호만 지우면 그 줄에 바로 쓴 표 · 문단이
+# 앞 항목 문단에 이어지는(lazy) 줄이 되어 목록 안에 그려졌다. 인용 끝내기(QuoteExit-BlankLine)와 같은 규칙
+Test-MtCase 'ListExit-BlankLine: 들여쓰기 없는 빈 항목은 빈 줄을 남기고 목록 끝' '- a¶- |' $enter '- a¶¶|'
+Test-MtCase 'ListExit-BlankLine: 빈 체크박스 항목도 빈 줄을 남기고 목록 끝' '- [ ] a¶- [ ] |' $enter '- [ ] a¶¶|'
+Test-MtCase 'ListExit-BlankLine: 번호 목록도 같다' '1. a¶2. |' $enter '1. a¶¶|'
+Test-MtCase 'ListExit-BlankLine: 인용 안 목록은 빈 인용 줄을 남기고 인용은 이어 간다' '> - a¶> - |' $enter '> - a¶> ¶> |'
+Test-MtCase 'ListExit-BlankLine: 첫 줄 · 빈 줄 아래 빈 항목은 기호만 지운다' '메모¶¶- |' $enter '메모¶¶|'
+Test-MtCase 'ListExit-BlankLine: 글 맨 앞 빈 항목은 기호만 지운다' '- |' $enter '|'
 Test-MtCase 'Enter: 들여쓴 빈 항목은 한 단계 내어쓰기' '- a¶  - |' $enter '- a¶- |'
 Test-MtCase 'Enter: 번호 목록 내어쓰기는 부모 다음 번호' '1. a¶   1. |' $enter '1. a¶2. |'
 Test-MtCase 'Enter: 세 단계에서 한 단계만' '- a¶    - b¶      - |' $enter '- a¶    - b¶    - |'
