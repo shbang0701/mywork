@@ -1862,7 +1862,7 @@ function Get-WtMemoKey($E) {
 }
 
 # 커서 줄이 내용 없는 들여 쓴 목록 항목인지 (예: '  - ')
-function Test-WtMemoEmptyItem($State) {
+function Test-WtMemoEmptyItem($State, [switch]$Top) {
     if ($State.Length) { return $false }
     $t = $State.Text
     $i = $State.Start
@@ -1870,7 +1870,8 @@ function Test-WtMemoEmptyItem($State) {
     $le = $t.IndexOf("`n", $i)
     if ($le -lt 0) { $le = $t.Length }
     $line = $t.Substring($ls, $le - $ls).TrimEnd("`r")
-    $line -match '^\s+([-*+]|\d{1,9}[.)])\s*(\[[ xX]\]\s*)?$'
+    # -Top: 들여쓰기 없는 빈 항목, 없으면 들여쓴 빈 항목
+    $line -match $(if ($Top) { '^([-*+]|\d{1,9}[.)])\s*(\[[ xX]\]\s*)?$' } else { '^\s+([-*+]|\d{1,9}[.)])\s*(\[[ xX]\]\s*)?$' })
 }
 
 # 한글 조합 중에 누른 키는 입력기가 먼저 처리한다. 확정이 끝난 뒤(Background)에 할 일을 남긴다
@@ -1970,6 +1971,9 @@ function Invoke-WtMemoBoxKey($S, $E) {
                     if (-not $shift) {
                         # 빈 안쪽 항목에서 Enter(내어쓰기)는 부모 표지를 봐야 하므로 섬을 목록 전체로 넓힌다
                         if (Test-WtMemoEmptyItem $st) { $S = Expand-WtMemoIslandFor $S 'List'; $st = Get-WtMemoBoxState $S }
+                        # 들여쓰기 없는 빈 항목(목록 끝내기)은 위 줄이 글이면 빈 줄을 남긴다. 섬이 그 항목 하나면 위 줄이 안 보여
+                        # 표지만 지웠으므로(11-22 재확인: 다음 줄이 앞 항목 안으로 들어감) 바로 위 단위까지 넓힌다
+                        elseif (Test-WtMemoEmptyItem $st -Top) { $S = Expand-WtMemoIslandFor $S 'Up'; $st = Get-WtMemoBoxState $S }
                         $edit = Get-WtMemoEnterEdit $st
                         $handled = [bool]$edit
                     }

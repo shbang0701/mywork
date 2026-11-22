@@ -1400,6 +1400,38 @@ try {
         $kinds = @($ed.Units | ForEach-Object { '{0}-{1} {2}' -f $_.Start, $_.End, $_.Kind }) -join ', '
         Assert-Ed 'QuoteExit-NextBlockOutside: 탈출 뒤 쓴 문단은 콜아웃 밖 단위' ($kinds -ceq '0-2 callout, 3-4 para') $kinds
     }
+    # 11-22 재확인: 편집 보기에서 빈 목록 항목 Enter가 빈 줄을 안 남겨 다음 줄이 앞 항목 안으로 들어갔다(원문 보기는 됨).
+    # 새 메모처럼 한 줄씩 쳐서 섬이 목록 항목 하나일 때도 원문 보기와 같은 글이 되어야 한다
+    Invoke-EdCase 'ListExit-NewMemoBlankLine' {
+        foreach ($item in '- 슬롯 확인', '- [ ] 슬롯 확인', '1. 슬롯 확인') {
+            $ed = New-EdEditor
+            Set-EdText $ed ''
+            Open-EdAt $ed 0 0
+            Sync-EdUi
+            Send-EdText $ed '목록 시험'
+            Send-EdKey $ed Return
+            Send-EdText $ed $item
+            Send-EdKey $ed Return 2
+            $exitFocus = $ed.Island -and $ed.IslandBox.IsKeyboardFocused -and (Get-EdCaret $ed) -ceq '3:0'
+            if (-not $ed.IslandBox.IsKeyboardFocused) { throw '다음 문단을 받을 키보드 포커스가 없습니다.' }
+            Send-EdText $ed '문단 줄'
+            Sync-EdUi
+            Assert-Ed "ListExit-NewMemoBlankLine: $item 빈 항목 Enter = 빈 줄 · 다음 줄은 문단 · 포커스 유지" (
+                $exitFocus -and $ed.IslandBox.IsKeyboardFocused -and (Get-EdText $ed) -ceq "목록 시험`n$item`n`n문단 줄") "글=$((Get-EdText $ed).Replace("`n", '¶')) 커서=$(Get-EdCaret $ed)"
+            Assert-EdContract $ed "ListExit-NewMemoBlankLine: $item 문서 약속"
+            Close-Ed $ed
+            $kinds = @($ed.Units | ForEach-Object { '{0}-{1} {2}' -f $_.Start, $_.End, $_.Kind }) -join ', '
+            Assert-Ed "ListExit-NewMemoBlankLine: $item 뒤 문단은 목록 밖 단위" ($kinds -match ', 3-4 para$') $kinds
+        }
+        # 위가 빈 줄이면 빈 줄을 더하지 않고 표지만 지운다(원문 보기 규칙과 같게)
+        $ed = New-EdEditor
+        Set-EdText $ed "메모`n`n- "
+        Open-EdAt $ed 2 2
+        Sync-EdUi
+        Send-EdKey $ed Return
+        Assert-Ed 'ListExit-NewMemoBlankLine: 빈 줄 아래 빈 항목은 표지만 지운다' ((Get-EdText $ed) -ceq "메모`n`n" -and (Get-EdCaret $ed) -ceq '2:0') "글=$((Get-EdText $ed).Replace("`n", '¶')) 커서=$(Get-EdCaret $ed)"
+        Close-Ed $ed
+    }
     Invoke-EdCase 'BlankCaret-EnterUpType' {
         foreach ($block in @(@('```ps', 'Get-Service', 'Get-Process', '```'), @('middle line'), @('## Heading'))) {
             $ed = New-EdEditor
