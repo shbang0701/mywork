@@ -703,6 +703,9 @@ $script:stylesXaml = @'
     <Setter Property="Padding" Value="9,6,8,6"/>
 
   </Style>
+  <!-- 메모 탭 폭: 글자에 맞추되 최소 · 최대 폭 안. 줄에 다 안 들어가면 메모 화면이 넓은 탭부터 MaxWidth를 최소 폭까지 낮춘다 -->
+  <sys:Double x:Key="F.MemoTab.MinWidth">120</sys:Double>
+  <sys:Double x:Key="F.MemoTab.MaxWidth">240</sys:Double>
   <!-- 메모 탭 하나. 선택 표시는 바탕 + 아래 가운데 막대(3 × 16). 막대 색은 BorderBrush로 받는다
        Memo.Tab: 선택 안 됨 · Memo.Tab.Current: 포커스가 있는 칸의 지금 탭 · Memo.Tab.Selected: 다른 칸의 지금 탭(덜 강조) -->
   <Style x:Key="Memo.Tab" TargetType="Button">
@@ -712,8 +715,8 @@ $script:stylesXaml = @'
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="BorderBrush" Value="Transparent"/>
     <Setter Property="MinHeight" Value="{DynamicResource F.Height.MemoTab}"/>
-    <Setter Property="MinWidth" Value="120"/>
-    <Setter Property="MaxWidth" Value="240"/>
+    <Setter Property="MinWidth" Value="{DynamicResource F.MemoTab.MinWidth}"/>
+    <Setter Property="MaxWidth" Value="{DynamicResource F.MemoTab.MaxWidth}"/>
     <Setter Property="Padding" Value="12,0,0,0"/>
     <Setter Property="Margin" Value="0,0,4,0"/>
     <Setter Property="Cursor" Value="Hand"/>
@@ -794,6 +797,27 @@ $script:stylesXaml = @'
       </Border>
     </ControlTemplate></Setter.Value></Setter>
 
+  </Style>
+  <!-- 탭이 최소 폭으로도 넘칠 때 탭 줄 양 끝의 스크롤 단추(‹ ›). 닫기 영역과 같은 24 × 28 · 글리프 10.
+       내용은 아이콘 글자 하나. Windows 탭(TabView)처럼 포커스를 받지 않는다.
+       ‹(Memo.TabScroll)는 탭과 사이 4, ›(Memo.TabScroll.End)는 탭 · 보기 단추와 사이 4 -->
+  <Style x:Key="Memo.TabScroll" TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
+    <Setter Property="Width" Value="24"/>
+    <Setter Property="Height" Value="{DynamicResource F.Height.MemoTab}"/>
+    <Setter Property="Margin" Value="0,0,4,0"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Font.Icon}"/>
+    <Setter Property="FontSize" Value="10"/>
+    <Setter Property="Focusable" Value="False"/>
+  </Style>
+  <Style x:Key="Memo.TabScroll.End" TargetType="Button" BasedOn="{StaticResource Memo.TabScroll}">
+    <Setter Property="Margin" Value="4,0,4,0"/>
+  </Style>
+  <!-- 탭들을 놓는 줄. 탭마다 오른쪽 간격 4가 붙으므로 마지막 탭의 간격은 줄 폭에서 뺀다(끝까지 스크롤하면 마지막 탭이 › 단추와 4 사이).
+       왼쪽 맞춤이라 줄 폭이 탭 폭 합을 따른다(글자 크기 설정 등으로 탭 폭이 바뀌면 크기 변화로 알 수 있음) -->
+  <Style x:Key="Memo.TabStrip" TargetType="StackPanel">
+    <Setter Property="Orientation" Value="Horizontal"/>
+    <Setter Property="HorizontalAlignment" Value="Left"/>
+    <Setter Property="Margin" Value="0,0,-4,0"/>
   </Style>
   <Style x:Key="Memo.ListBody" TargetType="DockPanel"><Setter Property="Margin" Value="12,0,12,8"/></Style>
   <Style x:Key="Memo.SearchRow" TargetType="DockPanel"><Setter Property="Margin" Value="0,0,0,8"/></Style>
