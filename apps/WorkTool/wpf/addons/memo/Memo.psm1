@@ -720,14 +720,6 @@ function New-WtMemoPane {
         -OnLink { param($ed, $link, $how) Invoke-WtMemoLink $ed $link $how } `
         -OnTitles { param($ed, $prefix) Get-WtMemoTitles }
     [void]$body.Children.Add($ed.Root)
-    $empty = New-WtStack Vertical 12
-    $empty.HorizontalAlignment = 'Center'
-    $empty.VerticalAlignment = 'Center'
-    $emptyText = New-WtText '' 'T.Sub'
-    $emptyText.HorizontalAlignment = 'Center'
-    [void](Add-WtChild $empty $emptyText)
-    $emptyButtons = New-WtStack Horizontal 8
-    $emptyButtons.HorizontalAlignment = 'Center'
     $emptyAdd = New-WtButton '새 메모' -Icon 0xE710 -ToolTip '새 메모 (Ctrl+N)'
     $emptyAdd.Tag = $pane
     $emptyAdd.Add_Click({ param($s, $e) Set-WtMemoActivePane $s.Tag; [void](Add-WtMemo -Edit) })
@@ -735,10 +727,8 @@ function New-WtMemoPane {
     $emptyQuick.Tag = $pane
     $emptyQuick.Add_Click({ param($s, $e) Set-WtMemoActivePane $s.Tag; Open-WtMemoQuick })
     [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($emptyQuick, $true)
-    [void](Add-WtChild $emptyButtons $emptyAdd)
-    [void](Add-WtChild $emptyButtons $emptyQuick)
-    [void](Add-WtChild $empty $emptyButtons)
-    [void]$body.Children.Add($empty)
+    $empty = New-WtEmptyState -Buttons $emptyAdd, $emptyQuick
+    [void]$body.Children.Add($empty.Root)
     [void]$center.Children.Add($body)
     [void]$dock.Children.Add($center)
     $card.Child = $dock
@@ -746,7 +736,7 @@ function New-WtMemoPane {
     $pane.Root = $card; $pane.Strip = $strip; $pane.Scroll = $scroll; $pane.Head = $head
     $pane.BarGrid = $barGrid; $pane.BarTools = $barTools; $pane.ScrollLeft = $scrollLeft; $pane.ScrollRight = $scrollRight
     $pane.TitleText = $titleText; $pane.TitleBox = $titleBox; $pane.Meta = $meta; $pane.Tags = $tags; $pane.Status = $status
-    $pane.Editor = $ed; $pane.Empty = $empty; $pane.EmptyText = $emptyText; $pane.EmptyQuick = $emptyQuick
+    $pane.Editor = $ed; $pane.Empty = $empty.Root; $pane.EmptyText = $empty.Text; $pane.EmptyQuick = $emptyQuick
     $pane.ViewButton = $viewButton; $pane.More = $more; $pane.UndoHost = $undoHost
     Update-WtMemoPaneSide $pane 0
     $pane

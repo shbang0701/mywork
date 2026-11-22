@@ -940,6 +940,8 @@ try {
     & $memoModule { $p = $script:panes[0]; [void](Close-WtMemoTab $p $p.Current) }
     $empty = & $memoModule { $p = $script:panes[0]; $p.Empty.Visibility -eq 'Visible' -and $p.Head.Visibility -eq 'Collapsed' -and -not $p.More.IsEnabled }
     Assert-WtTest 'WPF 메모 칸: 탭이 없으면 빈 상태 안내 + 행동 버튼' $empty
+    $emptyLook = & $memoModule { $p = $script:panes[0]; "$($p.Empty.GetType().Name)|$($p.EmptyText.Text)|$($p.EmptyQuick.IsEnabled)|$($p.EmptyQuick.ToolTip)" }
+    Assert-WtTest 'WPF 메모 칸: 빈 상태 한 줄은 열린 메모가 없다는 안내, [빠른 이동]은 메모가 있으면 켜짐 (공통 빈 화면 안내)' ($emptyLook -ceq 'StackPanel|열린 메모가 없습니다. 목록에서 고르거나 새로 만드세요.|True|빠른 이동 (Ctrl+O)') $emptyLook
 
     # ---- 지운 메모의 탭은 모든 칸에서 닫힌다 ----
     & $memoModule { [void](Open-WtMemo 'ma' 'tab'); [void](Open-WtMemo 'mb' 'tab') }

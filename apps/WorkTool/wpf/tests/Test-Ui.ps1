@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 메뉴 항목.
+    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 메뉴 항목 · 빈 화면 안내.
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/tests/Test-Ui.ps1
 #>
@@ -203,6 +203,34 @@ try {
         try { & $invokeItem $menuItems[0] } catch { $captionBlocked = $true }
         Assert-WtTest '공통 메뉴 항목: 누르면 그 항목의 값으로 한 번씩 부르고(값 없는 항목도), 묶음 이름은 누를 수 없다' (($global:uiMenuPicked -join ',') -ceq 'title,updated,값 없음' -and $captionBlocked) ($global:uiMenuPicked -join ',')
     } finally { $menuSource.Dispose() }
+    # 빈 화면 안내(New-WtEmptyState): 가운데에 한 줄 + 버튼. 버튼 하나는 글 아래 12, 여럿이면 한 줄에 사이 8. 숨긴 버튼은 그 간격도 빠진다
+    $middle = { param($r) ($r.Left + $r.Right) / 2 }
+    $folderAdd = New-WtButton '폴더 추가' -Icon 0xE710
+    $single = New-WtEmptyState '스크립트 폴더가 없습니다.' $folderAdd
+    $root.Child = $single.Root; Set-UiLayout
+    $line = Get-UiBounds $single.Text; $button = Get-UiBounds $folderAdd
+    Assert-WtTest '빈 화면 안내: 한 줄(T.Sub)과 버튼이 가로 · 세로 가운데, 버튼은 글 아래 12' (
+        $single.Text.Style -eq $styles['T.Sub'] -and $single.Text.Text -ceq '스크립트 폴더가 없습니다.' -and $single.Root.Children.Count -eq 2 -and
+        [Math]::Abs((& $middle $line) - $root.Width / 2) -le 1 -and [Math]::Abs((& $middle $button) - $root.Width / 2) -le 1 -and
+        $button.Top - $line.Bottom -eq 12 -and [Math]::Abs(($line.Top + $button.Bottom) / 2 - $root.Height / 2) -le 1) "글=$line 버튼=$button"
+    $route = Test-WtTestInputPath -View $root -Element $folderAdd -Target $folderAdd
+    Assert-WtTest '빈 화면 안내 숨김 좌표 경로: 폴더 추가' $route.Ok $route.Path
+    $folderAdd.Visibility = 'Collapsed'; Set-UiLayout
+    $alone = Get-UiBounds $single.Text
+    Assert-WtTest '빈 화면 안내: 버튼을 숨기면 그 위 간격도 빠져 글만 가운데' ([Math]::Abs(($alone.Top + $alone.Bottom) / 2 - $root.Height / 2) -le 1) "글=$alone"
+    $pair = @((New-WtButton '새 메모' -Icon 0xE710), (New-WtButton '빠른 이동' -Icon 0xE721))
+    $double = New-WtEmptyState -Buttons $pair
+    $double.Text.Text = '메모가 없습니다.'
+    $root.Child = $double.Root; Set-UiLayout
+    $first = Get-UiBounds $pair[0]; $second = Get-UiBounds $pair[1]; $line = Get-UiBounds $double.Text
+    Assert-WtTest '빈 화면 안내: 버튼이 여럿이면 한 줄에 사이 8로 가운데, 글 아래 12 (글은 나중에 바꿔도 됨)' (
+        $first.Top -eq $second.Top -and $second.Left - $first.Right -eq 8 -and [Math]::Abs(($first.Left + $second.Right) / 2 - $root.Width / 2) -le 1 -and
+        $first.Top - $line.Bottom -eq 12 -and [Math]::Abs((& $middle $line) - $root.Width / 2) -le 1) "글=$line 버튼=$first $second"
+    foreach ($target in $pair) {
+        $route = Test-WtTestInputPath -View $root -Element $target -Target $target
+        Assert-WtTest "빈 화면 안내 숨김 좌표 경로: $(@(Get-WtTestTexts $target)[-1])" $route.Ok $route.Path
+    }
+    $root.Child = $null
     Write-Host '공통 화면 검사 PASS · FAIL 0'
 } finally {
     if ($hostSource) { $hostSource.Dispose() }

@@ -1831,16 +1831,9 @@ function New-WtFlowsView {
     [System.Windows.Controls.Grid]::SetRow($formScroll, 1)
     [void]$cgrid.Children.Add($formScroll)
     # 스크립트 폴더가 없을 때: 폼부터 출력까지의 자리 한가운데에 한 줄 + [폴더 추가]
-    $empty = New-WtStack Vertical 12
-    $empty.HorizontalAlignment = 'Center'
-    $empty.VerticalAlignment = 'Center'
-    $emptyText = New-WtText '스크립트 폴더가 없습니다.' 'T.Sub'
-    $emptyText.HorizontalAlignment = 'Center'
     $emptyAdd = New-WtButton '폴더 추가' -Icon 0xE710
-    $emptyAdd.HorizontalAlignment = 'Center'
     $emptyAdd.Add_Click({ Add-WtFlowRoot })
-    [void](Add-WtChild $empty $emptyText)
-    [void](Add-WtChild $empty $emptyAdd)
+    $empty = (New-WtEmptyState '스크립트 폴더가 없습니다.' $emptyAdd).Root
     [System.Windows.Controls.Grid]::SetRow($empty, 1)
     [System.Windows.Controls.Grid]::SetRowSpan($empty, 5)
     [void]$cgrid.Children.Add($empty)

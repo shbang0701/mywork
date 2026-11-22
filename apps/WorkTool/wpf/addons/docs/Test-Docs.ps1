@@ -208,6 +208,17 @@ try {
     Set-WtSetting 'docs.roots' @(); Set-WtSetting 'docs.last' ''
     & $docsModule { param($worker) $script:worker = $worker; Stop-WtDocs } $originalWorker
     Assert-WtTest '문서 안정성: 끝낸 뒤 남은 조회 · 화면 밖 작업이 없다' ((& $docsModule { $script:jobs.Count }) -eq 0 -and (Get-WtWorkInfo).Running -eq 0 -and (Get-WtWorkInfo).Abandoned -eq 0)
+    # 빈 화면 안내(공통 New-WtEmptyState): 볼 폴더가 없으면 가운데 한 줄 + [폴더 추가], 불러오는 중에는 [취소]만
+    $emptyLook = & $docsModule {
+        $saved = @{ Current = $script:current; Entries = $script:entries }
+        $script:current = ''; $script:entries = @(); $script:ui.Error = $null; $script:ui.Loading = $false; Update-WtDocList
+        $look = "$($script:ui.Empty.GetType().Name)|$($script:ui.Empty.Visibility)|$($script:ui.EmptyText.Text)|$($script:ui.EmptyAdd.Visibility)|$($script:ui.Cancel.Visibility)"
+        $script:ui.Loading = $true; Update-WtDocList
+        $look += "|$($script:ui.EmptyText.Text)|$($script:ui.EmptyAdd.Visibility)|$($script:ui.Cancel.Visibility)"
+        $script:ui.Loading = $false; $script:current = $saved.Current; $script:entries = $saved.Entries; Update-WtDocList
+        $look
+    }
+    Assert-WtTest '문서 빈 화면(공통 빈 화면 안내): 볼 폴더가 없으면 한 줄 + [폴더 추가], 불러오는 중에는 [취소]만' ($emptyLook -ceq 'StackPanel|Visible|볼 폴더를 추가하세요.|Visible|Collapsed|불러오는 중…|Collapsed|Visible') $emptyLook
 
     # 실제 문서 조회 → 셸 정리 → 전용 프로세스 종료를 한 번에 본다. 창·실제 공유 폴더는 사용하지 않는다.
     # 대조 프로세스는 마지막 종료 호출을 빼서 같은 막힌 조회가 정말 프로세스를 붙잡는지도 확인한다.

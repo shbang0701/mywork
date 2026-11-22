@@ -2565,6 +2565,22 @@ function New-WtPage([switch]$Fill) {
     @{ Root = $sv; Panel = $panel }
 }
 
+# 비어 있음 안내: 가운데에 한 줄(T.Sub) + 행동 버튼. 버튼이 여럿이면 한 줄에 사이 8. 글 · 보이기는 돌려준 Root · Text로 탭이 바꾼다
+# 버튼 하나는 줄로 감싸지 않는다(그 버튼을 숨기면 위 간격 12도 같이 빠진다)
+function New-WtEmptyState([string]$Text, [object[]]$Buttons) {
+    $root = New-WtStack Vertical 12
+    $root.HorizontalAlignment = 'Center'; $root.VerticalAlignment = 'Center'
+    $label = New-WtText $Text 'T.Sub'; $label.HorizontalAlignment = 'Center'
+    [void](Add-WtChild $root $label)
+    if ($Buttons.Count -eq 1) { $Buttons[0].HorizontalAlignment = 'Center'; [void](Add-WtChild $root $Buttons[0]) }
+    elseif ($Buttons.Count) {
+        $row = New-WtStack Horizontal 8; $row.HorizontalAlignment = 'Center'
+        foreach ($button in $Buttons) { [void](Add-WtChild $row $button) }
+        [void](Add-WtChild $root $row)
+    }
+    @{ Root = $root; Text = $label }
+}
+
 $script:ko = [System.Globalization.CultureInfo]::GetCultureInfo('ko-KR')
 
 # 날짜를 한국어로. 예: Format-WtDate (Get-Date) 'M월 d일 dddd' → 10월 22일 목요일
@@ -2832,7 +2848,7 @@ Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMo
 Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
-    New-WtPageHeader, New-WtPage, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
+    New-WtPageHeader, New-WtPage, New-WtEmptyState, Format-WtDate, Show-WtMessage, Confirm-WtYesNo, Show-WtError
 
 # 상태에 따른 치수·배치만 바꾼다. 저장·단축키 판단은 Shell이 한다.
 function Set-WtNavBadge($Item, [bool]$Visible) {

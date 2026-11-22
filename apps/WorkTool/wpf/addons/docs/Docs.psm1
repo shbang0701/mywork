@@ -738,21 +738,15 @@ function New-WtDocsView {
             [void]$s.ContextMenu.Items.Add((New-WtHomePinMenuItem ([pscustomobject]@{ Page = 'docs'; Key = $entry.Path; Title = $entry.Name; Sub = '문서'; Icon = 0xE8A5 })))
         })
     [void]$area.Children.Add($list)
-    $empty = New-WtStack Vertical 12
-    $empty.HorizontalAlignment = 'Center'
-    $empty.VerticalAlignment = 'Center'
-    $emptyText = New-WtText '' 'T.Sub'
-    $emptyText.TextAlignment = 'Center'
     $emptyAdd = New-WtButton '폴더 추가' -Icon 0xE710
-    $emptyAdd.HorizontalAlignment = 'Center'
     $emptyAdd.Add_Click({ Add-WtDocRoot })
-    [void](Add-WtChild $empty $emptyText)
-    [void](Add-WtChild $empty $emptyAdd)
+    $empty = New-WtEmptyState -Buttons $emptyAdd
+    $empty.Text.TextAlignment = 'Center'   # 긴 오류 글이 두 줄이 되어도 줄마다 가운데
     $cancel = New-WtButton '취소' -Kind Link
     $cancel.Add_Click({ Cancel-WtDocFolder })
     $cancel.Visibility = 'Collapsed'
-    [void](Add-WtChild $empty $cancel)
-    [void]$area.Children.Add($empty)
+    [void](Add-WtChild $empty.Root $cancel)
+    [void]$area.Children.Add($empty.Root)
     [void]$rdock.Children.Add($area)
     $right.Child = $rdock
     [System.Windows.Controls.Grid]::SetColumn($right, 1)
@@ -774,7 +768,7 @@ function New-WtDocsView {
     $script:ui = @{
         Tree = $tree; RemoveRoot = $remove; List = $list; Filter = $filter; PathText = $pathText; Status = $status; Columns = $colsBorder
         Up = $up; OpenFolder = $openFolder; Open = $open; Pin = $pin; ItemButtons = @($open, $reveal, $copy, $pin)
-        Empty = $empty; EmptyText = $emptyText; EmptyAdd = $emptyAdd; Cancel = $cancel; Error = $null; Loading = $false
+        Empty = $empty.Root; EmptyText = $empty.Text; EmptyAdd = $emptyAdd; Cancel = $cancel; Error = $null; Loading = $false
     }
     $page.Root
 }
