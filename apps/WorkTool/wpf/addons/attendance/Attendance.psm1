@@ -63,7 +63,7 @@ function New-WtAttendanceView {
     $script:monthLabel = New-WtText '' 'Attendance.Month'
     foreach ($button in $previous, $next) {
         [Windows.Automation.AutomationProperties]::SetName($button, [string]$button.ToolTip)
-        $button.Add_Click({ param($s, $e) $script:month = $script:month.AddMonths([int]$s.Tag); $script:form = $null; Update-WtAttendanceView })
+        $button.Add_Click({ param($s, $e) if (-not (Confirm-WtAttFormLeave)) { return }; $script:month = $script:month.AddMonths([int]$s.Tag); $script:form = $null; Update-WtAttendanceView })
     }
     [void]$script:view.Nav.Children.Add($previous); [void]$script:view.Nav.Children.Add($script:monthLabel); [void]$script:view.Nav.Children.Add($next)
     foreach ($spec in @(@('출근','work-start'), @('퇴근','work-end'), @('업무외 시작','over'), @('','new'))) {
@@ -150,6 +150,7 @@ function Update-WtAttendanceView {
     } finally { $script:refreshing = $false }
 }
 function Invoke-WtAttClock([string]$Action) {
+    if (-not (Confirm-WtAttFormLeave)) { return }   # 찍으면 폼을 닫으므로 고친 내용이 있으면 먼저 묻는다(취소면 찍지 않음)
     try {
         $store = $script:data.Store
         if ($Action -ceq 'work-start') { $result = Start-WtAttendanceRecord $store }
@@ -222,6 +223,8 @@ function Set-WtAttFormKind {
 }
 # Entry = 고칠 기록. 새 기록이면 Date(yyyy-MM-dd) · Kind(work · leave …)로 처음 값을 정할 수 있다(일정 우클릭 「여러 날 · 다른 종류…」)
 function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
+    # 고친 폼이 있으면 먼저 묻는다(다른 행 · 직접 입력 · 다른 탭에서 열기). 취소하면 폼을 두고 표 선택도 그 폼의 줄로 되돌린다
+    if (-not (Confirm-WtAttFormLeave)) { Select-WtAttRow; return }
     $body = [Windows.Controls.DockPanel]::new(); Set-WtStyle $body 'Attendance.Body'
     $buttons = [Windows.Controls.DockPanel]::new(); [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
     $delete = New-WtButton '삭제'; $delete.Visibility = if ($Entry -and $Entry.State -ceq 'ok') { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
@@ -231,6 +234,7 @@ function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     $scroll = [Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'
     $col = New-WtStack
     $script:form = @{ Entry = $Entry; Store = $script:data.Store; Fields = @{}; Errors = @{}; Rows = @{}; Panel = $col; ChangingKind = $true; LeaveCodes = @{} }
+    Select-WtAttRow   # 떠나기 전에 [저장]해 표를 새로 그렸어도 이 기록의 줄을 고른다(새 기록이면 선택 없음)
     $day = if ($Entry) { $Entry.StartDate } elseif ($Date) { ConvertFrom-WtDateText $Date } else { $null }
     if (-not $day) { $day = if ($script:month.Year -eq [datetime]::Today.Year -and $script:month.Month -eq [datetime]::Today.Month) { [datetime]::Today } else { $script:month } }
     Add-WtAttField date '날짜' (New-WtAttInput (ConvertTo-WtDateText $day))
@@ -254,6 +258,7 @@ function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     Add-WtAttField back '이동 오는 길 분' (New-WtAttInput $(if ($Entry -and $Entry.TravelBack) { [string]$Entry.TravelBack } else { '' }))
     $note = New-WtAttInput $(if ($Entry) { $Entry.Note } else { '' }); Set-WtStyle $note 'Attendance.Note'; Add-WtAttField note '메모' $note
     Set-WtAttFormKind; $script:form.ChangingKind = $false
+    $script:form.Initial = Get-WtFormState $script:form.Fields   # 떠날 때 이 값과 다르면 묻는다
     $script:form.Fields.kind.Add_SelectionChanged({ Set-WtAttFormKind })
     $script:form.Fields.leaveType.Add_SelectionChanged({ Set-WtAttFormKind })
     $cancel.Add_Click({ Show-WtAttSummary })
@@ -267,20 +272,32 @@ function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     $scroll.Content = $col; [void]$body.Children.Add($scroll); $script:detail.Content = $body; $script:side.Title.Text = '기록 편집'
     if ($script:side.Rail.Visibility -eq 'Visible') { $script:side.Open.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent)) }
 }
+
+# 같은 기록인지(표를 새로 그리면 기록 객체가 바뀌므로 id로 본다. id가 없는 기록은 같은 객체일 때만)
+function Test-WtAttSameEntry($A, $B) {
+    if ($null -eq $A -or $null -eq $B) { return $false }
+    if ($A.Id -and $B.Id) { return $A.Id -ceq $B.Id }
+    [object]::ReferenceEquals($A, $B)
+}
+# 표 선택을 지금 폼에 맞춘다: 고치는 기록의 줄, 새 기록이면 선택 없음. 코드로 바꾸는 동안의 선택 변경은 폼을 열지 않는다
+function Select-WtAttRow {
+    if (-not $script:table) { return }
+    $target = $null
+    if ($script:form -and $script:form.Entry) { $target = @($script:table.ItemsSource | Where-Object { Test-WtAttSameEntry $_.Entry $script:form.Entry }) | Select-Object -First 1 }
+    if ([object]::ReferenceEquals($script:table.SelectedItem, $target)) { return }
+    $was = $script:refreshing; $script:refreshing = $true
+    try { $script:table.SelectedItem = $target } finally { $script:refreshing = $was }
+}
 function Set-WtAttFormError([string]$Key, [string]$Message) {
     $script:form.Errors[$Key].Text = $Message; $script:form.Errors[$Key].Visibility = 'Visible'
     [Windows.Automation.AutomationProperties]::SetHelpText($script:form.Fields[$Key], $Message)
-    if ($script:form.Fields[$Key] -is [Windows.Controls.TextBox]) {
-        $binding = $script:form.Fields[$Key].GetBindingExpression([Windows.Controls.TextBox]::TextProperty)
-        $errorInfo = [Windows.Controls.ValidationError]::new([Windows.Controls.ExceptionValidationRule]::new(), $binding, $Message, $null)
-        [Windows.Controls.Validation]::MarkInvalid($binding, $errorInfo)
-    }
+    Set-WtInputError $script:form.Fields[$Key] $Message   # 빨간 선 · 오류 아이콘 · 툴팁(일정 · 메모와 같은 공통 표시, 글 칸만)
 }
 function Save-WtAttForm {
     $fields = $script:form.Fields; $old = $script:form.Entry
     foreach ($key in $script:form.Errors.Keys) {
         $script:form.Errors[$key].Text = ''; $script:form.Errors[$key].Visibility = 'Collapsed'; [Windows.Automation.AutomationProperties]::SetHelpText($fields[$key], '')
-        if ($fields[$key] -is [Windows.Controls.TextBox]) { [Windows.Controls.Validation]::ClearInvalid($fields[$key].GetBindingExpression([Windows.Controls.TextBox]::TextProperty)) }
+        Set-WtInputError $fields[$key] ''
     }
     $date = ConvertFrom-WtDateText $fields.date.Text
     if (-not $date) { Set-WtAttFormError date '날짜는 yyyy-MM-dd 형식으로 입력하세요.' }
@@ -355,6 +372,25 @@ function Save-WtAttForm {
         $script:form = $null; $script:viewKey = $null; Update-WtAttendanceView
     } catch { Set-WtAttFormError note $_.Exception.Message }
 }
+# ---- 폼을 떠날 때 묻기 (11-22 실사용 보고, 일정 폼과 같음) ----------------------------------------------
+# 폼을 닫는 길(달 이동 · 다른 행 · 직접 입력 · 출근 · 퇴근 · 업무외 · 다른 탭에서 열기 · 앱 끝내기)은 먼저 Confirm-WtAttFormLeave를 부른다.
+# 탭 이동 · 사이드바 접기는 폼이 그대로 남으므로 묻지 않는다. 폼의 [취소] 단추는 묻지 않고 닫는다
+function Test-WtAttFormDirty {
+    $f = $script:form
+    [bool]($f -and $null -ne $f.Initial -and (Get-WtFormState $f.Fields) -cne $f.Initial)
+}
+# 폼을 닫아도 되면 $true. 고친 것이 없으면 묻지 않는다. [저장]은 저장이 끝났을 때만(틀린 칸이 있으면 폼에 남음),
+# [저장 안 함]은 버리고 이번 달 요약으로, [취소] · Esc는 폼을 그대로 두고 부른 동작을 하지 않는다
+function Confirm-WtAttFormLeave {
+    if (-not (Test-WtAttFormDirty)) { return $true }
+    $entry = $script:form.Entry
+    $text = if ($entry) { "「$(Format-WtDate $entry.StartDate 'M/d (ddd)') $(Get-WtAttKindName $entry)」 기록에서 고친 내용이 저장되지 않았습니다." } else { '새 기록에 쓴 내용이 저장되지 않았습니다.' }
+    switch (Read-WtSaveChoice $text) {
+        'save' { Save-WtAttForm; return $null -eq $script:form }
+        'discard' { Show-WtAttSummary; return $true }
+        default { return $false }
+    }
+}
 # 다른 탭(일정)의 날짜 칸 우클릭 항목(설계 15.6). 그날 휴가가 있으면 「휴가 보기 · 종류」(근태 탭의 그 기록), 없으면 「휴가 넣기 ›」
 function Get-WtAttDateMenu([datetime]$Date) {
     $data = Get-WtAttendanceData
@@ -379,8 +415,9 @@ function Add-WtAttQuickLeave($Arg) {
 function Open-WtAttArgs($OpenArgs) {
     if (-not $script:view -or $null -eq $OpenArgs) { return }
     $entry = $null; $newDate = $null
+    $find = { @((Get-WtAttendanceData).Entries | Where-Object { $_.Id -ceq [string]$OpenArgs.Id -and $_.State -ne 'deleted' }) | Select-Object -First 1 }
     if ($OpenArgs.Id) {
-        $entry = @((Get-WtAttendanceData).Entries | Where-Object { $_.Id -ceq [string]$OpenArgs.Id -and $_.State -ne 'deleted' }) | Select-Object -First 1
+        $entry = & $find
         if (-not $entry) { return }
         $target = $entry.StartDate
     } elseif ($OpenArgs.NewLeave) {
@@ -388,6 +425,8 @@ function Open-WtAttArgs($OpenArgs) {
         if (-not $newDate) { return }
         $target = $newDate
     } else { return }
+    if (-not (Confirm-WtAttFormLeave)) { return }   # 고친 폼이 있으면 먼저 묻는다(취소면 달 · 폼을 그대로 둔다)
+    if ($entry) { $entry = & $find; if (-not $entry) { return } }   # [저장]했으면 같은 기록이라도 저장한 뒤 값으로 연다
     $script:month = [datetime]::new($target.Year, $target.Month, 1); $script:form = $null; $script:viewKey = $null
     Update-WtAttendanceView
     if ($entry) { Show-WtAttForm $entry } else { Show-WtAttForm $null -Date (ConvertTo-WtDateText $newDate) -Kind 'leave' }
@@ -401,6 +440,7 @@ Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -
     } `
     -BadgeKind dot -BadgeToolTip '오늘 안 찍음' -NewView { New-WtAttendanceView } -Refresh { param($view) Update-WtAttendanceView } `
     -OnOpen { param($OpenArgs) Open-WtAttArgs $OpenArgs } `
+    -ConfirmExit @{ Pending = { Test-WtAttFormDirty }; Confirm = { Confirm-WtAttFormLeave } } `
     -DateMenu { param([datetime]$Date) Get-WtAttDateMenu $Date } `
     -CalendarItems { param([datetime]$From, [datetime]$To) $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }; Get-WtAttendanceCalendarItems $From $To $data.Entries } `
     -ImportLegacy { param($folder) Import-WtAttendanceLegacy $folder } `

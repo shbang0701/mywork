@@ -1289,11 +1289,12 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
     if ($Kind -eq 'routine' -and $Id) { $entry = @($store.Items | Where-Object id -CEQ $Id)[0] }
     if ($Occurrence) { $Id = $Occurrence.Entry.Id }
     $body = [Windows.Controls.DockPanel]::new(); Set-WtStyle $body 'Schedule.SideBody'
-    $buttons = [Windows.Controls.DockPanel]::new(); Set-WtStyle $buttons 'Schedule.FormButtons'; [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
+    $buttons = [Windows.Controls.DockPanel]::new(); [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
     $delete = New-WtButton '삭제'; $delete.Visibility = if ($Id) { 'Visible' } else { 'Collapsed' }; [void]$buttons.Children.Add($delete)
     $actions = New-WtStack Horizontal 8; $actions.HorizontalAlignment = 'Right'
     $save = New-WtButton '저장' Primary; $cancel = New-WtButton '취소'
     [void](Add-WtChild $actions $save); [void](Add-WtChild $actions $cancel); [void]$buttons.Children.Add($actions); [void]$body.Children.Add($buttons)
+    Set-WtStyle $buttons 'Schedule.FormButtons'   # 단추 줄은 칸 스크롤 영역과 12 띄운다(디자인 8절 일정)
     $scroll = [Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'
     $col = New-WtStack; Set-WtStyle $col 'Schedule.Form'; $scroll.Content = $col; [void]$body.Children.Add($scroll)
     $script:form = @{ Kind = $Kind; Id = $Id; Occurrence = $Occurrence; Store = $store; Fields = @{}; Errors = @{}; Rows = @{}; Panel = $col; Save = $save }
@@ -1362,18 +1363,10 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
 # 떠나기 전에 Confirm-WtScheduleFormLeave를 부른다. 보기 전환 · 달 이동 · 사이드바 접기 · 탭 이동은 폼을 그대로 두므로 묻지 않는다.
 # 앱을 끝낼 때는 셸이 등록(-ConfirmExit)을 통해 같은 함수를 부른다(취소 · 저장 실패면 끝내지 않음)
 
-# 폼 칸의 지금 값. 열 때 값과 비교해 고친 것이 있는지 본다. 관련 메모는 붙이고 빼는 즉시 저장되므로 넣지 않는다
+# 폼 칸의 지금 값(core Get-WtFormState, 근태 폼과 같음). 열 때 값과 비교해 고친 것이 있는지 본다. 관련 메모는 붙이고 빼는 즉시 저장되므로 넣지 않는다
 function Get-WtScheduleFormState {
     $f = $script:form; if (-not $f) { return '' }
-    @(foreach ($key in @($f.Fields.Keys | Sort-Object)) {
-            $c = $f.Fields[$key]
-            $value = if ($c -is [Windows.Controls.TextBox]) { $c.Text }
-            elseif ($c -is [Windows.Controls.ComboBox]) { [string]$c.SelectedItem }
-            elseif ($c -is [Windows.Controls.Primitives.ToggleButton]) { [string]$c.IsChecked }
-            elseif ($c -is [Windows.Controls.Panel]) { @($c.Children | Where-Object { $_ -is [Windows.Controls.CheckBox] -and $_.IsChecked } | ForEach-Object { [string]$_.Tag }) -join ',' }
-            else { '' }
-            "$key=$value"
-        }) -join "`n"
+    Get-WtFormState $f.Fields
 }
 function Test-WtScheduleFormDirty {
     $f = $script:form

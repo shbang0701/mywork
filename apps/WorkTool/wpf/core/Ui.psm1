@@ -2726,10 +2726,16 @@ function New-WtNameDialog([string]$Title, [string]$Label, [string]$Note, [string
 
 # 고친 내용을 버리게 되는 동작 앞에서 묻는 창(apps/design.md 13장): 제목 = 질문, [저장] [저장 안 함] [취소] (주 버튼이 왼쪽).
 # 'save' · 'discard' · 'cancel' 중 하나를 돌려준다. Enter = 저장, Esc · 창 닫기 = 취소. -Text: 제목 아래 한 문장(무엇을 고쳤는지)
+# 이 창이 떠 있는 동안 또 물으면(트레이 → 종료 · 창이 뜨기 전에 온 클릭) 겹쳐 띄우지 않고 'cancel'로 답한다
+$script:saveChoiceOpen = $false
 function Read-WtSaveChoice([string]$Text) {
-    $dialog = New-WtSaveChoiceDialog $Text
-    [void]$dialog.Window.ShowDialog()
-    [string]$dialog.Window.Tag.Choice
+    if ($script:saveChoiceOpen) { return 'cancel' }
+    $script:saveChoiceOpen = $true
+    try {
+        $dialog = New-WtSaveChoiceDialog $Text
+        [void]$dialog.Window.ShowDialog()
+        [string]$dialog.Window.Tag.Choice
+    } finally { $script:saveChoiceOpen = $false }
 }
 
 # Read-WtSaveChoice의 창을 띄우지 않고 만들기만 한다. 검사는 이 내용을 숨김 호스트에 붙여 본다
@@ -2766,6 +2772,20 @@ function Set-WtInputError($Box, [string]$Message) {
         [System.Windows.Controls.Validation]::MarkInvalid($expression,
             [System.Windows.Controls.ValidationError]::new([System.Windows.Controls.ExceptionValidationRule]::new(), $expression, $Message, $null))
     } else { [System.Windows.Controls.Validation]::ClearInvalid($expression) }
+}
+
+# 편집 폼 칸들의 지금 값(글 칸 · 고르기 칸 · 체크 상자 · 체크 상자 묶음)을 한 글로. 열 때 값과 비교해 고친 것이 있는지 본다
+# (고친 폼을 떠날 때 Read-WtSaveChoice로 물을지). $Fields = @{ 이름 = 칸 }
+function Get-WtFormState([hashtable]$Fields) {
+    @(foreach ($key in @($Fields.Keys | Sort-Object)) {
+            $c = $Fields[$key]
+            $value = if ($c -is [System.Windows.Controls.TextBox]) { $c.Text }
+            elseif ($c -is [System.Windows.Controls.ComboBox]) { [string]$c.SelectedItem }
+            elseif ($c -is [System.Windows.Controls.Primitives.ToggleButton]) { [string]$c.IsChecked }
+            elseif ($c -is [System.Windows.Controls.Panel]) { @($c.Children | Where-Object { $_ -is [System.Windows.Controls.CheckBox] -and $_.IsChecked } | ForEach-Object { [string]$_.Tag }) -join ',' }
+            else { '' }
+            "$key=$value"
+        }) -join "`n"
 }
 
 function New-WtMinuteInput([int]$Value) {
@@ -2914,7 +2934,7 @@ function Get-WtVisualChild($Root, [type]$Type) {
 }
 
 Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
-Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, Read-WtSaveChoice, Set-WtInputError, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption,
+Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, Read-WtSaveChoice, Set-WtInputError, Get-WtFormState, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption,
     Set-WtButtonMenuPlacement, Open-WtButtonMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,

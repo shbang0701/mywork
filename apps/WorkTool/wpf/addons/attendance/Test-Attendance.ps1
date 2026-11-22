@@ -29,6 +29,13 @@ $ErrorActionPreference = 'Stop'
 Import-WtTestCore
 Import-Module (Join-Path $PSScriptRoot 'AttendanceData.psm1') -Force -DisableNameChecking
 Import-Module (Join-Path $PSScriptRoot 'Attendance.psm1') -Force -DisableNameChecking
+# 고친 폼을 떠날 때 묻는 창(core Read-WtSaveChoice)은 띄우지 않는다. 근태 모듈 안의 같은 이름 함수가 먼저 불린다.
+# 답을 넣지 않으면 「저장 안 함」(전에 말없이 버리던 것과 같은 결과라 다른 검사는 그대로 돈다). 넣으면 그 순서대로 답한다
+& (Get-Module Attendance) {
+    $script:saveAsked = [System.Collections.Generic.List[string]]::new()
+    $script:saveAnswers = [System.Collections.Generic.Queue[string]]::new()
+    function script:Read-WtSaveChoice { param([string]$Text) $script:saveAsked.Add($Text); if ($null -ne $global:wtExitTrace) { $global:wtExitTrace.Add('탭') }; if ($script:saveAnswers.Count) { $script:saveAnswers.Dequeue() } else { 'discard' } }
+}
 $fixtures = Join-Path $PSScriptRoot 'fixtures'
 $holidayFixture = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'tests/fixtures/holidays.json'
 $d = { param($t) [datetime]::ParseExact($t, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) }
@@ -604,6 +611,122 @@ try {
         Assert-WtTest '4단계 근태 열기: NewLeave는 그 달 · 그날 휴가 새 폼, Id는 그 기록 편집 폼' ($opened -ceq '2026-12|2026-12-03|휴가|연차' -and $openedId -ceq "2026-11|$($quickSaved[0].Id)") "$opened / $openedId"
         $dateItems = @(Get-WtDateMenuItems ([datetime]::new(2026,11,27)) -Exclude 'schedule' | Where-Object Page -CEQ 'attendance')
         Assert-WtTest '4단계 코어 날짜 메뉴: 근태가 등록한 항목이 다른 탭 메뉴에 나온다' ($dateItems.Count -eq 1 -and $dateItems[0].Item.Header -ceq '휴가 넣기' -and -not $dateItems[0].Error)
+    }
+
+    # ---- 11-22 실사용 보고(일관성): 근태 폼도 고친 채 떠나면 일정 폼과 같이 묻는다(core Read-WtSaveChoice · 셸 끝내기 등록 ConfirmExit) ----
+    # 숨김 호스트(WindowStyle=0인 HwndSource, 창을 띄우지 않음)에 실제로 배치하고 단추는 누름 이벤트로 누른다. 묻는 창은 위의 가짜 답
+    if (Test-WtTestWpf) {
+        $test = New-WtTestData 'attendance-leave'; $tests.Add($test)
+        Copy-WtTestFixture 'v2-travel.json'; Copy-WtTestHolidays
+        $module = Get-Module Attendance
+        & $module { $script:month = [datetime]::new(2026,11,1); $script:form = $null; $script:viewKey = $null }
+        $view = New-WtTestView 'attendance'
+        $leaveParams = [Windows.Interop.HwndSourceParameters]::new('Attendance leave test'); $leaveParams.WindowStyle = 0; $leaveParams.Width = 1224; $leaveParams.Height = 736
+        $leaveHost = [Windows.Interop.HwndSource]::new($leaveParams)
+        $placeAtt = { for ($pass = 0; $pass -lt 2; $pass++) { $view.Measure([Windows.Size]::new(1224,736)); $view.Arrange([Windows.Rect]::new(0,0,1224,736)); $view.UpdateLayout(); [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle) } }
+        $pressAtt = { param($Element) $Element.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent)) }
+        $answerAtt = { param([string]$Choice) & $module { param($c) $script:saveAsked.Clear(); $script:saveAnswers.Clear(); if ($c) { $script:saveAnswers.Enqueue($c) } } $Choice }
+        $attState = { & $module { "$($null -ne $script:form)|$(if ($script:form) { $script:form.Fields.note.Text })|$($script:month.ToString('yyyy-MM'))|$($script:saveAsked.Count)" } }
+        $toNovember = { & $module { $script:month = [datetime]::new(2026,11,1); $script:viewKey = $null; Update-WtAttendanceView } }
+        $shell = Get-Module Shell
+        try {
+            $leaveHost.RootVisual = $view
+            & $module { Update-WtAttendanceView }; & $placeAtt
+            $rows = @(& $module { @($script:table.ItemsSource) })
+            $first = $rows[0].Entry; $second = $rows[1].Entry
+            # 표 줄을 고르면 그 기록 폼이 열린다(사용자가 줄을 누를 때와 같은 선택 변경 길)
+            $openFirst = { & $module { param($id) $script:refreshing = $true; $script:table.SelectedItem = $null; $script:refreshing = $false; $script:table.SelectedItem = @($script:table.ItemsSource | Where-Object { $_.Entry.Id -ceq $id })[0] } $first.Id }
+            $noteOf = { param($Id) [string]@((Get-WtAttendanceData).Entries | Where-Object Id -ceq $Id)[0].Note }
+            $firstNote = & $noteOf $first.Id
+            $prevButton = & $module { $script:view.Nav.Children[0] }
+            $navRoute = Test-WtTestInputPath -View $view -Element $prevButton -Target $prevButton
+            # 안 고친 폼은 달 이동에 묻지 않는다
+            & $answerAtt ''; & $openFirst; & $pressAtt $prevButton
+            $quiet = & $attState
+            & $toNovember
+            # 고친 폼: 달 이동 · 다른 행 · 직접 입력 · 업무외 시작 · 다른 탭에서 열기 → 각각 [취소]로 한 번만 묻고 폼 · 고친 글 · 달 · 표 선택 그대로, 찍지 않음
+            & $answerAtt ''; & $openFirst; & $module { $script:form.Fields.note.Text = '근태 고침' }
+            $overBefore = @((Get-WtAttendanceData).Entries | Where-Object { $_.Kind -ceq 'overtime' }).Count
+            $paths = [ordered]@{
+                '달 이동' = { & $pressAtt (& $module { $script:view.Nav.Children[0] }) }
+                '다른 행' = { & $module { param($id) $script:table.SelectedItem = @($script:table.ItemsSource | Where-Object { $_.Entry.Id -ceq $id })[0] } $second.Id }
+                '직접 입력' = { & $pressAtt (& $module { $script:view.new }) }
+                '업무외 시작' = { & $pressAtt (& $module { $script:view.over }) }
+                '다른 탭에서 열기' = { & $module { param($a) Open-WtAttArgs $a } @{ Id = $second.Id } }
+            }
+            $pathStates = @(foreach ($name in $paths.Keys) { & $answerAtt 'cancel'; & $paths[$name]; "$name=$(& $attState)|$(& $module { if ($script:table.SelectedItem) { $script:table.SelectedItem.Entry.Id } })" })
+            $pathBad = @($pathStates | Where-Object { $_ -cnotlike "*=True|근태 고침|2026-11|1|$($first.Id)" })
+            $overAfter = @((Get-WtAttendanceData).Entries | Where-Object { $_.Kind -ceq 'overtime' }).Count
+            $asked = & $module { $script:saveAsked[0] }
+            $askedWant = & $module { param($e) "「$(Format-WtDate $e.StartDate 'M/d (ddd)') $(Get-WtAttKindName $e)」 기록에서 고친 내용이 저장되지 않았습니다." } $first
+            # 떠나지 않는 길(사이드바 접기 · 펴기)은 묻지 않고 폼과 고친 글을 그대로 둔다
+            & $answerAtt ''
+            $sideRoot = & $module { $script:side.Root }
+            & $pressAtt $sideRoot.FindName('Collapse'); & $placeAtt; & $pressAtt $sideRoot.FindName('Open'); & $placeAtt
+            $stay = & $attState
+            Assert-WtTest '근태 폼 떠날 때: 달 이동(좌표 경로) — 안 고치면 안 묻고, 고치면 달 이동 · 다른 행 · 직접 입력 · 업무외 시작 · 다른 탭에서 열기 모두 한 번만 묻고 [취소]면 폼 · 고친 글 · 달 · 표 선택 그대로 · 찍지 않음, 사이드바 접기는 묻지 않음' (
+                $navRoute.Ok -and $quiet -ceq 'False||2026-10|0' -and -not $pathBad.Count -and $overAfter -eq $overBefore -and $asked -ceq $askedWant -and $stay -ceq 'True|근태 고침|2026-11|0') (
+                "$($navRoute.Path) / $quiet / $($pathStates -join ' / ') / 업무외 $overBefore→$overAfter / $asked / $stay")
+            # [저장 안 함]은 버리고 옮김, [저장]은 저장하고 옮김, [저장]이 틀리면 옮기지 않고 칸 오류(공통 표시), 폼의 [취소] 단추는 묻지 않고 닫음
+            & $answerAtt 'discard'; & $pressAtt $prevButton
+            $dropped = "$(& $attState)|$(& $noteOf $first.Id)"
+            & $toNovember
+            & $answerAtt ''; & $openFirst; & $module { $script:form.Fields.note.Text = '근태 저장' }
+            & $answerAtt 'save'; & $pressAtt $prevButton
+            Wait-WtTestWrites
+            $saved = "$(& $attState)|$(& $noteOf $first.Id)"
+            & $toNovember
+            & $answerAtt ''; & $openFirst; & $module { $script:form.Fields.date.Text = '잘못된 날' }
+            & $answerAtt 'save'; & $pressAtt $prevButton
+            & $placeAtt
+            $badBox = & $module { if ($script:form) { $script:form.Fields.date } }
+            $badIcon = if ($badBox) { $badBox.Template.FindName('ErrorIcon', $badBox) }
+            $bad = "$(& $attState)|$(& $module { if ($script:form) { $script:form.Errors.date.Text } })|$(if ($badBox) { [Windows.Controls.Validation]::GetHasError($badBox) })|$(if ($badIcon) { $badIcon.Visibility })"
+            & $answerAtt ''
+            $cancelButton = & $module { if ($script:form) { $script:detail.Content.Children[0].Children[1].Children[1] } }
+            if ($cancelButton) { & $pressAtt $cancelButton }
+            $closed = & $attState
+            Assert-WtTest '근태 폼 떠날 때: [저장 안 함]은 버리고 옮기고, [저장]은 저장하고 옮기며, [저장]이 틀리면 옮기지 않고 칸 오류(빨간 선 · 아이콘), 폼의 [취소] 단추는 묻지 않고 닫는다' (
+                $dropped -ceq "False||2026-10|1|$firstNote" -and $saved -ceq 'False||2026-10|1|근태 저장' -and
+                $bad -ceq 'True|근태 저장|2026-11|1|날짜는 yyyy-MM-dd 형식으로 입력하세요.|True|Visible' -and $closed -ceq 'False||2026-11|0') "$dropped / $saved / $bad / $closed"
+            # [저장]하고 옮기면 표를 새로 그린다: 다른 행은 앞 기록을 저장하고 고른 줄의 폼 · 선택, 다른 탭에서 같은 기록을 열면 저장한 뒤 값으로 연다
+            & $answerAtt ''; & $openFirst; & $module { $script:form.Fields.note.Text = '행 옮길 때 저장' }
+            & $answerAtt 'save'; & $module { param($id) $script:table.SelectedItem = @($script:table.ItemsSource | Where-Object { $_.Entry.Id -ceq $id })[0] } $second.Id
+            Wait-WtTestWrites
+            $rowSaved = "$(& $noteOf $first.Id)|$(& $module { "$($script:form.Entry.Id)|$(if ($script:table.SelectedItem) { $script:table.SelectedItem.Entry.Id })" })"
+            & $module { $script:form.Fields.note.Text = '같은 기록 다시' }
+            & $answerAtt 'save'; & $module { param($a) Open-WtAttArgs $a } @{ Id = $second.Id }
+            Wait-WtTestWrites
+            $sameSaved = "$(& $noteOf $second.Id)|$(& $module { "$($script:form.Entry.Id)|$($script:form.Fields.note.Text)|$(Test-WtAttFormDirty)" })"
+            Assert-WtTest '근태 폼 떠날 때 [저장]: 다른 행은 앞 기록을 저장하고 고른 줄의 폼 · 선택, 다른 탭에서 같은 기록을 열면 저장한 뒤 값으로 연다' (
+                $rowSaved -ceq "행 옮길 때 저장|$($second.Id)|$($second.Id)" -and $sameSaved -ceq "같은 기록 다시|$($second.Id)|같은 기록 다시|False") "$rowSaved / $sameSaved"
+            # 앱 끝내기(셸 Stop-WtApp)도 같다: 고친 것이 없으면 묻지 않고, [취소]면 끝내지 않고 폼 그대로 · 뒤 단계 확인 창 없음, [저장 안 함]은 끝냄
+            $global:wtExitTrace = [System.Collections.Generic.List[string]]::new()
+            & $shell {
+                $script:exitTestPending = (Get-Item function:Show-WtPendingChoice).ScriptBlock; $script:exitTestWriting = (Get-Item function:Show-WtWritingChoice).ScriptBlock
+                function script:Show-WtPendingChoice { param($Purpose, $Title) $global:wtExitTrace.Add("셸:$Purpose"); 'cancel' }
+                function script:Show-WtWritingChoice { param($Purpose, [switch]$NoCancel) $global:wtExitTrace.Add("셸쓰기:$Purpose"); $w = [Diagnostics.Stopwatch]::StartNew(); while ((Test-WtDataWriting) -and $w.ElapsedMilliseconds -lt 5000) { Update-WtWork; Start-Sleep -Milliseconds 20 }; if (Test-WtDataWriting) { 'proceed' } else { 'done' } }
+            }
+            $exitRun = {
+                $global:wtExitTrace.Clear()
+                $allowed = & $shell { $script:exiting = $false; $script:frame = $null; Stop-WtApp }
+                & $shell { $script:exiting = $false }
+                "$allowed|$($global:wtExitTrace -join ',')"
+            }
+            try {
+                & $answerAtt ''
+                $exitClean = & $exitRun
+                & $openFirst; & $module { $script:form.Fields.note.Text = '끝낼 때 고침' }; & $answerAtt 'cancel'
+                $exitCancel = "$(& $exitRun)|$(& $attState)"
+                & $answerAtt 'discard'
+                $exitDrop = "$(& $exitRun)|$(& $noteOf $first.Id)"
+            } finally {
+                & $shell { Set-Item function:script:Show-WtPendingChoice $script:exitTestPending; Set-Item function:script:Show-WtWritingChoice $script:exitTestWriting; $script:exiting = $false }
+                Remove-Variable wtExitTrace -Scope Global -ErrorAction SilentlyContinue
+            }
+            Assert-WtTest '근태 폼 끝내기: 고친 것이 없으면 묻지 않고 끝냄, [취소]면 끝내지 않고 폼 그대로 · 뒤 단계 확인 창 없음, [저장 안 함]은 버리고 끝냄' (
+                $exitClean -ceq 'True|' -and $exitCancel -ceq 'False|탭|True|끝낼 때 고침|2026-11|1' -and $exitDrop -ceq 'True|탭|행 옮길 때 저장') "$exitClean / $exitCancel / $exitDrop"
+        } finally { $leaveHost.RootVisual = $null; $leaveHost.Dispose(); & $module { $script:form = $null } }
     }
 } finally {
     foreach ($t in $tests) { Remove-WtTestData $t }

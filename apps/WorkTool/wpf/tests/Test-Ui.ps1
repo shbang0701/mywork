@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 저장 묻는 창 · 입력칸 오류 · 단추 메뉴 자리 · 메뉴 항목 · 빈 화면 안내.
+    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 저장 묻는 창(겹쳐 묻지 않음) · 폼 칸 값 · 입력칸 오류 · 단추 메뉴 자리 · 메뉴 항목 · 빈 화면 안내.
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/tests/Test-Ui.ps1
 #>
@@ -199,6 +199,32 @@ try {
         Assert-WtTest "저장 묻는 창: 열리면 [저장]에 포커스 · [$($choice[$case.Button].Content)] 누르면 답 $($case.Pick) · 닫기" ($focused -and $window.Tag.Choice -ceq $case.Pick -and $closing) "포커스=$focused 답=$($window.Tag.Choice) 닫기=$closing"
         $root.Child = $null
     }
+    # 저장 묻는 창이 떠 있는 동안 또 물으면(트레이 → 종료 · 창이 뜨기 전에 온 클릭) 겹쳐 띄우지 않고 취소로 답한다.
+    # 창은 띄우지 않는 가짜로 바꾼다: 가짜 창이 떠 있는 동안 한 번 더 묻고, 닫힌 뒤 다시 물으면 평소대로 창을 만든다
+    $overlap = & (Get-Module Ui) {
+        $realDialog = (Get-Item function:New-WtSaveChoiceDialog).ScriptBlock
+        $script:fakeMade = 0; $script:fakeDepth = 0; $script:fakeNested = @()
+        function script:New-WtSaveChoiceDialog([string]$Text) {
+            $script:fakeMade++
+            $fakeWindow = [pscustomobject]@{ Tag = @{ Choice = 'save' } }
+            $fakeWindow | Add-Member ScriptMethod ShowDialog { $script:fakeDepth++; if ($script:fakeDepth -le 1) { $script:fakeNested += Read-WtSaveChoice '또 묻기' } }
+            [pscustomobject]@{ Window = $fakeWindow }
+        }
+        try { $first = Read-WtSaveChoice '처음'; $later = Read-WtSaveChoice '닫힌 뒤'; "$first|$($script:fakeNested -join ',')|$later|$script:fakeMade" }
+        finally { Set-Item function:script:New-WtSaveChoiceDialog $realDialog; $script:saveChoiceOpen = $false }
+    }
+    Assert-WtTest '저장 묻는 창: 떠 있는 동안 또 물으면 겹쳐 띄우지 않고 취소, 닫힌 뒤에는 다시 묻는다' ($overlap -ceq 'save|cancel|save|2') $overlap
+    # 편집 폼 칸 값(Get-WtFormState, 고친 폼인지 볼 때): 이름 순 「이름=값」 줄. 고르기 칸은 고른 항목, 체크 상자 묶음은 고른 Tag
+    $stateText = [Windows.Controls.TextBox]::new(); $stateText.Text = '점검'
+    $stateCombo = [Windows.Controls.ComboBox]::new(); [void]$stateCombo.Items.Add('근무'); [void]$stateCombo.Items.Add('휴가'); $stateCombo.SelectedIndex = 1
+    $stateCheck = [Windows.Controls.CheckBox]::new(); $stateCheck.IsChecked = $true
+    $stateDays = [Windows.Controls.WrapPanel]::new()
+    foreach ($tag in 'mon', 'tue', 'wed') { $dayCheck = [Windows.Controls.CheckBox]::new(); $dayCheck.Tag = $tag; $dayCheck.IsChecked = $tag -cne 'tue'; [void]$stateDays.Children.Add($dayCheck) }
+    $stateFields = @{ title = $stateText; kind = $stateCombo; allDay = $stateCheck; days = $stateDays }
+    $stateBefore = Get-WtFormState $stateFields
+    $stateDays.Children[1].IsChecked = $true; $stateAfter = Get-WtFormState $stateFields
+    Assert-WtTest '편집 폼 칸 값(Get-WtFormState): 이름 순 · 글 칸 · 고른 항목 · 체크 · 묶음의 고른 Tag, 체크 하나만 바꿔도 달라진다' (
+        $stateBefore -ceq "allDay=True`ndays=mon,wed`nkind=휴가`ntitle=점검" -and $stateAfter -ceq "allDay=True`ndays=mon,tue,wed`nkind=휴가`ntitle=점검") "$stateBefore / $stateAfter"
     # 입력칸 오류(Set-WtInputError): 글 바인딩이 없는 칸도 빨간 선 · 칸 안 오른쪽 오류 아이콘 · 이유 툴팁, 빈 문구로 지운다. 글 칸이 아니면 그대로
     $errorBox = [Windows.Controls.TextBox]::new(); Set-WtStyle $errorBox 'Input'; $errorBox.Width = 240
     $plainCombo = [Windows.Controls.ComboBox]::new()
