@@ -94,16 +94,15 @@ function Initialize-WtMemoSearchEngine {
     $script:memoNewExpression = $expr.GetMethod('New', [type[]]@([Reflection.ConstructorInfo], [Collections.Generic.IEnumerable[Linq.Expressions.Expression]])).CreateDelegate(
         [Func[Reflection.ConstructorInfo, Collections.Generic.IEnumerable[Linq.Expressions.Expression], Linq.Expressions.NewExpression]])
 
-    $textsArg = $expr::Parameter([string[]], 'texts'); $needleArg = $expr::Parameter([string], 'needle')
-    $foundVar = $expr::Variable([int[]], 'found'); $numberVar = $expr::Variable([int], 'number')
-    $textAt = $expr::ArrayIndex($textsArg, $numberVar)
+    $numberVar = $expr::Variable([int], 'number')
+    $searchInput = $expr::Parameter([object[]], 'search')
+    $texts = $expr::Convert($expr::ArrayIndex($searchInput, $expr::Constant(0)), [Collections.Generic.List[string]])
+    $needle = $expr::Convert($expr::ArrayIndex($searchInput, $expr::Constant(1)), [string])
+    $textAt = $expr::Property($texts, 'Item', [Linq.Expressions.Expression[]]@($numberVar))
     $indexOf = [string].GetMethod('IndexOf', [type[]]@([string], [StringComparison]))
     $position = $expr::Condition($expr::Equal($textAt, $expr::Constant($null, [string])), $expr::Constant(-1),
-        $expr::Call($textAt, $indexOf, [Linq.Expressions.Expression[]]@($needleArg, $expr::Constant([StringComparison]::Ordinal))))
-    $body = $expr::Block([Linq.Expressions.ParameterExpression[]]@($foundVar, $numberVar), [Linq.Expressions.Expression[]]@(
-        $expr::Assign($foundVar, $expr::NewArrayBounds([int], [Linq.Expressions.Expression[]]@($expr::ArrayLength($textsArg)))),
-        (New-WtMemoLoopExpression $numberVar ($expr::ArrayLength($textsArg)) ($expr::Assign($expr::ArrayAccess($foundVar, [Linq.Expressions.Expression[]]@($numberVar)), $position))), $foundVar))
-    $script:memoPositionsFactory = $expr::Lambda([Func[string[], string, int[]]], $body, [Linq.Expressions.ParameterExpression[]]@($textsArg, $needleArg)).Compile()
+        $expr::Call($textAt, $indexOf, [Linq.Expressions.Expression[]]@($needle, $expr::Constant([StringComparison]::Ordinal))))
+    $script:memoPositionsFactory = New-WtMemoArrayFactory ([int]) $searchInput $numberVar ($expr::Property($texts, 'Count')) $position
 
     # 조건 잎의 배열 판정. 해석/날짜 검증/연결 대상 오류는 PowerShell 경로에 그대로 둔다.
     $maskInput = $expr::Parameter([object[]], 'input')
@@ -410,8 +409,14 @@ function Set-WtMemoIndexEntry($Index, [object[]]$Memos) {
         }
         $title = [string]$memo.title; $body = [string]$memo.body; $titleLower = $title.ToLowerInvariant()
         $c.Id[$n] = $id; $c.Title[$n] = $title; $c.Body[$n] = $body
-        if (-not $bodyLowers.ContainsKey($body)) { $bodyLowers[$body] = $body.ToLowerInvariant() }
-        $c.TitleLower[$n] = $titleLower; $c.BodyLower[$n] = $bodyLowers[$body]
+        $bodyLower = $null
+        if (-not $bodyLowers.TryGetValue($body, [ref]$bodyLower)) {
+            $bodyLower = $body.ToLowerInvariant()
+            # 소문자로 바꿔도 같은 본문이면 검색 색인도 불변인 원문 문자열을 그대로 보유한다.
+            if ([string]::Equals($body, $bodyLower, [StringComparison]::Ordinal)) { $bodyLower = $body }
+            $bodyLowers.Add($body, $bodyLower)
+        }
+        $c.TitleLower[$n] = $titleLower; $c.BodyLower[$n] = $bodyLower
         $tags = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($tag in $memo.tags) { if ($tag -is [string]) { [void]$tags.Add($tag.ToLowerInvariant()) } }
         $c.Tags[$n] = $tags; $c.Folder[$n] = [string]$memo.folder; $c.Pinned[$n] = ($memo.pinned -eq $true)
@@ -519,8 +524,7 @@ function Get-WtMemoQueryTerms($Node, [switch]$Negated) {
 function Get-WtMemoTextPositions($Index, [string]$Field, [string]$Needle, $Positions) {
     $key = $Field + ':' + $Needle
     if ($Positions.ContainsKey($key)) { return , $Positions[$key] }
-    [string[]]$texts = if ($Field -eq 'title') { $Index.Columns.TitleLower.ToArray() } else { $Index.Columns.BodyLower.ToArray() }
-    $found = $script:memoPositionsFactory.Invoke($texts, $Needle)
+    $found = $script:memoPositionsFactory.Invoke([object[]]@($Index.Columns[$Field + 'Lower'], $Needle))
     $Positions[$key] = $found
     , $found
 }
@@ -749,8 +753,7 @@ function Find-WtMemo {
             if ($null -ne $stamp) { $openedTicks[$n] = $stamp.UtcTicks }
         }
         $baseOrder = Get-WtMemoSortOrder $Index $Sort $Dir $openedTicks
-        $ranks = [int[]]::new($count); $starts = [int[]]::new($count); $locations = [object[]]::new($count)
-        [string[]]$tl = $c.TitleLower.ToArray(); [string[]]$bl = $c.BodyLower.ToArray(); [string[]]$titleText = $c.Title.ToArray()
+        $titleText = $c.Title.ToArray()
         if ($termCount) {
             [string[]]$needleArray = $needles.ToArray(); [string[]]$fieldArray = $termFields.ToArray()
             $titlePositions = [int[][]]::new($termCount); $bodyPositions = [int[][]]::new($termCount)
@@ -758,10 +761,11 @@ function Find-WtMemo {
                 if ($fieldArray[$t] -ne 'body') { $titlePositions[$t] = Get-WtMemoTextPositions $Index 'title' $needleArray[$t] $positions }
                 if ($fieldArray[$t] -ne 'title') { $bodyPositions[$t] = Get-WtMemoTextPositions $Index 'body' $needleArray[$t] $positions }
             }
-            $rankColumns = [object[]]@($tl, $titleText, $needleArray, $titlePositions, $bodyPositions, $mask, $joined)
+            $rankColumns = [object[]]@($c.TitleLower.ToArray(), $titleText, $needleArray, $titlePositions, $bodyPositions, $mask, $joined)
             $rankResult = $script:memoRanksFactory.Invoke($rankColumns)
             $ranks = $rankResult[0]; $starts = $rankResult[1]; $locations = $rankResult[2]
         } else {
+            $ranks = [int[]]::new($count); $starts = [int[]]::new($count); $locations = [object[]]::new($count)
             [Array]::Fill[int]($ranks, 3); [Array]::Fill[object]($locations, [object[]]::new(0))
         }
         $items = $script:memoSelectFactory.Invoke($baseOrder, $mask, $ranks, ($termCount -gt 0 -and -not $Sort)); $length = $items.Length
@@ -1027,18 +1031,24 @@ function Initialize-WtMemoWorker($Context) {
 # 화면에서 메모 수만큼 반복하는 속성 조회/행 생성은 기존 검색 엔진과 같은 기본 .NET 식 트리로 묶는다.
 function New-WtMemoFieldExpression($Object, [string]$Name, [switch]$String) {
     $e = [Linq.Expressions.Expression]
-    $ps = $e::Call([Management.Automation.PSObject].GetMethod('AsPSObject', [type[]]@([object])), [Linq.Expressions.Expression[]]@($Object))
+    $ps = $e::Variable([Management.Automation.PSObject], 'record')
+    $property = $e::Variable([Management.Automation.PSPropertyInfo], 'property')
+    $wrap = $e::Call([Management.Automation.PSObject].GetMethod('AsPSObject', [type[]]@([object])), [Linq.Expressions.Expression[]]@($Object))
     $base = $e::Property($ps, 'BaseObject')
-    $properties = $e::Property($ps, 'Properties')
-    $property = $e::Call($properties, [Management.Automation.PSMemberInfoCollection[Management.Automation.PSPropertyInfo]].GetMethod('get_Item', [type[]]@([string])), [Linq.Expressions.Expression[]]@($e::Constant($Name)))
     $none = $e::Constant($null, [object])
-    $value = $e::Condition($e::Equal($property, $e::Constant($null, [Management.Automation.PSPropertyInfo])), $none, $e::Property($property, 'Value'))
-    $value = $e::Condition($e::TypeIs($base, [Collections.IDictionary]),
-        $e::Call($e::Convert($base, [Collections.IDictionary]), [Collections.IDictionary].GetMethod('get_Item'), [Linq.Expressions.Expression[]]@($e::Constant($Name, [object]))), $value)
-    $value = $e::Condition($e::Equal($Object, $none), $none, $value)
+    $find = $e::Property($e::Property($ps, 'Properties'), 'Item', [Linq.Expressions.Expression[]]@($e::Constant($Name)))
+    $readProperty = $e::Block($e::Assign($property, $find),
+        $e::Condition($e::Equal($property, $e::Constant($null, [Management.Automation.PSPropertyInfo])), $none, $e::Property($property, 'Value')))
+    $readKey = $e::Property($e::Convert($base, [Collections.IDictionary]), 'Item', [Linq.Expressions.Expression[]]@($e::Constant($Name, [object])))
+    $read = $e::Block([Linq.Expressions.ParameterExpression[]]@($ps, $property), [Linq.Expressions.Expression[]]@(
+        $e::Assign($ps, $wrap), $e::Condition($e::TypeIs($base, [Collections.IDictionary]), $readKey, $readProperty)))
+    $value = $e::Condition($e::Equal($Object, $none), $none, $read)
     if ($String) {
-        return $e::Coalesce($e::Convert($e::Call([Management.Automation.LanguagePrimitives].GetMethod('ConvertTo', [type[]]@([object], [type])),
-            [Linq.Expressions.Expression[]]@($value, $e::Constant([string], [type]))), [string]), $e::Constant(''))
+        $raw = $e::Variable([object], 'value')
+        $convert = $e::Call([Management.Automation.LanguagePrimitives].GetMethod('ConvertTo', [type[]]@([object], [type])),
+            [Linq.Expressions.Expression[]]@($raw, $e::Constant([string], [type])))
+        return $e::Block([Linq.Expressions.ParameterExpression[]]@($raw), [Linq.Expressions.Expression[]]@(
+            $e::Assign($raw, $value), $e::Coalesce($e::TypeAs($raw, [string]), $e::Coalesce($e::Convert($convert, [string]), $e::Constant('')))))
     }
     $value
 }

@@ -48,6 +48,11 @@ try {
     Assert-WtTest '문서: 맨 위 폴더 밖은 빈 차례' ((Get-WtDocChain @($docRoot) 'Z:\other').Count -eq 0)
     Assert-WtTest '문서: 경로 표시' ((Format-WtDocPathLabel @($docRoot) (Join-Path $docRoot '운영\점검')) -eq '문서 루트 › 운영 › 점검' -and (Format-WtDocPathLabel @($docRoot) 'Z:\a') -eq 'Z:\a')
     Assert-WtTest '문서: 이름 거르기' (@(Find-WtDocEntry $de '계정 목록').Count -eq 1 -and @(Find-WtDocEntry $de '').Count -eq 4)
+    $names = @(foreach ($n in '보고-B2.TXT', '보고-a1.txt', '보고-c3.txt') { [pscustomobject]@{ Name = $n } })
+    $hits = @(Find-WtDocEntry $names "  [ab]?`t.TxT  ")
+    Assert-WtTest '문서 필터: 와일드카드 · 대소문자 · 공백을 적용하고 원래 행과 순서를 보존' (
+        $hits.Count -eq 2 -and [object]::ReferenceEquals($hits[0], $names[0]) -and
+        [object]::ReferenceEquals($hits[1], $names[1]) -and @(Find-WtDocEntry $names '없는 글').Count -eq 0)
     $xl = Join-Path $docRoot '계정 목록.xlsx'
     Assert-WtTest '문서: 즐겨찾기 넣기 · 빼기' ((Switch-WtDocPin $xl) -and (Test-WtDocPinned $xl) -and -not (Switch-WtDocPin $xl) -and -not (Test-WtDocPinned $xl))
     [void](Switch-WtDocPin 'Z:\없는\파일.xlsx')

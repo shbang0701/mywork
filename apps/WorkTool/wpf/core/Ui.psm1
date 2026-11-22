@@ -731,40 +731,8 @@ $script:stylesXaml = @'
     <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
     <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
-    <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
-      </Trigger>
-      <Trigger Property="IsPressed" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
-      </Trigger>
-      <Trigger Property="IsEnabled" Value="False">
-        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
-    <Setter Property="Opacity" Value="1"/>
-      </Trigger>
-    </Style.Triggers>
   </Style>
-  <Style x:Key="Memo.Tab.Current" TargetType="Button" BasedOn="{StaticResource Memo.Tab}">
-    <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Accent}"/>
-    <Style.Triggers>
-      <Trigger Property="IsMouseOver" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/>
-      </Trigger>
-      <Trigger Property="IsPressed" Value="True">
-        <Setter Property="Background" Value="{DynamicResource B.Fill.Pressed.Surface}"/>
-      </Trigger>
-      <Trigger Property="IsEnabled" Value="False">
-        <Setter Property="Background" Value="{DynamicResource B.Bg.Canvas}"/>
-    <Setter Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/>
-    <Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/>
-    <Setter Property="Opacity" Value="1"/>
-      </Trigger>
-    </Style.Triggers>
-  </Style>
+  <Style x:Key="Memo.Tab.Current" TargetType="Button" BasedOn="{StaticResource Memo.Tab.Selected}"/>
   <Style x:Key="Memo.TabText" TargetType="TextBlock" BasedOn="{StaticResource T.Body}">
     <Setter Property="TextWrapping" Value="NoWrap"/>
     <Setter Property="TextTrimming" Value="CharacterEllipsis"/>

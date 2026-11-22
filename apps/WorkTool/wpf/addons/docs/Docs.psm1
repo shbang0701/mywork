@@ -153,9 +153,16 @@ function Format-WtDocPathLabel([string[]]$Roots, [string]$Path) {
 
 # 이름에 낱말이 모두 들어 있는 항목 (띄어 쓰면 AND)
 function Find-WtDocEntry([object[]]$Entries, [string]$Query) {
-    $words = @($Query -split '\s+' | Where-Object { $_ })
-    if (-not $words.Count) { return $Entries }
-    $Entries | Where-Object { $n = $_.Name; -not ($words | Where-Object { $n -notlike "*$_*" }) }
+    $patterns = @(foreach ($word in [regex]::Matches($Query, '\S+')) { "*$($word.Value)*" })
+    if (-not $patterns.Count) { return $Entries }
+    foreach ($entry in $Entries) {
+        $name = $entry.Name
+        $matched = $true
+        foreach ($pattern in $patterns) {
+            if ($name -notlike $pattern) { $matched = $false }
+        }
+        if ($matched) { $entry }
+    }
 }
 
 # ---- 열기 ------------------------------------------------------------------------------------

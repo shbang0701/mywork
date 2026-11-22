@@ -552,6 +552,16 @@ try {
     }
     Write-MemoPerf '메모 하나 본문/연결 갱신' $times
 
+    $bodyMemo = [pscustomobject]@{ id = 'body-case'; title = ''; body = '한글 abc'; tags = @() }
+    $bodyIndex = New-WtMemoIndex @($bodyMemo)
+    $sameBody = [object]::ReferenceEquals($bodyIndex.Columns.Body[0], $bodyIndex.Columns.BodyLower[0])
+    $bodyMemo.body = '한글 AbC Σ'
+    Update-WtMemoIndex -Index $bodyIndex -Memo $bodyMemo
+    $bodyHit = Find-WtMemo -Index $bodyIndex -Query 'body:abc' -SkipBacklinks
+    Assert-WtTest '메모 색인: 같은 본문은 공유하고 혼합 대소문자 편집 뒤에도 원문과 일치 위치를 보존' (
+        $sameBody -and $bodyIndex.Columns.BodyLower[0] -ceq $bodyMemo.body.ToLowerInvariant() -and
+        $bodyHit.Count -eq 1 -and $bodyHit.Items[0].Matches[0].Start -eq 3 -and $bodyHit.Items[0].Snippet -clike '*AbC Σ*')
+
     # 연결 해석은 메모 하나에 약 12ms다. 한꺼번에 하면 메모 3,000개의 첫 찾기가 36초 걸렸다
     $linkMemos = @(foreach ($i in 1..6) { [pscustomobject]@{ id = "l$i"; title = "연결 $i"; body = $(if ($i % 2) { "[[연결 $($i + 1)]]" } else { '연결 없음' }); tags = @() } })
     $stepped = New-WtMemoIndex $linkMemos
@@ -918,6 +928,16 @@ try {
     Assert-WtTest 'WPF 메모 칸: Ctrl+\로 지금 메모를 오른쪽 칸에 나눠 연다' ($s.Panes -eq 2 -and $s.Tabs[1] -eq 'ma' -and $s.Active -eq 1 -and (& $memoModule { $script:ui.Splitter.Visibility }) -eq 'Visible')
     $styles = & $memoModule { @($script:panes[0].Current.Style, $script:panes[1].Current.Style) -join ',' }
     Assert-WtTest 'WPF 메모 칸: 포커스가 있는 칸의 탭만 강조, 다른 칸은 덜 강조' ($styles -eq 'Memo.Tab.Selected,Memo.Tab.Current') $styles
+    foreach ($button in (& $memoModule { foreach ($pane in $script:panes) { $pane.Current.Button } })) {
+        $route = Test-WtTestInputPath -View $view -Element $button -Target $button
+        $selected = $button.Background -eq $button.FindResource('B.Fill.Hover.Surface') -and $button.BorderBrush -eq $button.FindResource('B.Accent')
+        try {
+            $button.IsEnabled = $false
+            $disabled = $button.Background -eq $button.FindResource('B.Bg.Canvas') -and $button.Foreground -eq $button.FindResource('B.Text.Disabled') -and
+                $button.BorderBrush -eq $button.FindResource('B.Border.Muted') -and $button.Opacity -eq 1
+        } finally { $button.ClearValue([Windows.UIElement]::IsEnabledProperty) }
+        Assert-WtTest 'WPF 메모 탭: 나눈 두 칸의 선택 표시 · 비활성 색 · 실제 좌표 입력 경로' ($selected -and $disabled -and $route.Ok) $route.Path
+    }
     Set-TestBody 1 'synced text'
     $st0 = & $memoModule { $script:panes[0].Status }; $st1 = & $memoModule { $script:panes[1].Status }
     Assert-WtTest 'WPF 메모 칸: 저장 상태는 칸마다 (고친 칸만 저장 안 됨)' ((@(Get-WtTestTexts $st1) -contains '저장 안 됨') -and -not (@(Get-WtTestTexts $st0) -contains '저장 안 됨'))
