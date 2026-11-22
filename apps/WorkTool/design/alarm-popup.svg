@@ -1,0 +1,218 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1000" viewBox="0 0 1240 1000" role="img" aria-labelledby="title desc">
+  <title id="title">WorkTool 알람 시안 — 알람 창 · 설정 알림 · 일정 폼 알람 자세히</title>
+  <desc id="desc">2026-11-22 시안. 값은 apps/WorkTool/design/README.md 7절 「알람 창」, 8절 일정 · 설정·도움말. 하늘(기본) 색. 가짜 일정 이름만 씁니다.</desc>
+  <defs>
+    <!-- 알람(Ringer) · 알람 꺼짐(QuietHours) · 더 보기 · 닫기 · 펼침 아이콘을 도형으로 그린다(글꼴 없이도 보이게) -->
+    <g id="bell"><path d="M8 1.6c-2.4 0-4.1 1.8-4.1 4.3v2.7L2.6 11h10.8l-1.3-2.4V5.9C12.1 3.4 10.4 1.6 8 1.6z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.4 12.6a1.6 1.6 0 0 0 3.2 0" fill="none" stroke="currentColor" stroke-width="1.2"/></g>
+    <g id="moon"><path d="M10.6 2.2a5.6 5.6 0 1 0 3.2 9.6A4.6 4.6 0 0 1 10.6 2.2z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></g>
+    <g id="more"><circle cx="3" cy="8" r="1" fill="currentColor"/><circle cx="8" cy="8" r="1" fill="currentColor"/><circle cx="13" cy="8" r="1" fill="currentColor"/></g>
+    <g id="close"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></g>
+    <g id="down"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <g id="right"><path d="M4.5 2.5L8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <g id="check"><path d="M3 6.5l2.5 2.5 5-5.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></g>
+  </defs>
+  <g font-family="Segoe UI, 'Malgun Gothic', sans-serif">
+    <rect width="1240" height="1000" fill="#F5F7FA"/>
+    <text x="24" y="34" font-size="20" fill="#1D2B3A">WorkTool 알람 시안 — 알람 창 · 설정 「알림」 · 일정 폼 「알람 자세히」</text>
+    <text x="24" y="56" font-size="12" fill="#465668">값: apps/WorkTool/design/README.md 7절 「알람 창」 · 8절 일정 · 설정·도움말. 하늘(기본) 색, 배율 100%. 일정 이름은 가짜 값입니다.</text>
+
+    <!-- ① 알람 창 -->
+    <rect x="24" y="72" width="600" height="912" rx="8" fill="#FFFFFF" stroke="#DAE0E6"/>
+    <text x="40" y="98" font-size="14" font-weight="600" fill="#1D2B3A">① 알람 창 — 오른쪽 아래 16 · 위로 쌓기 8 · 맨 위 · 포커스 안 뺏음</text>
+    <rect x="40" y="112" width="568" height="600" fill="#E3EAF1"/>
+    <text x="56" y="136" font-size="12" fill="#526172">다른 프로그램 화면(앱 창은 트레이로 숨어 있어도 뜸)</text>
+    <rect x="40" y="672" width="568" height="40" fill="#2B3440"/>
+    <text x="56" y="697" font-size="12" fill="#C9D3DD">작업 표시줄</text>
+
+    <!-- 「이 일정 알람 끄기」 뒤 모습 -->
+    <text x="56" y="164" font-size="12" fill="#526172">「이 일정 알람 끄기」 뒤</text>
+    <g transform="translate(56 172)">
+      <rect x="0.5" y="0.5" width="359" height="148" fill="#FFFFFF" stroke="#DAE0E6"/>
+      <use href="#bell" x="16" y="8" color="#226EBE"/>
+      <text x="40" y="21" font-size="12" fill="#465668">알람</text>
+      <use href="#more" x="298" y="8" color="#465668"/>
+      <use href="#close" x="330" y="8" color="#465668"/>
+      <text x="16" y="54" font-size="16" font-weight="600" fill="#1D2B3A">주간 회의</text>
+      <text x="16" y="79" font-size="14" fill="#465668">이 일정 알람을 껐습니다.</text>
+      <rect x="196" y="100" width="56" height="32" rx="4" fill="#226EBE"/>
+      <text x="224" y="121" font-size="14" fill="#FFFFFF" text-anchor="middle">확인</text>
+      <rect x="260.5" y="100.5" width="83" height="31" rx="4" fill="#FFFFFF" stroke="#CCD2D8"/>
+      <text x="302" y="121" font-size="14" fill="#1D2B3A" text-anchor="middle">실행 취소</text>
+    </g>
+
+    <!-- 쌓인 알람 창 둘: 위(하루 종일 · 더 보기 메뉴 열림), 아래(시각 일정) -->
+    <g transform="translate(232 350)">
+      <rect x="0.5" y="0.5" width="359" height="148" fill="#FFFFFF" stroke="#DAE0E6"/>
+      <use href="#bell" x="16" y="8" color="#226EBE"/>
+      <text x="40" y="21" font-size="12" fill="#465668">알람</text>
+      <rect x="292" y="2" width="28" height="28" rx="4" fill="#F3F8FD"/>
+      <use href="#more" x="298" y="8" color="#465668"/>
+      <use href="#close" x="330" y="8" color="#465668"/>
+      <text x="16" y="54" font-size="16" font-weight="600" fill="#1D2B3A">SRV-01 펌웨어 업데이트 · 서비스 점…</text>
+      <text x="16" y="79" font-size="14" fill="#465668">하루 종일</text>
+      <rect x="216" y="100" width="56" height="32" rx="4" fill="#226EBE"/>
+      <text x="244" y="121" font-size="14" fill="#FFFFFF" text-anchor="middle">확인</text>
+      <rect x="280.5" y="100.5" width="63" height="31" rx="4" fill="#FFFFFF" stroke="#CCD2D8"/>
+      <text x="312" y="121" font-size="14" fill="#1D2B3A" text-anchor="middle">5분 뒤</text>
+    </g>
+    <g transform="translate(232 507)">
+      <rect x="0.5" y="0.5" width="359" height="148" fill="#FFFFFF" stroke="#DAE0E6"/>
+      <use href="#bell" x="16" y="8" color="#226EBE"/>
+      <text x="40" y="21" font-size="12" fill="#465668">알람</text>
+      <use href="#more" x="298" y="8" color="#465668"/>
+      <use href="#close" x="330" y="8" color="#465668"/>
+      <rect x="8" y="32" width="344" height="56" rx="4" fill="#F3F8FD"/>
+      <text x="16" y="54" font-size="16" font-weight="600" fill="#1D2B3A">주간 회의</text>
+      <text x="16" y="79" font-size="14" fill="#465668">14:00 · 10분 뒤</text>
+      <text x="350" y="46" font-size="11" fill="#526172" text-anchor="end">올리면 Surface 조작색 · 누르면 그날 폼</text>
+      <rect x="216" y="100" width="56" height="32" rx="4" fill="#226EBE"/>
+      <text x="244" y="121" font-size="14" fill="#FFFFFF" text-anchor="middle">확인</text>
+      <rect x="280.5" y="100.5" width="63" height="31" rx="4" fill="#FFFFFF" stroke="#CCD2D8"/>
+      <text x="312" y="121" font-size="14" fill="#1D2B3A" text-anchor="middle">5분 뒤</text>
+    </g>
+    <!-- 더 보기 메뉴(7절 메뉴) + 하위 메뉴 -->
+    <g transform="translate(372 382)">
+      <rect x="0.5" y="0.5" width="179" height="80" rx="8" fill="#FFFFFF" stroke="#DAE0E6"/>
+      <rect x="4" y="4" width="172" height="32" rx="4" fill="#F3F8FD"/>
+      <text x="16" y="25" font-size="14" fill="#1D2B3A">이 일정 알람 끄기</text>
+      <rect x="8" y="40" width="164" height="1" fill="#E6EDF4"/>
+      <text x="16" y="66" font-size="14" fill="#1D2B3A">알람 잠시 끄기</text>
+      <use href="#right" x="156" y="54" color="#465668"/>
+    </g>
+    <g transform="translate(248 418)">
+      <rect x="0.5" y="0.5" width="119" height="72" rx="8" fill="#FFFFFF" stroke="#DAE0E6"/>
+      <text x="16" y="25" font-size="14" fill="#1D2B3A">1시간</text>
+      <text x="16" y="57" font-size="14" fill="#1D2B3A">오늘 하루</text>
+    </g>
+    <!-- 간격 표시: 오른쪽 16 · 아래 16 · 창 사이 8 -->
+    <g stroke="#C42F29" stroke-width="1" fill="none">
+      <path d="M592 600h16M592 596v8M608 596v8"/>
+      <path d="M220 656v16M216 656h8M216 672h8"/>
+      <path d="M220 499v8M216 499h8M216 507h8"/>
+    </g>
+    <g font-size="10" fill="#B42820">
+      <text x="594" y="592">16</text>
+      <text x="204" y="668">16</text>
+      <text x="208" y="506">8</text>
+    </g>
+
+    <!-- 상태 줄 · 트레이 메뉴 -->
+    <text x="40" y="744" font-size="14" font-weight="600" fill="#1D2B3A">알람 잠시 끄기 — 상태 줄 · 트레이 메뉴 · 설정 · 알람 창 어디서든</text>
+    <rect x="40" y="756" width="568" height="24" fill="#EFF6FD"/>
+    <use href="#moon" x="380" y="760" color="#526172"/>
+    <text x="398" y="773" font-size="12" fill="#465668">알람 꺼짐 ~ 15:30</text>
+    <use href="#check" x="518" y="762" color="#526172"/>
+    <text x="534" y="773" font-size="12" fill="#465668">남은 일 3</text>
+    <text x="40" y="798" font-size="11" fill="#526172">상태 줄 오른쪽 맨 앞. 누르면 바로 다시 켭니다(툴팁 「누르면 알람을 다시 켭니다.」).</text>
+    <g transform="translate(40 812)">
+      <rect x="0.5" y="0.5" width="219" height="118" fill="#FFFFFF" stroke="#C9CED6"/>
+      <text x="28" y="24" font-size="13" fill="#1D2B3A">열기</text>
+      <rect x="3" y="33" width="214" height="26" fill="#E5F1FB"/>
+      <text x="28" y="51" font-size="13" fill="#1D2B3A">알람 잠시 끄기</text>
+      <use href="#right" x="200" y="40" color="#465668"/>
+      <rect x="8" y="66" width="204" height="1" fill="#D7DBE0"/>
+      <text x="28" y="90" font-size="13" fill="#1D2B3A">종료</text>
+      <text x="0" y="146" font-size="11" fill="#526172">트레이 우클릭(Windows 기본 메뉴): 1시간 · 오늘 하루 · 다시 켤 때까지</text>
+    </g>
+    <g transform="translate(300 812)">
+      <rect x="0.5" y="0.5" width="279" height="92" fill="#FFFFFF" stroke="#C9CED6"/>
+      <text x="28" y="24" font-size="13" fill="#1D2B3A">열기</text>
+      <text x="28" y="51" font-size="13" fill="#1D2B3A">알람 다시 켜기 (꺼짐 ~ 15:30)</text>
+      <rect x="8" y="62" width="264" height="1" fill="#D7DBE0"/>
+      <text x="28" y="84" font-size="13" fill="#1D2B3A">종료</text>
+      <text x="0" y="120" font-size="11" fill="#526172">끈 동안 트레이 메뉴</text>
+    </g>
+
+    <!-- ② 설정 → 일반 → 알림 -->
+    <rect x="648" y="72" width="568" height="456" rx="8" fill="#EFF6FD" stroke="#DAE0E6"/>
+    <text x="664" y="98" font-size="14" font-weight="600" fill="#1D2B3A">② 설정 → 일반 → 알림 (화면 설정 행 아래 24)</text>
+    <rect x="664" y="112" width="536" height="400" rx="8" fill="#FFFFFF"/>
+    <text x="684" y="142" font-size="14" font-weight="600" fill="#1D2B3A">알림</text>
+    <g font-size="14">
+      <text x="684" y="173" fill="#465668">새 일정 기본 알람</text>
+      <rect x="830.5" y="152.5" width="159" height="31" rx="4" fill="#FFFFFF" stroke="#74808F"/>
+      <text x="840" y="173" fill="#1D2B3A">10분 전</text><use href="#down" x="970" y="162" color="#465668"/>
+
+      <text x="684" y="217" fill="#465668">하루 종일 알람 기준</text>
+      <rect x="830.5" y="196.5" width="159" height="31" rx="4" fill="#FFFFFF" stroke="#74808F"/>
+      <text x="840" y="217" fill="#1D2B3A">업무 시작 시각</text><use href="#down" x="970" y="206" color="#465668"/>
+      <rect x="998.5" y="196.5" width="119" height="31" rx="4" fill="#EFF6FD" stroke="#E6EDF4"/>
+      <text x="1008" y="217" fill="#A3AAB4" font-family="Consolas, monospace">09:00</text>
+
+      <text x="684" y="261" fill="#465668">늦게 켰을 때</text>
+      <rect x="830.5" y="240.5" width="239" height="31" rx="4" fill="#FFFFFF" stroke="#74808F"/>
+      <text x="840" y="261" fill="#1D2B3A">시작 뒤 30분까지 울림</text><use href="#down" x="1050" y="250" color="#465668"/>
+
+      <text x="684" y="305" fill="#465668">다시 알림</text>
+      <rect x="830.5" y="284.5" width="159" height="31" rx="4" fill="#FFFFFF" stroke="#74808F"/>
+      <text x="840" y="305" fill="#1D2B3A">5분 뒤</text><use href="#down" x="970" y="294" color="#465668"/>
+
+      <text x="684" y="349" fill="#465668">알람 소리</text>
+      <rect x="830" y="336" width="16" height="16" rx="2" fill="#226EBE"/><use href="#check" x="832" y="338" color="#FFFFFF"/>
+      <text x="856" y="349" fill="#1D2B3A">켜기</text>
+
+      <text x="684" y="393" fill="#465668">소리</text>
+      <rect x="830.5" y="372.5" width="239" height="31" rx="4" fill="#FFFFFF" stroke="#74808F"/>
+      <text x="840" y="393" fill="#1D2B3A">Windows Notify Calendar</text><use href="#down" x="1050" y="382" color="#465668"/>
+
+      <text x="684" y="437" fill="#465668">볼륨</text>
+      <rect x="830" y="430" width="168" height="4" rx="2" fill="#226EBE"/>
+      <rect x="998" y="430" width="72" height="4" rx="2" fill="#74808F"/>
+      <circle cx="998" cy="432" r="9.5" fill="#FFFFFF" stroke="#74808F"/><circle cx="998" cy="432" r="6" fill="#226EBE"/>
+      <text x="1082" y="437" font-weight="600" fill="#1D2B3A">70%</text>
+      <rect x="1124.5" y="416.5" width="75" height="31" rx="4" fill="#FFFFFF" stroke="#CCD2D8"/>
+      <text x="1162" y="437" fill="#1D2B3A" text-anchor="middle">들어 보기</text>
+
+      <text x="684" y="481" fill="#465668">알람 잠시 끄기</text>
+      <rect x="830.5" y="460.5" width="63" height="31" rx="4" fill="#FFFFFF" stroke="#CCD2D8"/>
+      <text x="862" y="481" fill="#1D2B3A" text-anchor="middle">1시간</text>
+      <rect x="901.5" y="460.5" width="79" height="31" rx="4" fill="#FFFFFF" stroke="#CCD2D8"/>
+      <text x="941" y="481" fill="#1D2B3A" text-anchor="middle">오늘 하루</text>
+      <rect x="988.5" y="460.5" width="111" height="31" rx="4" fill="#FFFFFF" stroke="#CCD2D8"/>
+      <text x="1044" y="481" fill="#1D2B3A" text-anchor="middle">다시 켤 때까지</text>
+    </g>
+    <text x="664" y="522" font-size="11" fill="#526172">앞 세 줄은 일정 탭이 등록(탭을 끄면 빠짐). 소리를 끄면 아래 칸은 비활성 + 이유 툴팁.</text>
+
+    <!-- ③ 일정 폼 — 알람 자세히 -->
+    <rect x="648" y="544" width="568" height="440" rx="8" fill="#FFFFFF" stroke="#DAE0E6"/>
+    <text x="664" y="570" font-size="14" font-weight="600" fill="#1D2B3A">③ 일정 폼 — 알람 자세히 (펼침 · 하루 종일 일정)</text>
+    <g font-size="14">
+      <text x="680" y="604" fill="#465668">알람</text>
+      <rect x="680.5" y="612.5" width="255" height="31" rx="4" fill="#FFFFFF" stroke="#74808F"/>
+      <text x="690" y="633" fill="#1D2B3A">10분 전</text><use href="#down" x="916" y="622" color="#465668"/>
+      <rect x="680" y="648" width="256" height="28" rx="4" fill="#F3F8FD"/>
+      <use href="#down" x="684" y="656" color="#465668"/>
+      <text x="698" y="666" font-size="12" fill="#465668">알람 자세히</text>
+
+      <text x="680" y="698" fill="#465668">소리</text>
+      <rect x="680.5" y="706.5" width="255" height="31" rx="4" fill="#FFFFFF" stroke="#74808F"/>
+      <text x="690" y="727" fill="#1D2B3A">끔</text><use href="#down" x="916" y="716" color="#465668"/>
+      <text x="680" y="770" fill="#465668">다시 알림</text>
+      <rect x="680.5" y="778.5" width="255" height="31" rx="4" fill="#FFFFFF" stroke="#74808F"/>
+      <text x="690" y="799" fill="#1D2B3A">10분</text><use href="#down" x="916" y="788" color="#465668"/>
+      <text x="680" y="842" fill="#465668">늦게 켰을 때</text>
+      <rect x="680.5" y="850.5" width="255" height="31" rx="4" fill="#FFFFFF" stroke="#74808F"/>
+      <text x="690" y="871" fill="#1D2B3A">전역 따름 (30분)</text><use href="#down" x="916" y="860" color="#465668"/>
+      <text x="680" y="914" fill="#465668">기준 시각</text>
+      <rect x="680.5" y="922.5" width="119" height="31" rx="4" fill="#FFFFFF" stroke="#74808F"/>
+      <text x="690" y="943" fill="#526172">전역 따름</text>
+    </g>
+    <g transform="translate(968 600)">
+      <text x="0" y="0" font-size="12" font-weight="600" fill="#1D2B3A">접힌 줄(덮어쓴 값 요약)</text>
+      <use href="#right" x="4" y="14" color="#465668"/>
+      <text x="18" y="24" font-size="12" fill="#465668">알람 자세히</text>
+      <text x="86" y="24" font-size="12" fill="#526172">· 소리 끔 · 다시 알림…</text>
+      <text x="0" y="42" font-size="11" fill="#526172">(폭이 모자라면 요약 끝을 말줄임)</text>
+      <text x="0" y="64" font-size="12" font-weight="600" fill="#1D2B3A">알람이 없음이면 비활성</text>
+      <use href="#right" x="4" y="78" color="#A3AAB4"/>
+      <text x="18" y="88" font-size="12" fill="#A3AAB4">알람 자세히</text>
+      <rect x="0.5" y="98.5" width="227" height="25" rx="4" fill="#FFFFFF" stroke="#DAE0E6"/>
+      <text x="8" y="115" font-size="12" fill="#1D2B3A">알람을 고르면 바꿀 수 있습니다.</text>
+      <text x="0" y="160" font-size="12" font-weight="600" fill="#1D2B3A">우선순위</text>
+      <text x="0" y="180" font-size="12" fill="#465668">회차(이 회차만) → 일정 → 전역</text>
+      <text x="0" y="198" font-size="12" fill="#465668">「전역 따름 (값)」의 괄호는 지금 설정</text>
+      <text x="0" y="216" font-size="12" fill="#465668">기준 시각은 하루 종일 일정만 보임</text>
+      <text x="0" y="234" font-size="12" fill="#465668">폼을 열 때마다 접힘</text>
+    </g>
+  </g>
+</svg>

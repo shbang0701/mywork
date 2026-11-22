@@ -6,7 +6,7 @@
     - 창 틀 · 왼쪽 메뉴(애드온) · 테마(파스텔 7색 · 투명도 · 글자 크기) · 설정 · 도움말이 들어 있다.
     - 처음 실행하면 예전 WorkTool(WinForms)의 data 폴더를 찾아 메모 · 일정 · 근태를 읽어 와서 보여 준다.
       예전 데이터는 바꾸지 않는다. 새 버전 데이터는 문서\WorkTool 에 저장된다.
-    - 편집 · 알람은 2단계에서 옮긴다. 그때까지는 예전 WorkTool을 계속 쓴다.
+    - 일정 알람은 앱이 떠 있는 동안(트레이로 숨었을 때도) 화면 오른쪽 아래 작은 창과 소리로 알린다.
 
 .EXAMPLE
     .\Start-WorkTool.ps1
@@ -71,7 +71,7 @@ if ($env:WORKTOOL_HARDWARE_RENDER -ne '1') {
 }
 
 #region 모듈 불러오기 (묶음 파일에서는 이 구역이 모듈 소스로 바뀐다)
-$coreModules = 'Work', 'Records', 'Storage', 'Settings', 'Calendar', 'Theme', 'Ui', 'Highlight', 'Markdown', 'Mermaid', 'Addons', 'Shortcuts', 'Pages', 'Shell'
+$coreModules = 'Work', 'Records', 'Storage', 'Settings', 'Calendar', 'Theme', 'Ui', 'Notice', 'Highlight', 'Markdown', 'Mermaid', 'Addons', 'Shortcuts', 'Pages', 'Shell'
 foreach ($name in $coreModules) {
     Import-Module (Join-Path $PSScriptRoot "core\$name.psm1") -Force -DisableNameChecking
 }

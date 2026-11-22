@@ -370,6 +370,16 @@ function Update-WtStatusBar {
                 } catch { continue }
             }
         }
+        # 알람을 잠시 끈 동안: 오른쪽 맨 앞(오른쪽 줄은 오른쪽부터 쌓이므로 마지막에 넣는다)에 코어 항목. 누르면 바로 다시 켠다
+        $pause = try { Get-WtNoticePause } catch { $null }
+        if ($pause -and $pause.Paused) {
+            $button = New-WtStatusButton $pause.Text -Icon 0xE708
+            $button.ToolTip = '누르면 알람을 다시 켭니다.'
+            [System.Windows.Automation.AutomationProperties]::SetAutomationId($button, 'Status-core-pause')
+            [System.Windows.Automation.AutomationProperties]::SetName($button, $pause.Text)
+            $button.Add_Click({ param($s, $e) [void](Set-WtNoticePause off) })
+            [void]$script:ui.StatusRight.Children.Add($button)
+        }
         Set-WtStatusLayout $script:ui.StatusLeft
     }
 }
@@ -765,6 +775,8 @@ function Stop-WtApp {
     try { Stop-WtAllWork } catch { }
     if ($script:warmTimer) { $script:warmTimer.Stop() }
     if ($script:badgeTimer) { $script:badgeTimer.Stop() }
+    try { Stop-WtAddonTicks } catch { }
+    try { Clear-WtNotices } catch { }
     try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
     try { if ($script:icon) { $script:icon.Dispose() } } catch { }
     if ($script:frame) { $script:frame.Continue = $false }
@@ -780,14 +792,42 @@ function Update-WtCloseTip {
     $script:ui.CloseButton.ToolTip = if ([bool](Get-WtSetting 'window.closeToTray')) { '닫기 (트레이에서 계속 실행)' } else { '닫기' }
 }
 
+# 트레이 메뉴(디자인 6절): 열기 · 알람 잠시 끄기 ›(1시간 · 오늘 하루 · 다시 켤 때까지) · 구분선 · 종료.
+# 알람을 끈 동안은 잠시 끄기 대신 「알람 다시 켜기 (꺼짐 ~ 15:30)」. 열 때마다 지금 상태로 맞춘다
+function New-WtTrayMenu {
+    $menu = [System.Windows.Forms.ContextMenuStrip]::new()
+    [void]$menu.Items.Add('열기', $null, { Show-WtMainWindow })
+    $pause = [System.Windows.Forms.ToolStripMenuItem]::new('알람 잠시 끄기')
+    foreach ($mode in @(@('hour', '1시간'), @('today', '오늘 하루'), @('manual', '다시 켤 때까지'))) {
+        $sub = [System.Windows.Forms.ToolStripMenuItem]::new($mode[1])
+        $sub.Tag = $mode[0]
+        $sub.Add_Click({ param($s, $e) [void](Set-WtNoticePause ([string]$s.Tag)) })
+        [void]$pause.DropDownItems.Add($sub)
+    }
+    $resume = [System.Windows.Forms.ToolStripMenuItem]::new('알람 다시 켜기')
+    $resume.Add_Click({ [void](Set-WtNoticePause off) })
+    [void]$menu.Items.Add($pause)
+    [void]$menu.Items.Add($resume)
+    [void]$menu.Items.Add([System.Windows.Forms.ToolStripSeparator]::new())
+    [void]$menu.Items.Add('종료', $null, { Exit-WtApp })
+    $menu.Tag = @{ Pause = $pause; Resume = $resume }
+    $menu.Add_Opening({ param($s, $e) Update-WtTrayMenu $s })
+    Update-WtTrayMenu $menu
+    $menu
+}
+function Update-WtTrayMenu($Menu, [datetime]$Now = (Get-Date)) {
+    $state = try { Get-WtNoticePause $Now } catch { $null }
+    $paused = $state -and $state.Paused
+    $Menu.Tag.Pause.Visible = -not $paused
+    $Menu.Tag.Resume.Visible = $paused
+    if ($paused) { $Menu.Tag.Resume.Text = "알람 다시 켜기 ($($state.Text -replace '^알람 ', ''))" }
+}
+
 function New-WtTrayIcon([System.Drawing.Icon]$Icon) {
     $n = [System.Windows.Forms.NotifyIcon]::new()
     $n.Icon = $Icon
     $n.Text = 'WorkTool'
-    $menu = [System.Windows.Forms.ContextMenuStrip]::new()
-    [void]$menu.Items.Add('열기', $null, { Show-WtMainWindow })
-    [void]$menu.Items.Add('종료', $null, { Exit-WtApp })
-    $n.ContextMenuStrip = $menu
+    $n.ContextMenuStrip = New-WtTrayMenu
     $n.Add_MouseDoubleClick({ Show-WtMainWindow })
     $n.Visible = $true
     $n
@@ -832,6 +872,7 @@ function Initialize-WtShellSettings {
             'ui.opacity' { Set-WtOpacity }
             'window.closeToTray' { Update-WtCloseTip }
             'addons.disabled' { Update-WtNav }
+            'notice.pausedUntil' { Update-WtStatusBar }
         }
     }
     $script:settingHandlerRegistered = $true
@@ -959,6 +1000,8 @@ function Start-WtApp {
 
     Update-WtNav
     Start-WtNavBadgeTimer
+    # 탭이 등록한, 화면에 묶지 않은 작업(일정 알람 확인 등). 트레이로 숨거나 다른 탭을 볼 때도 돈다
+    [void](Start-WtAddonTicks)
     Update-WtCloseTip
     Set-WtOpacity
     $script:notify = New-WtTrayIcon $script:icon
@@ -975,6 +1018,8 @@ function Start-WtApp {
     } finally {
         if ($script:badgeTimer) { $script:badgeTimer.Stop() }
         if ($script:warmTimer) { $script:warmTimer.Stop() }
+        try { Stop-WtAddonTicks } catch { }
+        try { Clear-WtNotices } catch { }
         $script:warmQueue = $null
         try {
             if ($script:notify) { $script:notify.Visible = $false; $script:notify.Dispose() }
@@ -985,4 +1030,5 @@ function Start-WtApp {
 
 Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Update-WtNavBadges, Register-WtKeyOwner, Test-WtKeyOwned,
     New-WtSidePanel, Switch-WtPanelCycle, Set-WtOpacity, Test-WtOpacityNeedsRestart,
-    Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp
+    Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp,
+    New-WtTrayMenu, Update-WtTrayMenu

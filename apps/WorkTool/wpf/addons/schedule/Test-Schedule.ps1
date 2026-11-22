@@ -480,6 +480,7 @@ try {
     Assert-WtTest '일정 되살리기: 89일은 가능 · 90일은 이유로 거부' (-not $expired.Success -and $expired.Reason -and $restored.Success) "$($expired.Reason) $($restored.Reason)"
 
     # 다섯째 요일 없는 달 · 윤년 말일 · 하루 종일 알람 · 지운 항목/모르는 값 제외를 문화권 다섯 개에서 고정한다.
+    # 하루 종일 알람의 기준은 그날 업무 시작(기본 09:00, 2026-11-22 설계 16장)이라 before 360은 그날 03:00이다(전에는 0시 기준이라 전날 18:00)
     $fifth = ConvertTo-WtTestItem '{ "id":"fifth", "kind":"event", "start":{"date":"2026-01-01","time":null}, "repeat":{"freq":"monthly","days":["mon"],"nth":5,"count":3}, "alarms":[{"before":360}] }'
     $lastDay = ConvertTo-WtTestItem '{ "id":"last", "kind":"event", "start":{"date":"2028-01-31","time":null}, "repeat":{"freq":"monthly","monthDay":-1,"count":3}, "alarms":[] }'
     $thread = [Threading.Thread]::CurrentThread; $oldCulture = $thread.CurrentCulture
@@ -490,16 +491,171 @@ try {
             $f = ConvertFrom-WtScheduleItem $fifth; $l = ConvertFrom-WtScheduleItem $lastDay
             $fk = Get-WtTestKeys (Get-WtScheduleOccurrences @($f) (& $d '2026-01-01') (& $d '2026-12-31'))
             $lk = Get-WtTestKeys (Get-WtScheduleOccurrences @($l) (& $d '2028-01-01') (& $d '2028-03-31'))
-            $al = Get-WtScheduleAlarms -Now '2026-03-29T18:00:00+09:00' -Previous '2026-03-29T17:59:59+09:00' -Entries @($f)
+            $al = Get-WtScheduleAlarms -Now '2026-03-30T03:00:00+09:00' -Previous '2026-03-30T02:59:59+09:00' -Entries @($f)
             $snapshots += "$fk|$lk|$($al.Alarms.Key -join ',')"
         }
     } finally { $thread.CurrentCulture = $oldCulture }
     $expected2a = 'fifth@2026-03-30,fifth@2026-06-29,fifth@2026-08-31|last@2028-01-31,last@2028-02-29,last@2028-03-31|fifth@2026-03-30/360'
-    Assert-WtTest '일정 2a 문화권 5개: 다섯째 요일 · 윤년 말일 · 하루 종일 전날 알람 기대값 동일' (@($snapshots | Where-Object { $_ -cne $expected2a }).Count -eq 0) ($snapshots -join "`n")
+    Assert-WtTest '일정 2a 문화권 5개: 다섯째 요일 · 윤년 말일 · 하루 종일 알람(업무 시작 기준) 기대값 동일' (@($snapshots | Where-Object { $_ -cne $expected2a }).Count -eq 0) ($snapshots -join "`n")
     $hidden = Copy-WtItem $fifth; Set-WtField $hidden 'deleted' $at
     $future = Copy-WtItem $fifth; $future.kind = 'future'
-    $a = Get-WtScheduleAlarms -Now '2026-03-29T18:00:00+09:00' -Previous '2026-03-29T17:59:59+09:00' -Entries @((ConvertFrom-WtScheduleItem $hidden), (ConvertFrom-WtScheduleItem $future))
+    $a = Get-WtScheduleAlarms -Now '2026-03-30T03:00:00+09:00' -Previous '2026-03-30T02:59:59+09:00' -Entries @((ConvertFrom-WtScheduleItem $hidden), (ConvertFrom-WtScheduleItem $future))
     Assert-WtTest '알람: 지운 항목 · 읽기 전용 항목 제외' (-not $a.Alarms.Count)
+
+    # ---- 알람 연속 틱 (2026-11-22 점검) ----
+    # 앱에는 아직 판정을 부르는 타이머와 알리는 방식이 없다(설계 9.1의 2b). 붙일 타이머가 지킬 약속을 가짜 알리기로 고정한다.
+    # 틱마다 (앞 틱, 지금] 판정 → 알리기 → 받아들인 것만 기록. 창 · 소리 · 트레이 풍선은 쓰지 않는다.
+    $test = New-WtTestData 'schedule-alarm-ticks'; $tests.Add($test)
+    $alarmAt = '2026-11-20T08:00:00+09:00'
+    $store = Open-WtScheduleStore; $k = @{}
+    foreach ($pair in @(
+            @('once', @{ title = '한 번'; start = @{ date = '2026-11-23'; time = '14:00' }; alarms = @(@{ before = 10 }) }),
+            @('daily', @{ title = '매일'; start = @{ date = '2026-11-22'; time = '09:00' }; repeat = @{ freq = 'daily' }; alarms = @(@{ before = 5 }) }),
+            @('allDay', @{ title = '하루 종일'; start = @{ date = '2026-11-24'; time = $null }; alarms = @(@{ before = 360 }) }),
+            @('multi', @{ title = '여러 날'; start = @{ date = '2026-11-25'; time = $null }; end = @{ date = '2026-11-26'; time = $null }; alarms = @(@{ before = 60 }) }),
+            @('done', @{ title = '체크함'; start = @{ date = '2026-11-23'; time = '15:00' }; alarms = @(@{ before = 10 }) }),
+            @('far', @{ title = '366일 전'; start = @{ date = '2027-11-25'; time = '10:00' }; alarms = @(@{ before = 527040 }) }))) {
+        $r = Save-WtScheduleItem $store $pair[1] -At $alarmAt
+        if (-not $r.Success) { throw "알람 틱 준비 $($pair[0]): $($r.Reason)" }
+        $k[$pair[0]] = $r.Id; $store = $r.Store
+    }
+    Wait-WtTestWrites
+    $checked = Set-WtEventCheck -Event $k.done -Date '2026-11-23' -Done $true -At $alarmAt
+    Wait-WtTestWrites
+    $alarmEntries = (Get-WtScheduleData).Entries
+    $notified = [System.Collections.Generic.List[string]]::new()
+    # 틱 하나 = 붙일 타이머가 할 일. 가짜 알리기는 키만 적는다. 기록한 뒤의 상태 핸들을 돌려준다
+    function Invoke-WtTestAlarmTick([string]$Now, [string]$Previous, $State) {
+        $result = Get-WtScheduleAlarms -Now $Now -Previous $Previous -Entries $alarmEntries -StateStore $State -Done (Get-WtEventDone)
+        if (-not $result.Success) { throw "알람 틱 $Now : $($result.Reason)" }
+        foreach ($alarm in $result.Alarms) { $notified.Add($alarm.Key) }
+        if ($result.Alarms.Count) { (Save-WtScheduleAlarms $State $result.Alarms -At $Now).Store } else { $State }
+    }
+    $alarmState = Open-WtScheduleAlarmStore
+    $steps = @(7, 15, 60, 1020, 10800); $tickCount = 0
+    $clock = [DateTimeOffset]::new(2026, 11, 22, 8, 0, 0, [timespan]::FromHours(9)); $previous = Get-WtStamp $clock
+    while ($clock -lt [DateTimeOffset]::new(2026, 11, 27, 0, 0, 0, [timespan]::FromHours(9))) {
+        $clock = $clock.AddSeconds($steps[$tickCount % $steps.Count]); $tickCount++
+        $nowText = Get-WtStamp $clock
+        $alarmState = Invoke-WtTestAlarmTick $nowText $previous $alarmState; $previous = $nowText
+    }
+    $expected = @("$($k.daily)@2026-11-22/5", "$($k.daily)@2026-11-23/5", "$($k.once)@2026-11-23/10", "$($k.allDay)@2026-11-24/360",
+        "$($k.daily)@2026-11-24/5", "$($k.far)@2027-11-25/527040", "$($k.multi)@2026-11-25/60", "$($k.daily)@2026-11-25/5", "$($k.daily)@2026-11-26/5") -join ','
+    Assert-WtTest '알람 틱: 한 번 · 매일 · 하루 종일(업무 시작 기준) · 여러 날 · 366일 전이 회차마다 정확히 한 번 (7초 ~ 3시간 틱)' (
+        $checked.Success -and ($notified -join ',') -ceq $expected) "$($notified -join ',') / 틱 $tickCount"
+    Assert-WtTest '알람 틱: 체크한 회차는 울리지 않는다' ($notified -cnotcontains "$($k.done)@2026-11-23/10") ($notified -join ',')
+    $count = $notified.Count
+    $alarmState = Invoke-WtTestAlarmTick '2026-11-23T14:00:00+09:00' '2026-11-23T08:00:00+09:00' $alarmState
+    Assert-WtTest '알람 틱: 울린 구간을 다시 봐도(겹친 틱) 또 울리지 않는다' ($notified.Count -eq $count) ($notified -join ',')
+    $unchecked = Set-WtEventCheck -Event $k.done -Date '2026-11-23' -Done $false -At $alarmAt
+    Wait-WtTestWrites
+    $alarmState = Invoke-WtTestAlarmTick '2026-11-23T14:50:00+09:00' '2026-11-23T14:49:00+09:00' $alarmState
+    Assert-WtTest '알람 틱: 체크를 풀면 그 회차는 울린다' ($unchecked.Success -and $notified.Count -eq $count + 1 -and
+        $notified[$notified.Count - 1] -ceq "$($k.done)@2026-11-23/10") ($notified -join ',')
+    $moved = Save-WtScheduleItem (Get-WtScheduleData).Store @{ start = @{ date = '2026-11-23'; time = '15:30' } } -Id $k.once -At '2026-11-23T14:05:00+09:00'
+    Wait-WtTestWrites
+    $alarmEntries = (Get-WtScheduleData).Entries
+    $count = $notified.Count
+    $alarmState = Invoke-WtTestAlarmTick '2026-11-23T15:21:00+09:00' '2026-11-23T15:19:00+09:00' $alarmState
+    $alarmState = Invoke-WtTestAlarmTick '2026-11-23T15:22:00+09:00' '2026-11-23T15:00:00+09:00' $alarmState
+    Assert-WtTest '알람 틱: 울린 뒤 같은 날 늦춘 일정(14:00 → 15:30)은 새 시각에 한 번 더' ($moved.Success -and $moved.Id -ceq $k.once -and
+        $notified.Count -eq $count + 1 -and $notified[$notified.Count - 1] -ceq "$($k.once)@2026-11-23/10") "$($moved.Reason) $($notified -join ',')"
+    # 판정 비용: 일정 300개(매일 30 · 매주 30 · 한 번 240)에 판정 한 번. 바쁜 PC에서도 흔들리지 않게 이 프로세스의 CPU 시간으로 잰다
+    $bigEntries = @(for ($n = 0; $n -lt 300; $n++) {
+            $freq = if ($n -lt 30) { 'daily' } elseif ($n -lt 60) { 'weekly' } else { $null }
+            ConvertFrom-WtScheduleItem ([pscustomobject][ordered]@{ id = ('{0:x12}' -f (0xb00000000000 + $n)); kind = 'event'; title = "가짜 $n"; note = ''
+                    start = [ordered]@{ date = [datetime]::new(2026, 1, 1).AddDays($n).ToString('yyyy-MM-dd', $inv); time = '10:00' }; end = $null
+                    repeat = $(if ($freq) { [ordered]@{ freq = $freq } } else { $null }); alarms = @([ordered]@{ before = 10 }); tags = @(); rev = 0
+                    created = $alarmAt; updated = $alarmAt; deleted = $null; origin = $null })
+        })
+    $dayCount = @(Get-WtScheduleOccurrences $bigEntries (& $d '2026-11-24') (& $d '2026-11-24')).Count
+    # 처음 틱(목록이 바뀐 뒤): 매번 새 배열이라 색인 · 펼친 결과를 새로 만든다. 다음 틱(같은 목록): 펼친 결과를 다시 쓴다
+    $cpu = @(foreach ($round in 1..3) {
+            $t0 = [Diagnostics.Process]::GetCurrentProcess().TotalProcessorTime
+            $big = Get-WtScheduleAlarms -Now '2026-11-24T09:50:05+09:00' -Previous '2026-11-24T09:49:50+09:00' -Entries @($bigEntries)
+            ([Diagnostics.Process]::GetCurrentProcess().TotalProcessorTime - $t0).TotalMilliseconds
+        }) | Sort-Object
+    [void](Get-WtScheduleAlarms -Now '2026-11-24T09:50:05+09:00' -Previous '2026-11-24T09:49:50+09:00' -Entries $bigEntries -Late 30)
+    $steady = @(foreach ($round in 1..3) {
+            $t0 = [Diagnostics.Process]::GetCurrentProcess().TotalProcessorTime
+            $bigTimer = Get-WtScheduleAlarms -Now '2026-11-24T09:50:05+09:00' -Previous '2026-11-24T09:49:50+09:00' -Entries $bigEntries -Late 30
+            ([Diagnostics.Process]::GetCurrentProcess().TotalProcessorTime - $t0).TotalMilliseconds
+        }) | Sort-Object
+    Assert-WtTest '알람 판정 비용: 일정 300개(매일 반복 30개)에 처음 틱 CPU 0.5초 미만(예전 366일 펼치기는 약 2.3초) · 같은 목록 다음 틱은 0.1초 미만' (
+        $big.Success -and $dayCount -gt 30 -and $big.Alarms.Count -eq $dayCount -and $cpu[0] -lt 500 -and $bigTimer.Alarms.Count -eq $dayCount -and $steady[0] -lt 100) (
+        "처음 CPU $([int]$cpu[0])ms · 다음 CPU $([int]$steady[0])ms · 알람 $($big.Alarms.Count)/$($bigTimer.Alarms.Count)/$dayCount")
+
+    # ---- 알람 2b (설계 16장): 앱 타이머 모드(-Late) · 늦은 알람 · 하루 종일 기준 · 덮어쓰기 우선순위 · 예전 파일 (화면 없이) ----
+    $test = New-WtTestData 'schedule-alarm-timer'; $tests.Add($test)
+    Assert-WtTest '알람 기본값: 새 일정 10분 전 · 하루 종일은 업무 시작 · 늦게 켰을 때 시작 뒤 30분 · 다시 알림 5분 · 소리 켬 70%' (
+        [int](Get-WtSetting 'schedule.alarmDefault') -eq 10 -and [string](Get-WtSetting 'schedule.alarmAllDay') -ceq '' -and [int](Get-WtSetting 'schedule.alarmLate') -eq 30 -and
+        [int](Get-WtSetting 'notice.snooze') -eq 5 -and [bool](Get-WtSetting 'notice.sound') -and [int](Get-WtSetting 'notice.volume') -eq 70 -and (Get-WtWorkHours)['work.start'] -ceq '09:00')
+    $store = Open-WtScheduleStore; $k = @{}
+    foreach ($pair in @(
+            @('meet', @{ title = '회의'; start = @{ date = '2026-11-23'; time = '14:00' }; alarms = @(@{ before = 10 }) }),
+            @('loud', @{ title = '덮어쓴 회의'; start = @{ date = '2026-11-23'; time = '14:00' }; alarms = @(@{ before = 10; sound = $false; snooze = 10; late = 60 }) }),
+            @('quiet', @{ title = '끈 동안'; start = @{ date = '2026-11-23'; time = '14:30' }; alarms = @(@{ before = 10 }) }),
+            @('day', @{ title = '하루 종일'; start = @{ date = '2026-11-24'; time = $null }; alarms = @(@{ before = 10 }) }),
+            @('dayAt', @{ title = '하루 종일 7시'; start = @{ date = '2026-11-24'; time = $null }; alarms = @(@{ before = 0; allDayAt = '07:00' }) }),
+            @('daily', @{ title = '매일 9시'; start = @{ date = '2026-11-23'; time = '09:00' }; repeat = @{ freq = 'daily' }; alarms = @(@{ before = 5; snooze = 15 }) }))) {
+        $r = Save-WtScheduleItem $store $pair[1] -At $alarmAt
+        if (-not $r.Success) { throw "알람 2b 준비 $($pair[0]): $($r.Reason)" }
+        $k[$pair[0]] = $r.Id; $store = $r.Store
+    }
+    # 회차 덮어쓰기: 매일 9시의 11-24 회차만 소리 켬 · 다시 알림 30 · 늦은 알람 0(회차 목록이 일정 목록을 대신함)
+    $r = Set-WtScheduleOccurrence $store $k.daily '2026-11-24' -Patch @{ alarms = @(@{ before = 5; sound = $true; snooze = 30; late = 0 }) } -At $alarmAt
+    if (-not $r.Success) { throw "알람 2b 회차: $($r.Reason)" }
+    Wait-WtTestWrites
+    $timerEntries = (Get-WtScheduleData).Entries
+    $titles = { param($Result) (@($Result.Alarms | ForEach-Object { $_.Title }) | Sort-Object -Culture 'ko-KR') -join ',' }
+    $pick = { param($Result, $Name) @($Result.Alarms | Where-Object { $_.Id -ceq $k[$Name] }) }
+    $late1355 = Get-WtScheduleAlarms -Now '2026-11-23T13:55:00+09:00' -Entries $timerEntries -Late 30
+    $late1431 = Get-WtScheduleAlarms -Now '2026-11-23T14:31:00+09:00' -Entries $timerEntries -Late 30
+    $late1501 = Get-WtScheduleAlarms -Now '2026-11-23T15:01:00+09:00' -Entries $timerEntries -Late 30
+    $drop1355 = Get-WtScheduleAlarms -Now '2026-11-23T13:55:00+09:00' -Entries $timerEntries -Late 0
+    Assert-WtTest '늦은 알람(첫 틱 = 앱을 늦게 켬): 시작 뒤 30분까지만 울림 · 0이면 버림 · 일정의 late(60)가 전역보다 먼저' (
+        (& $titles $late1355) -ceq '덮어쓴 회의,회의' -and (& $titles $late1431) -ceq '끈 동안,덮어쓴 회의' -and (& $titles $late1501) -ceq '' -and
+        (& $titles $drop1355) -ceq '덮어쓴 회의' -and -not @($late1355.Alarms | Where-Object { -not $_.Late }).Count) (
+        "$(& $titles $late1355) / $(& $titles $late1431) / $(& $titles $late1501) / $(& $titles $drop1355)")
+    $fresh = Get-WtScheduleAlarms -Now '2026-11-23T13:50:05+09:00' -Previous '2026-11-23T13:49:50+09:00' -Entries $timerEntries -Late 30
+    $sleep = Get-WtScheduleAlarms -Now '2026-11-23T14:35:00+09:00' -Previous '2026-11-23T13:00:00+09:00' -Entries $timerEntries -Late 30
+    Assert-WtTest '제때 · 잠자기: 2분 안의 틱은 제때(늦은 알람 아님) · 2분 넘게 비면 늦은 알람 규칙(시작 뒤 30분 지난 회의는 버림)' (
+        (& $titles $fresh) -ceq '덮어쓴 회의,회의' -and -not @($fresh.Alarms | Where-Object Late).Count -and
+        (& $titles $sleep) -ceq '끈 동안,덮어쓴 회의' -and @($sleep.Alarms | Where-Object Late).Count -eq 2) "$(& $titles $fresh) / $(& $titles $sleep)"
+    $dayFresh = Get-WtScheduleAlarms -Now '2026-11-24T08:50:05+09:00' -Previous '2026-11-24T08:49:50+09:00' -Entries $timerEntries -Late 30
+    $dayNight = Get-WtScheduleAlarms -Now '2026-11-23T23:50:05+09:00' -Previous '2026-11-23T23:49:50+09:00' -Entries $timerEntries -Late 30
+    $daySeven = Get-WtScheduleAlarms -Now '2026-11-24T07:00:05+09:00' -Previous '2026-11-24T06:59:50+09:00' -Entries $timerEntries -Late 30
+    $dayDirect = Get-WtScheduleAlarms -Now '2026-11-24T07:50:05+09:00' -Previous '2026-11-24T07:49:50+09:00' -Entries $timerEntries -Late 30 -AllDayAt '08:00'
+    Set-WtSetting 'work.start' '08:30'
+    $dayWork = Get-WtScheduleAlarms -Now '2026-11-24T08:20:05+09:00' -Previous '2026-11-24T08:19:50+09:00' -Entries $timerEntries -Late 30
+    Set-WtSetting 'work.start' '09:00'
+    $dayItem = @(& $pick $dayFresh 'day')
+    Assert-WtTest '하루 종일 기준: 그날 업무 시작(09:00 → 08:50, 08:30으로 바꾸면 08:20) · 설정 직접(08:00 → 07:50) · 일정 allDayAt(07:00)이 먼저 · 전날 23:50에 울리지 않음' (
+        $dayItem.Count -eq 1 -and $dayItem[0].Base -eq [datetime]'2026-11-24 09:00' -and $dayItem[0].Due -eq [datetime]'2026-11-24 08:50' -and $dayItem[0].AllDay -and
+        -not @($dayNight.Alarms).Count -and (& $titles $daySeven) -ceq '하루 종일 7시' -and (& $titles $dayDirect) -ceq '하루 종일' -and (& $titles $dayWork) -ceq '하루 종일') (
+        "$(& $titles $dayFresh) / $(@($dayNight.Alarms).Count) / $(& $titles $daySeven) / $(& $titles $dayDirect) / $(& $titles $dayWork)")
+    $morning = Get-WtScheduleAlarms -Now '2026-11-23T09:02:00+09:00' -Entries $timerEntries -Late 30
+    $nextMorning = Get-WtScheduleAlarms -Now '2026-11-24T09:02:00+09:00' -Entries $timerEntries -Late 30
+    $freshNext = Get-WtScheduleAlarms -Now '2026-11-24T08:55:05+09:00' -Previous '2026-11-24T08:54:50+09:00' -Entries $timerEntries -Late 30
+    $meetOpt = @(& $pick $fresh 'meet')[0]; $loudOpt = @(& $pick $fresh 'loud')[0]
+    $daily23 = @(& $pick $morning 'daily')[0]; $daily24 = @(& $pick $freshNext 'daily')[0]
+    Assert-WtTest '덮어쓰기 우선순위: 회차(이 회차만) > 일정 > 전역(빈 값) — 소리 · 다시 알림 · 늦은 알람' (
+        $null -eq $meetOpt.Sound -and $null -eq $meetOpt.Snooze -and $loudOpt.Sound -eq $false -and $loudOpt.Snooze -eq 10 -and
+        $daily23 -and $null -eq $daily23.Sound -and $daily23.Snooze -eq 15 -and $daily23.Late -and -not @(& $pick $nextMorning 'daily').Count -and
+        $daily24 -and $daily24.Sound -eq $true -and $daily24.Snooze -eq 30 -and -not $daily24.Late) "$($daily23 | ConvertTo-Json -Compress -Depth 2) / $($daily24 | ConvertTo-Json -Compress -Depth 2)"
+    $test = New-WtTestData 'schedule-alarm-old'; $tests.Add($test)
+    Copy-WtTestFixture 'v2-future.json'
+    $oldData = Get-WtScheduleData
+    $futureEntry = @($oldData.Entries | Where-Object { $_.Id -ceq 'f1f2f3f4f5f6' })[0]
+    $futureAlarm = Get-WtScheduleAlarms -Now '2026-10-29T08:55:05+09:00' -Previous '2026-10-29T08:54:50+09:00' -Entries $oldData.Entries -Late 30
+    Copy-WtTestFixture 'v2.json'
+    $v2Data = Get-WtScheduleData
+    $withAlarm = @($v2Data.Entries | Where-Object { $_.State -eq 'ok' -and @($_.Alarms).Count })
+    Assert-WtTest '예전 파일: 덮어쓰기 칸이 없으면 전역 따름 · 모양이 다른 값(sound "chime")도 전역 따름으로 읽고 파일 값은 그대로' (
+        $futureEntry.State -eq 'ok' -and @($futureEntry.AlarmOptions).Count -eq 1 -and $null -eq $futureEntry.AlarmOptions[0].Sound -and
+        $futureEntry.Item.alarms[0].sound -ceq 'chime' -and @($futureAlarm.Alarms).Count -eq 1 -and $null -eq $futureAlarm.Alarms[0].Sound -and
+        $withAlarm.Count -ge 2 -and -not @($withAlarm | ForEach-Object { $_.AlarmOptions } | Where-Object { $null -ne $_.Sound -or $null -ne $_.Snooze -or $null -ne $_.Late -or $null -ne $_.AllDayAt }).Count) (
+        "$($futureEntry.State) $(@($futureEntry.AlarmOptions).Count) $(@($futureAlarm.Alarms).Count) $($withAlarm.Count)")
 
     $test = New-WtTestData 'schedule-preserve-edit'; $tests.Add($test)
     Copy-WtTestFixture 'v2-future.json'
@@ -1428,6 +1584,197 @@ try {
         [IO.File]::WriteAllText((Get-WtStorePath 'schedule'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))
         & $module { Update-WtScheduleView }
         Assert-WtTest '일정 화면: 못 읽는 파일은 이유 표시 · 새로 만들기 비활성' ((Get-WtTestTexts $view | Where-Object { $_ -like '*더 새 버전*' }).Count -gt 0 -and -not (& $module { $script:side.Add.IsEnabled }))
+
+        # ---- 알람 2b 화면 (설계 16장): 앱 틱 → 알림 창 · 소리, 본문 → 그날 폼, 다시 알림, 이 일정 알람 끄기, 잠시 끄기, 폼 알람 자세히, 설정 행 ----
+        # 창 · 소리는 실제로 내지 않는다. 코어 알림 부품의 OS 자리(창 보이기 · 작업 영역 · 재생기 · 기본 소리 · 앱 창 열기)만 가짜로 바꾸고 15초 타이머를 끈다
+        $test = New-WtTestData 'schedule-alarm-notice'; $tests.Add($test)
+        $noticeModule = Get-Module Notice
+        $global:wtAlarmProbe = @{ Shown = 0; Opened = [System.Collections.Generic.List[object]]::new() }
+        $noticeSeams = & $noticeModule {
+            $saved = @{ Show = $script:showWindow; Area = $script:workArea; Player = $script:newPlayer; System = $script:systemSound; Open = $script:openPage; Timer = $script:useTimer }
+            $script:useTimer = $false
+            $script:showWindow = { param($Window) $global:wtAlarmProbe.Shown++ }
+            $script:workArea = { [System.Windows.Rect]::new(0, 0, 1920, 1040) }
+            $script:systemSound = { }
+            $script:openPage = { param($Id, $OpenArgs) $global:wtAlarmProbe.Opened.Add(@($Id, $OpenArgs)) }
+            $script:newPlayer = {
+                $fake = [pscustomobject]@{ Volume = -1.0; Opened = ''; Plays = 0 }
+                $fake | Add-Member ScriptMethod Open { param($Uri) $this.Opened = [string]$Uri }
+                $fake | Add-Member ScriptMethod Play { $this.Plays++ }
+                $fake | Add-Member ScriptMethod Stop { }
+                $fake
+            }
+            $script:player = & $script:newPlayer
+            $saved
+        }
+        $player = & $noticeModule { $script:player }
+        $click = { param($Element) $Element.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent)) }
+        $itemOf = { param($Id) @((Get-WtScheduleData).Items | Where-Object { (Test-WtRecordObject $_) -and $_.id -ceq $Id })[0] }
+        try {
+            $store = Open-WtScheduleStore; $k = @{}
+            foreach ($pair in @(
+                    @('meet', @{ title = '회의'; start = @{ date = '2026-11-23'; time = '14:00' }; alarms = @(@{ before = 10 }) }),
+                    @('loud', @{ title = '덮어쓴 회의'; start = @{ date = '2026-11-23'; time = '14:00' }; alarms = @(@{ before = 10; sound = $false; snooze = 10; late = 60 }) }),
+                    @('quiet', @{ title = '끈 동안'; start = @{ date = '2026-11-23'; time = '14:30' }; alarms = @(@{ before = 10 }) }),
+                    @('day', @{ title = '하루 종일'; start = @{ date = '2026-11-24'; time = $null }; alarms = @(@{ before = 10 }) }),
+                    @('daily', @{ title = '매일 9시'; start = @{ date = '2026-11-23'; time = '09:00' }; repeat = @{ freq = 'daily' }; alarms = @(@{ before = 5; snooze = 15 }) }))) {
+                $r = Save-WtScheduleItem $store $pair[1] -At $alarmAt
+                if (-not $r.Success) { throw "알람 화면 준비 $($pair[0]): $($r.Reason)" }
+                $k[$pair[0]] = $r.Id; $store = $r.Store
+            }
+            Wait-WtTestWrites
+            # 화면 · 앱 창이 없는 상태(트레이로 숨거나 다른 탭을 보는 것과 같음)에서 코어 틱 길로 부른다
+            & $module { $script:alarmPrevious = $null; $script:alarmState = $null; $script:alarmSeen.Clear(); $script:view = $null; $script:form = $null }
+            $addon = Get-WtAddon -Id 'schedule'
+            $ran1 = Invoke-WtAddonTick 'schedule' ([datetime]'2026-11-23 13:49:50')
+            $shown0 = $global:wtAlarmProbe.Shown; $plays0 = $player.Plays
+            $ran2 = Invoke-WtAddonTick 'schedule' ([datetime]'2026-11-23 13:50:05')
+            $open = @(Get-WtNotices)
+            $meetNotice = @($open | Where-Object { $_.Spec.Data.Id -ceq $k.meet })[0]
+            $loudNotice = @($open | Where-Object { $_.Spec.Data.Id -ceq $k.loud })[0]
+            $ran3 = Invoke-WtAddonTick 'schedule' ([datetime]'2026-11-23 13:50:20')
+            Assert-WtTest '알람 틱 → 알림 창: 코어 틱(15초)이 화면 · 앱 창 없이(트레이 상태) 판정 → 알람마다 창 하나 · 다음 틱은 그대로 · 소리는 덮어쓰기대로(끈 일정은 안 냄)' (
+                $addon.Tick -and $addon.TickSeconds -eq 15 -and $ran1 -and $ran2 -and $ran3 -and $null -eq (Get-WtAddonTickError 'schedule') -and $null -eq (Get-WtWindow) -and
+                $shown0 -eq 0 -and $global:wtAlarmProbe.Shown -eq 2 -and $open.Count -eq 2 -and $meetNotice -and $loudNotice -and $player.Plays -eq $plays0 + 1 -and @(Get-WtNotices).Count -eq 2) (
+                "틱 $ran1 $ran2 $ran3 · 창 $($global:wtAlarmProbe.Shown) · 소리 $($player.Plays - $plays0) · 오류 $(Get-WtAddonTickError 'schedule')")
+            Assert-WtTest '알림 창 내용(일정): 제목 · 「14:00 · 10분 뒤」 · 다시 알림 글(전역 5분 · 덮어쓴 일정 10분) · 소리 볼륨 70%' (
+                $meetNotice.Parts.TitleText.Text -ceq '회의' -and $meetNotice.Parts.DetailText.Text -ceq '14:00 · 10분 뒤' -and [string]$meetNotice.Parts.Snooze.Content -ceq '5분 뒤' -and
+                [string]$loudNotice.Parts.Snooze.Content -ceq '10분 뒤' -and $player.Volume -eq 0.7) "$($meetNotice.Parts.DetailText.Text) / $($meetNotice.Parts.Snooze.Content) / $($loudNotice.Parts.Snooze.Content) / $($player.Volume)"
+            & $click $meetNotice.Parts.Body
+            $opened = $global:wtAlarmProbe.Opened[$global:wtAlarmProbe.Opened.Count - 1]
+            $view = New-WtTestView 'schedule'
+            & $addon.OnOpen $opened[1]
+            $formTitle = & $module { if ($script:form) { $script:form.Fields.title.Text } }
+            Assert-WtTest '알림 본문 누름(일정): 창을 닫고 일정 탭(Id · 날짜) → 그날 · 그 일정 편집 폼' (
+                $meetNotice.Closed -and $opened[0] -ceq 'schedule' -and $opened[1].Id -ceq $k.meet -and $formTitle -ceq '회의' -and (& $module { $script:selected }) -eq [datetime]'2026-11-23') "$($opened[0]) $($opened[1].Id) $formTitle"
+            & $module { Show-WtScheduleDay }
+            Invoke-WtNoticeSnooze $loudNotice ([datetime]'2026-11-23 13:51:00')
+            Invoke-WtNoticeTick ([datetime]'2026-11-23 14:00:59')
+            $early = @(Get-WtNotices).Count -eq 0
+            Invoke-WtNoticeTick ([datetime]'2026-11-23 14:01:00')
+            $again = @(Get-WtNotices | Where-Object { $_.Spec.Data.Id -ceq $k.loud })
+            Assert-WtTest '다시 알림(일정): 덮어쓴 일정은 10분 뒤 같은 창을 다시 띄움 · 그 전 틱은 없음 · 소리는 그 일정 덮어쓰기(끔)대로' (
+                $early -and $again.Count -eq 1 -and $player.Plays -eq $plays0 + 1 -and [string]$again[0].Parts.Snooze.Content -ceq '10분 뒤')
+            $menu = New-WtNoticeMenu $again[0]
+            $menu.Items[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+            $offAlarm = (& $itemOf $k.loud).alarms[0]; $offText = $again[0].Parts.DetailText.Text
+            & $click $again[0].Parts.Undo
+            $backAlarm = (& $itemOf $k.loud).alarms[0]
+            Assert-WtTest '알림 창 「이 일정 알람 끄기」: before만 끄고 소리 · 다시 알림 · 늦은 알람 칸은 남김 · 실행 취소로 before 되돌림' (
+                [string]$menu.Items[0].Header -ceq '이 일정 알람 끄기' -and $offText -ceq '이 일정 알람을 껐습니다.' -and $null -eq $offAlarm.before -and $offAlarm.sound -eq $false -and
+                $offAlarm.snooze -eq 10 -and $offAlarm.late -eq 60 -and $backAlarm.before -eq 10 -and $again[0].Parts.DetailText.Text -ceq '알람을 다시 켰습니다.') "$($offAlarm | ConvertTo-Json -Compress) / $($backAlarm | ConvertTo-Json -Compress)"
+            $dailyNotice = Show-WtNotice (& $module { param($Id) New-WtScheduleAlarmNotice ([pscustomobject]@{ Key = "$Id@2026-11-25/5"; Title = '매일 9시'; Id = $Id; OriginalDate = '2026-11-25'
+                            Start = [datetime]'2026-11-25 09:00'; AllDay = $false; Sound = $null; Snooze = 15 }) } $k.daily) ([datetime]'2026-11-25 08:55')
+            (New-WtNoticeMenu $dailyNotice).Items[0].RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent))
+            $afterOff = Get-WtScheduleAlarms -Now '2026-11-26T08:55:05+09:00' -Previous '2026-11-26T08:54:50+09:00' -Entries (Get-WtScheduleData).Entries -Late 30
+            $dailyOff = -not @(& $pick $afterOff 'daily').Count -and $dailyNotice.Parts.Undo.Visibility -eq 'Visible'
+            & $click $dailyNotice.Parts.Undo
+            $afterUndo = Get-WtScheduleAlarms -Now '2026-11-26T08:55:05+09:00' -Previous '2026-11-26T08:54:50+09:00' -Entries (Get-WtScheduleData).Entries -Late 30
+            Assert-WtTest '알림 창 「이 일정 알람 끄기」(반복): 계열 전체를 꺼서 다음 회차부터 안 울림 · 실행 취소하면 다시 울림' ($dailyOff -and @(& $pick $afterUndo 'daily').Count -eq 1)
+            Clear-WtNotices
+            $shownBefore = $global:wtAlarmProbe.Shown
+            [void](Set-WtNoticePause hour ([datetime]'2026-11-23 14:15:00'))
+            $pausedTick = @(Invoke-WtScheduleAlarmTick ([datetime]'2026-11-23 14:20:05'))
+            [void](Set-WtNoticePause off ([datetime]'2026-11-23 14:25:00'))
+            $resumedTick = @(Invoke-WtScheduleAlarmTick ([datetime]'2026-11-23 14:25:10'))
+            $nextDay = @(Invoke-WtScheduleAlarmTick ([datetime]'2026-11-24 08:50:05'))
+            Assert-WtTest '잠시 끄기 중 알람: 창 · 소리 없이 기록만 남겨 버림 · 다시 켜도 몰아서 울리지 않음 · 그 뒤 새 알람은 울림' (
+                $pausedTick.Count -eq 1 -and $pausedTick[0].Title -ceq '끈 동안' -and $resumedTick.Count -eq 0 -and $nextDay.Count -eq 1 -and $nextDay[0].Title -ceq '하루 종일' -and
+                $global:wtAlarmProbe.Shown -eq $shownBefore + 1 -and @(Get-WtNotices).Count -eq 1) "$(@($pausedTick).Count) $(@($resumedTick).Count) $(@($nextDay | ForEach-Object Title) -join ',') 창 $($global:wtAlarmProbe.Shown - $shownBefore)"
+            Clear-WtNotices
+
+            # 폼: 새 일정 기본 알람 · 알람 자세히 저장 · 불러오기 · 기준 시각 · 이 회차만
+            & $module { Set-WtScheduleDate ([datetime]::new(2026, 11, 23)); Show-WtScheduleForm -Kind event }
+            $newDefault = & $module { @([string]$script:form.Fields.alarm.SelectedItem, (@($script:form.Fields.alarm.Items) -join ',')) }
+            Set-WtSetting 'schedule.alarmDefault' 30
+            & $module { Show-WtScheduleForm -Kind event }
+            $default30 = & $module { [string]$script:form.Fields.alarm.SelectedItem }
+            Set-WtSetting 'schedule.alarmDefault' -1
+            & $module { Show-WtScheduleForm -Kind event }
+            $defaultNone = & $module { @([string]$script:form.Fields.alarm.SelectedItem, $script:form.AlarmMore.Toggle.IsEnabled, [string]$script:form.AlarmMore.Toggle.ToolTip) }
+            Set-WtSetting 'schedule.alarmDefault' 10
+            & $module { Show-WtScheduleDay }
+            Assert-WtTest '폼 기본 알람: 새 일정은 설정값(기본 10분 전 · 30분 전 · 없음) · 선택지 없음 ~ 1시간 전 · 없음이면 알람 자세히 끔 + 이유' (
+                $newDefault[0] -ceq '10분 전' -and $newDefault[1] -ceq '없음,정시,5분 전,10분 전,15분 전,30분 전,1시간 전' -and $default30 -ceq '30분 전' -and
+                $defaultNone[0] -ceq '없음' -and -not $defaultNone[1] -and $defaultNone[2] -ceq '알람을 고르면 바꿀 수 있습니다.') "$($newDefault -join ' / ') / $default30 / $($defaultNone -join ',')"
+            & $addon.OnOpen @{ Id = $k.meet; Date = [datetime]'2026-11-23' }
+            $loaded = & $module { @($script:form.AlarmMore.Open, [string]$script:form.AlarmMore.Panel.Visibility, [string]$script:form.Fields.alarmSound.SelectedItem, [string]$script:form.Rows.alarmDayAt.Visibility, $script:form.AlarmMore.Toggle.IsEnabled) }
+            # 실제 배치 좌표 경로(보이지 않는 HwndSource에 배치, 창 표시 · OS 입력 아님): 접힌 줄 → 펼친 뒤 소리 칸
+            $alarmHost = [Windows.Controls.Border]::new()
+            $hostParameters = [Windows.Interop.HwndSourceParameters]::new('Schedule alarm test')
+            $hostParameters.WindowStyle = 0; $hostParameters.Width = 1280; $hostParameters.Height = 744
+            $alarmSource = [Windows.Interop.HwndSource]::new($hostParameters); $alarmSource.RootVisual = $alarmHost
+            try {
+                $alarmHost.Child = $view
+                $alarmHost.Measure([Windows.Size]::new(1280, 744)); $alarmHost.Arrange([Windows.Rect]::new(0, 0, 1280, 744)); $alarmHost.UpdateLayout()
+                $toggle = & $module { $script:form.AlarmMore.Toggle }
+                $togglePath = Test-WtTestInputPath -View $alarmHost -Element $toggle -Target $toggle -BringIntoView
+                & $click $toggle
+                $soundBox = & $module { $script:form.Fields.alarmSound }
+                $soundPath = Test-WtTestInputPath -View $alarmHost -Element $soundBox -Target $soundBox -BringIntoView
+            } finally { $alarmHost.Child = $null; $alarmSource.Dispose() }
+            Assert-WtTest '폼 알람 자세히 좌표 경로: 접힌 줄과 펼친 소리 칸이 실제 배치 좌표에서 닿음' ($togglePath.Ok -and $soundPath.Ok) "$($togglePath.Path) / $($soundPath.Path)"
+            $opened = & $module { @($script:form.AlarmMore.Open, [string]$script:form.AlarmMore.Panel.Visibility, $script:form.AlarmMore.Chevron.Text) }
+            & $module { $f = $script:form.Fields; $f.alarmSound.SelectedItem = '끔'; $f.alarmSnooze.SelectedItem = '10분'; $f.alarmLate.SelectedItem = '울리지 않음' }
+            $summary = & $module { $script:form.AlarmMore.Summary.Text }
+            & $module { Save-WtScheduleForm }
+            $saved = (& $itemOf $k.meet).alarms[0]
+            Assert-WtTest '폼 알람 자세히: 처음엔 접힘(전역 따름 · 시각 일정은 기준 시각 숨김) → 펼침 → 소리 끔 · 다시 알림 10분 · 늦게 켰을 때 울리지 않음 저장(바뀐 칸만) · 요약 줄' (
+                -not $loaded[0] -and $loaded[1] -ceq 'Collapsed' -and $loaded[2] -ceq '전역 따름 (켬)' -and $loaded[3] -ceq 'Collapsed' -and $loaded[4] -and
+                $opened[0] -and $opened[1] -ceq 'Visible' -and $opened[2] -ceq ([string][char]0xE70D) -and $summary -ceq ' · 소리 끔 · 다시 알림 10분 · 늦게 켰을 때 울리지 않음' -and
+                $saved.before -eq 10 -and $saved.sound -eq $false -and $saved.snooze -eq 10 -and $saved.late -eq 0 -and $saved.PSObject.Properties.Name -cnotcontains 'allDayAt') (
+                "$($loaded -join ',') / $($opened -join ',') / $summary / $($saved | ConvertTo-Json -Compress)")
+            & $addon.OnOpen @{ Id = $k.meet; Date = [datetime]'2026-11-23' }
+            $reloaded = & $module { @([string]$script:form.Fields.alarmSound.SelectedItem, [string]$script:form.Fields.alarmSnooze.SelectedItem, [string]$script:form.Fields.alarmLate.SelectedItem, $script:form.AlarmMore.Summary.Text) }
+            & $module { $script:form.Fields.alarmSound.SelectedItem = $script:form.Fields.alarmSound.Items[0]; Save-WtScheduleForm }
+            $cleared = (& $itemOf $k.meet).alarms[0]
+            Assert-WtTest '폼 알람 자세히 불러오기: 저장한 값 그대로 · 전역 따름으로 되돌리면 그 칸만 null(나머지 유지)' (
+                $reloaded[0] -ceq '끔' -and $reloaded[1] -ceq '10분' -and $reloaded[2] -ceq '울리지 않음' -and $reloaded[3] -ceq ' · 소리 끔 · 다시 알림 10분 · 늦게 켰을 때 울리지 않음' -and
+                $cleared.PSObject.Properties.Name -ccontains 'sound' -and $null -eq $cleared.sound -and $cleared.snooze -eq 10 -and $cleared.late -eq 0) "$($reloaded -join ' / ') / $($cleared | ConvertTo-Json -Compress)"
+            & $addon.OnOpen @{ Id = $k.day; Date = [datetime]'2026-11-24' }
+            $dayVisible = & $module { [string]$script:form.Rows.alarmDayAt.Visibility }
+            & $module { $script:form.Fields.alarmDayAt.Text = '8:3'; Save-WtScheduleForm }
+            $dayError = & $module { @([string]$script:form.Errors.alarmDayAt.Text, $script:form.AlarmMore.Open) }
+            & $module { $script:form.Fields.alarmDayAt.Text = '08:30'; Save-WtScheduleForm }
+            $daySaved = (& $itemOf $k.day).alarms[0]
+            Assert-WtTest '폼 기준 시각(하루 종일): 하루 종일 일정만 보임 · 틀린 시각은 칸 아래 오류(펼쳐서 보임) · 08:30 저장' (
+                $dayVisible -ceq 'Visible' -and $dayError[0] -ceq '기준 시각은 HH:mm 형식으로 입력하세요.' -and $dayError[1] -and $daySaved.allDayAt -ceq '08:30' -and $daySaved.before -eq 10) "$dayVisible / $($dayError -join ',') / $($daySaved | ConvertTo-Json -Compress)"
+            & $addon.OnOpen @{ Id = $k.daily; Date = [datetime]'2026-11-25' }
+            & $module { $script:form.Fields.alarmSound.SelectedItem = '끔'; Save-WtScheduleForm -Scope '이 회차만' }
+            $dailyItem = & $itemOf $k.daily
+            $change = $dailyItem.repeat.changes.'2026-11-25'.alarms[0]
+            $occAlarm = @(& $pick (Get-WtScheduleAlarms -Now '2026-11-25T08:55:05+09:00' -Previous '2026-11-25T08:54:50+09:00' -Entries (Get-WtScheduleData).Entries -Late 30) 'daily')
+            Assert-WtTest '폼 이 회차만: 회차 알람 목록에 보이는 네 칸 모두(소리 끔 · 일정의 다시 알림 15 · 빈 칸 null) · 일정 알람은 그대로 · 그 회차 판정에 반영' (
+                $change.before -eq 5 -and $change.sound -eq $false -and $change.snooze -eq 15 -and $change.PSObject.Properties.Name -ccontains 'late' -and $null -eq $change.late -and
+                $dailyItem.alarms[0].PSObject.Properties.Name -cnotcontains 'sound' -and $dailyItem.alarms[0].snooze -eq 15 -and $occAlarm.Count -eq 1 -and $occAlarm[0].Sound -eq $false -and $occAlarm[0].Snooze -eq 15) (
+                "$($change | ConvertTo-Json -Compress) / $($dailyItem.alarms[0] | ConvertTo-Json -Compress)")
+
+            # 설정 → 일반 → 알림의 일정 행
+            $rows = @(& $module { New-WtScheduleAlarmSettingRows })
+            $rowLabels = @($rows | ForEach-Object { $_.Label }) -join ','
+            $rows[0].Control.SelectedItem = '30분 전'; $defaultSet = [int](Get-WtSetting 'schedule.alarmDefault')
+            $rows[2].Control.SelectedItem = '울리지 않음'; $lateOff = [int](Get-WtSetting 'schedule.alarmLate')
+            $rows[2].Control.SelectedItem = '시작 뒤 1시간까지 울림'; $lateHour = [int](Get-WtSetting 'schedule.alarmLate')
+            $dayLine = $rows[1].Control.Children[0]; $mode = $dayLine.Children[0]; $timeBox = $dayLine.Children[1]; $dayErr = $rows[1].Control.Children[1]
+            $mode.SelectedItem = '직접'; $direct = [string](Get-WtSetting 'schedule.alarmAllDay')
+            $timeBox.Text = '25:00'; $timeBox.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.UIElement]::LostFocusEvent))
+            $bad = @([string]$dayErr.Visibility, [string](Get-WtSetting 'schedule.alarmAllDay'))
+            $timeBox.Text = '08:15'; $timeBox.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.UIElement]::LostFocusEvent))
+            $direct2 = [string](Get-WtSetting 'schedule.alarmAllDay')
+            $mode.SelectedItem = '업무 시작 시각'
+            $back = @([string](Get-WtSetting 'schedule.alarmAllDay'), $timeBox.IsEnabled, $timeBox.Text)
+            Set-WtSetting 'schedule.alarmDefault' 10; Set-WtSetting 'schedule.alarmLate' 30
+            Assert-WtTest '설정 행(일정): 새 일정 기본 알람 · 하루 종일 알람 기준 · 늦게 켰을 때 — 고르면 바로 저장 · 직접 시각은 HH:mm만(틀리면 칸 아래 오류) · 업무 시작으로 되돌림' (
+                $rowLabels -ceq '새 일정 기본 알람,하루 종일 알람 기준,늦게 켰을 때' -and $defaultSet -eq 30 -and $lateOff -eq 0 -and $lateHour -eq 60 -and
+                $direct -ceq '09:00' -and $bad[0] -ceq 'Visible' -and $bad[1] -ceq '09:00' -and $direct2 -ceq '08:15' -and $back[0] -ceq '' -and -not $back[1] -and $back[2] -ceq '09:00') (
+                "$rowLabels / $defaultSet $lateOff $lateHour / $direct $($bad -join ',') $direct2 / $($back -join ',')")
+        } finally {
+            try { Clear-WtNotices } catch { }
+            try { [void](Set-WtNoticePause off) } catch { }
+            & $noticeModule { param($saved) $script:showWindow = $saved.Show; $script:workArea = $saved.Area; $script:newPlayer = $saved.Player; $script:systemSound = $saved.System
+                $script:openPage = $saved.Open; $script:useTimer = $saved.Timer; $script:player = $null } $noticeSeams
+            Remove-Variable wtAlarmProbe -Scope Global -ErrorAction SilentlyContinue
+        }
     }
 
 } finally {

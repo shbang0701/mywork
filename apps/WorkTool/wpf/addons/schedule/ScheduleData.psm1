@@ -122,19 +122,37 @@ function Get-WtSchTiming($StartPoint, $EndPoint) {
     @{ Start = $start; End = $end; AllDay = $allDay; LastDay = $last.Date; Problem = '' }
 }
 
-# alarms 목록 → @{ List(int[] 분 전); Problem }. before가 없는 알람은 이 앱이 모르는 모양이라 건너뛰고, before가 null이면 꺼진 알람이라 건너뛴다
+# alarms 목록 → @{ List(int[] 분 전); Options(List와 같은 자리의 덮어쓰기 값); Problem }.
+# before가 없는 알람은 이 앱이 모르는 모양이라 건너뛰고, before가 null이면 꺼진 알람이라 건너뛴다
 function Read-WtSchAlarms($Alarms) {
     $list = [System.Collections.Generic.List[int]]::new()
+    $options = [System.Collections.Generic.List[object]]::new()
     foreach ($a in @($Alarms)) {
         if ($null -eq $a) { continue }
-        if (-not (Test-WtSchObject $a)) { return @{ List = @(); Problem = "알람 모양이 틀렸습니다: '$a'" } }
+        if (-not (Test-WtSchObject $a)) { return @{ List = @(); Options = @(); Problem = "알람 모양이 틀렸습니다: '$a'" } }
         $b = Get-WtField $a 'before'
         if ($null -eq $b) { continue }
         $m = ConvertFrom-WtWhole $b $script:limits.before[0] $script:limits.before[1]
-        if ($null -eq $m) { return @{ List = @(); Problem = "알람을 읽지 못했습니다(0~$($script:limits.before[1])분 정수): '$b'" } }
+        if ($null -eq $m) { return @{ List = @(); Options = @(); Problem = "알람을 읽지 못했습니다(0~$($script:limits.before[1])분 정수): '$b'" } }
         $list.Add([int]$m)
+        $options.Add((Read-WtSchAlarmOptions $a))
     }
-    @{ List = $list.ToArray(); Problem = '' }
+    @{ List = $list.ToArray(); Options = $options.ToArray(); Problem = '' }
+}
+
+# 알람 하나의 덮어쓰기 칸(설계 2.2 · 16장). 없거나 모양이 다르면 $null = 전역 따름(고칠 항목이 아니고, 저장할 때 그대로 둔다)
+#   sound true/false · snooze 1~1440분 · late 0~1440분(0 = 늦은 알람 울리지 않음) · allDayAt "HH:mm"(하루 종일 일정의 기준 시각)
+function Read-WtSchAlarmOptions($Alarm) {
+    $sound = Get-WtField $Alarm 'sound'
+    $snooze = ConvertFrom-WtWhole (Get-WtField $Alarm 'snooze') 1 1440
+    $late = ConvertFrom-WtWhole (Get-WtField $Alarm 'late') 0 1440
+    $dayAt = Get-WtField $Alarm 'allDayAt'
+    [pscustomobject]@{
+        Sound = $(if ($sound -is [bool]) { $sound } else { $null })
+        Snooze = $(if ($null -ne $snooze) { [int]$snooze } else { $null })
+        Late = $(if ($null -ne $late) { [int]$late } else { $null })
+        AllDayAt = $(if ($dayAt -is [string]) { ConvertFrom-WtTimeText $dayAt } else { $null })
+    }
 }
 
 # repeat 객체 → @{ Rule; State(ok · readonly · broken); Problem }. changes는 시간을 알아야 해서 ConvertFrom-WtScheduleItem이 읽는다
@@ -198,7 +216,7 @@ function Read-WtSchRepeat($Repeat) {
 # 회차 하나의 바뀐 칸 → @{ Timing | $null; Title | $null; Note | $null; Alarms | $null; Problem }. 시작만 바꾸면 길이는 그대로 둔다
 function Read-WtSchChange($Entry, [string]$Key, $Change) {
     if (-not (Test-WtSchObject $Change)) { return @{ Problem = "회차 $Key 바꿈 모양이 틀렸습니다" } }
-    $c = @{ Timing = $null; Title = $null; Note = $null; Alarms = $null; Problem = '' }
+    $c = @{ Timing = $null; Title = $null; Note = $null; Alarms = $null; AlarmOptions = $null; Problem = '' }
     $ps = @{}
     foreach ($p in (Get-WtSchPairs $Change)) { $ps[$p.Name] = $p }
     if ($ps['start'] -or $ps['end']) {
@@ -225,6 +243,7 @@ function Read-WtSchChange($Entry, [string]$Key, $Change) {
         $al = Read-WtSchAlarms $ps['alarms'].Value
         if ($al.Problem) { return @{ Problem = "회차 $Key 바꿈: $($al.Problem)" } }
         $c.Alarms = $al.List
+        $c.AlarmOptions = $al.Options
     }
     $c
 }
@@ -232,11 +251,12 @@ function Read-WtSchChange($Entry, [string]$Key, $Change) {
 <#
 저장된 항목 하나 → 화면 · 계산용 값. 저장 파일은 바꾸지 않는다(Item에 원래 객체가 그대로 있다).
 State: ok(계산 · 알람에 씀) · readonly(새 버전의 값이 있어 읽기만) · broken(고칠 항목) · deleted(지운 항목)
-나머지: Id · Kind · Title · Note · Start · End · AllDay · LastDay · Repeat(규칙 | $null) · Alarms(int[]) · Tags · Links([{ Page, Key, Date }]) · Problem(이유)
+나머지: Id · Kind · Title · Note · Start · End · AllDay · LastDay · Repeat(규칙 | $null) · Alarms(int[]) · AlarmOptions(Alarms와 같은 자리의
+덮어쓰기 값 @{ Sound; Snooze; Late; AllDayAt }, Read-WtSchAlarmOptions) · Tags · Links([{ Page, Key, Date }]) · Problem(이유)
 #>
 function ConvertFrom-WtScheduleItem($Item) {
     $e = [ordered]@{ Id = ''; Item = $Item; State = 'ok'; Problem = ''; Kind = ''; Title = ''; Note = ''
-        Start = $null; End = $null; AllDay = $true; LastDay = $null; Repeat = $null; Alarms = @(); Tags = @(); Links = @() }
+        Start = $null; End = $null; AllDay = $true; LastDay = $null; Repeat = $null; Alarms = @(); AlarmOptions = @(); Tags = @(); Links = @() }
     if (Test-WtDeleted $Item) { $e.Id = [string]$Item.id; $e.State = 'deleted'; return [pscustomobject]$e }
     if (-not (Test-WtSchObject $Item)) { $e.State = 'broken'; $e.Problem = '항목 모양이 틀렸습니다'; return [pscustomobject]$e }
     $e.Id = [string]$Item.id; $e.Kind = [string]$Item.kind; $e.Title = [string]$Item.title; $e.Note = [string]$Item.note
@@ -260,6 +280,7 @@ function ConvertFrom-WtScheduleItem($Item) {
     $al = Read-WtSchAlarms $Item.alarms
     if ($al.Problem -and -not $problem) { $problem = $al.Problem }
     $e.Alarms = $al.List
+    $e.AlarmOptions = $al.Options
     if (-not $problem -and $e.Repeat -and $e.Repeat.RawChanges) {
         $entryView = [pscustomobject]$e
         foreach ($p in @(Get-WtSchPairs $e.Repeat.RawChanges)) {
@@ -394,20 +415,21 @@ function New-WtSchOccurrence($Entry, [datetime]$Original, $Change) {
     $shift = $Original.Date - $Entry.Start.Date
     $o = [ordered]@{ Key = "$($Entry.Id)@$(ConvertTo-WtDateText $Original)"; Entry = $Entry; Original = $Original.Date
         Start = $Entry.Start + $shift; End = $Entry.End + $shift; LastDay = $Entry.LastDay + $shift; AllDay = $Entry.AllDay
-        Title = $Entry.Title; Note = $Entry.Note; Alarms = $Entry.Alarms; Changed = $false }
+        Title = $Entry.Title; Note = $Entry.Note; Alarms = $Entry.Alarms; AlarmOptions = $Entry.AlarmOptions; Changed = $false }
     if ($Change) {
         $o.Changed = $true
         if ($Change.Timing) { $o.Start = $Change.Timing.Start; $o.End = $Change.Timing.End; $o.LastDay = $Change.Timing.LastDay; $o.AllDay = $Change.Timing.AllDay }
         if ($null -ne $Change.Title) { $o.Title = $Change.Title }
         if ($null -ne $Change.Note) { $o.Note = $Change.Note }
-        if ($null -ne $Change.Alarms) { $o.Alarms = $Change.Alarms }
+        # 회차의 알람 목록은 일정의 목록을 통째로 대신한다(덮어쓰기 값도 회차 것, 비면 전역 따름)
+        if ($null -ne $Change.Alarms) { $o.Alarms = $Change.Alarms; $o.AlarmOptions = $Change.AlarmOptions }
     }
     [pscustomobject]$o
 }
 
 <#
 $From ~ $To(날짜, 그날 포함)와 겹치는 회차들. 계산할 수 있는 항목(State ok)만 쓴다. 시작 순서(같으면 하루 종일 먼저, 그다음 제목)
-회차: Key("<id>@<원래 날짜>") · Entry · Original(원래 날짜) · Start · End · LastDay · AllDay · Title · Note · Alarms · Changed
+회차: Key("<id>@<원래 날짜>") · Entry · Original(원래 날짜) · Start · End · LastDay · AllDay · Title · Note · Alarms · AlarmOptions · Changed
 여러 날에 걸친 회차는 시작이 범위 앞이어도 범위에 걸치면 들어간다. 다른 날로 옮긴 회차(changes)는 옮긴 날로 들어간다
 #>
 function Get-WtScheduleOccurrences([object[]]$Entries, [datetime]$From, [datetime]$To) {
@@ -872,34 +894,119 @@ function Remove-WtScheduleLink($Store, [string]$Id, [string]$Page, [string]$Key,
     Set-WtScheduleLinkCore $Store $Id $Page $Key $Date $false $At
 }
 
-# ---- 알람 (앱이 켜져 있는 동안, 소리 · 타이머 없음) --------------------------------------------
+# ---- 알람 (앱이 켜져 있는 동안. 확인 타이머 · 알림 창 · 소리는 Schedule.psm1과 core\Notice.psm1, 설계 16장) ----------
 
 function Open-WtScheduleAlarmStore { Open-WtStore -Name 'schedule-state' -Schema 1 }
 
-# (Previous, Now] 현지 벽시계 구간. Previous 없으면 첫 실행이라 지난 알람은 울리지 않는다.
-# 상태는 회차 키 + before로 구분한다(한 회차의 여러 알람이 서로 막지 않게).
-function Get-WtScheduleAlarms($Now, $Previous, [object[]]$Entries, $StateStore) {
+<#
+울릴 알람. 결과 { Success, Reason, Alarms }. Alarms 하나:
+  Key("<회차 키>/<before>") · OccurrenceKey · Id · OriginalDate · Before · Due(울릴 시각) · Base(기준: 시각 일정은 시작, 하루 종일은 그날 기준 시각)
+  Start · AllDay · Title · Note · Late(늦게 울리는 것인지) · Sound · Snooze(알람의 덮어쓰기 값, $null = 전역 따름)
+두 가지로 부른다(설계 9.1 · 16장).
+  -Late 없음: (Previous, Now] 현지 벽시계 구간만 본다. Previous가 없으면(첫 실행) 빈 목록이다.
+  -Late <분>(설정 「늦게 켰을 때」): 앱의 확인 타이머다. Previous가 있고 Now - Previous가 2분 안이면 (Previous, Now]는 제때 울린다.
+    그 밖에 Due ≤ Now인 알람(앱이 꺼져 있었거나 PC가 잠자기였음)은 늦은 알람 허용(알람의 late, 없으면 -Late)이 0보다 크고
+    Now ≤ Base + 허용일 때만 울린다.
+하루 종일 일정의 기준 시각: 알람의 allDayAt → -AllDayAt(HH:mm) → 그날 업무시간 규칙의 시작(Get-WtWorkHours -Date).
+상태는 회차 키 + before로 구분한다(한 회차의 여러 알람이 서로 막지 않게). 기록의 at(울린 시각)이 이번 Due보다 이르면
+울린 뒤 일정을 늦춘 것이라 다시 울린다. Done(끝낸 회차 키 모음, Get-WtEventDone)에 든 회차는 울리지 않는다.
+#>
+function Get-WtScheduleAlarms($Now, $Previous, [object[]]$Entries, $StateStore, $Done, $Late, [string]$AllDayAt) {
     $r = [pscustomobject]@{ Success = $true; Reason = ''; Alarms = @() }
     $nowAt = ConvertFrom-WtStamp ([string]$Now)
     $prevAt = ConvertFrom-WtStamp ([string]$Previous)
     if (-not $nowAt -or ($Previous -and -not $prevAt)) { $r.Success = $false; $r.Reason = '앱 시각을 읽지 못했습니다'; return $r }
-    if (-not $prevAt) { return $r }
-    if ($nowAt -lt $prevAt -or $nowAt.DateTime -lt $prevAt.DateTime) { $r.Success = $false; $r.Reason = '지금 시각이 앞서 본 시각보다 이릅니다'; return $r }
+    $timerMode = $null -ne $Late
+    if (-not $timerMode -and -not $prevAt) { return $r }
+    if ($prevAt -and ($nowAt -lt $prevAt -or $nowAt.DateTime -lt $prevAt.DateTime)) { $r.Success = $false; $r.Reason = '지금 시각이 앞서 본 시각보다 이릅니다'; return $r }
     if ($StateStore -and $StateStore.State -eq 'error') { $r.Success = $false; $r.Reason = $StateStore.Error; return $r }
-    $fired = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($i in @($StateStore.Items)) { if ($i.key) { [void]$fired.Add([string]$i.key) } }
+    $clock = $nowAt.DateTime
+    $prevClock = if ($prevAt) { $prevAt.DateTime } else { $null }
+    $onTime = $null -ne $prevClock -and (-not $timerMode -or ($clock - $prevClock).TotalMinutes -le 2)
+    $lateAll = if ($timerMode) { [Math]::Max(0, [int]$Late) } else { 0 }
+    $dayAt = ConvertFrom-WtTimeText $AllDayAt
+    $workStart = @{}
+    # 키 → 마지막으로 울린 벽시계 시각. at을 읽지 못하는 기록은 늘 울린 것으로 본다(두 번 울리지 않게)
+    $fired = [System.Collections.Generic.Dictionary[string, datetime]]::new([StringComparer]::Ordinal)
+    foreach ($record in @($StateStore.Items)) {
+        if (-not $record.key) { continue }
+        $stamp = ConvertFrom-WtStamp ([string]$record.at)
+        $seen = if ($stamp) { $stamp.DateTime } else { [datetime]::MaxValue }
+        $old = [datetime]::MinValue
+        if (-not $fired.TryGetValue([string]$record.key, [ref]$old) -or $old -lt $seen) { $fired[[string]$record.key] = $seen }
+    }
+    $doneKeys = if ($null -eq $Done) { $null } elseif ($Done -is [System.Collections.Generic.HashSet[string]]) { $Done } else {
+        [System.Collections.Generic.HashSet[string]]::new([string[]]@($Done | ForEach-Object { [string]$_ }), [StringComparer]::Ordinal)
+    }
+    # 항목마다 펼칠 날: 앞은 (Now - 늦은 허용 - 하루) · Previous 날 중 이른 날, 뒤는 그 항목의 가장 큰 before(366일까지)가 닿는 날.
+    # 늘 366일을 펼치면 일정 300개(매일 반복 30개)에 한 번 2초가 넘는다. 범위가 같은 항목은 묶어 한 번에 펼친다. 옮긴 회차는 기존 펼치기 함수가 찾는다.
+    # 15초마다 부르므로, 알람 있는 일정 색인(Get-WtSchAlarmIndex, 목록이 바뀔 때만 다시 만듦)에서 반복 일정과 범위 안 날짜의 일정만 본다
+    $first = [datetime]::new(1900, 1, 1); $last = [datetime]::new(2199, 12, 31)
+    $index = Get-WtSchAlarmIndex $Entries
+    $loAll = if ($timerMode) { $clock.AddMinutes(-[Math]::Max($lateAll, $index.LateMax)).AddDays(-1).Date } else { $prevClock.Date }
+    if ($null -ne $prevClock -and $prevClock.Date -lt $loAll) { $loAll = $prevClock.Date }
+    if ($loAll -lt $first) { $loAll = $first }
+    $hiAll = $clock.AddMinutes([Math]::Max(0, $index.MostMax)).Date
+    if ($hiAll -gt $last) { $hiAll = $last }
+    $candidates = [System.Collections.Generic.List[object]]::new($index.Repeating)
+    for ($day = $loAll; $day -le $hiAll; $day = $day.AddDays(1)) {
+        $bucket = $null
+        if ($index.ByStart.TryGetValue($day, [ref]$bucket)) { $candidates.AddRange($bucket) }
+    }
+    $groups = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    foreach ($candidate in $candidates) {
+        $e = $candidate.Entry
+        $lateMost = if ($timerMode) { [Math]::Max($lateAll, $candidate.LateMax) } else { 0 }
+        # 하루 종일 회차는 기준 시각이 그날 안 어디든 될 수 있어 하루를 더 본다. 시각 일정은 시작 뒤 허용 시간만 본다
+        $lo = if (-not $timerMode) { $prevClock.Date } elseif ($candidate.AllDay) { $clock.AddMinutes(-$lateMost).AddDays(-1).Date } else { $clock.AddMinutes(-$lateMost).Date }
+        if ($null -ne $prevClock -and $prevClock.Date -lt $lo) { $lo = $prevClock.Date }
+        if ($lo -lt $first) { $lo = $first }
+        $hi = $clock.AddMinutes($candidate.Most).Date
+        if ($hi -gt $last) { $hi = $last }
+        # 반복 없는 일정은 날짜만 보고 범위 밖이면 펼치지 않는다
+        if (-not $e.Repeat -and ($e.Start.Date -gt $hi -or $e.LastDay -lt $lo)) { continue }
+        $groupKey = "$($lo.Ticks)|$($hi.Ticks)"
+        if (-not $groups.ContainsKey($groupKey)) { $groups[$groupKey] = @{ From = $lo; To = $hi; Items = [System.Collections.Generic.List[object]]::new() } }
+        $groups[$groupKey].Items.Add($e)
+    }
     $list = [System.Collections.Generic.List[object]]::new()
-    # 366일 앞의 일정도 미리 알람을 줄 수 있다. 옮긴 회차는 기존 펼치기 함수가 찾는다.
-    $lo = $prevAt.DateTime.Date
-    $hi = $nowAt.DateTime.Date.AddDays(366)
-    if ($hi -gt [datetime]::new(2199, 12, 31)) { $hi = [datetime]::new(2199, 12, 31) }
-    foreach ($o in @(Get-WtScheduleOccurrences $Entries $lo $hi)) {
-        foreach ($before in @($o.Alarms)) {
-            $due = $o.Start.AddMinutes(-$before)
-            $key = "$($o.Key)/$before"
-            if ($due -gt $prevAt.DateTime -and $due -le $nowAt.DateTime -and $fired.Add($key)) {
+    foreach ($group in $groups.Values) {
+        # 같은 일정들 · 같은 범위의 회차는 틱마다 같다. 펼친 결과를 색인에 두고(목록이 바뀌면 색인째 버림), 키에는 범위와 일정 id를 모두 넣는다
+        $signature = [System.Text.StringBuilder]::new("$($group.From.Ticks)|$($group.To.Ticks)")
+        foreach ($member in $group.Items) { [void]$signature.Append('|').Append($member.Id) }
+        $signatureText = $signature.ToString()
+        $occurrences = $null
+        if (-not $index.Occurrences.TryGetValue($signatureText, [ref]$occurrences)) {
+            if ($index.Occurrences.Count -ge 16) { $index.Occurrences.Clear() }
+            $occurrences = @(Get-WtScheduleOccurrences $group.Items.ToArray() $group.From $group.To)
+            $index.Occurrences[$signatureText] = $occurrences
+        }
+        foreach ($o in $occurrences) {
+            if ($null -ne $doneKeys -and $doneKeys.Contains([string]$o.Key)) { continue }
+            $befores = @($o.Alarms); $options = @($o.AlarmOptions)
+            for ($i = 0; $i -lt $befores.Count; $i++) {
+                $before = $befores[$i]
+                $opt = if ($i -lt $options.Count) { $options[$i] } else { $null }
+                $base = $o.Start
+                if ($o.AllDay) {
+                    $time = if ($opt -and $null -ne $opt.AllDayAt) { $opt.AllDayAt } elseif ($null -ne $dayAt) { $dayAt } else { Get-WtSchWorkStart $o.Start.Date $workStart }
+                    $base = $o.Start.Date + $time
+                }
+                $due = $base.AddMinutes(-$before)
+                if ($due -gt $clock) { continue }
+                $fresh = $onTime -and $due -gt $prevClock
+                if (-not $fresh) {
+                    if (-not $timerMode) { continue }
+                    $allow = if ($opt -and $null -ne $opt.Late) { $opt.Late } else { $lateAll }
+                    if ($allow -le 0 -or $clock -gt $base.AddMinutes($allow)) { continue }
+                }
+                $key = "$($o.Key)/$before"
+                $seen = [datetime]::MinValue
+                if ($fired.TryGetValue($key, [ref]$seen) -and $seen -ge $due) { continue }
+                $fired[$key] = [datetime]::MaxValue   # 한 회차에 같은 before가 둘이어도 한 번만
                 $list.Add([pscustomobject]@{ Key = $key; OccurrenceKey = $o.Key; Id = $o.Entry.Id; OriginalDate = ConvertTo-WtDateText $o.Original
-                    Before = $before; Due = $due; Title = $o.Title; Note = $o.Note; Start = $o.Start })
+                    Before = $before; Due = $due; Base = $base; Start = $o.Start; AllDay = [bool]$o.AllDay; Title = $o.Title; Note = $o.Note; Late = -not $fresh
+                    Sound = $(if ($opt) { $opt.Sound } else { $null }); Snooze = $(if ($opt) { $opt.Snooze } else { $null }) })
             }
         }
     }
@@ -907,23 +1014,73 @@ function Get-WtScheduleAlarms($Now, $Previous, [object[]]$Entries, $StateStore) 
     $r
 }
 
+# 알람 있는 일정 색인: 반복 일정 목록 · 반복 없는 일정의 시작 날짜별 목록 · 가장 큰 before · 가장 큰 late 덮어쓰기.
+# 일정 목록(Get-WtScheduleData의 Entries 배열)이 같으면 다시 만들지 않는다. 항목 = @{ Entry; Most(가장 큰 before); LateMax(가장 큰 late, 없으면 -1) }
+$script:alarmIndex = $null
+function Get-WtSchAlarmIndex([object[]]$Entries) {
+    $cached = $script:alarmIndex
+    if ($cached -and [object]::ReferenceEquals($cached.Entries, $Entries)) { return $cached }
+    $repeating = [System.Collections.Generic.List[object]]::new()
+    $byStart = [System.Collections.Generic.Dictionary[datetime, System.Collections.Generic.List[object]]]::new()
+    $mostMax = -1; $lateMax = -1
+    foreach ($e in $Entries) {
+        if ($null -eq $e -or $e.State -ne 'ok') { continue }
+        $most = -1; $lateTop = -1; $allDay = [bool]$e.AllDay
+        foreach ($b in $e.Alarms) { if ($b -gt $most) { $most = $b } }
+        foreach ($opt in $e.AlarmOptions) { if ($opt -and $null -ne $opt.Late -and $opt.Late -gt $lateTop) { $lateTop = $opt.Late } }
+        if ($e.Repeat -and $e.Repeat.Changes.Count) {
+            foreach ($c in $e.Repeat.Changes.Values) {
+                if ($c.Timing -and $c.Timing.AllDay) { $allDay = $true }   # 하루 종일로 옮긴 회차
+                if ($null -eq $c.Alarms) { continue }
+                foreach ($b in $c.Alarms) { if ($b -gt $most) { $most = $b } }
+                foreach ($opt in @($c.AlarmOptions)) { if ($opt -and $null -ne $opt.Late -and $opt.Late -gt $lateTop) { $lateTop = $opt.Late } }
+            }
+        }
+        if ($most -lt 0) { continue }
+        $item = [pscustomobject]@{ Entry = $e; Most = $most; LateMax = $lateTop; AllDay = $allDay }
+        if ($most -gt $mostMax) { $mostMax = $most }
+        if ($lateTop -gt $lateMax) { $lateMax = $lateTop }
+        if ($e.Repeat) { $repeating.Add($item); continue }
+        $day = $e.Start.Date
+        if (-not $byStart.ContainsKey($day)) { $byStart[$day] = [System.Collections.Generic.List[object]]::new() }
+        $byStart[$day].Add($item)
+    }
+    $script:alarmIndex = [pscustomobject]@{ Entries = $Entries; Repeating = $repeating; ByStart = $byStart; MostMax = $mostMax; LateMax = $lateMax
+        Occurrences = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal) }
+    $script:alarmIndex
+}
+
+# 그날 업무 시작(하루 종일 알람의 기본 기준, 설정 → 업무시간의 그날 규칙). 한 번 부를 때 날짜마다 한 번만 읽는다
+function Get-WtSchWorkStart([datetime]$Date, [hashtable]$Cache) {
+    $dayKey = $Date.Ticks
+    if (-not $Cache.ContainsKey($dayKey)) {
+        $time = ConvertFrom-WtTimeText ([string](Get-WtWorkHours -Date $Date)['work.start'])
+        $Cache[$dayKey] = if ($null -ne $time) { $time } else { [timespan]::FromHours(9) }
+    }
+    $Cache[$dayKey]
+}
+
 # 실제 알림을 받아들인 뒤에만 호출한다. 실패 · 낡은 핸들은 Save-WtStore의 예외 그대로다.
+# 이미 있는 키(울린 뒤 늦춘 일정이 다시 울림)는 at만 새로 적는다. 모르는 칸은 그대로 둔다.
 function Save-WtScheduleAlarms($Store, [object[]]$Alarms, [string]$At = (Get-WtStamp)) {
     $now = ConvertFrom-WtStamp $At
     if ($Store.Name -cne 'schedule-state' -or -not $now) { return [pscustomobject]@{ Success = $false; Reason = '알람 상태 핸들 · 시각을 확인하세요'; Store = $Store } }
     $items = [System.Collections.Generic.List[object]]::new()
-    $keys = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $index = [System.Collections.Generic.Dictionary[string, int]]::new([StringComparer]::Ordinal)
     foreach ($i in @($Store.Items)) {
         $atValue = ConvertFrom-WtStamp ([string]$i.at)
         if ($atValue -and $atValue -lt $now.AddDays(-7)) { continue }
+        if ($i.key -and -not $index.ContainsKey([string]$i.key)) { $index[[string]$i.key] = $items.Count }
         $items.Add((Copy-WtItem $i))
-        if ($i.key) { [void]$keys.Add([string]$i.key) }
     }
     foreach ($a in @($Alarms)) {
         if (-not $a.Key -or -not $a.OccurrenceKey -or $null -eq (ConvertFrom-WtWhole $a.Before 0 527040)) {
             return [pscustomobject]@{ Success = $false; Reason = '알람 결과 목록을 넘기세요'; Store = $Store }
         }
-        if ($keys.Add([string]$a.Key)) { $items.Add([pscustomobject]@{ key = [string]$a.Key; occurrence = [string]$a.OccurrenceKey; before = $a.Before; at = $At }) }
+        $key = [string]$a.Key
+        if ($index.ContainsKey($key)) { Set-WtField $items[$index[$key]] 'at' $At; continue }
+        $index[$key] = $items.Count
+        $items.Add([pscustomobject]@{ key = $key; occurrence = [string]$a.OccurrenceKey; before = $a.Before; at = $At })
     }
     $next = Save-WtStore $Store $items.ToArray()
     [pscustomobject]@{ Success = $true; Reason = ''; Store = $next }

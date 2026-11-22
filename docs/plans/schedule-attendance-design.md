@@ -1,7 +1,7 @@
 # 일정 · 근태 데이터 설계 — 형식 · 이전 · 공통 규칙
 
 - 작성: 2026-10-26
-- 상태: **1단계(데이터 형식 · 이전)와 2a(기능 로직 · 등록 목록) 구현, 2b(화면) 전 검토용.** 화면은 지금도 보기 전용입니다. 2026-10-26 형식 검토(막음 7 · 권고 3)와 재확인(덜 닫힘 5 · 새 권고 1)을 반영했습니다: 1.9 저장 계약(낙관적 잠금 · 끈질긴 거부), 1.5 `rev` · id 비교, 7.4 합치기(목록 원소 소유 · 같은 줄), 1.4 숫자 범위, 1.3 · 1.6 · 2.3의 계약. 2a 호출 약속은 9.1입니다.
+- 상태: **1단계(데이터 형식 · 이전)와 2a(기능 로직 · 등록 목록) 구현, 2b(화면) 전 검토용.** 화면은 지금도 보기 전용입니다. 2026-10-26 형식 검토(막음 7 · 권고 3)와 재확인(덜 닫힘 5 · 새 권고 1)을 반영했습니다: 1.9 저장 계약(낙관적 잠금 · 끈질긴 거부), 1.5 `rev` · id 비교, 7.4 합치기(목록 원소 소유 · 같은 줄), 1.4 숫자 범위, 1.3 · 1.6 · 2.3의 계약. 2a 호출 약속은 9.1입니다. 알람 울리기(2b: 확인 타이머 · 알림 창 · 소리 · 전역/개별 설정 · 잠시 끄기)는 16장입니다(2026-11-22).
 - 범위: WorkTool WPF 일정 · 근태 탭이 저장하는 파일의 형식, 버전을 올리고 옛 파일을 읽는 규칙, 예전 WinForms 데이터 가져오기, 휴무일 · 달력 표시 자리.
 - 경로: `core/` · `addons/` · `tests/`로 시작하는 경로는 `apps/WorkTool/wpf/` 안입니다. 그 밖의 경로는 저장소 루트 기준입니다. 근거가 된 제안서는 로컬 `.work/plans/schedule-attendance-proposal.md`(저장소에 없음)입니다.
 - 용어
@@ -180,7 +180,8 @@
   - 끝이 시작보다 이르면 「고칠 항목」입니다.
   - 시각 있는 일정이 다음 날 0시에 끝나면 그 앞날까지 걸친 것으로 봅니다(다음 날 목록에는 놓지 않음).
 - `repeat`: `null` 또는 2.3.
-- `alarms`: `[ { "before": 분 } ]`. 시작 몇 분 전입니다. 하루 종일 일정은 그날 0시 기준입니다(전날 18시 = `before: 360`). `before`가 없는 알람(더 새 앱의 모양)은 이 앱이 울리지 않고 그대로 둡니다.
+- `alarms`: `[ { "before": 분 } ]`. 시작 몇 분 전입니다. 하루 종일 일정은 그날 기준 시각(알람의 `allDayAt` → 설정 「하루 종일 알람 기준」 → 그날 업무 시작)의 몇 분 전입니다. 2026-11-22 전에는 0시 기준이었으나 그때는 울리는 앱이 없어서 바뀌는 동작은 없습니다. `before`가 없는 알람(더 새 앱의 모양)은 이 앱이 울리지 않고 그대로 둡니다.
+  - 알람마다 덮어쓰는 칸(선택, 없거나 `null`이면 전역 설정): `sound`(true · false) · `snooze`(1~1440분) · `late`(0~1440분, 0 = 늦은 알람 울리지 않음) · `allDayAt`(`"HH:mm"`). 모양이 다른 값은 없는 것으로 읽고 저장할 때 그대로 둡니다(고칠 항목 아님). 규칙은 16장입니다.
 - `tags`: 글 목록.
 - `rev`: 사람이 고친 횟수(1.5).
 - `created` · `updated` · `deleted`: 앱이 찍는 시각(1.3, 1.5).
@@ -382,13 +383,13 @@ RFC 5545(iCalendar) 반복 규칙의 일부를 JSON 칸으로 씁니다. `FREQ=.
 
 - 울린 알람 · 다시 알림은 사람이 쓴 데이터와 다른 파일(`schedule-state.json`, 일정 탭 소유)에 둡니다. 잃어도 데이터는 멀쩡합니다.
 - 회차 키 `"<id>@<원래 날짜>"`와 알람의 `before`를 함께 써서 울린 시각을 적고, 7일 지난 것은 지웁니다. 여러 알람이 서로 막지 않게 하는 세부 약속은 9.1입니다.
-- 예전 CSV의 `LastAlarm`은 옮기지 않습니다(`origin.row`에만 남음). 처음 켤 때 지난 회차는 울리지 않습니다.
+- 예전 CSV의 `LastAlarm`은 옮기지 않습니다(`origin.row`에만 남음). 처음 켤 때 지난 회차는 늦은 알람 규칙(16.2)으로만 울립니다(시작 뒤 허용 시간이 지난 것은 버림).
 
 ### 6.3 2차 후보가 형식을 바꾸지 않는지
 
 - 온콜 당번 · 대기: `kind` 값을 더함 → schema 그대로, 옛 앱은 읽기 전용.
 - 할 일 완료: `task`에 `done`(앱이 찍는 시각) 칸 → 그대로.
-- 알람 여러 개 · 하루 종일 알람: `alarms` 목록 · `before` 기준이 이미 정해짐 → 그대로.
+- 알람 여러 개 · 하루 종일 알람: `alarms` 목록 · `before` 기준이 이미 정해짐 → 그대로. 알람마다 덮어쓰기(소리 · 다시 알림 · 늦은 알람 · 기준 시각)도 선택적 칸이라 그대로(2026-11-22, 16장).
 - 연차 잔여: `leave-grant` 기록 + 사용 합계 → 그대로.
 - 월 마감: `month-close` 기록(그때 낸 합계와 규칙 이름) → 그대로.
 - 주간 근무 경고: `work.end`가 이미 있음 → 계산만 더함.
@@ -516,9 +517,11 @@ schema와 고정 시험 자료는 그대로입니다. 편집 함수는 먼저 �
   - `Set-WtScheduleDeleted Store Id [-Deleted false] [-At]`: 기본은 지운 표시, `false`면 90일 안 되살리기입니다. 정확히 90일이면 거부합니다. 읽기 전용 항목은 고치지 않습니다.
   - 날짜를 넘는 시각 일정은 새로 만들지 않습니다(업무외시간 사용). 이미 저장된 기간 일정의 읽기 · 알람은 유지합니다.
 - 알람, 같은 모듈
-  - `Open-WtScheduleAlarmStore` → 별도 `schedule-state.json` 핸들(schema 1). `items` 하나는 `{ key: "<회차 키>/<before>", occurrence: "<회차 키>", before, at }`입니다. 원자료의 schema는 바뀌지 않습니다. 다시 알림은 이번에 구현하지 않았습니다.
-  - `Get-WtScheduleAlarms -Now -Previous -Entries [-StateStore]` → `{ Success, Reason, Alarms }`. `(Previous, Now]` 현지 벽시계 구간을 계산합니다. `Alarms` 하나는 `Key/OccurrenceKey/Id/OriginalDate/Before/Due/Title/Note/Start`입니다. `Due/Start`는 벽시계 `datetime`입니다. 첫 실행(`Previous` 없음)은 빈 목록, 시계가 뒤로 가면 이유를 돌려줍니다. 휴무일이어도 울립니다.
-  - `Save-WtScheduleAlarms Store Alarms [-At]` → `{ Success, Reason, Store }`. 알림을 받아들인 뒤 호출합니다. 울린 기록을 7일간 남겨 중복을 막습니다. 상태 파일을 못 읽으면 이유를 표시하고, 파일이 없어도 첫 실행에 지난 알람을 되살리지 않습니다. 타이머 · 소리 · 창은 2b가 맡습니다.
+  - `Open-WtScheduleAlarmStore` → 별도 `schedule-state.json` 핸들(schema 1). `items` 하나는 `{ key: "<회차 키>/<before>", occurrence: "<회차 키>", before, at }`입니다. 원자료의 schema는 바뀌지 않습니다. 다시 알림은 이 파일에 두지 않습니다(알림 창이 앱 실행 동안만 들고 있음, 16.6).
+  - `Get-WtScheduleAlarms -Now -Previous -Entries [-StateStore] [-Done] [-Late] [-AllDayAt]` → `{ Success, Reason, Alarms }`. `-Late` 없이 부르면 `(Previous, Now]` 현지 벽시계 구간을 계산합니다. `-Late <분>`을 주면 앱의 확인 타이머 모드(16.2: 제때 · 늦은 알람)입니다. `Alarms` 하나는 `Key/OccurrenceKey/Id/OriginalDate/Before/Due/Base/Start/AllDay/Title/Note/Late/Sound/Snooze`입니다. `Due/Base/Start`는 벽시계 `datetime`, `Sound/Snooze`는 알람의 덮어쓰기 값(`$null` = 전역 따름)입니다. `-Late` 없는 첫 실행(`Previous` 없음)은 빈 목록, 시계가 뒤로 가면 이유를 돌려줍니다. 휴무일이어도 울립니다.
+    - `Done`(끝낸 회차 키 모음, `Get-WtEventDone`)에 든 회차는 울리지 않습니다. 항목마다 그 항목의 가장 큰 `before`가 닿는 날까지만 펼칩니다(늘 366일을 펼치면 일정 300개에 한 번 2초가 넘음).
+    - 울린 기록의 `at`이 이번에 울릴 시각보다 이르면(울린 뒤 같은 날 일정을 늦춤) 다시 울립니다.
+  - `Save-WtScheduleAlarms Store Alarms [-At]` → `{ Success, Reason, Store }`. 알림을 받아들인 뒤 호출합니다. 울린 기록을 7일간 남겨 중복을 막고, 이미 있는 키는 `at`만 새로 적습니다. 상태 파일을 못 읽으면 이유를 표시하고, 파일이 없어도 첫 실행에 지난 알람을 되살리지 않습니다. 타이머 · 소리 · 창(2b)은 16장입니다(2026-11-22).
 - 근태, `addons/attendance/AttendanceData.psm1`
   - `Save-WtAttendanceItem Store Patch [-Id] [-At]`: `Id` 생략은 추가, 있으면 `kind/start/end/place/note/tags/overtime/leave` 편집입니다. 직접 고친 점에서는 `at`을 지우고, 안 바꾼 점의 증거는 유지합니다.
   - `Start-WtAttendanceRecord Store [-Kind work|overtime] [-How remote|onsite] [-Ref] [-Place] [-Note] [-At]`, `Stop-WtAttendanceRecord Store [-Kind] [-Id] [-At]`: 지금 출근/퇴근 · 업무외 시작/끝입니다. 벽시계와 `at`을 함께 찍습니다. 열린 같은 종류가 있으면 새 시작을 막고, 출근 버튼은 그날 이미 끝낸 출근도 중복으로 만들지 않습니다. 직접 입력으로 같은 날 여러 출근은 가능하며 요약에서는 하루입니다. 열린 기록이 여럿이면 끝낼 `Id`를 골라야 합니다.
@@ -967,3 +970,69 @@ Register-WtAddon -Id 'memo' ... -Related @{
 - 근태 탭: `addons/attendance/AttendanceData.psm1`(att-3 · 반차 · 대휴 발생 · 잔여 · 달력 · 월 보고), `addons/attendance/Attendance.psm1`(폼 · 표 · 사이드바 · 점 · 날짜 메뉴 · 근태 열기), `addons/attendance/Test-Attendance.ps1`(att-3 기대 값 · 4단계 검사)
 - 일정 탭: `addons/schedule/ScheduleData.psm1`(루틴 근무 요일 · 반차 날 · 할 일 수 · `Soon`), `addons/schedule/Schedule.psm1`(날짜 메뉴 · 할 일 배지 · 폼 처음 시각), `addons/schedule/Test-Schedule.ps1`
 - 문서: 이 문서 · `apps/WorkTool/design/README.md` · `apps/WorkTool/wpf/README.md` · 루트 `README.md`, 시안 `apps/WorkTool/design/schedule-plan-leave*` · `build-schedule-mockups.ps1`
+
+## 16. 알람 울리기 — 2b (2026-11-22)
+
+승호가 고른 알림 방식은 **작은 창 + 소리(볼륨 조절)**입니다. 기본 알람 · 하루 종일 기준 · 늦은 알람 · 다시 알림은 전역(설정)과 일정마다(폼) 바꿀 수 있고, 알람 지옥을 피하려고 「알람 잠시 끄기」를 둡니다. 화면 값은 디자인 README 7절 「알람 창」 · 8절 일정 · 설정·도움말, 시안은 `apps/WorkTool/design/alarm-popup.svg`입니다.
+
+### 16.1 흐름
+
+- 일정 탭이 `Register-WtAddon -Tick { ... } -TickSeconds 15`로 확인 작업을 등록하고, 셸이 앱을 띄울 때 `Start-WtAddonTicks`로 타이머를 만듭니다(끝낼 때 `Stop-WtAddonTicks`). 화면에 묶지 않아서 트레이로 숨었을 때 · 최소화 · 다른 탭을 볼 때도 돕니다. 꺼진 탭은 부르지 않습니다.
+- 틱 하나(`Invoke-WtScheduleAlarmTick`): 일정 읽기 → `Get-WtScheduleAlarms -Late <전역> -AllDayAt <전역>`(앞 틱 시각 · 상태 파일 · 끝낸 회차) → 알람마다 `Show-WtNotice` → 받아들인 알람을 `Save-WtScheduleAlarms`로 기록합니다.
+- 상태 파일을 못 쓰거나 못 읽어도 같은 실행 안에서는 「키|울릴 시각」 모음으로 두 번 띄우지 않습니다. 체크 기록을 못 읽어도 알람은 울립니다.
+- 비용: 일정 목록이 바뀐 첫 틱만 알람 있는 일정 색인과 펼친 회차를 만들고, 다음 틱은 다시 씁니다. 일정 300개(매일 반복 30개)에서 처음 약 50ms, 다음 틱 약 15ms입니다(2026-11-22 개발 PC).
+
+### 16.2 울릴 때
+
+- 제때: 앞 틱이 있고 2분 안이면 `(앞 틱, 지금]`에 든 알람입니다.
+- 늦은 알람: 그 밖에 울릴 시각이 지난 알람(앱을 늦게 켬 · PC 잠자기)은 허용 시간(알람의 `late` → 설정 「늦게 켰을 때」, 기본 30분)이 0보다 크고 `지금 ≤ 기준 + 허용`일 때만 울립니다. 0이면 버립니다. 같은 회차 · 같은 알람은 기록으로 한 번만 울립니다.
+- 기준: 시각 일정은 시작, 하루 종일 일정은 그날 기준 시각(알람의 `allDayAt` → 설정 「하루 종일 알람 기준」 → `Get-WtWorkHours -Date`의 업무 시작)입니다. 그래서 하루 종일 일정의 `10분 전`이 전날 23:50에 울리지 않습니다.
+- 끝낸(체크한) 회차는 울리지 않습니다. 울린 뒤 같은 날 일정을 늦추면 새 시각에 한 번 더 울립니다(9.1).
+
+### 16.3 전역 설정 (설정 → 일반 → 알림)
+
+| 키 | 기본 | 뜻 | 등록 |
+|---|---|---|---|
+| `schedule.alarmDefault` | 10 | 새 일정 기본 알람(분 전, -1 = 없음) | 일정 탭 |
+| `schedule.alarmAllDay` | `''` | 하루 종일 알람 기준 시각(비면 그날 업무 시작) | 일정 탭 |
+| `schedule.alarmLate` | 30 | 늦게 켰을 때 시작 뒤 몇 분까지 울릴지(0 = 울리지 않음) | 일정 탭 |
+| `notice.snooze` | 5 | 다시 알림 간격(분). 알람 창 단추 글자 | 코어 |
+| `notice.sound` · `notice.soundFile` · `notice.volume` | 켬 · `''` · 70 | 알람 소리 · 소리 파일(`C:\Windows\Media`의 이름, 비면 `Windows Notify Calendar`) · 볼륨 0~100 | 코어 |
+| `notice.pausedUntil` | `''` | 알람 잠시 끄기(`manual` = 다시 켤 때까지, 앱 시각 = 그때까지) | 코어 |
+
+일정 탭의 행은 `Register-WtAddon -SettingRows`로 넣습니다(탭을 끄면 빠짐). 코어는 탭 이름을 모릅니다.
+
+### 16.4 개별 덮어쓰기 (일정 폼의 「알람 자세히」)
+
+- 우선순위는 회차(이 회차만) → 일정 → 전역입니다. 저장은 알람 원소의 선택적 칸(2.2)이고, 없으면 전역을 따르므로 예전 파일은 그대로 읽힙니다.
+- 회차를 바꾸면(이 회차만) 회차의 알람 목록이 일정의 목록을 통째로 대신합니다(2.3 `changes.alarms`). 그래서 이 회차만 저장할 때는 폼에 보이는 네 칸(소리 · 다시 알림 · 늦게 켰을 때 · 기준 시각)을 모두 적고, 빈 칸은 `null`(전역 따름)입니다. 일정 저장(이후 모두 · 반복 없음)은 바뀐 칸만 고칩니다.
+- 새 일정의 알람은 `schedule.alarmDefault`로 엽니다. 루틴에는 알람이 없습니다(11.1).
+
+### 16.5 알람 잠시 끄기
+
+- `1시간` · `오늘 하루`(내일 0시까지) · `다시 켤 때까지`. 설정 → 일반 → 알림, 상태 줄 오른쪽 항목(누르면 다시 켬), 트레이 메뉴, 알람 창의 더 보기에서 켜고 끕니다.
+- 끈 동안 울릴 알람은 창 · 소리 없이 기록만 남겨 버립니다(다시 켤 때 한꺼번에 울리지 않게). 끈 동안 시간이 된 다시 알림도 버립니다. 끄면 떠 있는 알람 창을 모두 닫습니다.
+
+### 16.6 알림 창 · 소리 (`core/Notice.psm1`, 코어 공용 부품)
+
+- `Show-WtNotice Spec [-Now]`: Spec = `Key · Title · Detail 또는 Refresh { param($Data, $Now) } · Data · Open @{ Id; Args } · Snooze · Sound · Menu`. 잠시 끈 동안은 `$null`입니다. 같은 키가 떠 있으면 글만 바꿉니다.
+- 창은 앱 창에 붙이지 않고(Owner 없음) 맨 위 · 포커스 안 뺏음 · 작업 표시줄 없음으로 작업 영역 오른쪽 아래에 쌓습니다. 본문을 누르면 앱 창을 앞으로 가져와 `Open-WtPage -Id -Args`(일정: 그날 · 그 일정 폼), `확인` · `닫기` · `Esc`는 닫기, `N분 뒤`는 그 간격 뒤 다시 띄웁니다(앱 실행 동안만).
+- 더 보기: 부른 탭의 항목(일정: `이 일정 알람 끄기` = 그 일정 · 반복이면 계열 전체의 `before`만 끔, 실행 취소 있음) · `알람 잠시 끄기 ›`.
+- 소리 `Invoke-WtNoticeSound [-File] [-Volume] [-Force]`: Windows 소리 파일을 `MediaPlayer`로 내고 `Volume`으로 볼륨을 정합니다. 파일이 없거나 재생하지 못하면 Windows 기본 경고음으로 대신합니다(볼륨 못 바꿈). 파일 이름만 받습니다(경로 글은 쓰지 않음).
+
+### 16.7 코어 등록 자리 (`core/Addons.psm1`)
+
+- `-Tick { param([datetime]$Now) }` · `-TickSeconds 5~3600`(기본 60): 앱이 떠 있는 동안 부르는 작업. 실패는 `Get-WtAddonTickError`에만 남기고 대화상자를 띄우지 않습니다.
+- `-SettingRows { }` → `@(@{ Group = '알림'; Label; Control; Note })`: 설정 화면 묶음에 넣을 행. `Get-WtAddonSettingRows -Group`이 켜진 탭만 모으고, 실패한 탭은 오류 줄 하나로 바꿉니다.
+
+### 16.8 검사
+
+- `tests/Test-Notice.ps1`(코어, `tests/Test-Core.ps1`이 부름): 잠시 끄기 · 소리(가짜 재생기, 볼륨 값) · 쌓기 자리(작업 영역을 넣음) · 창 내용(숨김 호스트 배치) · 좌표 경로 · 확인 · 다시 알림 · 본문 · 더 보기 · 알림 글 · 트레이 메뉴 · 상태 줄 · 설정 행 · 틱 등록(가짜 탭).
+- `addons/schedule/Test-Schedule.ps1`: 판정(제때 · 늦은 알람 · 잠자기 · 하루 종일 기준 · 우선순위 · 예전 파일), 코어 틱 → 알림 창(화면 · 앱 창 없이), 잠시 끄기 중 버림, 이 일정 알람 끄기 · 실행 취소, 폼 기본값 · 알람 자세히 저장/불러오기 · 이 회차만, 설정 행.
+- 창 · 소리는 실제로 내지 않습니다. OS에 닿는 곳(창 보이기 · 작업 영역 · 재생기 · 기본 소리 · 앱 창 열기)만 바꿔 끼우고 15초 타이머는 끕니다. 실제 화면 · 실제 소리 확인은 따로 합니다.
+
+### 16.9 바꾼 파일
+
+- 코어: `core/Notice.psm1`(새), `core/Addons.psm1`(Tick · SettingRows), `core/Shell.psm1`(틱 시작 · 정리, 상태 줄 「알람 꺼짐」, 트레이 메뉴), `core/Pages.psm1`(설정 → 일반 → 알림), `core/Settings.psm1`(기본값), `core/Ui.psm1`(알람 창 · 설정 묶음 · 알람 자세히 모양), `Start-WorkTool.ps1`(코어 목록), `tests/Test-Notice.ps1`(새) · `tests/Test-Core.ps1`(부르기)
+- 일정 탭: `addons/schedule/ScheduleData.psm1`(덮어쓰기 칸 · 타이머 모드 판정 · 하루 종일 기준), `addons/schedule/Schedule.psm1`(틱 · 알림 내용 · 이 일정 알람 끄기 · 폼 알람 자세히 · 기본 알람 · 설정 행), `addons/schedule/Test-Schedule.ps1`
+- 문서: 이 문서 · `apps/WorkTool/design/README.md` · `apps/WorkTool/design/alarm-popup.svg`(새) · `apps/WorkTool/wpf/README.md` · 루트 `README.md`
