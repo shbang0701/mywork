@@ -746,6 +746,21 @@ function ConvertFrom-WtTimeText([string]$Text) {
     [timespan]::new([int]$Text.Substring(0, 2), [int]$Text.Substring(3, 2), 0)
 }
 
+# 사람이 시각 칸에 친 글 → 저장 모양 "HH:mm". 09:00 · 9:00 · 0900 · 900 · 9(시만)를 받고 앞뒤 공백은 뺀다. 못 읽으면 $null.
+# 저장된 기록을 읽을 때는 쓰지 않는다(기록은 ConvertFrom-WtTimeText로 HH:mm만). 일정 · 근태 · 설정의 시각 칸이 같이 쓴다
+function ConvertFrom-WtTimeInput([string]$Text) {
+    $t = "$Text".Trim()
+    if ($t -cmatch '^([0-9]{1,2}):([0-9]{2})$') { $hour = [int]$Matches[1]; $minute = [int]$Matches[2] }
+    elseif ($t -cmatch '^[0-9]{3,4}$') { $hour = [int]$t.Substring(0, $t.Length - 2); $minute = [int]$t.Substring($t.Length - 2) }
+    elseif ($t -cmatch '^[0-9]{1,2}$') { $hour = [int]$t; $minute = 0 }
+    else { return $null }
+    if ($hour -gt 23 -or $minute -gt 59) { return $null }
+    $hour.ToString('00', $script:inv) + ':' + $minute.ToString('00', $script:inv)
+}
+
+# 시각 칸이 틀렸을 때 칸 아래 문구(사람 말로, 형식 기호 HH:mm은 쓰지 않는다)
+function Get-WtTimeInputHint { '시각은 09:00처럼 입력하세요.' }
+
 # ---- 예전(WinForms) CSV 값 --------------------------------------------------------------------
 # Excel에서 열었다 저장하면 2026-10-01 → 2026/10/1, 09:30 → 9:30처럼 바뀔 수 있다. 읽을 수 있으면 정한 모양으로, 없으면 $null
 
@@ -1255,6 +1270,7 @@ function Get-WtQueryDateRange([string]$Value, [datetime]$Today = [datetime]::Tod
 }
 
 Export-ModuleMember -Function Get-WtStamp, ConvertFrom-WtStamp, ConvertFrom-WtDateText, ConvertTo-WtDateText, ConvertFrom-WtTimeText,
+    ConvertFrom-WtTimeInput, Get-WtTimeInputHint,
     ConvertFrom-WtWhole, ConvertFrom-WtNumber, ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, ConvertFrom-WtLegacyStamp,
     Test-WtRecordObject, Get-WtField, Set-WtField, Copy-WtItem, Test-WtDeleted, Get-WtItemRevision, Set-WtItemEdited, Get-WtRecordProblem,
     Compress-WtDeletedItems, Get-WtRowKey, Get-WtChangedColumns, Copy-WtPathValue, Merge-WtLegacyItems,
@@ -2346,7 +2362,7 @@ function Get-WtWorkHoursErrors([hashtable]$Hours) {
             }).Count) { $errors['work.days'] = '일하는 요일을 하나 이상 선택하세요.' }
     foreach ($k in 'work.start', 'work.end', 'work.lunchStart', 'work.lunchEnd') {
         if ($Hours[$k] -isnot [string] -or $Hours[$k] -cnotmatch '^([01][0-9]|2[0-3]):[0-5][0-9]$') {
-            $errors[$k] = '시각은 HH:mm 형식으로 입력하세요.'
+            $errors[$k] = Get-WtTimeInputHint
         }
     }
     if (-not $errors.Contains('work.start') -and -not $errors.Contains('work.end') -and $Hours['work.start'] -ge $Hours['work.end']) {
@@ -2364,7 +2380,7 @@ function Get-WtWorkHoursErrors([hashtable]$Hours) {
     # 반차 나누는 시각은 비울 수 있다(자동). 적으면 시작과 끝 사이
     $half = $Hours['work.halfDay']
     if ($null -ne $half -and '' -cne $half) {
-        if ($half -isnot [string] -or $half -cnotmatch '^([01][0-9]|2[0-3]):[0-5][0-9]$') { $errors['work.halfDay'] = '시각은 HH:mm 형식으로 입력하세요.' }
+        if ($half -isnot [string] -or $half -cnotmatch '^([01][0-9]|2[0-3]):[0-5][0-9]$') { $errors['work.halfDay'] = Get-WtTimeInputHint }
         elseif (-not $errors.Contains('work.start') -and -not $errors.Contains('work.end') -and ($half -le $Hours['work.start'] -or $half -ge $Hours['work.end'])) {
             $errors['work.halfDay'] = '반차 나누는 시각은 시작 시각과 끝 시각 사이여야 합니다.'
         }
@@ -3352,11 +3368,15 @@ $script:stylesXaml = @'
         </DockPanel>
       </Border>
       <Border x:Name="Rail" Width="{DynamicResource F.SidePanel.RailWidth}" Background="{DynamicResource B.Bg.Surface}" CornerRadius="{DynamicResource F.Radius.Card}">
-        <Grid Height="{DynamicResource F.Height.Header}" VerticalAlignment="Top">
-          <Button x:Name="Open" Style="{DynamicResource Btn.Icon}" VerticalAlignment="Center">
-            <TextBlock x:Name="OpenGlyph" Style="{DynamicResource T.Icon}"/>
-          </Button>
-        </Grid>
+        <StackPanel VerticalAlignment="Top">
+          <Grid Height="{DynamicResource F.Height.Header}">
+            <Button x:Name="Open" Style="{DynamicResource Btn.Icon}" VerticalAlignment="Center">
+              <TextBlock x:Name="OpenGlyph" Style="{DynamicResource T.Icon}"/>
+            </Button>
+          </Grid>
+          <!-- 접혀도 닿아야 하는 핵심 명령(일정 +)을 탭이 넣는 자리. 레일 제목 줄 바로 아래, 아이콘 단추 28 -->
+          <StackPanel x:Name="RailItems"/>
+        </StackPanel>
       </Border>
     </Grid>
   </DataTemplate>
@@ -4579,9 +4599,11 @@ $script:stylesXaml = @'
         <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.Hover}"/></Trigger>
         <Trigger Property="IsPressed" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.AccentSoft}"/></Trigger>
         <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Text}"/><Setter TargetName="Box" Property="BorderThickness" Value="2"/></Trigger>
-        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="1"/></Trigger>
+        <!-- 닫을 수 없는 줄 · 묶음: 값 문서 2절 비활성(Check와 같은 상자), 이유는 툴팁 (11-24 실사용) -->
+        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter TargetName="Mark" Property="Stroke" Value="{DynamicResource B.Text.Disabled}"/><Setter TargetName="Dash" Property="Background" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
+    <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
   </Style>
   <Style x:Key="Task.GroupCheck" TargetType="CheckBox" BasedOn="{StaticResource Task.Check}"><Setter Property="Padding" Value="4,8,12,8"/></Style>
   <Style x:Key="Task.GroupToggle" TargetType="ToggleButton">
@@ -5313,6 +5335,10 @@ function Get-WtStyleDictionary {
             }
         }
         $script:styles = [System.Windows.Markup.XamlReader]::Parse($script:stylesXaml.Replace('{NS}', $script:ns))
+        # 한 줄 입력 칸에 Tab으로 들어가면 글 전체를 고른다(Select-WtInputOnTab). Input을 바탕으로 한 스타일(시각 · 제목 칸 등)도 같이 받는다.
+        # XAML의 EventSetter는 코드 숨김 메서드 이름만 받으므로 스타일을 처음 쓰기 전에 여기서 단다
+        $script:styles['Input'].Setters.Add([System.Windows.EventSetter]::new([System.Windows.UIElement]::GotKeyboardFocusEvent,
+            [System.Windows.Input.KeyboardFocusChangedEventHandler]{ param($s, $e) Select-WtInputOnTab $s $e }))
     }
     $script:styles
 }
@@ -5799,6 +5825,69 @@ function Get-WtFormState([hashtable]$Fields) {
         }) -join "`n"
 }
 
+# ---- 입력 칸 공통 동작 (11-24 실사용 보고: Tab 선택 · 시각 모양 · 폼 저장 키 · 틀린 칸 포커스) ----------------------------
+
+# 지금 누른 보조 키. 검사는 이 함수를 바꿔 끼워 실제 키보드 없이 Ctrl 등을 준다(메모의 Get-WtMemoModifiers와 같음)
+function Get-WtKeyModifiers { [System.Windows.Input.Keyboard]::Modifiers }
+
+# 포커스가 Tab · Shift+Tab(키보드 이동)으로 옮겨지는 중인지. Ctrl+Tab은 탭 전환이라 뺀다. 검사가 바꿔 끼운다
+function Test-WtTabNavigation {
+    [System.Windows.Input.Keyboard]::IsKeyDown([System.Windows.Input.Key]::Tab) -and
+        -not ((Get-WtKeyModifiers) -band [System.Windows.Input.ModifierKeys]::Control)
+}
+
+# 한 줄 입력 칸(Input과 그 파생 스타일)에 Tab · Shift+Tab으로 들어가면 글 전체를 고른다(Windows 대화 상자와 같음, 바로 치면 바뀐다).
+# 마우스로 누를 때 · 코드가 포커스를 줄 때(창 다시 활성화 포함)는 커서를 그대로 둔다. 여러 줄 칸은 빼고, 메모 편집기의 섬은 Input 스타일이 아니라 들지 않는다.
+# Input 스타일의 GotKeyboardFocus 처리기(Get-WtStyleDictionary에서 단다)가 부른다
+function Select-WtInputOnTab($Box, $FocusEvent) {
+    if (-not [object]::ReferenceEquals($FocusEvent.NewFocus, $Box) -or $Box.AcceptsReturn -or -not (Test-WtTabNavigation)) { return }
+    $Box.SelectAll()
+}
+
+# 시각 칸: 칸을 떠날 때 0900 · 900 · 9:00 · 9를 09:00으로 바꿔 보인다(core\Records ConvertFrom-WtTimeInput). 못 읽는 글은 그대로 두고
+# 틀렸다는 표시는 저장하는 쪽이 칸 아래에 쓴다(Get-WtTimeInputHint). 저장 전에도 Update-WtTimeInput으로 같은 모양으로 바꾼다
+function Register-WtTimeInput($Box) {
+    $Box.Add_LostKeyboardFocus({ param($s, $e) Update-WtTimeInput $s })
+}
+function Update-WtTimeInput($Box) {
+    $text = [string]$Box.Text
+    $time = ConvertFrom-WtTimeInput $text
+    if ($null -ne $time -and $time -cne $text) { $Box.Text = $time }
+}
+
+# 편집 폼 저장 키(Windows 대화 상자 · Office와 같은 습관): 한 줄 입력 칸에서 Enter, 폼 어디서든 Ctrl+S.
+# 여러 줄 칸의 Enter(줄 바꿈) · 펼친 고르기 칸의 Enter(고르기) · 단추의 Enter(누르기)는 그 칸이 먼저 써서 여기 오지 않는다.
+# $Form = 폼 바깥 요소(키가 거쳐 올라오는 곳), $OnSave = 폼의 [저장]과 같은 일
+$script:formSaveKeys = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
+function Register-WtFormSaveKeys($Form, [scriptblock]$OnSave) {
+    $script:formSaveKeys.AddOrUpdate($Form, $OnSave)
+    $Form.Add_KeyDown({ param($s, $e) Invoke-WtFormSaveKey $s $e })
+}
+function Invoke-WtFormSaveKey($Form, $KeyEvent) {
+    $save = $null
+    if ($KeyEvent.Handled -or -not $script:formSaveKeys.TryGetValue($Form, [ref]$save)) { return }
+    $mods = Get-WtKeyModifiers
+    $source = $KeyEvent.OriginalSource
+    $enter = $KeyEvent.Key -eq [System.Windows.Input.Key]::Return -and $mods -eq [System.Windows.Input.ModifierKeys]::None -and
+        $source -is [System.Windows.Controls.TextBox] -and -not $source.AcceptsReturn -and -not $source.IsReadOnly
+    $ctrlS = $KeyEvent.Key -eq [System.Windows.Input.Key]::S -and $mods -eq [System.Windows.Input.ModifierKeys]::Control
+    if (-not $enter -and -not $ctrlS) { return }
+    $KeyEvent.Handled = $true
+    & $save
+}
+
+# 저장했는데 칸 오류가 나면 틀린 칸으로 포커스를 옮긴다. 글 칸은 글 전체를 골라 바로 다시 치게 한다(Windows 대화 상자의 값 검사 실패와 같음).
+# 칸 묶음(요일 체크 상자 줄 등)은 첫 칸으로. 표에서 칸을 눌러 편집 폼의 그 칸으로 갈 때도 쓴다. 옮겼으면 $true
+function Set-WtInputFocus($Control) {
+    if ($Control -is [System.Windows.Controls.Panel]) {
+        $Control = @($Control.Children | Where-Object { $_ -is [System.Windows.UIElement] -and $_.Focusable -and $_.IsEnabled -and $_.IsVisible })[0]
+    }
+    if ($Control -isnot [System.Windows.UIElement] -or -not $Control.IsEnabled -or -not $Control.IsVisible) { return $false }
+    [void]$Control.Focus()
+    if ($Control -is [System.Windows.Controls.TextBox]) { $Control.SelectAll() }
+    $Control.IsKeyboardFocusWithin
+}
+
 function New-WtMinuteInput([int]$Value) {
     $row = New-WtStack Horizontal 12
     $box = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $box 'Input'
@@ -5946,6 +6035,7 @@ function Get-WtVisualChild($Root, [type]$Type) {
 
 Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
 Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, Read-WtSaveChoice, Set-WtInputError, Get-WtFormState, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption,
+    Get-WtKeyModifiers, Register-WtTimeInput, Update-WtTimeInput, Register-WtFormSaveKeys, Set-WtInputFocus,
     Set-WtButtonMenuPlacement, Open-WtButtonMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,
@@ -6284,7 +6374,7 @@ function Set-WtTimelineLayout($Timeline) {
     # 막대는 두 줄까지 쌓고, 넘치면 숨긴 뒤 오른쪽에 +n으로 묶는다.
     # [Math]::Max · Min의 첫 값은 0.0처럼 실수로 쓴다: PowerShell은 Max(0, 636.67)을 정수 판으로 불러 637을 돌려주고,
     # 올림된 이름 자리가 오른쪽 끝을 넘어 숨겨졌다(11-22 재확인, 배율 150%)
-    $ends =@([double]::NegativeInfinity, [double]::NegativeInfinity); $hidden = [System.Collections.Generic.List[string]]::new(); $placed = [System.Collections.Generic.List[object]]::new()
+    $ends =@([double]::NegativeInfinity, [double]::NegativeInfinity); $hidden = [System.Collections.Generic.List[object]]::new(); $placed = [System.Collections.Generic.List[object]]::new()
     foreach ($event in $state.Events) {
         $left = [Math]::Clamp($event.Start, $state.Start, $state.End); $right = [Math]::Clamp($event.End, $state.Start, $state.End)
         $barWidth = [Math]::Max(10.0, $width * ($right - $left) / $span)
@@ -6293,7 +6383,7 @@ function Set-WtTimelineLayout($Timeline) {
         if ($lane -lt 0) {
             $event.Button.Visibility = 'Collapsed'; $event.Caption.Visibility = 'Collapsed'
             if ($event.Alarm) { $event.Alarm.Visibility = 'Collapsed' }
-            $hidden.Add($event.Entry.ToolTip); continue
+            $hidden.Add($event); continue
         }
         $ends[$lane] = $x + $barWidth
         $event.Button.Visibility = 'Visible'; if ($event.Alarm) { $event.Alarm.Visibility = 'Visible' }
@@ -6301,12 +6391,6 @@ function Set-WtTimelineLayout($Timeline) {
     }
     $stacked = @($placed | Where-Object { $_.Lane -eq 1 }).Count -gt 0
     $infinite = [System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)
-    # +n은 이름 첫 줄의 오른쪽 끝이다. 첫 줄 이름은 +n 앞 12까지만 쓰고, 둘째 줄은 막대 오른쪽 끝까지 쓴다
-    $state.More.Text = "+$($hidden.Count)"; $state.More.ToolTip = $hidden -join "`n`n"
-    $limits = @($width, $width)
-    if ($hidden.Count) { $limits[0] = $width - (Measure-WtTimelinePart $state.More $infinite) - 12 }
-    $state.More.Visibility = if ($hidden.Count) { 'Visible' } else { 'Collapsed' }
-    $captionEnds = @([double]::NegativeInfinity, [double]::NegativeInfinity)
     foreach ($item in $placed) {
         $event = $item.Event; $button = $event.Button
         $button.Width = $item.Width; $button.Height = if ($stacked) { 8 } else { 14 }
@@ -6328,20 +6412,36 @@ function Set-WtTimelineLayout($Timeline) {
             $alarm.Visibility = if ($null -eq $alarmX) { 'Collapsed' } else { 'Visible' }
             if ($null -ne $alarmX) { [System.Windows.Controls.Canvas]::SetLeft($alarm, $alarmX); [System.Windows.Controls.Canvas]::SetTop($alarm, $top - 2) }
         }
-        # 이름은 막대 시작에 두고, 오른쪽 끝(첫 줄은 +n 앞)을 넘으면 끝에 맞춘다. 앞 이름과 12 안으로 붙으면 둘째 줄, 둘째 줄도 겹치면 쓰지 않는다
         $event.Caption.MaxWidth = $width
-        $captionWidth = Measure-WtTimelinePart $event.Caption $infinite
-        $line = -1; $captionX = 0
-        for ($l = 0; $l -lt 2 -and $line -lt 0; $l++) {
-            $x = [Math]::Max(0.0, [Math]::Min($item.X, $limits[$l] - $captionWidth))
-            if ($x -ge $captionEnds[$l] -and $x + $captionWidth -le $limits[$l] + 0.01) { $line = $l; $captionX = $x }
-        }
-        $event.Caption.Visibility = if ($line -lt 0) { 'Collapsed' } else { 'Visible' }
-        if ($line -ge 0) {
-            $captionEnds[$line] = $captionX + $captionWidth + 12
-            [System.Windows.Controls.Canvas]::SetLeft($event.Caption, $captionX); [System.Windows.Controls.Canvas]::SetTop($event.Caption, 70 + $line * 18)
-        }
+        $item.CaptionWidth = Measure-WtTimelinePart $event.Caption $infinite
     }
+    # 이름은 막대 시작에 두고, 오른쪽 끝(첫 줄은 +n 앞)을 넘으면 끝에 맞춘다. 앞 이름과 12 안으로 붙으면 둘째 줄, 둘째 줄도 겹치면 쓰지 않는다.
+    # +n은 이름 첫 줄의 오른쪽 끝이고, 숨긴 막대와 막대는 보여도 이름을 못 놓은 일정을 함께 센다(11-24 실사용: 넷째 막대 이름이 빠지고 +n에도 없었다).
+    # 첫 줄 이름은 +n 앞 12까지만 쓰므로, +n이 생기거나 자릿수가 바뀌면 이름 자리를 다시 정한다(몇 번이면 굳는다)
+    $assumed = $hidden.Count; $unnamed = [System.Collections.Generic.List[object]]::new()
+    for ($pass = 0; $pass -lt 4; $pass++) {
+        $state.More.Text = "+$assumed"
+        $limits = @($width, $width)
+        if ($assumed) { $limits[0] = $width - (Measure-WtTimelinePart $state.More $infinite) - 12 }
+        $captionEnds = @([double]::NegativeInfinity, [double]::NegativeInfinity); $unnamed.Clear()
+        foreach ($item in $placed) {
+            $caption = $item.Event.Caption; $captionWidth = $item.CaptionWidth
+            $line = -1; $captionX = 0
+            for ($l = 0; $l -lt 2 -and $line -lt 0; $l++) {
+                $x = [Math]::Max(0.0, [Math]::Min($item.X, $limits[$l] - $captionWidth))
+                if ($x -ge $captionEnds[$l] -and $x + $captionWidth -le $limits[$l] + 0.01) { $line = $l; $captionX = $x }
+            }
+            $caption.Visibility = if ($line -lt 0) { 'Collapsed' } else { 'Visible' }
+            if ($line -lt 0) { $unnamed.Add($item.Event); continue }
+            $captionEnds[$line] = $captionX + $captionWidth + 12
+            [System.Windows.Controls.Canvas]::SetLeft($caption, $captionX); [System.Windows.Controls.Canvas]::SetTop($caption, 70 + $line * 18)
+        }
+        if ($hidden.Count + $unnamed.Count -eq $assumed) { break }
+        $assumed = $hidden.Count + $unnamed.Count
+    }
+    $rest = @(@($hidden) + @($unnamed) | Sort-Object { $_.Start }, { $_.End })
+    $state.More.Text = "+$($rest.Count)"; $state.More.ToolTip = @($rest | ForEach-Object { $_.Entry.ToolTip }) -join "`n`n"
+    $state.More.Visibility = if ($rest.Count) { 'Visible' } else { 'Collapsed' }
     $minute = ($state.Now - $state.Date.Date).TotalMinutes
     $visible = $minute -ge $state.Start -and $minute -le $state.End
     $state.Line.Visibility = $state.Label.Visibility = if ($visible) { 'Visible' } else { 'Collapsed' }
@@ -7513,7 +7613,9 @@ function Add-WtMdListItemUnits($Units, $List, $Li, $Ctx, [int]$Depth, [int]$List
     for ($i = 0; $i -lt $children.Count; $i++) { if ($children[$i].GetType().Name -eq 'ListBlock') { $firstNested = $i; break } }
     $split = $firstNested -ge 1
     if ($split) { for ($i = $firstNested; $i -lt $children.Count; $i++) { if ($children[$i].GetType().Name -ne 'ListBlock') { $split = $false } } }
-    $own = if ($split) { @($children[0..($firstNested - 1)]) } else { $children }
+    # if 식으로 받으면 자식이 하나일 때 배열이 풀린다. 그 자식이 목록 · 인용이면 그 안의 항목을 자식으로 읽어 글이 빠진다(- - 글)
+    $own = $children
+    if ($split) { $own = @($children[0..($firstNested - 1)]) }
     $range = Get-WtMdBlockLines $Li $Ctx
     $end = if ($split) { (Get-WtMdBlockLines $children[$firstNested] $Ctx)[0] } else { $range[1] }
     # 항목 안 빈 줄은 단위에 넣지 않는다 (뒤쪽 빈 줄 떼기)
@@ -10033,7 +10135,8 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   ShortcutExists { param($Key) } → 바로 가기 대상이 남아 있으면 $true (선택)
   ShortcutTitle  { param($Key) } → 바로 가기 대상의 지금 이름. 비거나 실패하면 연 때 남긴 이름을 쓴다 (선택)
   PageKey      { param($Key, $Modifiers) } → 이 화면이 떠 있는데 키보드 포커스가 화면 밖(왼쪽 메뉴 · 제목 줄 · 창 자체)에 있을 때
-               셸이 처리하지 않은 키를 넘긴다. 처리했으면 $true (선택). 화면 안 키는 화면이 직접 받는다
+               셸이 처리하지 않은 키를 넘긴다. 처리했으면 $true (선택). 화면 안 키는 화면이 직접 받는다.
+               주지 않으면 셸이 같은 키를 화면 맨 위 요소(NewView가 돌려준 것)의 PreviewKeyDown으로 다시 올린다
   HomeCard     { } → 홈에 놓을 카드 요소(여러 개 가능)를 돌려준다 (선택)
   HomeSlot     main(기본) · side · head(제목 아래 줄). HomeOrder가 작을수록 먼저 놓는다
   HomeCards    @(@{ Slot = 'head'|'main'|'side'; Order = 숫자; Card = { } }, ...). 한 탭의 여러 자리 카드 (선택)
@@ -11013,9 +11116,13 @@ function Save-WtHolidayDialog($Fields, $Entry) {
 
 # ---- 업무시간: 첫 설정과 일반 설정이 같은 입력 · 검사를 사용한다. ------------------------------
 
+# 시각 칸은 0900 · 9:00 · 9도 09:00으로 읽는다(core\Records ConvertFrom-WtTimeInput, 일정 · 근태 폼과 같음). 못 읽는 글은 그대로 넘겨 칸 아래 오류
 function Get-WtWorkFormHours($Form) {
     $hours = @{ 'work.days' = @($Form.Days | Where-Object IsChecked | ForEach-Object { [int]$_.Tag.Day }) }
-    foreach ($k in $Form.Boxes.Keys) { $hours[$k] = $Form.Boxes[$k].Text }
+    foreach ($k in $Form.Boxes.Keys) {
+        $text = $Form.Boxes[$k].Text; $time = ConvertFrom-WtTimeInput $text
+        $hours[$k] = if ($null -ne $time) { $time } else { $text }
+    }
     $hours
 }
 
@@ -11182,10 +11289,11 @@ function New-WtWorkHoursForm([switch]$FirstSetup) {
         $binding.Source = [pscustomobject]@{ Field = $field[0] }
         [void]$box.SetBinding([System.Windows.FrameworkElement]::DataContextProperty, $binding)
         $box.Add_TextChanged({ param($s, $e) [void](Update-WtWorkForm $s.Tag) })
+        Register-WtTimeInput $box   # 떠날 때 0900 → 09:00 (아래 저장보다 먼저)
         $box.Add_LostKeyboardFocus({ param($s, $e) if (-not $s.Tag.FirstSetup) { [void](Update-WtWorkForm $s.Tag -Save) } })
         $box.Add_KeyDown({
             param($s, $e)
-            if ($e.Key -eq 'Return' -and -not $s.Tag.FirstSetup) { [void](Update-WtWorkForm $s.Tag -Save); $e.Handled = $true }
+            if ($e.Key -eq 'Return' -and -not $s.Tag.FirstSetup) { Update-WtTimeInput $s; [void](Update-WtWorkForm $s.Tag -Save); $e.Handled = $true }
         })
         $form.Boxes[$field[0]] = $box
         if ($field[0] -ceq 'work.halfDay') {
@@ -11404,6 +11512,7 @@ $script:warmStarted = $false  # ContentRendered가 다시 와도 세션당 한 �
 $script:forceOpaque = $false  # WORKTOOL_FORCE_OPAQUE=1: 설정을 저장하지 않는 불투명 창
 $script:writingDropped = $false   # 끝낼 때 사용자가 「저장을 기다리지 않고 끝내기」를 골랐는지
 $script:exitAsking = $false       # 끝내기 전에 묻는 중(그사이 트레이 종료 등이 또 와도 겹쳐 묻지 않게)
+$script:forwardingKey = $false    # 화면 밖 포커스의 키를 화면에 다시 올리는 중(Invoke-WtPageKey)
 
 $script:shellXaml = Get-WtShellXaml
 
@@ -11516,14 +11625,48 @@ function Close-WtUtilityWindows {
 }
 
 # 지금 화면이 떠 있는데 키보드 포커스가 화면 밖(왼쪽 메뉴 · 제목 줄 단추 · 창 자체)에 있으면, 셸이 처리하지 않은 키를
-# 그 탭의 PageKey 등록에 넘긴다. 화면 안에 포커스가 있으면 화면이 직접 받으므로 넘기지 않는다. 처리했으면 $true
+# 그 탭에 넘긴다. 화면 안에 포커스가 있으면 화면이 직접 받으므로 넘기지 않는다. 처리했으면 $true
+# - PageKey를 등록한 탭은 그 등록이 받는다.
+# - 등록하지 않은 탭은 화면 맨 위 요소(NewView가 돌려준 것)에 같은 키를 PreviewKeyDown으로 다시 올린다. 화면 안에 포커스가 있을 때
+#   받던 처리기가 그대로 받는다(탭을 옮긴 직후 Ctrl+F · F5가 목록을 한 번 눌러야 먹던 것, 11-24 실사용)
 function Invoke-WtPageKey([System.Windows.Input.Key]$Key, [System.Windows.Input.ModifierKeys]$Modifiers) {
     if (-not $script:current -or -not $script:ui) { return $false }
     $view = $script:ui.PageHost.Content
     if (-not $view -or $view.IsKeyboardFocusWithin) { return $false }
     $addon = Get-WtAddon -Id $script:current
-    if (-not $addon -or -not $addon.PageKey) { return $false }
-    @(& $addon.PageKey $Key $Modifiers)[-1] -eq $true
+    if (-not $addon) { return $false }
+    if ($addon.PageKey) { return @(& $addon.PageKey $Key $Modifiers)[-1] -eq $true }
+    if ($view -isnot [System.Windows.UIElement]) { return $false }
+    $source = [System.Windows.PresentationSource]::FromVisual($view)
+    if (-not $source) { return $false }
+    $forward = [System.Windows.Input.KeyEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $source, [Environment]::TickCount, $Key)
+    $forward.RoutedEvent = [System.Windows.Input.Keyboard]::PreviewKeyDownEvent
+    # 다시 올린 키도 창을 지나 내려가므로, 그동안 창의 키 처리(Invoke-WtShellKey)는 건너뛴다
+    $script:forwardingKey = $true
+    try { $view.RaiseEvent($forward) } finally { $script:forwardingKey = $false }
+    $forward.Handled
+}
+
+# 앱 창의 단축키(창의 PreviewKeyDown). 셸 단축키를 먼저 보고, 처리하지 않은 키는 지금 화면에 넘긴다(Invoke-WtPageKey)
+function Invoke-WtShellKey($KeyArgs) {
+    if ($script:forwardingKey) { return }
+    if (Invoke-WtWorkSetupKey $KeyArgs) { return }
+    $ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
+    $key = if ($KeyArgs.Key -eq 'System') { $KeyArgs.SystemKey } else { $KeyArgs.Key }
+    $shift = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0
+    if ($ctrl -and $shift -and $key -eq 'B') { Switch-WtPanelCycle; $KeyArgs.Handled = $true; return }
+    if ($key -eq 'F11') { Switch-WtFullScreen; $KeyArgs.Handled = $true; return }
+    if ($key -eq 'Escape' -and $script:fullscreen) { Switch-WtFullScreen; $KeyArgs.Handled = $true; return }
+    if ($key -eq 'F1') { Select-WtPage '_help'; $KeyArgs.Handled = $true; return }
+    if ($ctrl -and $key -eq 'OemComma') { Select-WtPage '_settings'; $KeyArgs.Handled = $true; return }
+    if ($ctrl -and [int]$key -ge [int][System.Windows.Input.Key]::D1 -and [int]$key -le [int][System.Windows.Input.Key]::D9) {
+        $ids = @(Get-WtAddon | ForEach-Object { $_.Id })
+        $idx = [int]$key - [int][System.Windows.Input.Key]::D1
+        if ($idx -lt $ids.Count) { Select-WtPage $ids[$idx] }
+        $KeyArgs.Handled = $true
+        return
+    }
+    if (Invoke-WtPageKey $key ([System.Windows.Input.Keyboard]::Modifiers)) { $KeyArgs.Handled = $true }
 }
 
 # 공개된 Select-WtPage의 출력은 그대로 두고, 항목 열기는 전환 성공 여부까지 확인한다.
@@ -12368,25 +12511,7 @@ function Start-WtApp {
 
     $w.Add_PreviewKeyDown({
             param($s, $e)
-            try {
-                if (Invoke-WtWorkSetupKey $e) { return }
-                $ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
-                $key = if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }
-                $shift = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0
-                if ($ctrl -and $shift -and $key -eq 'B') { Switch-WtPanelCycle; $e.Handled = $true; return }
-                if ($key -eq 'F11') { Switch-WtFullScreen; $e.Handled = $true; return }
-                if ($key -eq 'Escape' -and $script:fullscreen) { Switch-WtFullScreen; $e.Handled = $true; return }
-                if ($key -eq 'F1') { Select-WtPage '_help'; $e.Handled = $true; return }
-                if ($ctrl -and $key -eq 'OemComma') { Select-WtPage '_settings'; $e.Handled = $true; return }
-                if ($ctrl -and [int]$key -ge [int][System.Windows.Input.Key]::D1 -and [int]$key -le [int][System.Windows.Input.Key]::D9) {
-                    $ids = @(Get-WtAddon | ForEach-Object { $_.Id })
-                    $idx = [int]$key - [int][System.Windows.Input.Key]::D1
-                    if ($idx -lt $ids.Count) { Select-WtPage $ids[$idx] }
-                    $e.Handled = $true
-                    return
-                }
-                if (Invoke-WtPageKey $key ([System.Windows.Input.Keyboard]::Modifiers)) { $e.Handled = $true }
-            } catch { Show-WtError $_ '단축키' }
+            try { Invoke-WtShellKey $e } catch { Show-WtError $_ '단축키' }
         })
 
     if ($global:WorkToolUnhandledHandler) {
@@ -12841,6 +12966,8 @@ function Update-WtTaskStatus {
         $groupRows = @($script:visible | Where-Object AppLabel -eq $key)
         $check.IsChecked = Get-WtTaskCheckState $groupRows
         $check.IsEnabled = @($groupRows | Where-Object CanClose).Count -gt 0
+        # 닫을 수 있는 줄이 없는 묶음은 비활성 + 이유(줄의 체크 상자는 CloseHint)
+        $check.ToolTip = if ($check.IsEnabled) { $null } else { '이 프로그램에는 여기서 닫을 수 있는 항목이 없습니다.' }
     }
 }
 
@@ -12883,6 +13010,9 @@ function Restore-WtTaskFocus {
     }
     if ($check) { [void]$check.Focus() }
 }
+
+# 보조 키(Ctrl · Shift · Alt) 상태. 검사는 이 함수를 바꿔 실제 키보드 없이 흉내 낸다
+function Get-WtTaskModifiers { [System.Windows.Input.Keyboard]::Modifiers }
 
 function Find-WtTaskRow($Root, [string]$Id) {
     if ($Root -is [System.Windows.Controls.DataGridRow]) { if ([string]$Root.Item.Id -eq $Id) { return $Root }; return $null }
@@ -13060,10 +13190,11 @@ function New-WtActiveTasksView {
         $e.Column.SortDirection = $script:sortDirection
         Update-WtTaskList -KeepSelection
     })
+    # 화면 단축키. 포커스가 왼쪽 메뉴 · 창 자체에 있어도 셸이 이 처리기에 다시 올려 준다
     $page.Root.Add_PreviewKeyDown({
         param($s, $e)
         if ($e.Key -eq 'F5') { Start-WtTaskJob 'scan'; $e.Handled = $true }
-        if ($e.Key -eq 'F' -and ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control)) { [void]$script:ui.Search.Focus(); $e.Handled = $true }
+        if ($e.Key -eq 'F' -and ((Get-WtTaskModifiers) -band [System.Windows.Input.ModifierKeys]::Control)) { [void]$script:ui.Search.Focus(); $e.Handled = $true }
     })
     $script:timer = [System.Windows.Threading.DispatcherTimer]::new()
     $script:timer.Interval = [timespan]::FromMilliseconds(250); $script:timer.Add_Tick({ Invoke-WtTaskTick })
@@ -13174,11 +13305,14 @@ function New-WtAttendanceView {
     Set-WtTableColumnScale $script:table
     $script:table.Add_SelectionChanged({ param($s, $e) if (-not $script:refreshing -and $s.SelectedItem) { Show-WtAttForm $s.SelectedItem.Entry } })
     # 취소 후 같은 선택 행을 다시 눌러도 폼을 연다. 선택 변경만으로는 이 클릭을 받지 못한다.
+    # 마우스로 누른 칸은 그 열의 편집 칸으로 포커스를 옮긴다(Select-WtAttCellField). 키보드로 줄을 옮길 때는 선택 변경만 와서 표에 남는다
     $script:table.Add_PreviewMouseUp({
         param($s, $e)
         if ($e.ChangedButton -ne [Windows.Input.MouseButton]::Left) { return }
         $row = [Windows.Controls.ItemsControl]::ContainerFromElement($s, $e.OriginalSource)
-        if ($row -is [Windows.Controls.DataGridRow] -and $row.Item -and (-not $script:form -or -not $script:form.Entry -or $script:form.Entry.Id -cne $row.Item.Entry.Id)) { Show-WtAttForm $row.Item.Entry }
+        if ($row -isnot [Windows.Controls.DataGridRow] -or -not $row.Item) { return }
+        if (-not $script:form -or -not $script:form.Entry -or $script:form.Entry.Id -cne $row.Item.Entry.Id) { Show-WtAttForm $row.Item.Entry }
+        Select-WtAttCellField $row.Item.Entry $e.OriginalSource
     })
     $script:detail = [Windows.Controls.ContentControl]::new()
     $sideRoot = New-WtSidePanel -Content $script:detail -Side Right -Key 'attendance.sidebar.collapsed' -Title '이번 달' -Width 288
@@ -13264,6 +13398,7 @@ function Invoke-WtAttClock([string]$Action) {
         if (-not $result.Success) { throw $result.Reason }
         $script:form = $null; $script:viewKey = $null; Update-WtAttendanceView
     } catch { $script:view.Actions.ToolTip = $_.Exception.Message; $script:viewKey = $null; Update-WtAttendanceView }
+    Update-WtAttBadges
 }
 function Add-WtAttField([string]$Key, [string]$Label, $Control) {
     $field = New-WtStack; Set-WtStyle $field 'Attendance.Field'
@@ -13272,6 +13407,7 @@ function Add-WtAttField([string]$Key, [string]$Label, $Control) {
     [Windows.Automation.AutomationProperties]::SetName($Control, $(if ($Label) { $Label } else { [string]$Control.Content }))
     [Windows.Automation.AutomationProperties]::SetAutomationId($Control, "Attendance-$Key")
     $script:form.Fields[$Key] = $Control; $script:form.Errors[$Key] = $errorText; $script:form.Rows[$Key] = $field; [void]$script:form.Panel.Children.Add($field)
+    $script:form.Order.Add($Key)   # 폼 순서(틀린 칸이 여럿이면 첫 칸으로 포커스)
 }
 function New-WtAttInput([string]$Value) {
     $box = [Windows.Controls.TextBox]::new(); Set-WtStyle $box Input
@@ -13306,6 +13442,7 @@ function Set-WtAttFormKind {
     $clock = $kindText -cin @('근무', '업무외')
     $old = $script:form.Entry
     $timed = $clock -or $half -or ($kindText -ceq '기타' -and $old -and $old.Kind -ceq 'other' -and $old.HasTime)
+    $script:form.Timed = $timed
     $show = @{ place = $kindText -ceq '업무외'; out = $kindText -ceq '업무외'; back = $kindText -ceq '업무외'; next = $clock
         leaveType = $kindText -ceq '휴가'; days = $kindText -ceq '대휴 발생'; start = $timed; end = $kindText -cne '대휴 발생' }
     foreach ($key in @($show.Keys)) { $script:form.Rows[$key].Visibility = if ($show[$key]) { 'Visible' } else { 'Collapsed' } }
@@ -13333,7 +13470,8 @@ function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     [void](Add-WtChild $actions $save); [void](Add-WtChild $actions $cancel); [void]$buttons.Children.Add($actions); [void]$body.Children.Add($buttons)
     $scroll = [Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'
     $col = New-WtStack
-    $script:form = @{ Entry = $Entry; Store = $script:data.Store; Fields = @{}; Errors = @{}; Rows = @{}; Panel = $col; ChangingKind = $true; LeaveCodes = @{} }
+    $script:form = @{ Entry = $Entry; Store = $script:data.Store; Fields = @{}; Errors = @{}; Rows = @{}; Panel = $col; ChangingKind = $true; LeaveCodes = @{}
+        Order = [System.Collections.Generic.List[string]]::new(); Save = $save; Timed = $false }
     Select-WtAttRow   # 떠나기 전에 [저장]해 표를 새로 그렸어도 이 기록의 줄을 고른다(새 기록이면 선택 없음)
     $day = if ($Entry) { $Entry.StartDate } elseif ($Date) { ConvertFrom-WtDateText $Date } else { $null }
     if (-not $day) { $day = if ($script:month.Year -eq [datetime]::Today.Year -and $script:month.Month -eq [datetime]::Today.Month) { [datetime]::Today } else { $script:month } }
@@ -13364,9 +13502,13 @@ function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     $cancel.Add_Click({ Show-WtAttSummary })
     $save.Add_Click({ Save-WtAttForm })
     $delete.Add_Click({
-        try { $result = Set-WtAttendanceDeleted $script:form.Store $script:form.Entry.Id; if (-not $result.Success) { throw $result.Reason }; $script:form = $null; $script:viewKey = $null; Update-WtAttendanceView }
+        try { $result = Set-WtAttendanceDeleted $script:form.Store $script:form.Entry.Id; if (-not $result.Success) { throw $result.Reason }; $script:form = $null; $script:viewKey = $null; Update-WtAttendanceView; Update-WtAttBadges }
         catch { Set-WtAttFormError note $_.Exception.Message }
     })
+    # 11-24 실사용: 한 줄 칸 Enter · 폼 어디서든 Ctrl+S도 [저장](메모 칸의 Enter는 줄 바꿈). [저장]을 못 누르는 기록(읽기 전용 · 고칠 항목)은 키도 저장하지 않는다
+    Register-WtFormSaveKeys $body { if ($script:form -and $script:form.Save.IsEnabled) { Save-WtAttForm } }
+    # 시각 칸은 0900 · 9:00 · 9도 받아 떠날 때 09:00으로 보인다. 끝 칸은 출장 · 휴가면 날짜라 시각일 때만(Set-WtAttFormKind의 Timed)
+    foreach ($key in 'start', 'end') { $script:form.Fields[$key].Add_LostKeyboardFocus({ param($s, $e) if ($script:form -and $script:form.Timed) { Update-WtTimeInput $s } }) }
     $save.IsEnabled = -not $Entry -or $Entry.State -ceq 'ok'
     if ($Entry -and $Entry.Problem) { $save.ToolTip = $Entry.Problem }
     # 새로 적는 폼은 「새 기록」이고 표 선택을 푼다. 고치는 폼은 「기록 편집」이고 그 기록의 줄을 고른다(11-22 실사용 보고 23)
@@ -13374,6 +13516,30 @@ function Show-WtAttForm($Entry, [string]$Date = '', [string]$Kind = '') {
     Select-WtAttRow
     if ($script:side.Rail.Visibility -eq 'Visible') { $script:side.Open.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent)) }
 }
+
+# 표 열(DisplayIndex) → 폼 칸. 시간은 시작 · 끝으로 계산한 값이라 끝(퇴근을 고치는 칸)으로 (디자인 8절 근태)
+$script:cellFields = @('date', 'kind', 'start', 'end', 'place', 'out', 'end', 'note')
+# 마우스로 누른 표 칸의 열에 맞는 편집 칸으로 포커스를 옮기고 글 전체를 고른다(11-24 실사용: 시작 16:34를 누르고 바로 친 0900이 표에서 사라졌다).
+# 그 기록의 폼이 열려 있을 때만 옮기고(떠날 때 묻기를 [취소]해 앞 폼이 남았으면 그대로), 그 종류에 없어 숨은 칸이면 표에 남는다.
+# 표가 누름을 마저 처리한 뒤(입력 차례) 옮긴다. 처리기는 지역 변수를 못 보므로 할 일을 $script:에 둔다
+function Select-WtAttCellField($Entry, $Source) {
+    if (-not $script:form -or -not (Test-WtAttSameEntry $script:form.Entry $Entry)) { return }
+    $cell = $Source
+    while ($cell -and $cell -isnot [Windows.Controls.DataGridCell]) {
+        $cell = if ($cell -is [Windows.Media.Visual]) { [Windows.Media.VisualTreeHelper]::GetParent($cell) } elseif ($cell -is [Windows.FrameworkContentElement]) { $cell.Parent } else { $null }
+    }
+    if (-not $cell -or -not $cell.Column -or $cell.Column.DisplayIndex -ge $script:cellFields.Count) { return }
+    $script:cellFocus = @{ Entry = $Entry; Key = $script:cellFields[$cell.Column.DisplayIndex] }
+    [void]$script:detail.Dispatcher.BeginInvoke([Windows.Threading.DispatcherPriority]::Input, [Action]{ Invoke-WtAttCellFocus })
+}
+function Invoke-WtAttCellFocus {
+    $want = $script:cellFocus; $script:cellFocus = $null
+    if (-not $want -or -not $script:form -or -not (Test-WtAttSameEntry $script:form.Entry $want.Entry)) { return }
+    if ($script:form.Rows[$want.Key].Visibility -ne 'Visible') { return }
+    [void](Set-WtInputFocus $script:form.Fields[$want.Key])
+}
+# 메뉴 점(오늘 안 찍음) · 상태 줄을 바로 다시 그린다(11-24 실사용: 출근해도 점이 1분 타이머 · 마우스 올림 전까지 남았다)
+function Update-WtAttBadges { if (Get-Command Update-WtNavBadges -ErrorAction Ignore) { Update-WtNavBadges } }
 
 # 같은 기록인지(표를 새로 그리면 기록 객체가 바뀌므로 id로 본다. id가 없는 기록은 같은 객체일 때만)
 function Test-WtAttSameEntry($A, $B) {
@@ -13407,6 +13573,8 @@ function Save-WtAttForm {
     $leaveCode = if ($kind -ceq 'leave') { Get-WtAttLeaveCode } else { '' }
     $half = $leaveCode -cin @('half-am', 'half-pm')
     $timed = $kind -cin @('work','overtime') -or $half -or ($kind -ceq 'other' -and $old -and $old.HasTime)
+    # Enter · Ctrl+S는 칸을 떠나지 않고 저장하므로 시각 칸 모양(0900 → 09:00)을 여기서도 맞춘다(시각 칸일 때만, 끝 칸은 날짜일 수 있다)
+    if ($timed) { Update-WtTimeInput $fields.start; Update-WtTimeInput $fields.end }
     $startTime = $null; $endTime = $null; $end = $null; $grantDays = $null
     if ($kind -ceq 'leave-grant') {
         # 대휴 발생: 날짜 하나 + 생긴 일수(0.5 단위). 설계 15.3
@@ -13416,16 +13584,16 @@ function Save-WtAttForm {
     } elseif ($half) {
         # 반차: 같은 날 시작 ~ 끝 시각. 그날 규칙과 같으면 시각 없이 저장해 규칙을 따른다(설계 15.2)
         $startTime = ConvertFrom-WtTimeText $fields.start.Text; $endTime = ConvertFrom-WtTimeText $fields.end.Text
-        if ($null -eq $startTime) { Set-WtAttFormError start '시각은 HH:mm 형식으로 입력하세요.' }
-        if ($null -eq $endTime) { Set-WtAttFormError end '시각은 HH:mm 형식으로 입력하세요.' }
+        if ($null -eq $startTime) { Set-WtAttFormError start (Get-WtTimeInputHint) }
+        if ($null -eq $endTime) { Set-WtAttFormError end (Get-WtTimeInputHint) }
         elseif ($null -ne $startTime -and $endTime -le $startTime) { Set-WtAttFormError end '끝이 시작보다 늦어야 합니다.' }
         elseif ($date) { $end = @{ date = ConvertTo-WtDateText $date; time = $fields.end.Text } }
     } elseif ($timed) {
         $startTime = ConvertFrom-WtTimeText $fields.start.Text
-        if ($null -eq $startTime) { Set-WtAttFormError start '시각은 HH:mm 형식으로 입력하세요.' }
+        if ($null -eq $startTime) { Set-WtAttFormError start (Get-WtTimeInputHint) }
         if ($fields.end.Text) {
             $endTime = ConvertFrom-WtTimeText $fields.end.Text
-            if ($null -eq $endTime) { Set-WtAttFormError end '시각은 HH:mm 형식으로 입력하세요.' }
+            if ($null -eq $endTime) { Set-WtAttFormError end (Get-WtTimeInputHint) }
             elseif ($date) {
                 # 기존 여러 날 기록은 다음 날 체크가 그대로면 원래 날짜 차이를 보존한다.
                 $offset = if ($fields.next.IsChecked) { if ($old -and $old.HasEnd -and $old.EndDate -gt $old.StartDate) { ($old.EndDate - $old.StartDate).Days } else { 1 } } else { 0 }
@@ -13451,7 +13619,9 @@ function Save-WtAttForm {
             $travel[$key] = $number
         }
     }
-    if (@($script:form.Errors.Values | Where-Object Text).Count) { return }
+    # 틀린 칸이 있으면 폼 순서로 첫 칸에 포커스를 옮기고 글 전체를 고른다(11-24 실사용: 저장 단추에 남아 칸을 다시 눌러야 했다)
+    $wrong = @($script:form.Order | Where-Object { $script:form.Errors[$_].Text })
+    if ($wrong.Count) { [void](Set-WtInputFocus $fields[$wrong[0]]); return }
     $patch = @{ kind = $kind; start = @{ date = $fields.date.Text; time = $(if ($timed) { $fields.start.Text } else { $null }) }; end = $end; note = $fields.note.Text }
     if ($kind -ceq 'overtime') {
         $patch.overtime = @{ how = $(switch ([string]$fields.place.SelectedItem) { '작업장' { 'onsite' }; '원격' { 'remote' }; default { $null } }) }
@@ -13472,6 +13642,7 @@ function Save-WtAttForm {
         $result = Save-WtAttendanceItem $script:form.Store $patch -Id $(if ($old) { $old.Id } else { '' })
         if (-not $result.Success) { Set-WtAttFormError end $result.Reason; return }
         $script:form = $null; $script:viewKey = $null; Update-WtAttendanceView
+        Update-WtAttBadges
     } catch { Set-WtAttFormError note $_.Exception.Message }
 }
 # ---- 폼을 떠날 때 묻기 (11-22 실사용 보고, 일정 폼과 같음) ----------------------------------------------
@@ -13548,6 +13719,7 @@ Register-WtAddon -Id 'attendance' -Title '근태' -Icon 0xE823 -Group '일과' -
     -DateMenu { param([datetime]$Date) Get-WtAttDateMenu $Date } `
     -CalendarItems { param([datetime]$From, [datetime]$To) $data = Get-WtAttendanceData; if ($data.Error) { throw $data.Error }; Get-WtAttendanceCalendarItems $From $To $data.Entries } `
     -ImportLegacy { param($folder) Import-WtAttendanceLegacy $folder } `
+    -Shortcuts @(, @('Enter / Ctrl+S', '편집 폼 저장 (Enter는 한 줄 칸에서)')) `
     -Help @('월별 출퇴근 기록과 초과근무를 확인합니다.', '휴가는 종류(연차 · 오전 반차 · 오후 반차 · 대휴 등)를 고릅니다. 반차는 설정 → 업무시간의 반차 나누는 시각을 따르고, 그날만 다르면 폼에서 시각을 고칩니다.', '대휴는 「대휴 발생」 기록으로 생긴 일수를 넣으면 사이드바에 남은 일수가 보입니다. 일정 달력 날짜를 우클릭해 휴가를 바로 넣을 수도 있습니다.')
 Register-WtCalendarStores -Id 'addon:attendance' -Names @('attendance')
 Export-ModuleMember -Function Format-WtHours, Format-WtDays, Test-WtAttInMonth
@@ -13813,11 +13985,13 @@ function Get-WtLeaveDays($Entry, [datetime]$First, [datetime]$Last, $DayOff) {
   출장   그 달에 걸친 기록. TripCount 건수 · TripDays 일수($TripDays: all = 걸친 날 모두, workdays = 근무일만)
   휴가   LeaveDays: Get-WtLeaveDays 합계 (근무일 = 토 · 일 · 휴무일이 아닌 날)
          = LeaveFixed(사람이 정한 days, 확정) + LeaveEstimated(days가 null이라 지금 규칙 · 휴무일로 센 잠정 값)
-  초과 OvertimeSite · OvertimeRemote · OvertimeUnknown 분(작업장 → 원격 → 장소 없음 우선). Travel 이동 분은 별도. NoLeaveDays 퇴근 없는 날 수.
+  초과 OvertimeSite · OvertimeRemote · OvertimeUnknown 분(작업장 → 원격 → 장소 없음 우선). Travel 이동 분은 별도.
+       NoLeaveDays 퇴근 없는 날 수. 지난 날만 센다(오늘은 아직 근무 중일 수 있다, 11-24 실사용: 출근 직후 「퇴근 기록 없음 1일」)
   Skipped 계산에서 뺀 항목 수(읽기 전용 · 고칠 항목). other(기타)는 셈에 넣지 않는다
 $DayOff: 휴무일 날짜 모음(yyyy-MM-dd). 주지 않으면 core\Calendar.psm1의 휴무일을 쓴다
+$Today: 퇴근 없는 날을 이날 전까지만 센다. 주지 않으면 오늘
 #>
-function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, [string]$TripDays) {
+function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, [string]$TripDays, [datetime]$Today = [datetime]::Today) {
     $first = [datetime]::new($Month.Year, $Month.Month, 1)
     $last = $first.AddMonths(1).AddDays(-1)
     if ($null -eq $DayOff) { $DayOff = Get-WtHolidayDates $first $last }
@@ -13874,7 +14048,7 @@ function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, 
         $cuts = [Collections.Generic.SortedSet[long]]::new()
         foreach ($entry in $dayGroup.Group) {
             if ($entry.Kind -ceq 'overtime') { $r.Travel += $entry.Travel }
-            if ($entry.Kind -ceq 'work' -and -not $entry.HasEnd) { [void]$missing.Add($day) }
+            if ($entry.Kind -ceq 'work' -and -not $entry.HasEnd -and $day -lt $Today.Date) { [void]$missing.Add($day) }
             if (-not $entry.HasTime -or -not $entry.HasEnd -or $entry.End -le $entry.Start) { continue }
             $rank = if ($entry.Kind -ceq 'work' -or $entry.How -ceq 'onsite') { 0 } elseif ($entry.How -ceq 'remote') { 1 } else { 2 }
             $ranges.Add(@{ A = $entry.Start.Ticks; B = $entry.End.Ticks; Rank = $rank })
@@ -14590,6 +14764,24 @@ function Cancel-WtDocFolder {
 
 function Get-WtDocSelected { $script:ui.List.SelectedItem }
 
+# 보조 키(Ctrl · Shift · Alt) 상태. 검사는 이 함수를 바꿔 실제 키보드 없이 흉내 낸다
+function Get-WtDocModifiers { [System.Windows.Input.Keyboard]::Modifiers }
+
+# 찾기 칸에서 ↓: 걸러진 목록의 첫 항목을 고르고 그 줄로 포커스를 옮긴다. 목록이 비었으면 $false(칸에 남음)
+function Move-WtDocFilterToList {
+    # 방금 친 글이 아직 걸러지기 전이면 먼저 거른다
+    if ($script:filterTimer -and $script:filterTimer.IsEnabled) { $script:filterTimer.Stop(); Update-WtDocList }
+    $list = $script:ui.List
+    if (-not $list.Items.Count) { return $false }
+    $list.SelectedIndex = 0
+    $list.ScrollIntoView($list.Items[0])
+    $list.UpdateLayout()
+    $row = $list.ItemContainerGenerator.ContainerFromIndex(0)
+    if (-not $row) { return $false }
+    [void]$row.Focus()
+    $true
+}
+
 function Set-WtDocStatus([string]$Text) {
     $script:ui.Status.Text = $Text
     $script:ui.Status.ToolTip = if ($Text) { $Text } else { $null }   # 좁은 창에서 말줄임되면 전체를 본다
@@ -14827,6 +15019,12 @@ function New-WtDocsView {
     $filter.ToolTip = '이 폴더에서 이름으로 찾습니다. 띄어 쓰면 낱말이 모두 들어간 이름만 (Ctrl+F)'
     $script:filterTimer = New-WtPollTimer { $script:filterTimer.Stop(); Update-WtDocList }
     $filter.Add_TextChanged({ $script:filterTimer.Stop(); $script:filterTimer.Start() })
+    # ↓: 걸러진 목록으로 내려간다(11-24 실사용). 한글 조합 중이면 입력기가 받은 원래 키를 본다. Shift+↓ 등은 칸의 글 고르기로 남긴다
+    $filter.Add_PreviewKeyDown({
+            param($s, $e)
+            $key = if ($e.Key -eq 'ImeProcessed') { $e.ImeProcessedKey } else { $e.Key }
+            if ($key -eq 'Down' -and (Get-WtDocModifiers) -eq [System.Windows.Input.ModifierKeys]::None -and (Move-WtDocFilterToList)) { $e.Handled = $true }
+        })
     foreach ($b in @($openFolder, $refresh)) { [System.Windows.Controls.DockPanel]::SetDock($b, 'Right'); [void]$top.Children.Add($b) }
     $pathText = New-WtText '' 'T.Strong'
     $pathText.TextWrapping = 'NoWrap'
@@ -14951,10 +15149,10 @@ function New-WtDocsView {
     [void]$grid.Children.Add($right)
     [void]$page.Panel.Children.Add($grid)
 
-    # 문서 화면 안 단축키
+    # 문서 화면 단축키. 포커스가 왼쪽 메뉴 · 창 자체에 있어도 셸이 이 처리기에 다시 올려 준다
     $page.Root.Add_PreviewKeyDown({
             param($s, $e)
-            $mods = [System.Windows.Input.Keyboard]::Modifiers
+            $mods = Get-WtDocModifiers
             $key = if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }
             if ($key -eq 'F5') { Show-WtDocFolder $script:current; $e.Handled = $true; return }
             if ($key -eq 'Up' -and ($mods -band [System.Windows.Input.ModifierKeys]::Alt) -and $script:ui.Up.IsEnabled) {
@@ -14987,7 +15185,7 @@ Register-WtAddon -Id 'docs' -Title '문서' -Icon 0xE8B7 -Group '작업' -Order 
     -ShortcutExists { param($Key) Test-WtDocShortcut $Key } `
     -OnExit { Stop-WtDocs } `
     -Help '폴더의 파일을 원래 프로그램으로 엽니다.' `
-    -Shortcuts @(@('Enter', '고른 파일 열기 · 폴더 들어가기'), @('Alt + ↑', '위 폴더'), @('F5', '새로 고침'), @('Ctrl + F', '이름으로 필터링'))
+    -Shortcuts @(@('Enter', '고른 파일 열기 · 폴더 들어가기'), @('Alt + ↑', '위 폴더'), @('F5', '새로 고침'), @('Ctrl + F', '이름으로 필터링'), @('↓', '찾기 칸에서 목록으로'))
 
 Export-ModuleMember -Function Get-WtDocKind, Format-WtDocSize, Get-WtDocEntries, Get-WtDocSubfolders, Get-WtDocPinEntries,
     Test-WtDocPinned, Switch-WtDocPin, Get-WtDocRoots, Get-WtDocChain, Find-WtDocEntry, Format-WtDocPathLabel
@@ -16036,17 +16234,23 @@ function Select-WtMemoNextTab([int]$Step) {
     [void](Select-WtMemoTab $p $p.Tabs[(($i + $Step) % $n + $n) % $n])
 }
 
-# Ctrl+\: 나누지 않았으면 지금 메모를 오른쪽 칸에 열고, 나눴으면 다른 칸으로 포커스
+# Ctrl+\: 나누지 않았으면 지금 메모를 오른쪽 칸에 열고 그 칸으로 포커스, 나눴으면 다른 칸으로 포커스.
+# 「다른 칸」은 키보드 포커스가 있는 칸의 반대쪽이다. 나눈 직후 · 링크나 메뉴로 다른 칸에 연 뒤에는 지금 칸(active)만 옮겨 가고
+# 포커스는 앞 칸에 남아 있어서, active 기준으로 고르면 포커스가 있던 칸으로 되돌아가 옮겨지지 않았다(11-24 실사용)
 function Split-WtMemoRight {
     $p = Get-WtMemoActivePane
     if (-not $p) { return }
     if ($script:panes.Count -gt 1) {
+        foreach ($q in $script:panes) { if ($q.Root.IsKeyboardFocusWithin) { $p = $q; break } }
         $other = Get-WtMemoOtherPane $p
         Set-WtMemoActivePane $other
         if ($other.Current) { $null = Set-WtMemoEditorFocus $other.Editor }
         return
     }
-    if ($p.Current) { [void](Open-WtMemo $p.Current.Id 'side' $p) }
+    if (-not $p.Current) { return }
+    [void](Open-WtMemo $p.Current.Id 'side' $p)
+    $side = Get-WtMemoActivePane
+    if ($script:panes.Count -gt 1 -and $side.Current -and -not [object]::ReferenceEquals($side, $p)) { $null = Set-WtMemoEditorFocus $side.Editor }
 }
 
 # 뒤로(-1) · 앞으로(1). 탭마다 기록이 따로 있다
@@ -20904,9 +21108,9 @@ function Get-WtMemoSourceOffset([string]$Rendered, [string]$Source) {
     if ($Rendered.Length -and [char]::IsWhiteSpace($Rendered[$Rendered.Length - 1])) {
         while ($j -lt $Source.Length -and $Source[$j] -in ' ', "`t", '|', "`n") { $j++ }
     }
-    # 줄 맨 앞이면 제목 · 목록 · 할 일 · 인용 기호 뒤(글자 앞)에 둔다
+    # 줄 맨 앞이면 제목 · 목록 · 할 일 · 인용 기호 뒤(글자 앞)에 둔다. 항목의 첫 내용이 또 목록 · 인용이면(- - 글 · 1. - 글 · - > 글) 그 기호까지
     if ($j -lt $Source.Length -and ($j -eq 0 -or $Source[$j - 1] -eq "`n")) {
-        $m = [regex]::Match($Source.Substring($j), '^\s*(?:>\s?)*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d{1,9}[.)]\s+(?:\[[ xX]\]\s+)?)?')
+        $m = [regex]::Match($Source.Substring($j), '^\s*(?:>\s?)*(?:#{1,6}\s+|(?:(?:[-*+]|\d{1,9}[.)])\s+(?:>\s?)*)+(?:\[[ xX]\]\s+)?)?')
         $j += $m.Length
     }
     $j
@@ -21216,6 +21420,12 @@ function Invoke-WtMemoBoxKey($S, $E) {
                     $S = Expand-WtMemoIslandFor $S 'List'
                     $edit = Get-WtMemoIndentEdit (Get-WtMemoBoxState $S) -Outdent:$shift
                     $handled = [bool]$edit -or $shift
+                }
+                'Space' {
+                    # TextBox는 스페이스를 KeyDown에서 바로 넣고 PreviewTextInput을 올리지 않는다(실제 타자, 11-24 노트북).
+                    # 그래서 공백 입력 보조(Get-WtMemoTypeEdit ' ', 표지 겹침 막기)는 여기서 부른다. 한글 조합 중 스페이스는 위 ImeProcessed에서 끝난다
+                    $edit = Get-WtMemoTypeEdit $st ' '
+                    $handled = [bool]$edit
                 }
             }
         }
@@ -22405,6 +22615,21 @@ function Get-WtMemoTypeEdit($s, [string]$Char) {
             $e.Suggest = 'wiki'
             return $e
         }
+        ' ' {
+            # 표지만 있는 빈 항목(Enter가 붙인 - · 2. · - [ ])에서 같은 종류 표지를 또 치면(- 뒤 - · 2. 뒤 3. · 할 일 뒤 - 나 [ ])
+            # 공백을 넣는 대신 친 표지를 지운다. 습관대로 줄마다 표지를 쳐도 - - 로 겹치지 않게. 하위 목록은 Tab으로 만든다
+            if ($n -gt 0) { return $null }
+            $line = Get-WtMemoTextLine $t $pos
+            $info = Get-WtMemoTextLineInfo $line.Text
+            if (-not $info.List) { return $null }
+            $cs = $line.Text.Length - $info.Body.Length
+            $col = $pos - $line.Start
+            if ($col -le $cs -or $line.Text.Substring($col).Trim()) { return $null }
+            $typed = $line.Text.Substring($cs, $col - $cs)
+            $kind = if ($info.Mk -match '^\d') { '^\d{1,9}' + [regex]::Escape($info.Mk.Substring($info.Mk.Length - 1)) + '$' } else { '^[-*+]$' }
+            if ($typed -notmatch $kind -and -not ($info.Cb -and $typed -match '^\[[ xX]\]$')) { return $null }
+            return New-WtMemoTextResult ($line.Start + $cs) $typed.Length '' ($line.Start + $cs)
+        }
         ']' {
             if ($n -gt 0 -or $pos -ge $t.Length -or $t[$pos] -ne ']') { return $null }
             $line = Get-WtMemoTextLine $t $pos
@@ -22740,6 +22965,8 @@ Register-WtSettingDefault 'schedule.alarmLate' 30      # 늦게 켰을 때 시�
 $script:alarmChoices = [ordered]@{ '없음' = -1; '정시' = 0; '5분 전' = 5; '10분 전' = 10; '15분 전' = 15; '30분 전' = 30; '1시간 전' = 60 }
 $script:snoozeChoices = @(5, 10, 15, 30)
 $script:lateChoices = [ordered]@{ '울리지 않음' = 0; '10분' = 10; '30분' = 30; '1시간' = 60 }
+# 편집 폼의 시각 칸(일정 시작 · 끝, 루틴 시각 · 시간마다 시작 · 끝, 알람 기준 시각). 0900 · 9:00 · 9도 09:00으로 받는다
+$script:timeKeys = @('start', 'end', 'time', 'alarmDayAt')
 # 알람 확인 틱(설계 16장): 앞 틱 시각 · 알람 상태 핸들 · 이번 실행에서 알린 "키|울릴 시각"(상태 파일을 못 써도 두 번 띄우지 않게)
 $script:alarmPrevious = $null
 $script:alarmState = $null
@@ -22871,17 +23098,29 @@ function New-WtScheduleView {
     $add = New-WtButton '' -Kind Icon -Icon 0xE710 -ToolTip '새로 만들기'; Set-WtStyle $add 'Schedule.Add'
     [Windows.Automation.AutomationProperties]::SetName($add, '새로 만들기')
     [Windows.Controls.DockPanel]::SetDock($add, 'Right'); $script:side.Header.Children.Insert(1, $add); $script:side.Add = $add
-    $menu = New-WtHomePinContextMenu
-    foreach ($spec in @('새 일정', 'event'), @('새 루틴', 'routine')) { [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($kind) Show-WtScheduleForm -Kind $kind } $spec[1])) }
-    $add.ContextMenu = $menu
+    $add.ContextMenu = New-WtScheduleAddMenu
     # +는 사이드바 제목 줄 오른쪽 끝(창 오른쪽 끝)이라 메뉴를 오른쪽에 맞춰 창 안쪽으로 연다
     $add.Add_Click({ param($s, $e) Open-WtButtonMenu $s -Right })
+    # 창이 좁아(1200 미만) 레일로 접혀도 새로 만들기에 닿게 레일 제목 줄 아래에도 +를 둔다. 같은 메뉴, 고르면 폼이 사이드바를 펼친다
+    # (11-24 실사용: 최소 창 1024 × 640에서 [+]가 접힌 칸 안에 숨어 새 일정을 만들 길이 안 보였다)
+    $railAdd = New-WtButton '' -Kind Icon -Icon 0xE710 -ToolTip '새로 만들기'
+    [Windows.Automation.AutomationProperties]::SetName($railAdd, '새로 만들기'); [Windows.Automation.AutomationProperties]::SetAutomationId($railAdd, 'Schedule-RailAdd')
+    $railAdd.ContextMenu = New-WtScheduleAddMenu
+    $railAdd.Add_Click({ param($s, $e) Open-WtButtonMenu $s -Right })
+    [void]$side.FindName('RailItems').Children.Add($railAdd); $script:side.RailAdd = $railAdd
     [void]$script:view.Side.Children.Add($side)
     $mode = [string](Get-WtSetting 'schedule.view')
     $script:viewMode = if ($mode -cin $script:viewModes) { $mode } else { 'calendar' }
     Initialize-WtScheduleHeader
     Initialize-WtScheduleLists
     $root
+}
+
+# 사이드바 + 메뉴(새 일정 · 새 루틴). 펼친 사이드바와 접힌 레일의 + 가 각자 하나씩 쓴다(메뉴 하나를 두 단추가 같이 쓰지 않는다)
+function New-WtScheduleAddMenu {
+    $menu = New-WtHomePinContextMenu
+    foreach ($spec in @('새 일정', 'event'), @('새 루틴', 'routine')) { [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($kind) Show-WtScheduleForm -Kind $kind } $spec[1])) }
+    $menu
 }
 
 # ---- 3단계 머리줄 · 표 · 할 일 · 루틴 보기 (설계 14장, 디자인 README 「일정」) ---------------------------------
@@ -23408,7 +23647,8 @@ function Update-WtScheduleView {
             default { Update-WtScheduleTable }
         }
         $script:side.Title.Text = Format-WtDate $script:selected 'M월 d일 dddd'
-        $script:side.Add.IsEnabled = -not [bool]$data.Error; $script:side.Add.ToolTip = if ($data.Error) { $data.Error } else { '새로 만들기' }
+        # 접힌 레일의 +도 같은 상태(못 읽는 파일이면 비활성 + 이유 툴팁)
+        foreach ($button in $script:side.Add, $script:side.RailAdd) { $button.IsEnabled = -not [bool]$data.Error; $button.ToolTip = if ($data.Error) { $data.Error } else { '새로 만들기' } }
         if (-not $script:form) { Show-WtScheduleDay }
     }
 }
@@ -24059,6 +24299,9 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
     Update-WtScheduleLinks
     # [취소]는 고친 내용을 버리는 단추라 묻지 않는다
     $save.Add_Click({ Save-WtScheduleForm }); $cancel.Add_Click({ Show-WtScheduleDay }); $delete.Add_Click({ Remove-WtScheduleForm })
+    # 11-24 실사용: 한 줄 칸 Enter · 폼 어디서든 Ctrl+S도 [저장]. 시각 칸은 0900 · 9:00 · 9도 받아 떠날 때 09:00으로 보인다(core\Ui)
+    Register-WtFormSaveKeys $body { Save-WtScheduleForm }
+    foreach ($key in $script:timeKeys) { if ($script:form.Fields[$key]) { Register-WtTimeInput $script:form.Fields[$key] } }
     Update-WtScheduleFormFields; $script:detail.Content = $body
     $script:form.Initial = Get-WtScheduleFormState   # 떠날 때 이 값과 다르면 묻는다
     if ($script:side.Rail.Visibility -eq 'Visible') { $script:side.Open.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent)) }
@@ -24132,16 +24375,19 @@ function Update-WtScheduleFormFields {
     }
 }
 # 칸 오류: 칸 아래 한 줄 + 글 칸이면 빨간 선 · 오류 아이콘 · 툴팁(근태 · 메모와 같은 공통 표시, core\Ui.psm1 Set-WtInputError).
-# -Notice: 칸 탓이 아닌 알림(저장 실패 등)은 제목 칸 아래 글만 쓰고 칸을 빨갛게 하지 않는다
+# 틀린 칸으로 포커스를 옮기고 글 칸은 글 전체를 고른다(11-24 실사용: 저장 단추에 남아 다시 눌러야 했다. 폼은 틀린 칸 하나에서 멈추므로 그 칸이 첫 칸).
+# -Notice: 칸 탓이 아닌 알림(저장 실패 등)은 제목 칸 아래 글만 쓰고 칸을 빨갛게 하지 않으며 포커스는 그대로 둔다
 function Set-WtScheduleFormError([string]$Key, [string]$Message, [switch]$Notice) {
     $script:form.Errors[$Key].Text = $Message; $script:form.Errors[$Key].Visibility = 'Visible'
     [Windows.Automation.AutomationProperties]::SetHelpText($script:form.Fields[$Key], $Message)
-    if (-not $Notice) { Set-WtInputError $script:form.Fields[$Key] $Message }
+    if (-not $Notice) { Set-WtInputError $script:form.Fields[$Key] $Message; [void](Set-WtInputFocus $script:form.Fields[$Key]) }
 }
 function Save-WtScheduleForm([string]$Scope) {
     $f = $script:form; if (-not $f) { return }
     foreach ($errorText in $f.Errors.Values) { $errorText.Text = ''; $errorText.Visibility = 'Collapsed' }
     foreach ($field in $f.Fields.Values) { Set-WtInputError $field '' }
+    # Enter · Ctrl+S는 칸을 떠나지 않고 저장하므로 시각 칸 모양(0900 → 09:00)을 여기서도 맞춘다
+    foreach ($key in $script:timeKeys) { if ($f.Fields[$key]) { Update-WtTimeInput $f.Fields[$key] } }
     $fields = $f.Fields
     if (-not $fields.title.Text.Trim()) { Set-WtScheduleFormError title '제목을 입력하세요.'; return }
     try {
@@ -24156,10 +24402,11 @@ function Save-WtScheduleForm([string]$Scope) {
             $start = $null; $end = $null
             if (-not $fields.allDay.IsChecked) {
                 $start = ConvertFrom-WtTimeText $fields.start.Text
-                if ($null -eq $start) { Set-WtScheduleFormError start '시작 시각을 확인하세요.'; return }
+                if ($null -eq $start) { Set-WtScheduleFormError start (Get-WtTimeInputHint); return }
                 if ($fields.end.Text) {
                     $end = ConvertFrom-WtTimeText $fields.end.Text
-                    if ($null -eq $end -or ($spanDays -eq 0 -and $end -lt $start)) { Set-WtScheduleFormError end '끝 시각을 확인하세요.'; return }
+                    if ($null -eq $end) { Set-WtScheduleFormError end (Get-WtTimeInputHint); return }
+                    if ($spanDays -eq 0 -and $end -lt $start) { Set-WtScheduleFormError end '끝 시각을 확인하세요.'; return }
                 } elseif ($spanDays -gt 0) { Set-WtScheduleFormError end '여러 날 일정은 끝 시각을 넣으세요.'; return }
             }
             $repeat = $null
@@ -24182,7 +24429,7 @@ function Save-WtScheduleForm([string]$Scope) {
                 $chosen = Get-WtScheduleFormAlarmOptions
                 if ($fields.allDay.IsChecked -and $chosen.AllDayAt -and $null -eq (ConvertFrom-WtTimeText $chosen.AllDayAt)) {
                     if (-not $f.AlarmMore.Open) { Switch-WtScheduleAlarmMore }
-                    Set-WtScheduleFormError alarmDayAt '기준 시각은 HH:mm 형식으로 입력하세요.'; return
+                    Set-WtScheduleFormError alarmDayAt (Get-WtTimeInputHint); return
                 }
                 $optionPatch = Get-WtScheduleAlarmOptionPatch $f.AlarmOptions $chosen ([bool]$fields.allDay.IsChecked) -All:($Scope -eq '이 회차만')
                 foreach ($a in $alarms) { foreach ($k in $optionPatch.Keys) { $a[$k] = $optionPatch[$k] } }
@@ -24212,7 +24459,7 @@ function Save-WtScheduleForm([string]$Scope) {
             if ($freq -ne 'hourly') {
                 # 시각은 선택 칸. 비우면 null로 넘겨 저장 함수가 칸을 뺀다(설계 14.2)
                 $timeText = $fields.time.Text.Trim()
-                if ($timeText -and $null -eq (ConvertFrom-WtTimeText $timeText)) { Set-WtScheduleFormError time '시각을 확인하세요. 예: 09:00'; return }
+                if ($timeText -and $null -eq (ConvertFrom-WtTimeText $timeText)) { Set-WtScheduleFormError time (Get-WtTimeInputHint); return }
                 $rule.time = if ($timeText) { $timeText } else { $null }
             }
             if ($freq -eq 'weekly') {
@@ -24223,8 +24470,9 @@ function Save-WtScheduleForm([string]$Scope) {
                 $every = 0
                 if (-not [int]::TryParse($fields.every.Text, [ref]$every) -or $every -lt 1 -or $every -gt 12) { Set-WtScheduleFormError every '간격 시간을 확인하세요.'; return }
                 $start = ConvertFrom-WtTimeText $fields.start.Text; $end = ConvertFrom-WtTimeText $fields.end.Text
-                if ($null -eq $start) { Set-WtScheduleFormError start '시작 시각을 확인하세요.'; return }
-                if ($null -eq $end -or $end -le $start) { Set-WtScheduleFormError end '끝 시각을 확인하세요.'; return }
+                if ($null -eq $start) { Set-WtScheduleFormError start (Get-WtTimeInputHint); return }
+                if ($null -eq $end) { Set-WtScheduleFormError end (Get-WtTimeInputHint); return }
+                if ($end -le $start) { Set-WtScheduleFormError end '끝 시각을 확인하세요.'; return }
                 $rule.every = $every; $rule.from = $fields.start.Text; $rule.to = $fields.end.Text
             }
             $patch = @{ title = $fields.title.Text; routine = $rule }; if (-not $f.Id) { $patch.start = @{ date = ConvertTo-WtDateText $script:selected } }
@@ -24477,16 +24725,17 @@ function New-WtScheduleAlarmSettingRows {
     )
 }
 function Save-WtScheduleAllDaySetting($Box) {
+    Update-WtTimeInput $Box   # 0900 · 9:00 · 9도 09:00으로(일정 · 근태 폼과 같은 칸 규칙)
     $text = $Box.Text.Trim()
     if ($null -eq (ConvertFrom-WtTimeText $text)) {
-        $Box.Tag.Error.Text = '시각은 HH:mm 형식으로 입력하세요.'; $Box.Tag.Error.Visibility = 'Visible'; return
+        $Box.Tag.Error.Text = Get-WtTimeInputHint; $Box.Tag.Error.Visibility = 'Visible'; return
     }
     $Box.Tag.Error.Visibility = 'Collapsed'
     if ([string](Get-WtSetting 'schedule.alarmAllDay') -cne $text) { Set-WtSetting 'schedule.alarmAllDay' $text }
 }
 
 # 메뉴 개수 = 할 일 수(기한 지남 + 오늘 남은 일정 · 루틴 + 마감 임박, 설계 14.5). 보기 단추의 숫자와 같다
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ConfirmExit @{ Pending = { Test-WtScheduleFormDirty }; Confirm = { Confirm-WtScheduleFormLeave } } -Tick { param($Now) [void](Invoke-WtScheduleAlarmTick $Now) } -TickSeconds 15 -SettingRows { New-WtScheduleAlarmSettingRows } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder }-Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ConfirmExit @{ Pending = { Test-WtScheduleFormDirty }; Confirm = { Confirm-WtScheduleFormLeave } } -Tick { param($Now) [void](Invoke-WtScheduleAlarmTick $Now) } -TickSeconds 15 -SettingRows { New-WtScheduleAlarmSettingRows } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder }-Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크'), @('Enter / Ctrl+S', '편집 폼 저장 (Enter는 한 줄 칸에서)')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
 Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel, Invoke-WtScheduleAlarmTick, Format-WtScheduleAlarmWhen
 } | Import-Module -Force -DisableNameChecking
 # ---- addons\schedule\Schedule.psm1 끝 ----
