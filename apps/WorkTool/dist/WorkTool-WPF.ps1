@@ -4420,7 +4420,53 @@ $script:stylesXaml = @'
     <Setter Property="CellSpacing" Value="0"/>
     <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
     <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Margin" Value="0"/>
+  </Style>
+  <!-- 본문 표는 가로 스크롤 칸 안의 문서에 둔다(값 문서 8절 메모 「표」): 블록(아래 12) > 스크롤 > 읽기 전용 상자 > 문서 > 표.
+       칸이 넉넉하면 가로 스크롤을 끄고 표가 글 폭을 채운다. 넓으면 Set-WtDocumentTableWidths가 상자 폭을 정하고 가로 스크롤을 켠다 -->
+  <Style x:Key="Md.TableBox" TargetType="BlockUIContainer">
     <Setter Property="Margin" Value="0,0,0,12"/>
+  </Style>
+  <Style x:Key="Md.TableScroll" TargetType="ScrollViewer" BasedOn="{StaticResource {x:Type ScrollViewer}}">
+    <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="Focusable" Value="False"/>
+  </Style>
+  <Style x:Key="Md.TableView" TargetType="RichTextBox" BasedOn="{StaticResource Md.View}">
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="IsTabStop" Value="False"/>
+    <Setter Property="IsReadOnly" Value="True"/>
+    <Setter Property="IsDocumentEnabled" Value="True"/>
+    <Setter Property="IsUndoEnabled" Value="False"/>
+    <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
+    <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+    <!-- 안쪽 스크롤 없이 문서만 그린다(가로 스크롤은 바깥 칸이 맡음, 표가 많은 메모도 가볍게). 안쪽 여백 -5가 문서의 PagePadding 5를 상쇄한다.
+         Mark: 본문에서 이어진 끌기가 이 표 안에서 시작 · 끝날 때 고른 칸 글자 자리를 선택 색으로 덮는다(WPF 선택은 칸을 넘으면 칸 · 행 단위로 넓어져서 따로 칠함) -->
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="RichTextBox">
+          <Grid>
+            <Decorator x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+            <Path x:Name="Mark" IsHitTestVisible="False" Fill="{TemplateBinding SelectionBrush}" Opacity="{TemplateBinding SelectionOpacity}"/>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+    <!-- 선택 색은 바깥 보기를 따른다: 바깥에서 표를 지나게 고르면 포커스 없는 표 칸도 다른 글과 같은 색으로 칠한다
+         (WPF 기본은 포커스 없는 상자를 옅은 회색으로 칠함). 바깥이 고르기를 쉬면서 비활성 선택을 숨기면 표 칸도 숨기고, 표 칸 자신이 포커스를 가지면 강조 색 -->
+    <Setter Property="SelectionBrush" Value="{Binding SelectionBrush, RelativeSource={RelativeSource AncestorType=RichTextBox}}"/>
+    <Style.Triggers>
+      <MultiDataTrigger>
+        <MultiDataTrigger.Conditions>
+          <Condition Binding="{Binding IsSelectionActive, RelativeSource={RelativeSource AncestorType=RichTextBox}}" Value="False"/>
+          <Condition Binding="{Binding IsInactiveSelectionHighlightEnabled, RelativeSource={RelativeSource AncestorType=RichTextBox}}" Value="False"/>
+        </MultiDataTrigger.Conditions>
+        <Setter Property="SelectionBrush" Value="Transparent"/>
+      </MultiDataTrigger>
+      <Trigger Property="IsSelectionActive" Value="True">
+        <Setter Property="SelectionBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+      </Trigger>
+    </Style.Triggers>
   </Style>
   <Style x:Key="Md.Td" TargetType="TableCell">
     <Setter Property="Padding" Value="12,6"/>
@@ -4599,8 +4645,8 @@ $script:stylesXaml = @'
         <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.Hover}"/></Trigger>
         <Trigger Property="IsPressed" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.AccentSoft}"/></Trigger>
         <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Text}"/><Setter TargetName="Box" Property="BorderThickness" Value="2"/></Trigger>
-        <!-- 닫을 수 없는 줄 · 묶음: 값 문서 2절 비활성(Check와 같은 상자), 이유는 툴팁 (11-24 실사용) -->
-        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter TargetName="Mark" Property="Stroke" Value="{DynamicResource B.Text.Disabled}"/><Setter TargetName="Dash" Property="Background" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
+        <!-- 닫을 수 없는 줄 · 묶음: 값 문서 2절 비활성(Check와 같은 상자), 이유는 툴팁, 올림 바탕 없음 (11-24 실사용) -->
+        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="HitArea" Property="Background" Value="Transparent"/><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter TargetName="Mark" Property="Stroke" Value="{DynamicResource B.Text.Disabled}"/><Setter TargetName="Dash" Property="Background" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
     <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
@@ -4649,6 +4695,8 @@ $script:stylesXaml = @'
     <Setter Property="BorderThickness" Value="0"/>
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <!-- 여기서 닫을 수 없는 줄은 누를 수 없으므로 올림 바탕이 없다(apps/design.md 11장, 값 문서 8절 활성 작업) -->
+      <DataTrigger Binding="{Binding CanClose}" Value="False"><Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/></DataTrigger>
       <DataTrigger Binding="{Binding Selected}" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/></DataTrigger>
     </Style.Triggers>
   </Style>
@@ -4681,6 +4729,19 @@ $script:stylesXaml = @'
     <Setter Property="VerticalAlignment" Value="Center"/>
     <Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=Text}"/>
     <Style.Triggers><Trigger Property="Text" Value=""><Setter Property="ToolTip" Value="{x:Null}"/></Trigger></Style.Triggers>
+  </Style>
+  <!-- 여기서 닫을 수 없는 줄(CanClose 거짓)은 글자 전체를 비활성 글자로. 목록에서 빼지 않고 이유는 체크 상자 툴팁 (값 문서 8절 활성 작업) -->
+  <Style x:Key="Task.RowText" TargetType="TextBlock" BasedOn="{StaticResource Task.Text}">
+    <Style.Triggers><DataTrigger Binding="{Binding CanClose}" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></DataTrigger></Style.Triggers>
+  </Style>
+  <!-- 묶음 머리의 이름 · 개수: 묶음 체크 상자(GroupCheck)가 비활성(닫을 수 있는 줄이 없음)이면 같이 흐리게. 펼침 단추는 그대로 쓴다 -->
+  <Style x:Key="Task.GroupName" TargetType="TextBlock" BasedOn="{StaticResource T.Strong}">
+    <Setter Property="Margin" Value="12,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/>
+    <Style.Triggers><DataTrigger Binding="{Binding IsEnabled, ElementName=GroupCheck}" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></DataTrigger></Style.Triggers>
+  </Style>
+  <Style x:Key="Task.GroupCount" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/>
+    <Style.Triggers><DataTrigger Binding="{Binding IsEnabled, ElementName=GroupCheck}" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></DataTrigger></Style.Triggers>
   </Style>
   <Style x:Key="Task.Title" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0,16,0"/></Style>
   <Style x:Key="Task.Filter" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Margin" Value="8,0,0,0"/></Style>
@@ -4835,23 +4896,39 @@ $script:stylesXaml = @'
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/><Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/>
     <Setter Property="MinHeight" Value="32"/><Setter Property="Padding" Value="12,0"/><Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <!-- 왼쪽 아이콘 자리(디자인 7절 「메뉴」): Icon이 있을 때만 16 + 간격 12를 잡는다. 없으면 접혀서 글자가 왼쪽 12에서 시작한다(아이콘 없는 메뉴 모양 그대로) -->
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem">
       <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="4">
-        <DockPanel LastChildFill="True"><TextBlock DockPanel.Dock="Right" Text="{TemplateBinding InputGestureText}" Margin="12,0,0,0" VerticalAlignment="Center" Style="{StaticResource T.Sub}"/>
+        <DockPanel LastChildFill="True"><ContentPresenter x:Name="IconSlot" DockPanel.Dock="Left" ContentSource="Icon" Margin="0,0,12,0" VerticalAlignment="Center"/>
+          <TextBlock DockPanel.Dock="Right" Text="{TemplateBinding InputGestureText}" Margin="12,0,0,0" VerticalAlignment="Center" Style="{StaticResource T.Sub}"/>
           <ContentPresenter ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="True"/>
         </DockPanel>
       </Border>
+      <ControlTemplate.Triggers><Trigger Property="Icon" Value="{x:Null}"><Setter TargetName="IconSlot" Property="Visibility" Value="Collapsed"/></Trigger></ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers><Trigger Property="IsHighlighted" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
     </Style.Triggers>
+  </Style>
+  <!-- 위험 항목(New-WtMenuItem -Danger): 글자는 위험 단추(Btn.Danger)와 같은 빨강. 올림 · 비활성은 보통 항목 그대로 -->
+  <Style x:Key="Menu.Item.Danger" TargetType="MenuItem" BasedOn="{StaticResource Home.PinMenuItem}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/>
+  </Style>
+  <!-- 메뉴 항목 왼쪽 아이콘(New-WtMenuIcon). 항목이 꺼지면 아이콘도 비활성 색 -->
+  <Style x:Key="Menu.Icon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
+    <Style.Triggers><Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger></Style.Triggers>
+  </Style>
+  <Style x:Key="Menu.Icon.Danger" TargetType="TextBlock" BasedOn="{StaticResource Menu.Icon}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/>
   </Style>
   <!-- 공통 메뉴의 하위 메뉴. 보통 항목의 글꼴·상태·높이를 이어 쓰고 WPF 메뉴 키보드 동작을 유지한다. -->
   <Style x:Key="Home.PinSubmenuItem" TargetType="MenuItem" BasedOn="{StaticResource Home.PinMenuItem}">
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem">
       <Grid>
         <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="4">
-          <DockPanel><TextBlock x:Name="SubmenuChevron" DockPanel.Dock="Right" Text="&#xE76C;" Margin="12,0,0,0" Style="{StaticResource T.Icon}"/>
+          <DockPanel><ContentPresenter x:Name="IconSlot" DockPanel.Dock="Left" ContentSource="Icon" Margin="0,0,12,0" VerticalAlignment="Center"/>
+            <TextBlock x:Name="SubmenuChevron" DockPanel.Dock="Right" Text="&#xE76C;" Margin="12,0,0,0" Style="{StaticResource T.Icon}"/>
             <ContentPresenter ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="True"/>
           </DockPanel>
         </Border>
@@ -4862,6 +4939,7 @@ $script:stylesXaml = @'
           </Border>
         </Popup>
       </Grid>
+      <ControlTemplate.Triggers><Trigger Property="Icon" Value="{x:Null}"><Setter TargetName="IconSlot" Property="Visibility" Value="Collapsed"/></Trigger></ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
   <!-- 항목 모양은 ItemContainerStyle 대신 이 메뉴 안의 기본 모양으로 준다. ItemContainerStyle은 구분선(Separator)에도 씌우려다
@@ -5673,9 +5751,9 @@ function New-WtTaskGrid {
       <ControlTemplate TargetType="GroupItem">
         <Expander Tag="task-group" IsExpanded="True" Style="{DynamicResource Task.Group}">
           <Expander.Header><StackPanel Orientation="Horizontal">
-            <CheckBox Tag="group" IsThreeState="True" Style="{DynamicResource Task.GroupCheck}" AutomationProperties.Name="{Binding Name}"/>
-            <TextBlock Text="{Binding Name}" Style="{DynamicResource T.Strong}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-            <TextBlock Text="{Binding ItemCount}" Style="{DynamicResource T.CaptionMuted}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+            <CheckBox x:Name="GroupCheck" Tag="group" IsThreeState="True" Style="{DynamicResource Task.GroupCheck}" AutomationProperties.Name="{Binding Name}"/>
+            <TextBlock Text="{Binding Name}" Style="{DynamicResource Task.GroupName}"/>
+            <TextBlock Text="{Binding ItemCount}" Style="{DynamicResource Task.GroupCount}"/>
           </StackPanel></Expander.Header>
           <ItemsPresenter/>
         </Expander>
@@ -5687,7 +5765,7 @@ function New-WtTaskGrid {
     # 열은 시각 트리 밖이라 DynamicResource가 듣지 않는다. 스타일 안의 색은 자원 이름으로 남아 테마를 따른다.
     $styles = Get-WtStyleDictionary
     $grid.Columns[0].CellStyle = $styles['Task.CheckCell']
-    foreach ($column in @($grid.Columns)[1..4]) { $column.ElementStyle = $styles['Task.Text'] }
+    foreach ($column in @($grid.Columns)[1..4]) { $column.ElementStyle = $styles['Task.RowText'] }
     # 그룹 행의 ItemsPresenter가 무한 폭으로 측정돼도 이름 열이 남는 폭을 채운다.
     $grid.Add_SizeChanged({ param($s, $e) $s.Columns[1].Width = [System.Windows.Controls.DataGridLength]::new([Math]::Max(200, $s.ActualWidth - 60 - 72 - 72 - 200 - 24)) })
     $grid
@@ -5705,9 +5783,10 @@ function New-WtTaskPage {
 }
 
 # 대화상자 모양은 여기에서만 정한다. 호출자는 본문/버튼과 처리기만 붙인다.
+# -Title은 본문 큰 제목이다. 창 제목줄은 Windows 메시지 상자처럼 앱 이름만 써서 같은 글이 두 번 보이지 않게 한다(값 문서 7절 대화상자)
 function New-WtModal([string]$Title) {
     $w = [System.Windows.Window]::new()
-    $w.Title = $Title; $w.Width = 480; $w.SizeToContent = 'Height'; $w.ResizeMode = 'NoResize'
+    $w.Title = 'WorkTool'; $w.Width = 480; $w.SizeToContent = 'Height'; $w.ResizeMode = 'NoResize'
     $w.WindowStyle = 'ToolWindow'; $w.ShowInTaskbar = $false; $w.WindowStartupLocation = 'CenterOwner'
     $owner = Get-WtWindow
     if ($owner -and $owner.IsVisible) { $w.Owner = $owner; $w.Resources.MergedDictionaries.Add($owner.Resources) }
@@ -5984,13 +6063,32 @@ function New-WtContextMenu {
     $menu
 }
 
+# 메뉴 항목 왼쪽 아이콘(디자인 7절 「메뉴」 · 9절 아이콘 표). -Danger면 위험 항목의 빨강
+function New-WtMenuIcon([int]$Code, [switch]$Danger) {
+    $icon = New-WtIcon $Code
+    Set-WtStyle $icon $(if ($Danger) { 'Menu.Icon.Danger' } else { 'Menu.Icon' })
+    $icon
+}
+
 # 메뉴 항목 하나. 누르면 & $OnClick $Value (항목마다 다른 값은 -Value로 넘긴다). -Checked면 글 앞에 ✓
-# 모양은 넣는 메뉴(New-WtHomePinContextMenu)의 항목 모양을 따른다. 하위 메뉴를 여는 머리 항목에는 쓰지 않는다(하위 항목의 누름이 올라온다)
-function New-WtMenuItem([string]$Text, [scriptblock]$OnClick, $Value, [switch]$Checked) {
+# -Icon: 왼쪽 아이콘(글리프 코드). 없으면 아이콘 자리를 잡지 않는다. -Danger: 지우기처럼 되돌리기 어려운 명령(글자 · 아이콘 빨강)
+# 모양은 넣는 메뉴(New-WtHomePinContextMenu)의 항목 모양을 따른다. 하위 메뉴를 여는 머리 항목에는 쓰지 않는다(하위 항목의 누름이 올라온다. New-WtSubmenuItem)
+function New-WtMenuItem([string]$Text, [scriptblock]$OnClick, $Value, [switch]$Checked, [int]$Icon, [switch]$Danger) {
     $item = [System.Windows.Controls.MenuItem]::new()
     $item.Header = if ($Checked) { "✓ $Text" } else { $Text }
     $item.Tag = @{ OnClick = $OnClick; Value = $Value }
+    if ($Danger) { Set-WtStyle $item 'Menu.Item.Danger' }
+    if ($Icon) { $item.Icon = New-WtMenuIcon $Icon -Danger:$Danger }
     $item.Add_Click({ param($s, $e) & $s.Tag.OnClick $s.Tag.Value })
+    $item
+}
+
+# 하위 메뉴를 여는 머리 항목(오른쪽 ›). 하위 항목은 .Items에 New-WtMenuItem으로 넣는다
+function New-WtSubmenuItem([string]$Text, [int]$Icon) {
+    $item = [System.Windows.Controls.MenuItem]::new()
+    $item.Header = $Text
+    Set-WtStyle $item 'Home.PinSubmenuItem'
+    if ($Icon) { $item.Icon = New-WtMenuIcon $Icon }
     $item
 }
 
@@ -6034,7 +6132,7 @@ function Get-WtVisualChild($Root, [type]$Type) {
 }
 
 Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
-Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, Read-WtSaveChoice, Set-WtInputError, Get-WtFormState, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption,
+Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, Read-WtSaveChoice, Set-WtInputError, Get-WtFormState, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuIcon, New-WtSubmenuItem, New-WtMenuCaption,
     Get-WtKeyModifiers, Register-WtTimeInput, Update-WtTimeInput, Register-WtFormSaveKeys, Set-WtInputFocus,
     Set-WtButtonMenuPlacement, Open-WtButtonMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
@@ -6477,11 +6575,19 @@ function Update-WtTableHead($List) {
     $state.Head.Padding = [System.Windows.Thickness]::new($p.Left, $p.Top, $p.Right + $width, $p.Bottom)
 }
 
-# 본문 표의 열 비율을 유지하되, 들어갈 수 있으면 각 열의 가장 긴 낱말 폭부터 확보한다.
+# 본문 표의 열 폭(값 문서 8절 메모 「표」). 표는 가로 스크롤 칸 안의 문서에 있다(Markdown.psm1 New-WtMdTableBox):
+#   칸 = 블록(BlockUIContainer) > 스크롤(ScrollViewer) > 읽기 전용 상자(RichTextBox) > 문서 > 표
+# 열은 그 열의 가장 긴 낱말 폭(칸 좌우 여백 포함, 최대 $script:tableColumnMax)보다 좁히지 않는다.
+# 다 들어가면 가로 스크롤을 끄고 열 비율을 지키며 글 폭을 채운다. 안 들어가면 상자 폭을 최소 폭 합으로 두고 표만 가로로 스크롤한다.
+$script:tableColumnMax = 360
 function Set-WtDocumentTableWidths($Table) {
     if (-not $Table.Tag -or -not $Table.Tag.Weights) { return }
-    $parent = $Table.Parent
-    $inset = $Table.Margin.Left + $Table.Margin.Right + $Table.BorderThickness.Left + $Table.BorderThickness.Right
+    $box = if ($Table.Parent -is [System.Windows.Documents.FlowDocument]) { $Table.Parent.Parent }
+    $scroll = if ($box -is [System.Windows.Controls.RichTextBox]) { $box.Parent }
+    $holder = if ($scroll -is [System.Windows.Controls.ScrollViewer]) { $scroll.Parent }
+    if ($holder -isnot [System.Windows.Documents.BlockUIContainer]) { return }   # 칸 밖의 표(다른 곳에서 직접 만든 문서)는 다루지 않는다
+    $parent = $holder.Parent
+    $inset = $holder.Margin.Left + $holder.Margin.Right + $holder.Padding.Left + $holder.Padding.Right
     while ($parent -and $parent -isnot [System.Windows.Controls.RichTextBox]) {
         if ($parent -is [System.Windows.Documents.Block]) {
             $inset += $parent.Padding.Left + $parent.Padding.Right + $parent.Margin.Left + $parent.Margin.Right
@@ -6493,31 +6599,21 @@ function Set-WtDocumentTableWidths($Table) {
         $parent = $parent.Parent
     }
     if (-not $parent -or $parent.ViewportWidth -le 0) { return }
+    # 스크롤 칸 폭(= 글 폭에서 둘레 여백을 뺀 폭). 상자의 안쪽 여백 -5가 문서의 PagePadding 5를 상쇄해 표 폭 = 상자 폭이다
+    $outer = $parent.ViewportWidth - $inset
     # 1: 반올림 여유. 계산한 폭은 비율(Star)로 넣어 WPF가 실제 폭에 맞추므로 표가 넘쳐 잘리지 않는다
-    $available = $parent.ViewportWidth - $inset - 1
+    $edge = $Table.Margin.Left + $Table.Margin.Right + $Table.BorderThickness.Left + $Table.BorderThickness.Right
+    $available = $outer - $edge - 1
     if ($available -le 0) { return }
     $n = $Table.Columns.Count
-    $minimum = [double[]]::new($n)
-    $measure = [System.Windows.Controls.TextBlock]::new()
-    $infinite = [System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)
-    foreach ($group in $Table.RowGroups) {
-        foreach ($row in $group.Rows) {
-            for ($i = 0; $i -lt $n; $i++) {
-                $cell = $row.Cells[$i]
-                $measure.FontFamily = $cell.FontFamily; $measure.FontSize = $cell.FontSize; $measure.FontWeight = $cell.FontWeight
-                $text = [System.Windows.Documents.TextRange]::new($cell.ContentStart, $cell.ContentEnd).Text
-                foreach ($word in [regex]::Matches($text, '\S+')) {
-                    $measure.Text = $word.Value; $measure.Measure($infinite)
-                    $minimum[$i] = [Math]::Max($minimum[$i], [Math]::Ceiling($measure.DesiredSize.Width) + $cell.Padding.Left + $cell.Padding.Right + $cell.BorderThickness.Left + $cell.BorderThickness.Right)
-                }
-            }
-        }
-    }
+    $minimum = Get-WtDocumentTableMinimum $Table
     $widths = [double[]]::new($n)
     $weights = $Table.Tag.Weights
-    $totalWeight = ($weights | Measure-Object -Sum).Sum
-    if (($minimum | Measure-Object -Sum).Sum -gt $available) {
-        for ($i = 0; $i -lt $n; $i++) { $widths[$i] = $available * $weights[$i] / $totalWeight }
+    $need = ($minimum | Measure-Object -Sum).Sum
+    $wide = $need -gt $available
+    if ($wide) {
+        # 열은 최소 폭 그대로, 상자는 그 합만큼 넓혀 표만 가로로 스크롤한다
+        for ($i = 0; $i -lt $n; $i++) { $widths[$i] = $minimum[$i] }
     } else {
         $pending = [System.Collections.Generic.List[int]]::new()
         for ($i = 0; $i -lt $n; $i++) { $pending.Add($i) }
@@ -6540,6 +6636,45 @@ function Set-WtDocumentTableWidths($Table) {
             $Table.Columns[$i].Width = [System.Windows.GridLength]::new($star, 'Star')
         }
     }
+    # 들어가면 상자는 칸 폭을 그대로 쓰고(가로 스크롤 끔), 넘치면 최소 폭 합 + 테두리 + 반올림 여유만큼 넓힌다
+    $bar = if ($wide) { 'Auto' } else { 'Disabled' }
+    if ($scroll.HorizontalScrollBarVisibility -ne $bar) {
+        # 칸에 다 들어가면 가로 위치를 0으로: 가로 스크롤을 꺼도 WPF는 옮긴 값을 들고 있다가 다시 켜면 되살린다
+        if (-not $wide) { $scroll.ScrollToHorizontalOffset(0) }
+        $scroll.HorizontalScrollBarVisibility = $bar
+    }
+    if ($wide) {
+        $width = [Math]::Ceiling($need + $edge + 1)
+        if ($box.Width -ne $width) { $box.Width = $width }
+    } elseif (-not [double]::IsNaN($box.Width)) { $box.ClearValue([System.Windows.FrameworkElement]::WidthProperty) }
+    $Table.Tag.Laid = $true   # 폭을 정했다(가로 위치 되살리기는 이 뒤에, Markdown.psm1 Restore-WtMdTableScroll)
+}
+
+# 표 열마다 가장 긴 낱말 폭 + 칸 좌우 여백(최대 $script:tableColumnMax). 글은 그린 뒤 바뀌지 않으므로 글꼴이 같으면 잰 값을 다시 쓴다
+function Get-WtDocumentTableMinimum($Table) {
+    $key = '{0}|{1}' -f $Table.FontSize, $Table.FontFamily.Source
+    if ($Table.Tag.MinimumKey -ceq $key -and $Table.Tag.Minimum) { return , $Table.Tag.Minimum }
+    $n = $Table.Columns.Count
+    $minimum = [double[]]::new($n)
+    $measure = [System.Windows.Controls.TextBlock]::new()
+    $infinite = [System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)
+    foreach ($group in $Table.RowGroups) {
+        foreach ($row in $group.Rows) {
+            for ($i = 0; $i -lt $n; $i++) {
+                $cell = $row.Cells[$i]
+                $measure.FontFamily = $cell.FontFamily; $measure.FontSize = $cell.FontSize; $measure.FontWeight = $cell.FontWeight
+                $text = [System.Windows.Documents.TextRange]::new($cell.ContentStart, $cell.ContentEnd).Text
+                $side = $cell.Padding.Left + $cell.Padding.Right + $cell.BorderThickness.Left + $cell.BorderThickness.Right
+                $minimum[$i] = [Math]::Max($minimum[$i], $side)   # 빈 열도 칸 여백만큼은 남긴다
+                foreach ($word in [regex]::Matches($text, '\S+')) {
+                    $measure.Text = $word.Value; $measure.Measure($infinite)
+                    $minimum[$i] = [Math]::Max($minimum[$i], [Math]::Min($script:tableColumnMax, [Math]::Ceiling($measure.DesiredSize.Width) + $side))
+                }
+            }
+        }
+    }
+    $Table.Tag.Minimum = $minimum; $Table.Tag.MinimumKey = $key
+    , $minimum
 }
 function Set-WtDocumentTablesLayout($View) {
     function Update-DocumentBlocks($Blocks) {
@@ -6547,6 +6682,12 @@ function Set-WtDocumentTablesLayout($View) {
             if ($block -is [System.Windows.Documents.Table]) {
                 Set-WtDocumentTableWidths $block
                 foreach ($group in $block.RowGroups) { foreach ($row in $group.Rows) { foreach ($cell in $row.Cells) { Update-DocumentBlocks $cell.Blocks } } }
+            } elseif ($block -is [System.Windows.Documents.BlockUIContainer]) {
+                # 가로 스크롤 칸 안의 표
+                $scroll = $block.Child
+                if ($scroll -is [System.Windows.Controls.ScrollViewer] -and $scroll.Content -is [System.Windows.Controls.RichTextBox] -and $scroll.Content.Document) {
+                    Update-DocumentBlocks $scroll.Content.Document.Blocks
+                }
             } elseif ($block -is [System.Windows.Documents.Section]) { Update-DocumentBlocks $block.Blocks }
             elseif ($block -is [System.Windows.Documents.List]) { foreach ($item in $block.ListItems) { Update-DocumentBlocks $item.Blocks } }
         }
@@ -7998,14 +8139,27 @@ function New-WtMarkdownView {
         Text = ''; BaseDir = $BaseDir; OnLink = $OnLink; OnTask = $OnTask; Strict = [bool]$StrictLineBreaks
         Anchors = @{}; HeadingBlocks = @{}; Remeasure = $false; Error = $null; ListDepth = 0
         Images = [System.Collections.Generic.List[object]]::new()   # 이번에 그리면서 읽기 시작한 그림 (끝내기 전에 잠깐 기다린다)
+        TableFocus = $true     # 표 칸 안쪽 상자가 포커스를 받는가 (New-WtMdTableBox). 그린 뒤 바꾸면 다음에 그리는 표부터
+        SelectionBox = $null   # Select-WtMarkdownRange가 마지막으로 고른 상자 (보기 또는 표 칸)
+        Tables = [System.Collections.Generic.List[object]]::new()   # 고를 수 있는 표 칸 블록 (TableFocus일 때만 모음, 선택 색 맞추기)
+        Drag = $null           # 끌어 고르기: @{ Anchor = 누른 자리; Cross = 표 경계를 넘었나 }
+        TableKey = $null       # { param($holder) 키 } 표마다 가로 위치를 기억할 때 (메모 편집 보기). 없으면 기억하지 않음
+        TableScroll = @{}      # 키 → 가로 위치
     }
     for ($i = $script:views.Count - 1; $i -ge 0; $i--) { if (-not $script:views[$i].IsAlive) { $script:views.RemoveAt($i) } }
     $script:views.Add([System.WeakReference]::new($v))
     $v.Add_SizeChanged({ param($s, $e) if ($e.WidthChanged) { Set-WtDocumentTablesLayout $s } })
     $v.AddHandler([System.Windows.Controls.ScrollViewer]::ScrollChangedEvent, [System.Windows.Controls.ScrollChangedEventHandler]{
         param($s, $e)
-        if ($e.ViewportWidthChange -ne 0) { Set-WtDocumentTablesLayout $s }
+        if ($e.ViewportWidthChange -ne 0 -and [object]::ReferenceEquals($e.OriginalSource, (Get-WtVisualChild $s ([System.Windows.Controls.ScrollViewer])))) { Set-WtDocumentTablesLayout $s }
     })
+    [System.Windows.Input.CommandManager]::AddPreviewExecutedHandler($v, [System.Windows.Input.ExecutedRoutedEventHandler]{ param($s, $e) Invoke-WtMdCopy $s $e })
+    # 끌어 고르기가 표 칸을 지나거나 표 칸에서 시작 · 끝나면 칸 글도 고른다(선택 색). 표 칸과 바깥 상자가 처리한 이벤트도 받는다
+    # 표 칸 상자의 선택 변경도 이 보기로 올라오므로(같은 라우팅 이벤트) 바깥 상자 자신의 것만 받는다
+    $v.Add_SelectionChanged({ param($s, $e) if ([object]::ReferenceEquals($e.OriginalSource, $s)) { Sync-WtMdTableSelection $s } })
+    $v.Add_PreviewMouseLeftButtonDown({ param($s, $e) Start-WtMdDrag $s $e })
+    $v.AddHandler([System.Windows.UIElement]::MouseMoveEvent, [System.Windows.Input.MouseEventHandler]{ param($s, $e) Update-WtMdDrag $s $e }, $true)
+    $v.AddHandler([System.Windows.UIElement]::MouseLeftButtonUpEvent, [System.Windows.Input.MouseButtonEventHandler]{ param($s, $e) Stop-WtMdDrag $s }, $true)
     $v
 }
 
@@ -8019,6 +8173,8 @@ function Set-WtMarkdownText {
     $st.Remeasure = $false
     $st.Error = $null
     $st.ListDepth = 0
+    $st.SelectionBox = $null
+    $st.Tables.Clear(); $st.Drag = $null
     $doc = [System.Windows.Documents.FlowDocument]::new()
     Set-WtMdStyle $doc 'Md.Doc'
     try {
@@ -8716,8 +8872,404 @@ function New-WtMdTable($B, $St) {
     }
     $t.RowGroups.Add($g)
     $t.Tag = @{ Weights = @($t.Columns | ForEach-Object { $_.Width.Value }) }
-    $t.Add_Loaded({ param($s, $e) Set-WtDocumentTableWidths $s })
-    $t
+    New-WtMdTableBox $t $St
+}
+
+<#
+표는 가로 스크롤 칸 안의 문서에 둔다(값 문서 8절 메모 「표」, apps/design.md 4.3).
+  블록(BlockUIContainer, 아래 여백) > 스크롤(ScrollViewer) > 읽기 전용 상자(RichTextBox) > 문서 > 표
+열 폭 · 가로 스크롤 켜기는 Set-WtDocumentTableWidths가 정한다(칸이 넉넉하면 지금처럼 글 폭을 채움).
+링크 · 그림은 안쪽 문서에서 그대로 눌린다. 세로 휠은 바깥 보기로 넘기고, Shift+휠은 표를 가로로 옮긴다.
+글자색은 둘레(인용 등)를 따르게 바깥 블록에 묶는다. 보기 상태의 TableFocus가 $false면(메모 편집 보기처럼 누름을 보기가 받는 곳)
+안쪽 상자는 포커스를 받지 않는다.
+#>
+function New-WtMdTableBox($Table, $St) {
+    $doc = [System.Windows.Documents.FlowDocument]::new()
+    Set-WtMdStyle $doc 'Md.Doc'
+    $doc.Blocks.Add($Table)
+    $box = [System.Windows.Controls.RichTextBox]::new()
+    Set-WtMdStyle $box 'Md.TableView'
+    if ($St -is [hashtable] -and $St.TableFocus -eq $false) { $box.Focusable = $false }
+    $box.Document = $doc
+    $scroll = [System.Windows.Controls.ScrollViewer]::new()
+    Set-WtMdStyle $scroll 'Md.TableScroll'
+    $scroll.Content = $box
+    $scroll.Tag = @{ State = $St; Ready = $false }   # Ready: 붙어서 폭을 정한 뒤에만 가로 위치를 기억한다(붙는 중 0으로 돌아가는 것은 빼고)
+    $scroll.Add_PreviewMouseWheel({
+            param($s, $e)
+            Invoke-WtMdTableWheel $s $e ((([System.Windows.Input.Keyboard]::Modifiers) -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0)
+        })
+    $scroll.Add_Loaded({ param($s, $e) Restore-WtMdTableScroll $s })
+    $scroll.Add_Unloaded({ param($s, $e) $s.Tag.Ready = $false })
+    # 가로로 옮기면 기억한다. 칸에 다 들어가 가로 스크롤이 꺼지면(Set-WtDocumentTableWidths) 0을 기억한다
+    $scroll.Add_ScrollChanged({
+            param($s, $e)
+            if (-not $s.Tag.Ready) { if ($s.IsLoaded) { Restore-WtMdTableScroll $s }; return }
+            if ($e.HorizontalChange -ne 0 -or $s.HorizontalScrollBarVisibility -eq 'Disabled') { Save-WtMdTableScroll $s }
+        })
+    $holder = [System.Windows.Documents.BlockUIContainer]::new($scroll)
+    Set-WtMdStyle $holder 'Md.TableBox'
+    if ($St -is [hashtable] -and $St.TableFocus -ne $false -and $null -ne $St.Tables) { $St.Tables.Add($holder) }
+    $bind = [System.Windows.Data.Binding]::new('Foreground')
+    $bind.Source = $holder
+    [void]$doc.SetBinding([System.Windows.Documents.FlowDocument]::ForegroundProperty, $bind)
+    $holder
+}
+
+# 표 칸 위의 휠. Shift+휠은 표를 가로로 옮긴다(넘칠 때만). 그 밖은 안쪽 상자가 휠을 먹지 않게 바깥 보기로 다시 올려 본문이 세로로 스크롤한다
+function Invoke-WtMdTableWheel($Scroll, $E, [bool]$Shift) {
+    if ($Shift -and $Scroll.ScrollableWidth -gt 0) {
+        $Scroll.ScrollToHorizontalOffset($Scroll.HorizontalOffset - $E.Delta / 120 * 48)
+        $E.Handled = $true
+        return
+    }
+    $up = [System.Windows.Media.VisualTreeHelper]::GetParent($Scroll)
+    while ($up -and $up -isnot [System.Windows.UIElement]) { $up = [System.Windows.Media.VisualTreeHelper]::GetParent($up) }
+    if (-not $up) { return }
+    $E.Handled = $true
+    $a = [System.Windows.Input.MouseWheelEventArgs]::new($E.MouseDevice, $E.Timestamp, $E.Delta)
+    $a.RoutedEvent = [System.Windows.UIElement]::MouseWheelEvent
+    $a.Source = $Scroll
+    $up.RaiseEvent($a)
+}
+
+# 표 칸이 붙을 때: 열 폭을 정하고, 보기가 키를 주면(TableKey, 메모 편집 보기) 그 표의 가로 위치를 되살린다.
+# 칸에 다 들어가는 표는 가로 스크롤이 꺼져 0이 된다(그 0도 기억)
+function Restore-WtMdTableScroll($Scroll) {
+    $t = $Scroll.Content.Document.Blocks.FirstBlock
+    if ($t -is [System.Windows.Documents.Table]) { Set-WtDocumentTableWidths $t }
+    if (-not ($t.Tag -is [hashtable] -and $t.Tag.Laid)) { return }   # 아직 바깥 배치 전: 폭을 정한 뒤 첫 스크롤 변경에서 다시 부른다
+    $key = Get-WtMdTableScrollKey $Scroll
+    $saved = $Scroll.Tag.State.TableScroll
+    if ($null -ne $key -and $saved -is [hashtable] -and $saved.ContainsKey($key)) { $Scroll.ScrollToHorizontalOffset([double]$saved[$key]) }
+    $Scroll.Tag.Ready = $true
+}
+function Save-WtMdTableScroll($Scroll) {
+    if (-not $Scroll.Tag.Ready) { return }
+    $key = Get-WtMdTableScrollKey $Scroll
+    $saved = $Scroll.Tag.State.TableScroll
+    if ($null -ne $key -and $saved -is [hashtable]) { $saved[$key] = if ($Scroll.HorizontalScrollBarVisibility -eq 'Disabled') { 0 } else { $Scroll.HorizontalOffset } }
+}
+function Get-WtMdTableScrollKey($Scroll) {
+    $st = $Scroll.Tag.State
+    if ($st -isnot [hashtable] -or -not $st.TableKey -or -not $Scroll.Parent) { return $null }
+    try { & $st.TableKey $Scroll.Parent | Select-Object -Last 1 } catch { $null }
+}
+
+# 바깥 선택이 바뀌면 표 칸의 칠과 선택을 지운다. 바깥 선택이 표 블록을 덮으면 WPF가 블록을 선택 색으로 덮고(Ctrl+A와 같음),
+# 표 안에서 시작 · 끝나는 끌기는 Set-WtMdCrossSelection이 다시 칠한다. 포커스를 가진 표 칸(그 안에서 고르는 중)은 둔다. -Clear는 모두 지운다
+function Sync-WtMdTableSelection($View, [switch]$Clear) {
+    foreach ($holder in @(Get-WtMdViewTables $View)) {
+        $box = Get-WtMarkdownTableView $holder
+        if (-not $Clear -and $box.IsKeyboardFocused) { continue }
+        Set-WtMdTableMark $box $null $null
+        if (-not $box.Selection.IsEmpty) { $box.Selection.Select($box.Document.ContentStart, $box.Document.ContentStart) }
+    }
+}
+# 지금 보기 문서에 든 표 칸 블록(지난 문서의 것은 뺀다)
+function Get-WtMdViewTables($View) {
+    $st = $View.Tag
+    if ($st -isnot [hashtable] -or $null -eq $st.Tables) { return }
+    foreach ($holder in @($st.Tables)) {
+        $box = Get-WtMarkdownTableView $holder
+        if (-not $box -or -not $box.Document) { continue }
+        try { if ([object]::ReferenceEquals($holder.ContentStart.DocumentStart.Parent, $View.Document)) { $holder } } catch { }
+    }
+}
+
+# 표 칸 안 [From, To) 글자 자리를 선택 색으로 덮는다(템플릿의 Mark). From이 $null이면 지운다. 상자 크기가 바뀌면 다시 잰다
+function Set-WtMdTableMark($Box, $From, $To) {
+    $mark = if ($Box.Template) { $Box.Template.FindName('Mark', $Box) }
+    if ($null -eq $From) {
+        if ($Box.Tag -is [hashtable]) { $Box.Tag.Mark = $null }
+        if ($mark -and $mark.Data) { $mark.Data = $null }
+        return
+    }
+    if ($Box.Tag -isnot [hashtable]) {
+        $Box.Tag = @{ Mark = $null }
+        $Box.Add_SizeChanged({ param($s, $e) $m = $s.Tag.Mark; if ($m) { Set-WtMdTableMark $s $m.From $m.To } })
+    }
+    $Box.Tag.Mark = @{ From = $From; To = $To }
+    if (-not $mark) { return }
+    $geometry = [System.Windows.Media.GeometryGroup]::new()
+    foreach ($r in (Get-WtMdRangeRects $From $To)) { $geometry.Children.Add([System.Windows.Media.RectangleGeometry]::new($r)) }
+    $mark.Data = $geometry
+}
+
+# 글 범위의 줄마다 글자 사각형(상자 좌표). 칸 · 줄 경계에서 나눈다
+function Get-WtMdRangeRects($From, $To) {
+    $rects = [System.Collections.Generic.List[System.Windows.Rect]]::new()
+    $tp = $From
+    while ($tp -and $tp.CompareTo($To) -lt 0) {
+        if ($tp.GetPointerContext('Forward') -eq 'Text') {
+            $n = [Math]::Min($tp.GetTextInRun('Forward').Length, $tp.GetOffsetToPosition($To))
+            $a = $tp.GetCharacterRect('Forward'); $z = $tp.GetPositionAtOffset($n).GetCharacterRect('Backward')
+            if ([Math]::Abs($a.Top - $z.Top) -lt 0.5) {
+                if ($z.X -gt $a.X) { $rects.Add([System.Windows.Rect]::new($a.X, $a.Top, $z.X - $a.X, [Math]::Max($a.Height, $z.Height))) }
+            } else {
+                # 줄이 바뀌는 조각: 글자마다 재서 같은 줄끼리 잇는다
+                $line = $null
+                for ($i = 0; $i -lt $n; $i++) {
+                    $c = $tp.GetPositionAtOffset($i).GetCharacterRect('Forward'); $d = $tp.GetPositionAtOffset($i + 1).GetCharacterRect('Backward')
+                    if ([Math]::Abs($c.Top - $d.Top) -ge 0.5 -or $d.X -le $c.X) { continue }
+                    if ($line -and [Math]::Abs($line.Top - $c.Top) -lt 0.5) { $line = [System.Windows.Rect]::new($line.X, $line.Top, $d.X - $line.X, $line.Height) }
+                    else { if ($line) { $rects.Add($line) }; $line = [System.Windows.Rect]::new($c.X, $c.Top, $d.X - $c.X, $c.Height) }
+                }
+                if ($line) { $rects.Add($line) }
+            }
+            $tp = $tp.GetPositionAtOffset($n)
+            continue
+        }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
+    , $rects
+}
+
+# 표 칸 안 [From, To) 글: 칸은 탭, 행은 줄바꿈(TextRange는 칸을 넘으면 칸 · 행 전체로 넓혀서 직접 모은다)
+function Get-WtMdTableRangeText($From, $To) {
+    $sb = [System.Text.StringBuilder]::new()
+    $tp = $From
+    while ($tp -and $tp.CompareTo($To) -lt 0) {
+        $context = $tp.GetPointerContext('Forward')
+        if ($context -eq 'Text') {
+            $n = [Math]::Min($tp.GetTextInRun('Forward').Length, $tp.GetOffsetToPosition($To))
+            [void]$sb.Append($tp.GetTextInRun('Forward').Substring(0, $n))
+            $tp = $tp.GetPositionAtOffset($n)
+            continue
+        }
+        if ($context -eq 'ElementEnd') {
+            $element = $tp.GetAdjacentElement('Forward')
+            if ($element -is [System.Windows.Documents.TableCell] -and $element.Parent.Cells.IndexOf($element) -lt $element.Parent.Cells.Count - 1) { [void]$sb.Append("`t") }
+            elseif ($element -is [System.Windows.Documents.TableRow]) { [void]$sb.Append("`r`n") }
+        }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
+    $sb.ToString().TrimEnd("`r", "`n")
+}
+
+# 누름이 링크 · 단추 · 스크롤 막대에 닿았나(그것들은 고르기를 시작하지 않는다)
+function Test-WtMdPassThrough($El, $Stop) {
+    $pending = [System.Collections.Generic.Queue[object]]::new()
+    $seen = [System.Collections.Generic.HashSet[System.Windows.DependencyObject]]::new()
+    if ($El -is [System.Windows.DependencyObject]) { $pending.Enqueue($El) }
+    while ($pending.Count) {
+        $node = $pending.Dequeue()
+        if ([object]::ReferenceEquals($node, $Stop) -or -not $seen.Add($node)) { continue }
+        if ($node -is [System.Windows.Controls.Primitives.ButtonBase] -or $node -is [System.Windows.Documents.Hyperlink] -or $node -is [System.Windows.Controls.Primitives.ScrollBar]) { return $true }
+        $logical = [System.Windows.LogicalTreeHelper]::GetParent($node)
+        if ($logical) { $pending.Enqueue($logical) }
+        if ($node -is [System.Windows.Media.Visual]) { $visual = [System.Windows.Media.VisualTreeHelper]::GetParent($node); if ($visual) { $pending.Enqueue($visual) } }
+    }
+    $false
+}
+
+<#
+끌어 고르기(읽기 보기). 같은 문서(본문 또는 한 표 칸) 안은 WPF 기본 고르기 그대로다.
+표 경계를 넘으면 바깥 보기가 이어받아(표 칸에서 시작했으면 그 마우스 잡기를 가져옴) 본문 선택은 표 블록 앞 · 뒤까지,
+시작 · 끝 표 칸은 고른 쪽 칸 글만, 사이 표 칸은 전체를 고른다(Sync-WtMdTableSelection). 표를 가로로 옮겨도 좌표는 Get-WtMarkdownPositionFromPoint가 따라간다
+#>
+function Start-WtMdDrag($View, $E) {
+    $st = $View.Tag
+    if ($st -isnot [hashtable]) { return }
+    $st.Drag = $null
+    if ($st.TableFocus -eq $false -or $null -eq $st.Tables -or -not $st.Tables.Count) { return }
+    if (Test-WtMdPassThrough $E.OriginalSource $View) { return }
+    if (([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0) { return }   # Shift+누름 넓히기는 기본 동작
+    $pos = Get-WtMarkdownPositionFromPoint $View ($E.GetPosition($View))
+    if (-not $pos) { return }
+    $st.Drag = @{ Anchor = $pos; Cross = $false }
+    # 새로 고른다: 앞서 칠한 표 칸 선택을 지우고, 표 안에서 시작하면 본문 선택은 접는다(복사 · 찾기 칸 채우기는 그 표 칸 선택)
+    if ((Get-WtMarkdownTableBlock $pos) -and -not $View.Selection.IsEmpty) { $View.Selection.Select($View.Selection.Start, $View.Selection.Start) }
+    Sync-WtMdTableSelection $View -Clear
+}
+function Update-WtMdDrag($View, $E) {
+    $st = $View.Tag
+    if ($st -isnot [hashtable] -or -not $st.Drag -or $st.Drag.Busy) { return }   # 마우스를 잡을 때 WPF가 바로 보내는 이동은 건너뛴다
+    if ($E.LeftButton -ne [System.Windows.Input.MouseButtonState]::Pressed) { $st.Drag = $null; return }
+    $drag = $st.Drag
+    $cur = Get-WtMarkdownPositionFromPoint $View ($E.GetPosition($View))
+    if (-not $cur) { return }
+    $drag.Busy = $true
+    try {
+        if (-not $drag.Cross) {
+            if ([object]::ReferenceEquals($drag.Anchor.DocumentStart.Parent, $cur.DocumentStart.Parent)) { return }
+            $drag.Cross = $true
+            if (-not $View.IsMouseCaptured) { [void]$View.Focus(); [void]$View.CaptureMouse() }
+        }
+        Set-WtMdCrossSelection $View $drag.Anchor $cur
+    } finally { $drag.Busy = $false }
+}
+function Stop-WtMdDrag($View) {
+    $st = $View.Tag
+    if ($st -isnot [hashtable] -or -not $st.Drag) { return }
+    if ($st.Drag.Cross -and $View.IsMouseCaptured) { $View.ReleaseMouseCapture() }
+    $st.Drag = $null
+}
+function Set-WtMdCrossSelection($View, $Anchor, $Cur) {
+    $aHolder = Get-WtMarkdownTableBlock $Anchor
+    $cHolder = Get-WtMarkdownTableBlock $Cur
+    if ([object]::ReferenceEquals($Anchor.DocumentStart.Parent, $Cur.DocumentStart.Parent)) {
+        if ($aHolder) {
+            # 시작한 표 칸 안으로 돌아왔다
+            $View.Selection.Select($aHolder.ElementStart, $aHolder.ElementStart)
+            Sync-WtMdTableSelection $View -Clear
+            $first, $last = if ($Anchor.CompareTo($Cur) -le 0) { $Anchor, $Cur } else { $Cur, $Anchor }
+            Set-WtMdTableMark (Get-WtMarkdownTableView $aHolder) $first $last
+        } else { $View.Selection.Select($Anchor, $Cur); Sync-WtMdTableSelection $View -Clear }
+        return
+    }
+    $aKey = if ($aHolder) { $aHolder.ElementStart } else { $Anchor }
+    $cKey = if ($cHolder) { $cHolder.ElementStart } else { $Cur }
+    $forward = $aKey.CompareTo($cKey) -le 0
+    # 본문 선택은 시작 · 끝 표 블록을 빼고 그 사이만: 본문 선택이 표 블록을 덮으면 WPF가 블록 전체를 선택 색으로 덮어 칸 일부만 칠할 수 없다.
+    # 사이에 낀 표는 본문 선택이 블록째 칠한다(Ctrl+A와 같음). 시작 · 끝 표는 고른 쪽 칸 글자만 Mark로 칠한다(WPF 선택은 칸을 넘으면 칸 · 행 단위로 넓어짐)
+    $from = if (-not $aHolder) { $Anchor } elseif ($forward) { $aHolder.ElementEnd } else { $aHolder.ElementStart }
+    $to = if (-not $cHolder) { $Cur } elseif ($forward) { $cHolder.ElementStart } else { $cHolder.ElementEnd }
+    $View.Selection.Select($from, $to)
+    Sync-WtMdTableSelection $View -Clear   # 본문 선택이 그대로여서 선택 변경이 오지 않은 경우에도 앞 칠을 지운다
+    if ($aHolder) {
+        $doc = (Get-WtMarkdownTableView $aHolder).Document
+        if ($forward) { Set-WtMdTableMark (Get-WtMarkdownTableView $aHolder) $Anchor $doc.ContentEnd } else { Set-WtMdTableMark (Get-WtMarkdownTableView $aHolder) $doc.ContentStart $Anchor }
+    }
+    if ($cHolder) {
+        $doc = (Get-WtMarkdownTableView $cHolder).Document
+        if ($forward) { Set-WtMdTableMark (Get-WtMarkdownTableView $cHolder) $doc.ContentStart $Cur } else { Set-WtMdTableMark (Get-WtMarkdownTableView $cHolder) $Cur $doc.ContentEnd }
+    }
+}
+
+# 표 블록(가로 스크롤 칸)이면 안쪽 읽기 전용 상자, 아니면 $null
+function Get-WtMarkdownTableView($Block) {
+    if ($Block -isnot [System.Windows.Documents.BlockUIContainer]) { return $null }
+    $scroll = $Block.Child
+    if ($scroll -is [System.Windows.Controls.ScrollViewer] -and $scroll.Content -is [System.Windows.Controls.RichTextBox]) { return $scroll.Content }
+    $null
+}
+
+# 표 안 문서의 글 자리면 그 표를 담은 바깥 문서의 블록(BlockUIContainer), 아니면 $null
+function Get-WtMarkdownTableBlock($Pointer) {
+    if (-not $Pointer) { return $null }
+    $doc = $Pointer.DocumentStart.Parent
+    $box = if ($doc -is [System.Windows.Documents.FlowDocument]) { $doc.Parent }
+    $scroll = if ($box -is [System.Windows.Controls.RichTextBox]) { $box.Parent }
+    $holder = if ($scroll -is [System.Windows.Controls.ScrollViewer]) { $scroll.Parent }
+    if ($holder -is [System.Windows.Documents.BlockUIContainer] -and [object]::ReferenceEquals((Get-WtMarkdownTableView $holder), $box)) { return $holder }
+    $null
+}
+
+# 보기 좌표($View 기준)의 글 자리(TextPointer). 표 칸 위면 그 안 문서의 자리를 찾는다(가로로 옮긴 만큼 따라감)
+function Get-WtMarkdownPositionFromPoint($View, [System.Windows.Point]$Point) {
+    $node = $View.InputHitTest($Point)
+    while ($node -and -not [object]::ReferenceEquals($node, $View)) {
+        if ($node -is [System.Windows.Controls.RichTextBox]) {
+            $tp = $node.GetPositionFromPoint($View.TranslatePoint($Point, $node), $true)
+            if ($tp) { return $tp }
+            break
+        }
+        $node = if ($node -is [System.Windows.Media.Visual]) { [System.Windows.Media.VisualTreeHelper]::GetParent($node) } else { [System.Windows.LogicalTreeHelper]::GetParent($node) }
+    }
+    $View.GetPositionFromPoint($Point, $true)
+}
+
+<#
+보기 안 글 범위를 고른다(찾기). 표 안이면 그 표 상자에서 고르고 바깥 선택은 지운다. 앞서 고른 다른 표 상자의 선택도 지운다.
+표는 고른 곳이 보이게 가로로 옮기고, 바깥 보기는 그 줄이 보이게 세로로 옮긴다. 두 문서에 걸친 범위는 시작 문서 안까지만 고른다
+#>
+function Select-WtMarkdownRange($View, $Start, $End) {
+    if (-not [object]::ReferenceEquals($Start.DocumentStart.Parent, $End.DocumentStart.Parent)) {
+        $block = Get-WtMarkdownTableBlock $End
+        $End = if ($block -and [object]::ReferenceEquals($block.ElementStart.DocumentStart.Parent, $Start.DocumentStart.Parent)) { $block.ElementStart } else { $Start.DocumentEnd }
+    }
+    $holder = Get-WtMarkdownTableBlock $Start
+    $box = if ($holder) { Get-WtMarkdownTableView $holder } else { $View }
+    $st = $View.Tag
+    $last = if ($st -is [hashtable]) { $st.SelectionBox }
+    if ($last -and -not [object]::ReferenceEquals($last, $box) -and $last.Document) { $last.Selection.Select($last.Document.ContentStart, $last.Document.ContentStart) }
+    if ($holder) { $View.Selection.Select($View.Document.ContentStart, $View.Document.ContentStart) }
+    $box.Selection.Select($Start, $End)
+    if ($st -is [hashtable]) { $st.SelectionBox = $box }
+    if (-not $holder) {
+        $p = $Start.Parent
+        if ($p -is [System.Windows.FrameworkContentElement]) { $p.BringIntoView() }
+        return
+    }
+    $scroll = $holder.Child
+    $box.UpdateLayout()
+    $a = $Start.GetCharacterRect('Forward'); $z = $End.GetCharacterRect('Backward')
+    if ($a.IsEmpty) { return }
+    $left = $a.X; $right = if ($z.IsEmpty) { $a.X } else { [Math]::Max($a.X, $z.X) }
+    $from = $scroll.HorizontalOffset; $port = $scroll.ViewportWidth
+    if ($right - $left -gt $port - 16 -or $left -lt $from) { $scroll.ScrollToHorizontalOffset($left - 8) }
+    elseif ($right -gt $from + $port) { $scroll.ScrollToHorizontalOffset($right - $port + 8) }
+    $top = $box.TranslatePoint([System.Windows.Point]::new(0, $a.Y), $scroll).Y
+    $scroll.BringIntoView([System.Windows.Rect]::new(0, $top, 1, [Math]::Max(1, $a.Height)))
+}
+
+# 보기에서 고른 글. 바깥 선택이 표를 지나면 표 글(칸은 탭, 행은 줄바꿈)도 넣고, 표에서 시작 · 끝난 끌기면 앞뒤 표 칸의 고른 글을 붙인다.
+# 바깥 선택이 없으면 포커스가 있는 표 상자의 선택
+function Get-WtMarkdownSelectedText($View) {
+    $text = Get-WtMdSelectionText $View
+    if ($text) { return $text }
+    $focused = [System.Windows.Input.Keyboard]::FocusedElement
+    if ($focused -is [System.Windows.Controls.RichTextBox] -and -not [object]::ReferenceEquals($focused, $View) -and $View.IsAncestorOf($focused)) { return $focused.Selection.Text }
+    ''
+}
+
+# 바깥 선택 글 + 그 앞 · 뒤에 걸친 표 칸의 고른 글($Tables에 넣은 표 수)
+function Get-WtMdSelectionText($View, [ref]$Tables) {
+    $sel = $View.Selection
+    $before = [System.Collections.Generic.List[string]]::new(); $after = [System.Collections.Generic.List[string]]::new()
+    foreach ($holder in @(Get-WtMdViewTables $View)) {
+        $box = Get-WtMarkdownTableView $holder
+        # 끌기로 칠한 칸 글(Mark) 또는 찾기 · 표 안 고르기의 선택
+        $mark = if ($box.Tag -is [hashtable]) { $box.Tag.Mark }
+        $part = if ($mark) { Get-WtMdTableRangeText $mark.From $mark.To } elseif (-not $box.Selection.IsEmpty) { $box.Selection.Text.TrimEnd("`r", "`n") }
+        if (-not $part) { continue }
+        $at = $holder.ContentStart
+        if ($at.CompareTo($sel.Start) -lt 0) { $before.Add($part) }
+        elseif ($sel.IsEmpty -or $at.CompareTo($sel.End) -ge 0) { $after.Add($part) }
+    }
+    $count = 0
+    $middle = if ($sel.IsEmpty) { '' } else { (Get-WtMdRangeText $sel.Start $sel.End ([ref]$count)).TrimEnd("`r", "`n") }
+    if ($Tables) { $Tables.Value = $count + $before.Count + $after.Count }
+    $parts = @(@($before) + @($middle) + @($after) | Where-Object { $_ })
+    $text = $parts -join "`r`n"
+    if (-not $sel.IsEmpty -and $View.Selection.Text.EndsWith("`n") -and -not $after.Count) { $text += "`r`n" }
+    $text
+}
+
+# 바깥 문서의 [Start, End) 글. 표 칸(블록 안 스크롤 요소)은 그 안 문서 글(칸은 탭, 행은 줄바꿈)로 바꿔 넣는다($Tables에 넣은 표 수).
+# 선택은 표 블록 안(요소 바로 앞)에서 시작할 수 있어서 블록 시작이 아니라 요소 자리에서 알아본다
+function Get-WtMdRangeText($Start, $End, [ref]$Tables) {
+    $sb = [System.Text.StringBuilder]::new()
+    $count = 0
+    $from = $Start; $tp = $Start
+    while ($tp -and $tp.CompareTo($End) -lt 0) {
+        if ($tp.GetPointerContext('Forward') -eq 'EmbeddedElement') {
+            $child = $tp.GetAdjacentElement('Forward')
+            $inner = if ($child -is [System.Windows.FrameworkElement]) { Get-WtMarkdownTableView $child.Parent }
+            if ($inner -and $inner.Document) {
+                [void]$sb.Append([System.Windows.Documents.TextRange]::new($from, $tp).Text)
+                if ($sb.Length -and $sb.ToString($sb.Length - 1, 1) -ne "`n") { [void]$sb.Append("`r`n") }
+                [void]$sb.Append([System.Windows.Documents.TextRange]::new($inner.Document.ContentStart, $inner.Document.ContentEnd).Text.TrimEnd("`r", "`n"))
+                $count++
+                $tp = $tp.GetNextContextPosition('Forward'); $from = $tp
+                continue
+            }
+        }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
+    if ($from -and $from.CompareTo($End) -lt 0) { [void]$sb.Append([System.Windows.Documents.TextRange]::new($from, $End).Text) }
+    if ($Tables) { $Tables.Value = $count }
+    $sb.ToString()
+}
+
+# 바깥 보기에서 복사: 고른 범위가 표 칸을 지나면 표 글까지 글로 넣는다(표 칸은 따로 든 문서라 기본 복사에서 빠진다)
+function Invoke-WtMdCopy($View, $E) {
+    if ($E.Command -ne [System.Windows.Input.ApplicationCommands]::Copy -or -not [object]::ReferenceEquals($E.OriginalSource, $View)) { return }
+    $tables = 0
+    $text = Get-WtMdSelectionText $View ([ref]$tables)
+    if (-not $tables) { return }
+    try { [System.Windows.Clipboard]::SetText($text); $E.Handled = $true } catch { }
 }
 
 # 맨 앞 속성(--- 사이): 이름 · 값 두 열 표
@@ -8759,7 +9311,8 @@ Register-WtSettingHandler {
 
 Export-ModuleMember -Function Register-WtMarkdownCodeRenderer, Register-WtMarkdownCallout, ConvertTo-WtMarkdownModel,
     Get-WtMarkdownSnippet, Get-WtMarkdownHeadings, New-WtMarkdownView, Set-WtMarkdownText, Invoke-WtMarkdownLink,
-    Get-WtMarkdownUnits, New-WtMarkdownUnitSection
+    Get-WtMarkdownUnits, New-WtMarkdownUnitSection,
+    Get-WtMarkdownTableView, Get-WtMarkdownTableBlock, Get-WtMarkdownPositionFromPoint, Select-WtMarkdownRange, Get-WtMarkdownSelectedText
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Markdown.psm1 끝 ----
 
@@ -10151,7 +10704,8 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
                셸은 끝낼 때(트레이 종료 · 닫기 = 끝내기 · Alt+F4) 맨 먼저, 저장 통로 마무리(SavePending) · 쓰지 못한 내용 확인보다 앞에
                탭 순서대로 부른다. Confirm 앞에 창을 띄우고 그 탭 화면을 보인다. 하나라도 $false면 끝내지 않고 뒤 단계도 묻지 않는다
   Help         도움말 「이 버전」에 넣을 설명 문단들 (선택)
-  Shortcuts    도움말 「단축키」에 넣을 @('키', '설명') 목록. 키 처리는 탭 화면이 직접 한다 (선택)
+  Shortcuts    도움말 「단축키」에 넣을 @('키', '설명') 또는 @('키', '설명', '주제') 목록. 키 처리는 탭 화면이 직접 한다 (선택)
+               도움말은 탭마다 제목 아래에 모으고, 주제가 있으면 그 탭 안에서 주제(소제목)별로 나눈다(처음 나온 순서)
                하나만 줄 때는 앞에 쉼표를 붙인다: -Shortcuts (, @('F5', '새로 고침'))
   HelpCard     { } → 도움말에 따로 놓을 카드 요소를 돌려준다 (선택)
   WarmUp       켠 뒤 한가할 때 화면을 미리 만들어 둘지 (선택). 처음 누를 때도 빨리 뜨게 하려는 것이다
@@ -10215,7 +10769,7 @@ function Register-WtAddon {
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
     foreach ($s in $Shortcuts) {
-        if (@($s).Count -ne 2) { throw "애드온 '$Id'의 단축키는 @('키', '설명') 모양이어야 합니다." }
+        if (@($s).Count -notin 2, 3) { throw "애드온 '$Id'의 단축키는 @('키', '설명') 또는 @('키', '설명', '주제') 모양이어야 합니다." }
     }
     $relatedEntry = $null
     if ($Related) {
@@ -11405,19 +11959,26 @@ function New-WtKeyRow([string]$Keys, [string]$What, [switch]$Header) {
     $row
 }
 
-# 탭이 등록한 단축키를 메뉴 순서대로 모은다. 키와 설명이 같으면 한 줄로 묶는다 (예: 문서 · 활성 작업: 새로 고침)
-function Get-WtShortcutRows {
-    $rows = [System.Collections.Generic.List[object]]::new()
+# 단축키 목록 안의 제목 줄. 탭 이름(-Topic 없음)은 진하게 위 16, 탭 안 주제는 작은 회색 글자 위 12
+function New-WtKeySection([string]$Text, [switch]$Topic) {
+    $t = New-WtText $Text $(if ($Topic) { 'T.Sub' } else { 'T.Strong' })
+    $t.Margin = if ($Topic) { [System.Windows.Thickness]::new(0, 12, 0, 2) } else { [System.Windows.Thickness]::new(0, 16, 0, 4) }
+    $t
+}
+
+# 탭이 등록한 단축키를 탭마다(메뉴 순서, 끈 탭 빼고) 묶는다. 셋째 값(주제)이 있으면 그 탭 안에서 주제가 처음 나온 순서대로 모은다.
+# 예전에는 한 목록에 「탭: 설명」으로 이어 붙여 메모 것만 스무 줄이 넘었다(11-24 승호: 많으면 주제를 나눠야)
+function Get-WtShortcutGroups {
     foreach ($a in @(Get-WtAddon)) {
-        foreach ($s in @($a.Shortcuts)) {
-            $same = $rows | Where-Object { $_.Key -ceq $s[0] -and $_.What -ceq $s[1] } | Select-Object -First 1
-            if ($same) { $same.Titles.Add($a.Title); continue }
-            $titles = [System.Collections.Generic.List[string]]::new()
-            $titles.Add($a.Title)
-            $rows.Add([pscustomobject]@{ Key = [string]$s[0]; What = [string]$s[1]; Titles = $titles })
-        }
+        $rows = @(foreach ($s in @($a.Shortcuts)) {
+                if (@($s).Count -lt 2) { continue }
+                [pscustomobject]@{ Key = [string]$s[0]; What = [string]$s[1]; Topic = $(if (@($s).Count -gt 2) { [string]$s[2] } else { '' }) }
+            })
+        if (-not $rows.Count) { continue }
+        $topics = [System.Collections.Generic.List[string]]::new()
+        foreach ($r in $rows) { if (-not $topics.Contains($r.Topic)) { $topics.Add($r.Topic) } }
+        [pscustomobject]@{ Title = [string]$a.Title; Rows = @(foreach ($t in $topics) { $rows | Where-Object { $_.Topic -ceq $t } }) }
     }
-    foreach ($r in $rows) { [pscustomobject]@{ Key = $r.Key; Text = '{0}: {1}' -f ($r.Titles -join ' · '), $r.What } }
 }
 
 function New-WtHelpPage {
@@ -11425,6 +11986,7 @@ function New-WtHelpPage {
     $col = New-WtStack Vertical
     [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
     [void](Add-WtChild $col (New-WtKeyRow '키' '하는 일' -Header))
+    [void](Add-WtChild $col (New-WtKeySection '공통'))
     foreach ($r in @(
             @('Ctrl + 1 ~ 9', '메뉴 순서대로 화면 이동'),
             @('Ctrl + Shift + B', '사이드바 접기 / 펼치기'),
@@ -11433,7 +11995,15 @@ function New-WtHelpPage {
             @('F1', '도움말'))) {
         [void](Add-WtChild $col (New-WtKeyRow $r[0] $r[1]))
     }
-    foreach ($r in @(Get-WtShortcutRows)) { [void](Add-WtChild $col (New-WtKeyRow $r.Key $r.Text)) }
+    foreach ($g in @(Get-WtShortcutGroups)) {
+        [void](Add-WtChild $col (New-WtKeySection $g.Title))
+        $topic = ''
+        foreach ($r in $g.Rows) {
+            if ($r.Topic -and $r.Topic -cne $topic) { [void](Add-WtChild $col (New-WtKeySection $r.Topic -Topic)) }
+            $topic = $r.Topic
+            [void](Add-WtChild $col (New-WtKeyRow $r.Key $r.What))
+        }
+    }
     $keys.Child = $col
 
     $tabs = New-WtStack Vertical 16
@@ -16922,38 +17492,41 @@ function Set-WtMemoSortMenu($Menu) {
     }
 }
 
-# 메모 하나를 정리하는 메뉴 항목: 고정 · 보관 · 폴더 · 삭제. 칸의 ⋯ 단추와 목록 우클릭이 같이 쓴다
+# 메모 하나를 정리하는 메뉴: 고정(목록 위 · 홈) ─ 정리(보관 · 폴더) ─ 삭제. 칸의 ⋯ 단추와 목록 우클릭이 같이 쓴다.
+# 묶음 · 아이콘 · 위험 항목은 디자인 3판 7절 「메뉴」, 항목은 8절 메모
 function Set-WtMemoActionItems($Menu, [string]$Id, $Pane) {
     $Menu.Items.Clear()
     $m = Get-WtMemoById $Id
     if (-not $m) { return }
     $pinned = $m.pinned -eq $true; $archived = $m.archived -eq $true
-    [void]$Menu.Items.Add((New-WtMenuItem $(if ($pinned) { '고정 해제' } else { '고정' }) { param($v) Invoke-WtMemoAction pin $v.Id $v.Value } @{ Id = $Id; Value = -not $pinned }))
-    [void]$Menu.Items.Add((New-WtMenuItem $(if ($archived) { '보관 해제' } else { '보관' }) { param($v) Invoke-WtMemoAction archive $v.Id $v.Value } @{ Id = $Id; Value = -not $archived }))
+    $onHome = Test-WtHomePin -Page 'memo' -Key $Id
+    [void]$Menu.Items.Add((New-WtMenuItem $(if ($pinned) { '목록 위 고정 해제' } else { '목록 위에 고정' }) { param($v) Invoke-WtMemoAction pin $v.Id $v.Value } @{ Id = $Id; Value = -not $pinned } -Icon $(if ($pinned) { 0xE77A } else { 0xE718 })))
+    [void]$Menu.Items.Add((New-WtMenuItem $(if ($onHome) { '홈 고정 해제' } else { '홈에 고정' }) {
+                param($v) Set-WtHomePin -Page 'memo' -Key $v -Title (Get-WtMemoTitle $v) -Sub '메모' -Icon 0xE70B -Pinned:(-not (Test-WtHomePin -Page 'memo' -Key $v))
+            } $Id -Icon 0xE80F))
+    [void]$Menu.Items.Add([System.Windows.Controls.Separator]::new())
+    [void]$Menu.Items.Add((New-WtMenuItem $(if ($archived) { '보관 해제' } else { '보관' }) { param($v) Invoke-WtMemoAction archive $v.Id $v.Value } @{ Id = $Id; Value = -not $archived } -Icon 0xE7B8))
     $folders = @(try { Get-WtMemoFolders $script:memoStore } catch { })
     if ($folders.Count) {
-        $move = [System.Windows.Controls.MenuItem]::new()
-        $move.Header = '폴더로 옮기기'
-        Set-WtStyle $move 'Home.PinSubmenuItem'
+        $move = New-WtSubmenuItem '폴더로 옮기기' -Icon 0xE8DE
         [void]$Menu.Items.Add($move)
         foreach ($folder in @($folders) + @([pscustomobject]@{ id = ''; name = '폴더 없음' })) {
             $on = [string]$m.folder -ceq [string]$folder.id
             [void]$move.Items.Add((New-WtMenuItem ([string]$folder.name) { param($v) Invoke-WtMemoAction folder $v.Id $v.Value } @{ Id = $Id; Value = [string]$folder.id } -Checked:$on))
         }
     }
-    [void]$Menu.Items.Add((New-WtMenuItem '삭제' { param($v) Remove-WtMemoItem $v.Id $v.Pane } @{ Id = $Id; Pane = $Pane }))
+    [void]$Menu.Items.Add([System.Windows.Controls.Separator]::new())
+    [void]$Menu.Items.Add((New-WtMenuItem '삭제' { param($v) Remove-WtMemoItem $v.Id $v.Pane } @{ Id = $Id; Pane = $Pane } -Icon 0xE74D -Danger))
 }
 
-# 목록 우클릭: 열기 · 홈 고정 + 정리 항목
+# 목록 우클릭: 열기 묶음 + 정리 메뉴(Set-WtMemoActionItems)
 function Set-WtMemoListMenu($Menu, [string]$Id) {
     Set-WtMemoActionItems $Menu $Id $null
     $Menu.Tag = $Id
+    if ($Menu.Items.Count) { $Menu.Items.Insert(0, [System.Windows.Controls.Separator]::new()) }
     $open = @(
-        (New-WtMenuItem '새 탭에서 열기' { param($v) [void](Open-WtMemo $v 'tab') } $Id),
-        (New-WtMenuItem '오른쪽에 열기' { param($v) [void](Open-WtMemo $v 'side') } $Id),
-        (New-WtMenuItem $(if (Test-WtHomePin -Page 'memo' -Key $Id) { '홈 고정 해제' } else { '홈에 고정' }) {
-            param($v) Set-WtHomePin -Page 'memo' -Key $v -Title (Get-WtMemoTitle $v) -Sub '메모' -Icon 0xE70B -Pinned:(-not (Test-WtHomePin -Page 'memo' -Key $v))
-        } $Id))
+        (New-WtMenuItem '새 탭에서 열기' { param($v) [void](Open-WtMemo $v 'tab') } $Id -Icon 0xE8A7),
+        (New-WtMenuItem '오른쪽에 열기' { param($v) [void](Open-WtMemo $v 'side') } $Id -Icon 0xE90D))
     $open[0].InputGestureText = 'Ctrl+클릭'
     for ($i = $open.Count - 1; $i -ge 0; $i--) { $Menu.Items.Insert(0, $open[$i]) }
 }
@@ -17971,21 +18544,25 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
         '편집기 찾기 막대에서 Alt+C는 대소문자 구분, Alt+R은 정규식을 켜고 끕니다.',
         '정규식 바꾸기: $1 · ${이름} · $$ · \1~\9(그룹) · \n(줄바꿈) · \t(탭) · \\(역슬래시).') `
     -Shortcuts @(
-        @('Ctrl + N', '새로 만들기 (새 탭)'), @('Ctrl + S', '바로 저장'), @('Ctrl + O', '메모 이름으로 찾아 열기'),
-        @('Ctrl + W', '탭 닫기'), @('Ctrl + Shift + T', '닫은 탭 다시 열기'), @('Ctrl + Tab / Ctrl + Shift + Tab', '다음 / 이전 탭'),
-        @('Ctrl + \', '오른쪽에 나눠 열기 (나눴으면 다른 칸으로)'), @('Alt + ← / Alt + →', '뒤로 / 앞으로 (링크 · 빠른 이동으로 간 메모)'),
-        @('Ctrl + E', '편집 → 원문 → 읽기'), @('Ctrl + /', '편집 / 원문'), @('Ctrl + Shift + F', '목록 찾기 칸으로'),
-        @('Ctrl + 클릭 · 가운데 클릭', '목록 · 링크를 새 탭에서 열기'),
-        @('Ctrl + B / Ctrl + I', '굵게 / 기울임 (다시 누르면 풀기)'), @('Ctrl + K', '링크 만들기'), @('Alt + Shift + 5', '취소선'),
-        @('`', '한 줄은 인라인 코드 · 여러 줄은 코드 블록 · 빈 짝 넣기 · 닫는 짝 넘기기 (빈 짝 직후 Backspace = 둘 다 삭제)'),
-        @('```', '줄 맨 앞에 치면 닫는 ``` 를 자동으로'),
-        @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)'), @('Enter', '목록 · 할 일 · 인용 이어 쓰기 (빈 항목 · 빈 인용 줄에서 Enter = 빈 줄을 두고 끝)'),
-        @('Tab / Shift + Tab', '목록 들여쓰기 / 내어쓰기'), @('Ctrl + L', '할 일 체크박스 넣기 · 완료 / 해제'),
-        @('Alt + ↑ / Alt + ↓', '줄 옮기기'), @('Ctrl + F / Ctrl + H / F3', '찾기 / 바꾸기 / 다음 찾기'),
-        @('Alt + C / Alt + R', '찾기 막대에서 대소문자 구분 / 정규식'),
-        @('정규식 바꾸기', '$1 · ${이름} · $$ · \1~\9(그룹) · \n(줄바꿈) · \t(탭) · \\(역슬래시)'),
-        @('Ctrl + Z / Ctrl + Y', '실행 취소 / 다시 실행'), @('Ctrl + Shift + V', '바꾸지 않고 붙여넣기'),
-        @('붙여넣기', '글을 고르고 URL을 붙이면 링크, 파일 경로는 경로 링크로'), @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크')) `
+        # 셋째 값은 도움말 → 단축키에서 이 탭 안의 주제(소제목). 많아서 주제별로 나눈다(11-24 승호)
+        @('Ctrl + N', '새로 만들기 (새 탭)', '탭 · 창'), @('Ctrl + S', '바로 저장', '탭 · 창'), @('Ctrl + O', '메모 이름으로 찾아 열기', '탭 · 창'),
+        @('Ctrl + W', '탭 닫기', '탭 · 창'), @('Ctrl + Shift + T', '닫은 탭 다시 열기', '탭 · 창'), @('Ctrl + Tab / Ctrl + Shift + Tab', '다음 / 이전 탭', '탭 · 창'),
+        @('Ctrl + \', '오른쪽에 나눠 열기 (나눴으면 다른 칸으로)', '탭 · 창'), @('Alt + ← / Alt + →', '뒤로 / 앞으로 (링크 · 빠른 이동으로 간 메모)', '탭 · 창'),
+        @('Ctrl + 클릭 · 가운데 클릭', '목록 · 링크를 새 탭에서 열기', '탭 · 창'),
+        @('Ctrl + E', '편집 → 원문 → 읽기', '보기'), @('Ctrl + /', '편집 / 원문', '보기'),
+        @('Ctrl + B / Ctrl + I', '굵게 / 기울임 (다시 누르면 풀기)', '서식'), @('Alt + Shift + 5', '취소선', '서식'),
+        @('Ctrl + Shift + `', '인라인 코드 (다시 누르면 풀기)', '서식'), @('Ctrl + K', '링크 만들기', '서식'),
+        @('Ctrl + L', '할 일 체크박스 넣기 · 완료 / 해제', '서식'),
+        @('`', '한 줄은 인라인 코드 · 여러 줄은 코드 블록 · 빈 짝 넣기 · 닫는 짝 넘기기 (빈 짝 직후 Backspace = 둘 다 삭제)', '서식'),
+        @('```', '줄 맨 앞에 치면 닫는 ``` 를 자동으로', '서식'), @('[[', '메모 링크 자동 완성 (↑↓ 고르기 · Enter)', '서식'),
+        @('Enter', '목록 · 할 일 · 인용 이어 쓰기 (빈 항목 · 빈 인용 줄에서 Enter = 빈 줄을 두고 끝)', '목록 · 줄'),
+        @('Tab / Shift + Tab', '목록 들여쓰기 / 내어쓰기', '목록 · 줄'), @('Alt + ↑ / Alt + ↓', '줄 옮기기', '목록 · 줄'),
+        @('Ctrl + F / Ctrl + H / F3', '찾기 / 바꾸기 / 다음 찾기', '찾기 · 바꾸기'), @('Ctrl + Shift + F', '목록 찾기 칸으로', '찾기 · 바꾸기'),
+        @('Alt + C / Alt + R', '찾기 막대에서 대소문자 구분 / 정규식', '찾기 · 바꾸기'),
+        @('정규식 바꾸기', '$1 · ${이름} · $$ · \1~\9(그룹) · \n(줄바꿈) · \t(탭) · \\(역슬래시)', '찾기 · 바꾸기'),
+        @('Ctrl + Z / Ctrl + Y', '실행 취소 / 다시 실행', '편집 · 붙여넣기'), @('Ctrl + Shift + V', '바꾸지 않고 붙여넣기', '편집 · 붙여넣기'),
+        @('붙여넣기', '글을 고르고 URL을 붙이면 링크, 파일 경로는 경로 링크로', '편집 · 붙여넣기'),
+        @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크', '편집 · 붙여넣기')) `
     -HelpCard { New-WtMemoMarkdownHelpCard }
 
 Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Format-WtMemoTime, Import-WtMemoLegacy,
@@ -19539,6 +20116,8 @@ function New-WtMemoEditor {
     $live = New-WtMarkdownView -Scroll -OnLink { param($link, $st) Invoke-WtMemoEditorLink $link $st } -OnTask { param($line, $el) Invoke-WtMemoTaskClick $line $el }
     Set-WtStyle $live 'Memo.View'   # 문서 면: 바깥 포커스 네모 없음
     $live.Tag.Editor = $ed
+    $live.Tag.TableFocus = $false   # 누름은 이 보기가 받아 섬을 연다. 표 칸 안 상자가 포커스를 가져가면 치는 글이 갈 곳을 잃는다
+    $live.Tag.TableKey = { param($holder) Get-WtMemoTableKey $holder }   # 섬을 열고 닫거나 다시 그려도 표마다 가로 위치를 기억한다
     # 문서에서 블록을 빼고 넣을 때 RichTextBox가 실행 취소용으로 뺀 요소를 XAML로 저장하려 한다.
     # 섬(Tag에 편집기 상태)을 저장하다 끝없이 파고들어 멈추므로 끈다. 실행 취소는 편집기가 따로 든다
     $live.IsUndoEnabled = $false
@@ -19643,17 +20222,34 @@ function Add-WtMemoBoxHandlers($Box, [switch]$Island) {
     $Box.Add_PreviewDrop({ param($s, $e) Invoke-WtMemoBoxDrop $s $e })
 }
 
-# 본문 공통 메뉴. 그린 보기에서도 편집 명령은 현재 섬(없으면 커서의 블록)에 보낸다.
+# 본문 메뉴 항목 하나. 값(Tag.Value)의 Action이 할 일이고, 비활성 · 툴팁은 Update-WtMemoContextMenu가 정한다
+function New-WtMemoContextItem($Ed, [string]$Text, [string]$Action, [string]$Keys, [int]$Icon) {
+    $item = New-WtMenuItem $Text { param($v) Invoke-WtMemoContextAction $v.Ed $v.Action } @{ Ed = $Ed; Action = $Action } -Icon $Icon
+    $item.InputGestureText = $Keys
+    [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true)
+    $item
+}
+
+# 본문 공통 메뉴(디자인 3판 8절 메모): 고치기 ─ 서식 › ─ 모두 선택. 그린 보기에서도 편집 명령은 현재 섬(없으면 커서의 블록)에 보낸다.
 function Add-WtMemoContextMenu($Target, $Ed) {
     $menu = New-WtHomePinContextMenu
     $menu.Tag = $Ed
-    foreach ($spec in @(@('잘라내기', 'Cut', 'Ctrl+X'), @('복사', 'Copy', 'Ctrl+C'), @('붙여넣기', 'Paste', 'Ctrl+V'), @('모두 선택', 'SelectAll', 'Ctrl+A'))) {
-        $item = [System.Windows.Controls.MenuItem]::new()
-        $item.Header = $spec[0]; $item.Tag = $spec[1]; $item.InputGestureText = $spec[2]
-        [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true)
-        $item.Add_Click({ param($s, $e) Invoke-WtMemoContextAction $s.Parent.Tag $s.Tag })
-        [void]$menu.Items.Add($item)
+    foreach ($spec in @(@('잘라내기', 'Cut', 'Ctrl+X', 0xE8C6), @('복사', 'Copy', 'Ctrl+C', 0xE8C8), @('붙여넣기', 'Paste', 'Ctrl+V', 0xE77F),
+            @('서식 없이 붙여넣기', 'PastePlain', 'Ctrl+Shift+V', 0xF0E3))) {
+        [void]$menu.Items.Add((New-WtMemoContextItem $Ed @spec))
     }
+    [void]$menu.Items.Add([System.Windows.Controls.Separator]::new())
+    # 서식은 단축키와 같은 편집 명령(Get-WtMemoFormatEdit)을 부른다
+    $format = New-WtSubmenuItem '서식' -Icon 0xE8D2
+    $format.Tag = @{ Value = @{ Ed = $Ed; Action = 'Format' } }
+    [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($format, $true)
+    foreach ($spec in @(@('굵게', 'Bold', 'Ctrl+B', 0xE8DD), @('기울임', 'Italic', 'Ctrl+I', 0xE8DB), @('취소선', 'Strike', 'Alt+Shift+5', 0xEDE0),
+            @('인라인 코드', 'Code', 'Ctrl+Shift+`', 0xE943), @('링크', 'Link', 'Ctrl+K', 0xE71B), @('할 일', 'Task', 'Ctrl+L', 0xE73A))) {
+        [void]$format.Items.Add((New-WtMemoContextItem $Ed @spec))
+    }
+    [void]$menu.Items.Add($format)
+    [void]$menu.Items.Add([System.Windows.Controls.Separator]::new())
+    [void]$menu.Items.Add((New-WtMemoContextItem $Ed '모두 선택' 'SelectAll' 'Ctrl+A' 0xE8B3))
     $Target.ContextMenu = $menu
     $Target.Add_ContextMenuOpening({ param($s, $e) Update-WtMemoContextMenu $s.ContextMenu })
     $menu.Add_Closed({
@@ -19664,15 +20260,37 @@ function Add-WtMemoContextMenu($Target, $Ed) {
         })
 }
 
+# 쓸 수 없는 항목은 숨기지 않고 비활성 + 이유 툴팁. 서식 안 항목은 머리(서식 ›)가 대신 막는다
 function Update-WtMemoContextMenu($Menu) {
     $ed = $Menu.Tag
     $selected = [bool](Get-WtMemoSelectedText $ed)
     $paste = $false
     try { $paste = [System.Windows.Clipboard]::ContainsText() } catch { }
-    $allowed = @(($ed.Enabled -and $selected), $selected, ($ed.Enabled -and $paste), [bool](Get-WtMemoEditorText $ed))
-    for ($i = 0; $i -lt $Menu.Items.Count; $i++) {
-        $Menu.Items[$i].IsEnabled = $allowed[$i]
-        $Menu.Items[$i].ToolTip = if ($allowed[$i]) { $null } elseif (-not $ed.Enabled) { '메모를 먼저 선택하세요' } elseif ($i -eq 2) { '붙여넣을 글이 없습니다' } else { '글을 먼저 선택하세요' }
+    $hasText = [bool](Get-WtMemoEditorText $ed)
+    foreach ($item in @($Menu.Items | Where-Object { $_ -is [System.Windows.Controls.MenuItem] })) {
+        $action = [string]$item.Tag.Value.Action
+        $allowed, $reason = switch ($action) {
+            'Cut' { ($ed.Enabled -and $selected), '글을 먼저 선택하세요' }
+            'Copy' { $selected, '글을 먼저 선택하세요' }
+            { $_ -in 'Paste', 'PastePlain' } { ($ed.Enabled -and $paste), '붙여넣을 글이 없습니다' }
+            'SelectAll' { $hasText, '선택할 글이 없습니다' }
+            default { [bool]$ed.Enabled, '' }
+        }
+        $item.IsEnabled = [bool]$allowed
+        $item.ToolTip = if ($allowed) { $null } elseif (-not $ed.Enabled) { '메모를 먼저 선택하세요' } else { $reason }
+    }
+}
+
+# 본문 메뉴 「서식 ›」의 편집. 단축키(Invoke-WtMemoBoxKey)와 같은 MemoText.psm1 명령이다
+function Get-WtMemoFormatEdit($Box, [string]$Action) {
+    $st = Get-WtMemoBoxState $Box
+    switch ($Action) {
+        'Bold' { Get-WtMemoWrapEdit $st '**' }
+        'Italic' { Get-WtMemoWrapEdit $st '*' }
+        'Strike' { Get-WtMemoWrapEdit $st '~~' }
+        'Code' { Get-WtMemoWrapEdit $st '`' }
+        'Link' { Get-WtMemoLinkEdit $st }
+        'Task' { Get-WtMemoTaskEdit $st }
     }
 }
 
@@ -19693,6 +20311,10 @@ function Invoke-WtMemoContextAction($Ed, [string]$Action) {
         'Cut' { $box.Cut() }
         'Copy' { $box.Copy() }
         'Paste' { $box.Paste() }
+        'PastePlain' { Invoke-WtMemoPlainPaste $box }
+        default {
+            try { [void](Invoke-WtMemoBoxEdit $box (Get-WtMemoFormatEdit $box $Action)) } catch { Show-WtError $_ '메모 편집' }
+        }
     }
 }
 
@@ -19808,6 +20430,7 @@ function Set-WtMemoEditorText($Ed, [AllowEmptyString()][string]$Text) {
         $Ed.Caret = @{ Line = 0; Col = 0 }
         $Ed.ReadText = $null
         $Ed.Cache.Clear()   # 다른 메모의 그린 블록을 붙잡고 있지 않게
+        $Ed.Live.Tag.TableScroll.Clear()   # 다른 메모의 표는 가로 처음부터
         switch ($Ed.Mode) {
             'source' { $Ed.Source.Text = $Text; $Ed.Source.CaretIndex = 0; $Ed.Source.ScrollToHome() }
             'live' { Update-WtMemoLive $Ed; Get-WtMemoScroller $Ed.Live | ForEach-Object { $_.ScrollToHome() } }
@@ -21045,10 +21668,11 @@ function Find-WtMemoBlankHit($Ed, $Point, $Block) {
     $null
 }
 
-# 보기 좌표 → 원문 줄 · 칸. 그린 글자를 원문과 차례로 맞춰 본다 (기호 · 아이콘은 건너뜀)
+# 보기 좌표 → 원문 줄 · 칸. 그린 글자를 원문과 차례로 맞춰 본다 (기호 · 아이콘은 건너뜀).
+# 표는 가로 스크롤 칸 안의 문서라서 그 안 자리를 찾고(옮긴 만큼 따라감), 그린 글은 표 블록 앞까지 + 표 문서 처음부터 그 자리까지다
 function Find-WtMemoLiveHit($Ed, [System.Windows.Point]$Point, [switch]$BlocksOnly) {
     $view = $Ed.Live
-    $tp = $view.GetPositionFromPoint($Point, $true)
+    $tp = Get-WtMarkdownPositionFromPoint $view $Point
     if (-not $tp) { return $null }
     $block = $tp.Parent
     while ($block -and -not [object]::ReferenceEquals($block.Parent, $view.Document)) { $block = [System.Windows.LogicalTreeHelper]::GetParent($block) }
@@ -21063,7 +21687,11 @@ function Find-WtMemoLiveHit($Ed, [System.Windows.Point]$Point, [switch]$BlocksOn
     if (-not $sec) { return $null }
     $u = $sec.Tag
     $rendered = ''
-    try { $rendered = Get-WtMemoRenderedPrefix $sec.ContentStart $tp } catch { }
+    try {
+        $table = Get-WtMarkdownTableBlock $tp
+        $rendered = if ($table) { (Get-WtMemoRenderedPrefix $sec.ContentStart $table.ElementStart) + "`n" + (Get-WtMemoRenderedPrefix $tp.DocumentStart $tp) }
+        else { Get-WtMemoRenderedPrefix $sec.ContentStart $tp }
+    } catch { }
     $offset = Get-WtMemoSourceOffset $rendered $u.Text
     $parts = @($u.Text.Substring(0, $offset) -split "`n")
     $line = $u.Start + $parts.Count - 1
@@ -21071,6 +21699,22 @@ function Find-WtMemoLiveHit($Ed, [System.Windows.Point]$Point, [switch]$BlocksOn
     $isl = $Ed.Island
     if ($isl -and $u.Start -ge $isl.End) { $line += @($Ed.IslandBox.Text -split "\r?\n").Count - ($isl.End - $isl.Start) }
     @{ Line = $line; Col = $parts[-1].Length; Unit = $u }
+}
+
+# 편집 보기의 표 가로 위치를 기억하는 열쇠(Markdown.psm1 TableKey): 그 표가 든 단위의 시작 줄 + 단위 안 자리.
+# 섬을 열고 닫거나 다시 그려도 같은 표다. 섬에서 줄 수가 바뀌었으면 섬 아래 단위는 닫힌 뒤의 줄 번호로 맞춘다
+function Get-WtMemoTableKey($Holder) {
+    $sec = $Holder
+    while ($sec -and -not ($sec -is [System.Windows.Documents.Section] -and $sec.Tag -is [hashtable] -and $sec.Tag.ContainsKey('Kind'))) {
+        $sec = [System.Windows.LogicalTreeHelper]::GetParent($sec)
+    }
+    if (-not $sec) { return $null }
+    $u = $sec.Tag
+    $start = $u.Start
+    $ed = Find-WtMemoEditorFrom $sec.Parent
+    $isl = if ($ed) { $ed.Island }
+    if ($isl -and $u.Start -ge $isl.End) { $start += @($ed.IslandBox.Text -split "\r?\n").Count - ($isl.End - $isl.Start) }
+    '{0}:{1}' -f $start, $sec.ContentStart.GetOffsetToPosition($Holder.ElementStart)
 }
 
 # 그린 글의 [Start, End) 글자. TextRange.Text는 표 칸에 걸치면 칸 · 행 전체로 넓혀 버려서 직접 따라가며 모은다.
@@ -21825,7 +22469,7 @@ function Get-WtMemoSelectedText($Ed) {
     switch ($Ed.Mode) {
         'source' { return $Ed.Source.SelectedText }
         'live' { if ($Ed.Island) { return $Ed.IslandBox.SelectedText } }
-        'read' { return $Ed.View.Selection.Text }
+        'read' { return Get-WtMarkdownSelectedText $Ed.View }   # 표 칸에서 고른 글도
     }
     ''
 }
@@ -22023,19 +22667,35 @@ function Invoke-WtMemoFind($Ed, [switch]$Back, [switch]$Here) {
     }
 }
 
+# 읽기 보기의 글 조각을 문서 차례로 모은다: @{ Start; Text }(Run 하나) · @{ Break = 'line' | 'para' }(줄바꿈 · 문단 시작).
+# 표는 가로 스크롤 칸 안의 문서라서 그 블록 자리에서 안 문서로 들어간다
+function Add-WtMemoReadPieces($Document, $Out) {
+    $tp = $Document.ContentStart
+    while ($tp) {
+        $context = $tp.GetPointerContext('Forward')
+        if ($context -eq 'Text') { $Out.Add(@{ Start = $tp; Text = $tp.GetTextInRun('Forward') }) }
+        elseif ($context -eq 'ElementStart') {
+            $element = $tp.GetAdjacentElement('Forward')
+            if ($element -is [System.Windows.Documents.LineBreak]) { $Out.Add(@{ Break = 'line' }) }
+            elseif ($element -is [System.Windows.Documents.Paragraph]) { $Out.Add(@{ Break = 'para' }) }
+            $table = Get-WtMarkdownTableView $element
+            if ($table -and $table.Document) { Add-WtMemoReadPieces $table.Document $Out }
+        }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
+}
+
 # 읽기 모드: 그린 글(Run)에서 찾는다. 여러 Run에 걸친 글은 찾지 않는다
 function Get-WtMemoReadMatches($Ed, [string]$Query) {
     if ($Ed.Find.Regex.IsChecked) { return , (Get-WtMemoReadRegexMatches $Ed $Query) }
     $out = [System.Collections.Generic.List[object]]::new()
-    $tp = $Ed.View.Document.ContentStart
-    while ($tp) {
-        if ($tp.GetPointerContext('Forward') -eq 'Text') {
-            $run = $tp.GetTextInRun('Forward')
-            foreach ($hit in (Get-WtMemoMatches $run $Query -CaseSensitive:($Ed.Find.Case.IsChecked -eq $true) -RegexMode:($Ed.Find.Regex.IsChecked -eq $true))) {
-                $out.Add(@{ Start = $tp.GetPositionAtOffset($hit.Index); End = $tp.GetPositionAtOffset($hit.Index + $hit.Length) })
-            }
+    $pieces = [System.Collections.Generic.List[object]]::new()
+    Add-WtMemoReadPieces $Ed.View.Document $pieces
+    foreach ($piece in $pieces) {
+        if ($piece.Break) { continue }
+        foreach ($hit in (Get-WtMemoMatches $piece.Text $Query -CaseSensitive:($Ed.Find.Case.IsChecked -eq $true) -RegexMode:($Ed.Find.Regex.IsChecked -eq $true))) {
+            $out.Add(@{ Start = $piece.Start.GetPositionAtOffset($hit.Index); End = $piece.Start.GetPositionAtOffset($hit.Index + $hit.Length) })
         }
-        $tp = $tp.GetNextContextPosition('Forward')
     }
     , $out
 }
@@ -22045,19 +22705,13 @@ function Get-WtMemoReadMatches($Ed, [string]$Query) {
 function Get-WtMemoReadRegexMatches($Ed, [string]$Query) {
     $text = [System.Text.StringBuilder]::new()
     $segments = [System.Collections.Generic.List[object]]::new()
-    $tp = $Ed.View.Document.ContentStart
-    while ($tp) {
-        $context = $tp.GetPointerContext('Forward')
-        if ($context -eq 'Text') {
-            $run = $tp.GetTextInRun('Forward')
-            $segments.Add(@{ Offset = $text.Length; Length = $run.Length; Start = $tp })
-            [void]$text.Append($run)
-        } elseif ($context -eq 'ElementStart') {
-            $element = $tp.GetAdjacentElement('Forward')
-            if ($element -is [System.Windows.Documents.LineBreak] -or
-                ($element -is [System.Windows.Documents.Paragraph] -and $text.Length -gt 0)) { [void]$text.Append("`n") }
-        }
-        $tp = $tp.GetNextContextPosition('Forward')
+    $pieces = [System.Collections.Generic.List[object]]::new()
+    Add-WtMemoReadPieces $Ed.View.Document $pieces
+    foreach ($piece in $pieces) {
+        if ($piece.Break -eq 'line' -or ($piece.Break -eq 'para' -and $text.Length -gt 0)) { [void]$text.Append("`n"); continue }
+        if ($piece.Break) { continue }
+        $segments.Add(@{ Offset = $text.Length; Length = $piece.Text.Length; Start = $piece.Start })
+        [void]$text.Append($piece.Text)
     }
     $out = [System.Collections.Generic.List[object]]::new()
     foreach ($hit in (Get-WtMemoMatches $text.ToString() $Query -RegexMode -CaseSensitive:($Ed.Find.Case.IsChecked -eq $true))) {
@@ -22088,9 +22742,8 @@ function Invoke-WtMemoFindRead($Ed, [string]$Query, [switch]$Back, [switch]$Here
     if ($k -lt 0) { $k = $hits.Count - 1 }
     if ($k -ge $hits.Count) { $k = 0 }
     $f.ReadIndex = $k
-    $Ed.View.Selection.Select($hits[$k].Start, $hits[$k].End)
-    $p = $hits[$k].Start.Parent
-    if ($p -is [System.Windows.FrameworkContentElement]) { $p.BringIntoView() }
+    # 표 안이면 그 표 칸에서 고르고 찾은 곳이 보이게 표를 가로로 옮긴다
+    Select-WtMarkdownRange $Ed.View $hits[$k].Start $hits[$k].End
     Update-WtMemoFindCount $Ed $k $hits.Count
 }
 
