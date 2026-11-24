@@ -2625,22 +2625,20 @@ function Open-WtMemoFromArgs($OpenArgs) {
 }
 
 # ---- 빠른 메모 (바로 가기 키 → 코어 빠른 적기 -QuickCapture → 이 탭) ------------------------------------
-# 작은 창(core\Ui.psm1 New-WtCaptureWindow)에 적은 글은 매번 새 메모다. 첫 줄이 제목, 첫 줄이 비면 「빠른 메모 11/25 09:12」(창을 연 시각).
+# 작은 창(core\Ui.psm1 New-WtCaptureWindow)에 적은 글은 매번 새 메모다. 제목은 늘 「20261125-091230-빠른메모」(창을 연 시각),
+# 적은 글은 첫 줄까지 모두 본문이다(11-25 승호: 「첫 줄 제목」 안내 글자 없이).
 # 쉬면 1초 뒤 · Ctrl+S · 닫을 때 저장한다. 빈 채로 닫으면 메모를 만들지 않고, 만들었다 비우면 지운다(메모 탭의 빈 메모 규칙과 같음).
 # 메모 화면이 떠 있으면 목록 · 색인 · 같은 메모를 연 칸도 같이 고친다. 이벤트 처리기는 $script:quick만 쓴다
 
-$script:capture = $null   # 떠 있는 빠른 메모 창 @{ Window; Frame; Box; Hint; Status; Open; Timer; Id; Saved; Started; Error }
+$script:capture = $null   # 떠 있는 빠른 메모 창 @{ Window; Frame; Box; Status; Open; Timer; Id; Saved; Started; Error }
 $script:captureShow = { param($Window) $Window.Show() }             # 검사가 바꿔 끼운다(창을 띄우지 않게)
 $script:captureClose = { param($Window) $Window.Close() }
 $script:captureArea = { [System.Windows.SystemParameters]::WorkArea }
 $script:captureOpenPage = { param($Id) Show-WtMainWindow; Open-WtPage -Id 'memo' -Args @{ Key = $Id; Edit = $true } }
 
-# 창 글 → 제목 · 본문. 첫 줄이 제목이고 나머지가 본문이다
+# 창 글 → 제목 · 본문. 제목은 창을 연 시각 「년월일-시분초-빠른메모」, 글은 그대로 본문이다
 function Split-WtMemoCaptureText([string]$Text, [datetime]$Started) {
-    $parts = $Text -split '\r\n|\r|\n', 2
-    $title = $parts[0].Trim()
-    if (-not $title) { $title = '빠른 메모 ' + $Started.ToString('M/d HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
-    @{ Title = $title; Body = $(if ($parts.Count -gt 1) { $parts[1] } else { '' }) }
+    @{ Title = $Started.ToString('yyyyMMdd-HHmmss', [Globalization.CultureInfo]::InvariantCulture) + '-빠른메모'; Body = $Text }
 }
 
 # 단축키로 부른다. 이미 떠 있으면 새 창을 만들지 않고 그 창을 앞으로 가져온다
@@ -2651,22 +2649,20 @@ function Show-WtMemoCapture {
     $box = [System.Windows.Controls.TextBox]::new()
     Set-WtStyle $box 'Capture.Box'
     [System.Windows.Automation.AutomationProperties]::SetName($box, '빠른 메모 내용')
-    $hint = New-WtText '첫 줄이 제목이 됩니다' 'Capture.Hint'
-    [void]$grid.Children.Add($box); [void]$grid.Children.Add($hint)
+    [void]$grid.Children.Add($box)
     $parts.Body.Child = $grid
     $open = New-WtButton '메모에서 열기'
     $close = New-WtButton '닫기'
     foreach ($b in $open, $close) { Set-WtStyle $b 'Capture.Button'; [void]$parts.ToolRight.Children.Add($b) }
     $timer = [System.Windows.Threading.DispatcherTimer]::new()
     $timer.Interval = [TimeSpan]::FromSeconds(1)
-    $q = @{ Window = $parts.Window; Frame = $parts.Frame; Box = $box; Hint = $hint; Status = $parts.Status; Open = $open; CloseButton = $close; ChromeClose = $parts.Close; Timer = $timer
+    $q = @{ Window = $parts.Window; Frame = $parts.Frame; Box = $box; Status = $parts.Status; Open = $open; CloseButton = $close; ChromeClose = $parts.Close; Timer = $timer
         Id = ''; Saved = ''; Started = (Get-Date); Error = ''; Closing = $false }
     $script:capture = $q
     $box.Add_TextChanged({
             param($s, $e)
             $q = $script:capture
             if (-not $q) { return }
-            $q.Hint.Visibility = if ($q.Box.Text.Length) { 'Collapsed' } else { 'Visible' }
             $q.Error = ''
             $q.Timer.Stop(); $q.Timer.Start()
             Update-WtMemoCaptureStatus $q

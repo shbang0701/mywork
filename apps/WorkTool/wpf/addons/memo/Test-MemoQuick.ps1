@@ -72,7 +72,7 @@ try {
     Assert-WtTest '빠른 메모 창: 440 × 280 · 맨 위 · 작업 표시줄 단추 · 작업 영역 가로 가운데 위 96 · 본문 칸에 포커스 · 아직 메모 없음' (
         $q -and $global:wtQuickProbe.Shown -eq 1 -and $w.Width -eq 440 -and $w.Height -eq 280 -and $w.Topmost -and $w.ShowInTaskbar -and $w.ShowActivated -and
         $null -eq $w.Owner -and $w.Left -eq 740 -and $w.Top -eq 96 -and $w.Title -ceq 'WorkTool · 빠른 메모' -and [object]::ReferenceEquals($focused, $q.Box) -and
-        $q.Box.AcceptsReturn -and -not $q.Box.AcceptsTab -and $q.Box.TextWrapping -eq 'Wrap' -and $q.Hint.Visibility -eq 'Visible' -and -not $q.Status.Text -and
+        $q.Box.AcceptsReturn -and -not $q.Box.AcceptsTab -and $q.Box.TextWrapping -eq 'Wrap' -and -not $q.ContainsKey('Hint') -and -not $q.Status.Text -and
         -not $q.Open.IsEnabled -and [string]$q.Open.ToolTip -ceq '글을 쓰면 열 수 있습니다.' -and (Get-TestLive).Count -eq $before) "($($w.Width)x$($w.Height) @ $($w.Left),$($w.Top) · 포커스 $($focused.GetType().Name))"
     $again = & $cap.QuickCapture.Open
     Assert-WtTest '빠른 메모 창: 떠 있는데 또 부르면 새 창 없이 그 창을 앞으로 가져온다' ([object]::ReferenceEquals((Get-TestQuick), $q) -and [object]::ReferenceEquals((Get-TestQuick).Window, $w))
@@ -93,25 +93,26 @@ try {
         $closeRect.Right -eq 432 -and $openRect.Right + 8 -eq $closeRect.Left -and $chromeRect.Right -eq 440 -and $chromeRect.Top -eq 0 -and $chromeRect.Height -eq 32) "(본문 $boxRect · 열기 $openRect · 닫기 $closeRect · 제목 줄 닫기 $chromeRect)"
     Assert-WtTest '빠른 메모 좌표 경로: 본문 칸 · 메모에서 열기 · 닫기 · 제목 줄 닫기가 실제 배치 좌표에서 닿는다' (-not @($routes | Where-Object { -not $_.Ok }).Count) (($routes | ForEach-Object { "$($_.Name)=$($_.Ok) $($_.Path)" }) -join ' / ')
 
-    # ---- 쓰기: 쉬면 저장 · 첫 줄이 제목 · 홈 바로 가기 ----
-    Assert-WtTest '빠른 메모 쓰기: 치면 「저장 중…」 · 1초 쉬면 저장하는 타이머 · 예시 글자 숨김 · 메모에서 열기 켜짐' (
-        $q.Status.Text -ceq '저장 중…' -and $q.Timer.IsEnabled -and $q.Timer.Interval.TotalSeconds -eq 1 -and $q.Hint.Visibility -eq 'Collapsed' -and $q.Open.IsEnabled)
+    # ---- 쓰기: 쉬면 저장 · 제목은 연 시각(년월일-시분초-빠른메모) · 글은 모두 본문 · 홈 바로 가기 ----
+    Assert-WtTest '빠른 메모 쓰기: 치면 「저장 중…」 · 1초 쉬면 저장하는 타이머 · 메모에서 열기 켜짐' (
+        $q.Status.Text -ceq '저장 중…' -and $q.Timer.IsEnabled -and $q.Timer.Interval.TotalSeconds -eq 1 -and $q.Open.IsEnabled)
     $saved = Save-TestQuick
     Wait-WtTestWrites
     & $memoModule { Update-WtMemoCaptureStatus $script:capture }
     $live = Get-TestLive
     $made = @($live | Where-Object { [string]$_.id -ceq $q.Id })
     $shortcut = @(Get-WtShortcuts | Where-Object { $_.Page -ceq 'memo' -and $_.Key -ceq $q.Id })
-    Assert-WtTest '빠른 메모 저장: 새 메모 하나(첫 줄 = 제목, 나머지 = 본문) · 「저장됨」 · 홈 바로 가기에 쓴 기록' (
-        $saved -and $live.Count -eq $before + 1 -and $made.Count -eq 1 -and $made[0].title -ceq '회의 메모' -and $made[0].body -ceq '내용 한 줄' -and
-        $q.Status.Text -ceq '저장됨' -and -not $q.Timer.IsEnabled -and $shortcut.Count -eq 1 -and $shortcut[0].Title -ceq '회의 메모') "($($live.Count) · $($made.title) · $($q.Status.Text) · 바로 가기 $($shortcut.Count))"
+    $timeTitle = $q.Started.ToString('yyyyMMdd-HHmmss', [Globalization.CultureInfo]::InvariantCulture) + '-빠른메모'
+    Assert-WtTest "빠른 메모 저장: 새 메모 하나(제목 「$timeTitle」 = 연 시각, 적은 글은 첫 줄까지 본문) · 「저장됨」 · 홈 바로 가기에 쓴 기록" (
+        $saved -and $live.Count -eq $before + 1 -and $made.Count -eq 1 -and $made[0].title -ceq $timeTitle -and $timeTitle -match '^\d{8}-\d{6}-빠른메모$' -and $made[0].body -ceq "회의 메모`r`n내용 한 줄" -and
+        $q.Status.Text -ceq '저장됨' -and -not $q.Timer.IsEnabled -and $shortcut.Count -eq 1 -and $shortcut[0].Title -ceq $timeTitle) "($($live.Count) · $($made.title) · $($q.Status.Text) · 바로 가기 $($shortcut.Count))"
     $firstId = $q.Id
     $q.Box.Text = "회의 메모 고침`r`n둘째 줄`r`n셋째 줄"
     $handled = Send-TestKey $q.Box 'S' 'Control'
     $live = Get-TestLive
     $made = @($live | Where-Object { [string]$_.id -ceq $firstId })
-    Assert-WtTest '빠른 메모 Ctrl+S: 같은 메모의 제목 · 본문만 바꾸고 창은 그대로' (
-        $handled -and $q.Id -ceq $firstId -and $live.Count -eq $before + 1 -and $made[0].title -ceq '회의 메모 고침' -and $made[0].body -ceq "둘째 줄`r`n셋째 줄" -and
+    Assert-WtTest '빠른 메모 Ctrl+S: 같은 메모의 본문만 바꾸고(제목은 연 시각 그대로) 창은 그대로' (
+        $handled -and $q.Id -ceq $firstId -and $live.Count -eq $before + 1 -and $made[0].title -ceq $timeTitle -and $made[0].body -ceq "회의 메모 고침`r`n둘째 줄`r`n셋째 줄" -and
         $global:wtQuickProbe.Closed -eq 0 -and [object]::ReferenceEquals((Get-TestQuick), $q)) "(처리 $handled · $($q.Id -ceq $firstId) · $($live.Count) · $($made.title) · $($made.body -replace "`r`n", '⏎') · 닫힘 $($global:wtQuickProbe.Closed) · 상태 $($q.Status.Text) · 오류 $($q.Error))"
     $enter = Send-TestKey $q.Box 'Return'
     $ime = Send-TestKey $q.Box 'ImeProcessed'
@@ -127,9 +128,9 @@ try {
     & $memoModule { Set-Item function:script:Save-WtMemoItems $script:realSave }
     $closed = Send-TestKey $q.Box 'Return' 'Control'
     $made = @(Get-TestLive | Where-Object { [string]$_.id -ceq $firstId })
-    Assert-WtTest '빠른 메모 Ctrl+Enter: 다시 저장하고 닫는다' ($closed -and $global:wtQuickProbe.Closed -eq 1 -and $null -eq (Get-TestQuick) -and $made[0].body -ceq '저장 실패 중에 쓴 줄')
+    Assert-WtTest '빠른 메모 Ctrl+Enter: 다시 저장하고 닫는다' ($closed -and $global:wtQuickProbe.Closed -eq 1 -and $null -eq (Get-TestQuick) -and $made[0].body -ceq "회의 메모 고침`r`n저장 실패 중에 쓴 줄")
 
-    # ---- 첫 줄이 빈 메모 · 비우면 지우기 · 빈 채로 닫기 ----
+    # ---- 첫 줄이 빈 글도 그대로 본문 · 비우면 지우기 · 빈 채로 닫기 ----
     [void](& $cap.QuickCapture.Open)
     $q = Get-TestQuick
     Set-TestHosted $q
@@ -137,8 +138,8 @@ try {
     $q.Box.Text = "`r`n본문만 적음"
     [void](Save-TestQuick)
     $made = @(Get-TestLive | Where-Object { [string]$_.id -ceq $q.Id })
-    $wantTitle = '빠른 메모 ' + $q.Started.ToString('M/d HH:mm', [Globalization.CultureInfo]::InvariantCulture)
-    Assert-WtTest "빠른 메모 제목: 첫 줄이 비면 「$wantTitle」(창을 연 시각)" ($made.Count -eq 1 -and $made[0].title -ceq $wantTitle -and $made[0].body -ceq '본문만 적음' -and (Get-TestLive).Count -eq $before + 2)
+    $wantTitle = $q.Started.ToString('yyyyMMdd-HHmmss', [Globalization.CultureInfo]::InvariantCulture) + '-빠른메모'
+    Assert-WtTest "빠른 메모 제목: 새 창은 새로 연 시각 「$wantTitle」, 첫 줄이 빈 글도 그대로 본문" ($made.Count -eq 1 -and $made[0].title -ceq $wantTitle -and $made[0].body -ceq "`r`n본문만 적음" -and (Get-TestLive).Count -eq $before + 2)
     $secondId = $q.Id
     $q.Box.Text = "  `r`n "
     [void](Save-TestQuick)
@@ -157,7 +158,7 @@ try {
     $q.Open.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
     $made = @(Get-TestLive | Where-Object { [string]$_.id -ceq $q.Id })
     Assert-WtTest '빠른 메모 [메모에서 열기]: 저장하고 닫은 뒤 메모 탭에서 그 메모를 연다' (
-        $made.Count -eq 1 -and $made[0].title -ceq '전화: SRV-01 재부팅 요청' -and $global:wtQuickProbe.Closed -eq 4 -and $null -eq (Get-TestQuick) -and
+        $made.Count -eq 1 -and $made[0].title -match '^\d{8}-\d{6}-빠른메모$' -and $made[0].body -ceq '전화: SRV-01 재부팅 요청' -and $global:wtQuickProbe.Closed -eq 4 -and $null -eq (Get-TestQuick) -and
         $global:wtQuickProbe.Opened.Count -eq 1 -and $global:wtQuickProbe.Opened[0] -ceq $q.Id)
 
     # ---- 메모 화면이 떠 있을 때: 목록에 바로 보이고, 끝낼 때 저장 · 닫기 ----
@@ -182,7 +183,7 @@ try {
     [void](& $addon.OnExit)
     $made = @(Get-TestLive | Where-Object { [string]$_.id -ceq $q.Id })
     Assert-WtTest '빠른 메모 끝내기: 저장 확인(SavePending)이 창의 글을 저장하고, 정리(OnExit)가 창을 닫는다' (
-        $pending -eq $true -and $made[0].body -ceq '끝내기 직전에 쓴 줄' -and $null -eq (Get-TestQuick) -and $global:wtQuickProbe.Closed -eq 5)
+        $pending -eq $true -and $made[0].body -ceq "목록에 보일 메모`r`n끝내기 직전에 쓴 줄" -and $null -eq (Get-TestQuick) -and $global:wtQuickProbe.Closed -eq 5)
 
     # ---- 바로 가기 「실행: 최소화」로 켜면 Windows가 앱 프로세스의 첫 창을 최소화해 띄울 수 있다 → 빠른 메모 창은 원래 크기로 ----
     & $memoModule { $script:testShow = $script:captureShow; $script:captureShow = { param($Window) $global:wtQuickProbe.Shown++; $Window.WindowState = 'Minimized' } }

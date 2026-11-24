@@ -2180,7 +2180,6 @@ $script:stylesXaml = @'
     <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
   </Style>
   <!-- 빈 본문의 예시 글자: 본문 글자 자리(안쪽 16 + 편집 칸 글자 여백 2, 위 12)에 겹친다 -->
-  <Style x:Key="Capture.Hint" TargetType="TextBlock" BasedOn="{StaticResource Memo.BodyHint}"><Setter Property="Margin" Value="18,12,16,0"/></Style>
   <!-- 설정 → 휴무일: 해 이동 줄과 간단한 표(폭 720, 머리 32 · 행 32, 셀 좌우 12, 행 사이 선 B.Border.Muted). 행은 우클릭 · Delete · F2 -->
   <Style x:Key="T.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></Style>
   <Style x:Key="Holiday.Bar" TargetType="DockPanel"><Setter Property="Width" Value="720"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,4,0,8"/></Style>
