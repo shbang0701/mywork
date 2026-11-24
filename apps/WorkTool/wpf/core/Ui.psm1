@@ -2151,6 +2151,36 @@ $script:stylesXaml = @'
     <Setter Property="FontSize" Value="{DynamicResource F.Memo.H1}"/><Setter Property="FontWeight" Value="{DynamicResource F.Memo.H1.Weight}"/><Setter Property="LineHeight" Value="{DynamicResource F.Memo.H1.LineHeight}"/>
   </Style>
   <Style x:Key="MemoWindow.Meta" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Margin" Value="0,4,0,12"/></Style>
+  <!-- 빠른 적기 창(New-WtCaptureWindow, 디자인 7절 「빠른 적기 창」): 창 바탕 위 흰 카드(좌우 8, 모서리 8), 본문 글은 메모 본문 단계(F.Memo.Body),
+       글 안쪽 위 12 · 좌우 16. 아래 줄 48(위아래 8 · 단추 32): 상태 글은 본문 글과 같은 x 24, 단추 오른쪽 끝은 카드와 같은 8 -->
+  <Style x:Key="Capture.Body" TargetType="Border" BasedOn="{StaticResource Panel.Surface}"><Setter Property="Margin" Value="8,0,8,0"/></Style>
+  <Style x:Key="Capture.Bar" TargetType="DockPanel"><Setter Property="Margin" Value="24,8,8,8"/></Style>
+  <Style x:Key="Capture.Status" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+    <Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="Margin" Value="0,0,12,0"/>
+  </Style>
+  <Style x:Key="Capture.Status.Error" TargetType="TextBlock" BasedOn="{StaticResource Capture.Status}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></Style>
+  <Style x:Key="Capture.Button" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/></Style>
+  <!-- 본문 칸: 문서처럼 이어 쓰는 면이라 포커스 네모 · 테두리가 없다(메모 원문 칸 · 섬과 같음). 줄이 넘치면 칸 안에서 세로로 스크롤한다 -->
+  <Style x:Key="Capture.Box" TargetType="TextBox">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Padding" Value="16,12,16,12"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.Body.LineHeight}"/>
+    <Setter Property="TextBlock.LineStackingStrategy" Value="BlockLineHeight"/>
+    <Setter Property="TextWrapping" Value="Wrap"/>
+    <Setter Property="AcceptsReturn" Value="True"/>
+    <Setter Property="AcceptsTab" Value="False"/>
+    <Setter Property="VerticalContentAlignment" Value="Top"/>
+    <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+    <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+  </Style>
+  <!-- 빈 본문의 예시 글자: 본문 글자 자리(안쪽 16 + 편집 칸 글자 여백 2, 위 12)에 겹친다 -->
+  <Style x:Key="Capture.Hint" TargetType="TextBlock" BasedOn="{StaticResource Memo.BodyHint}"><Setter Property="Margin" Value="18,12,16,0"/></Style>
   <!-- 설정 → 휴무일: 해 이동 줄과 간단한 표(폭 720, 머리 32 · 행 32, 셀 좌우 12, 행 사이 선 B.Border.Muted). 행은 우클릭 · Delete · F2 -->
   <Style x:Key="T.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></Style>
   <Style x:Key="Holiday.Bar" TargetType="DockPanel"><Setter Property="Width" Value="720"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,4,0,8"/></Style>
@@ -3855,6 +3885,64 @@ function Get-WtUtilityWindowXaml {
 
 function New-WtUtilityWindow([string]$Title) { New-WtSideWindow $Title -Width 960 -Height 680 -Utility }
 Export-ModuleMember -Function New-WtUtilityWindow
+
+# ---- 빠른 적기 창 (단축키로 어디서든 띄우는 작은 창, 디자인 7절 「빠른 적기 창」) ------------------------------------
+# 32 제목 줄(표식 · 제목 · 닫기) + 흰 카드 본문 + 아래 줄 48(왼쪽 상태 글 · 오른쪽 단추). 처음 440 × 280(최소 360 × 200).
+# 늘 맨 위에 있고 앱 창에 붙지 않는다(트레이로 숨었을 때도 뜬다). 작업 표시줄 단추가 있어서 Windows가 앞으로 못 가져오면 깜빡인다.
+# 모양은 여기서만 정하고, 본문 · 단추는 부르는 탭이 채운다. 보이기(Show) · 자리는 부르는 쪽이 한다(Get-WtCapturePlacement)
+function Get-WtCaptureWindowXaml {
+@'
+<Window {NS} Width="440" Height="280" MinWidth="360" MinHeight="200" WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="True" Topmost="True"
+    ShowActivated="True" WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Ideal"
+    FontFamily="{DynamicResource Font.UI}" FontSize="{DynamicResource F.Body}" Foreground="{DynamicResource B.Text.Primary}" Background="{DynamicResource B.Bg.Canvas}">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="32" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
+  <Grid x:Name="Frame">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <DockPanel Height="{DynamicResource F.Chrome.Height}">
+      <Button x:Name="CloseButton" DockPanel.Dock="Right" Style="{DynamicResource Btn.Close}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="닫기 (Esc)" AutomationProperties.Name="닫기">
+        <TextBlock Text="&#xE8BB;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+      </Button>
+      <StackPanel Orientation="Horizontal">
+        <Border Style="{DynamicResource Shell.Brand}"><TextBlock Text="W" Style="{DynamicResource Shell.BrandLetter}"/></Border>
+        <TextBlock x:Name="TitleText" Style="{DynamicResource T.Sub}" Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+      </StackPanel>
+    </DockPanel>
+    <Border x:Name="Body" Grid.Row="1" Style="{DynamicResource Capture.Body}"/>
+    <DockPanel Grid.Row="2" Style="{DynamicResource Capture.Bar}">
+      <StackPanel x:Name="ToolRight" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"/>
+      <TextBlock x:Name="StatusText" Style="{DynamicResource Capture.Status}"/>
+    </DockPanel>
+    <Border x:Name="WindowBorder" Grid.RowSpan="3" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
+  </Grid>
+</Window>
+'@
+}
+
+# 결과: @{ Window; Frame(창 안 전체, 검사는 이것을 숨김 호스트에 옮겨 잰다); Title; Body(Border); Status(TextBlock); ToolRight; Close(Button) }
+# 앱 창이 있으면 그 자원(테마 · 글자 크기)을 합쳐 바꾸면 같이 바뀌고, 아이콘도 같이 쓴다
+function New-WtCaptureWindow([string]$Title) {
+    $xaml = Get-WtCaptureWindowXaml
+    $w = ConvertFrom-WtXaml $xaml
+    $main = if (Get-Command Get-WtWindow -ErrorAction Ignore) { Get-WtWindow } else { $null }
+    if ($main) {
+        $w.Resources.MergedDictionaries.Add($main.Resources)
+        if ($main.Icon) { $w.Icon = $main.Icon }
+    } else { $w.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary)) }
+    $w.Title = $Title
+    $named = Get-WtNamedElements $w $xaml
+    $named.TitleText.Text = $Title
+    @{ Window = $w; Frame = $named.Frame; Title = $named.TitleText; Body = $named.Body; Status = $named.StatusText; ToolRight = $named.ToolRight; Close = $named.CloseButton }
+}
+
+# 자리: 작업 영역 가로 가운데, 위에서 96(알람 창이 쌓이는 오른쪽 아래와 겹치지 않게). 작업 영역이 낮으면 위 16까지 올린다. 왼쪽 위 점
+function Get-WtCapturePlacement([System.Windows.Rect]$WorkArea, [double]$Width = 440, [double]$Height = 280) {
+    $left = [Math]::Max($WorkArea.Left, [Math]::Round($WorkArea.Left + ($WorkArea.Width - $Width) / 2))
+    $top = [Math]::Max($WorkArea.Top + 16, [Math]::Min($WorkArea.Top + 96, $WorkArea.Bottom - 16 - $Height))
+    [System.Windows.Point]::new($left, $top)
+}
+Export-ModuleMember -Function New-WtCaptureWindow, Get-WtCapturePlacement
 
 # 기본 컨트롤이 먼저 처리한 Esc는 창에 오지 않는다. 남아 있는 펼침만 한 번 닫는다.
 function Close-WtOpenTransient($Root) {

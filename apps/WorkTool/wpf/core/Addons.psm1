@@ -63,6 +63,10 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
                실패는 그 탭 기록(Get-WtAddonTickError)에만 남기고 다음 틱을 막지 않는다(대화상자를 띄우지 않는다)
   SettingRows  { } → 설정 화면에 넣을 행 @(@{ Group = '알림'; Label = '라벨'; Control = 화면 요소; Note = '툴팁' }) (선택)
                지금 받는 묶음은 일반 탭의 '알림'뿐이다. 켜진 탭만, 탭 순서대로 코어 행 앞에 놓는다
+  QuickCapture 빠른 적기: 바탕 화면 바로 가기 키(진입 스크립트 -QuickMemo)로 어디서든 바로 적는 작은 창 (선택)
+               @{ Name = '도움말 · 오류에 보일 이름'; Key = '권하는 바로 가기 키 글(선택)'; Open = { } → 창을 띄우거나 이미 떠 있으면 앞으로 }
+               셸은 신호를 받으면 켜진 탭 중 메뉴 순서로 처음 등록한 하나의 Open을 부른다. 없거나 꺼졌거나 실패하면 앱 창을 보인다.
+               Open은 화면 스레드에서 부르고, 끝나면 셸이 실행 보조에 다 했다고 알려 그 창을 앞으로 가져오게 한다
 #>
 function Register-WtAddon {
     param(
@@ -101,7 +105,8 @@ function Register-WtAddon {
         [scriptblock]$DateMenu,
         [scriptblock]$Tick,
         [ValidateRange(5, 3600)][int]$TickSeconds = 60,
-        [scriptblock]$SettingRows
+        [scriptblock]$SettingRows,
+        [hashtable]$QuickCapture
     )
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
@@ -130,6 +135,12 @@ function Register-WtAddon {
         }
         $exitEntry = [pscustomobject]@{ Pending = $ConfirmExit.Pending; Confirm = $ConfirmExit.Confirm }
     }
+    $captureEntry = $null
+    if ($QuickCapture) {
+        if (-not ($QuickCapture.Name -is [string] -and $QuickCapture.Name.Trim())) { throw "애드온 '$Id'의 QuickCapture에는 Name(글)이 필요합니다." }
+        if ($QuickCapture.Open -isnot [scriptblock]) { throw "애드온 '$Id'의 QuickCapture에는 Open(함수)이 필요합니다." }
+        $captureEntry = [pscustomobject]@{ Name = $QuickCapture.Name.Trim(); Key = [string]$QuickCapture.Key; Open = $QuickCapture.Open }
+    }
     $cards = @($HomeCards)
     if (-not $PSBoundParameters.ContainsKey('HomeCards') -and $HomeCard) {
         $cards = @(@{ Slot = $HomeSlot; Order = $HomeOrder; Card = $HomeCard })
@@ -152,7 +163,7 @@ function Register-WtAddon {
             SavePending = $SavePending; ConfirmExit = $exitEntry; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
             Related = $relatedEntry; DateMenu = $DateMenu
-            Tick = $Tick; TickSeconds = $TickSeconds; SettingRows = $SettingRows
+            Tick = $Tick; TickSeconds = $TickSeconds; SettingRows = $SettingRows; QuickCapture = $captureEntry
         })
     # 같은 탭을 다시 등록하면서 표시 함수를 뺐으면 옛 등록도 없앤다.
     Register-WtCalendarSource -Id "addon:$Id" -Page $Id -CalendarItems $CalendarItems
@@ -226,6 +237,9 @@ function Stop-WtAddonTicks {
     foreach ($timer in $script:tickTimers) { $timer.Stop() }
     $script:tickTimers.Clear()
 }
+
+# 빠른 적기를 등록한 켜진 탭 하나(메뉴 순서로 처음). 없으면 $null
+function Get-WtQuickCapture { @(Get-WtAddon | Where-Object { $_.QuickCapture }) | Select-Object -First 1 }
 
 # 설정 화면 묶음(Group)에 넣을 탭의 행. 켜진 탭만 탭 순서대로. 한 탭이 실패하면 그 탭의 오류 줄 하나(Error)로 바꾼다
 function Get-WtAddonSettingRows([string]$Group) {
@@ -353,4 +367,4 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
 }
 
 Export-ModuleMember -Function Get-WtCalendarStores, Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource,
-    Get-WtDateMenuItems, Test-WtCalendarPartDay, Invoke-WtAddonTick, Get-WtAddonTickError, Start-WtAddonTicks, Stop-WtAddonTicks, Get-WtAddonSettingRows
+    Get-WtDateMenuItems, Test-WtCalendarPartDay, Invoke-WtAddonTick, Get-WtAddonTickError, Start-WtAddonTicks, Stop-WtAddonTicks, Get-WtAddonSettingRows, Get-WtQuickCapture

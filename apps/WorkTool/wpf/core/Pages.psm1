@@ -848,6 +848,71 @@ function Get-WtShortcutGroups {
     }
 }
 
+$script:setClipboard = { param($Text) [System.Windows.Clipboard]::SetText($Text) }   # 검사가 바꿔 끼운다(사용자 클립보드를 건드리지 않게)
+
+<#
+도움말 → 정보의 「바로 가기 키」 묶음: 바탕 화면 바로 가기에 붙여 넣을 「대상」 글 · [복사] · 짧은 만드는 법.
+보이기(코어)와, 빠른 적기를 등록한 켜진 탭이 있으면 그 줄. 앱은 바로 가기를 만들거나 단축키를 등록하지 않는다
+(사용자가 Windows 기본 「바로 가기 키」를 직접 단다). 대상 글은 Get-WtLaunchTarget(core\Shell.psm1)이 만든다
+#>
+function New-WtLaunchKeyRows {
+    $items = @(@{ Label = 'WorkTool 보이기'; Key = 'Ctrl + Alt + W'; Target = (Get-WtLaunchTarget) })
+    $capture = Get-WtQuickCapture
+    if ($capture) { $items += @{ Label = $capture.QuickCapture.Name; Key = $capture.QuickCapture.Key; Target = (Get-WtLaunchTarget -QuickCapture) } }
+    if (-not $items[0].Target) { return }
+    $group = New-WtText '바로 가기 키' 'T.Strong'
+    $group.Margin = [System.Windows.Thickness]::new(0, 24, 0, 0)
+    $group
+    $slow = $false; $long = $false
+    foreach ($item in $items) {
+        if (-not $item.Target) { continue }
+        if (-not $item.Target.Fast) { $slow = $true }
+        if ($item.Target.TooLong) { $long = $true }
+        $box = New-WtStack Vertical 8
+        $line = [System.Windows.Controls.DockPanel]::new()
+        $copy = New-WtButton '복사' -Icon 0xE8C8
+        $copy.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
+        $copy.VerticalAlignment = 'Top'
+        $copy.Tag = @{ Text = $item.Target.Text; Label = $item.Label; Timer = $null }
+        [System.Windows.Automation.AutomationProperties]::SetName($copy, "$($item.Label) 대상 복사")
+        $copy.ToolTip = '대상 글을 복사합니다.'
+        $copy.Add_Click({ param($s, $e) Copy-WtLaunchTarget $s })
+        [System.Windows.Controls.DockPanel]::SetDock($copy, 'Right')
+        $text = New-WtText $item.Target.Text 'T.Body'
+        Set-WtResource $text 'FontFamily' 'Font.Mono'
+        [void]$line.Children.Add($copy); [void]$line.Children.Add($text)
+        [void](Add-WtChild $box $line)
+        if ($item.Key) { [void](Add-WtChild $box (New-WtText "권하는 키 $($item.Key)" 'T.Sub')) }
+        New-WtSettingRow $item.Label $box
+    }
+    $steps = New-WtStack Vertical 4
+    foreach ($t in @(
+            '1. 바탕 화면 빈 곳을 우클릭 → 새로 만들기 → 바로 가기를 고릅니다.',
+            '2. 「항목 위치」에 위 대상을 붙여 넣고 [다음], 이름을 정하고 [마침]을 누릅니다.',
+            '3. 만든 바로 가기를 우클릭 → 속성에서 「바로 가기 키」 칸을 누른 뒤 권하는 키를 누르고, 「실행」은 「최소화」를 고릅니다.',
+            '4. [확인]을 누르면 어디서든 그 키로 뜹니다. 바로 가기는 바탕 화면이나 시작 메뉴에 두어야 키가 듣습니다.')) {
+        [void](Add-WtChild $steps (New-WtText $t 'T.Body'))
+    }
+    if ($long) { [void](Add-WtChild $steps (New-WtText '대상이 260자를 넘어 바로 가기에 다 들어가지 않습니다. 앱 폴더를 더 짧은 경로로 옮기세요.' 'T.Error')) }
+    if ($slow) { [void](Add-WtChild $steps (New-WtText '같은 폴더에 worktool.zip의 Start-WorkTool-Launcher.ps1을 두면 키를 누른 뒤 더 빨리 뜹니다.' 'T.Sub')) }
+    New-WtSettingRow '만드는 법' $steps
+}
+
+# [복사]: 대상 글을 클립보드에 넣고 단추 글을 2초 동안 「복사함」으로 바꾼다
+function Copy-WtLaunchTarget($Button) {
+    try { & $script:setClipboard ([string]$Button.Tag.Text) }
+    catch { Show-WtMessage '클립보드를 다른 프로그램이 쓰고 있어서 복사하지 못했습니다. 다시 누르세요.' 'WorkTool' 'Warning'; return }
+    $Button.Content = New-WtButtonContent '복사함' 0xE73E
+    if (-not $Button.Tag.Timer) {
+        $timer = [System.Windows.Threading.DispatcherTimer]::new()
+        $timer.Interval = [TimeSpan]::FromSeconds(2)
+        $timer.Tag = $Button
+        $timer.Add_Tick({ param($s, $e) $s.Stop(); $s.Tag.Content = New-WtButtonContent '복사' 0xE8C8 })
+        $Button.Tag.Timer = $timer
+    }
+    $Button.Tag.Timer.Stop(); $Button.Tag.Timer.Start()
+}
+
 function New-WtHelpPage {
     $keys = New-WtCard
     $col = New-WtStack Vertical
@@ -897,6 +962,7 @@ function New-WtHelpPage {
     $rootText = New-WtText (Get-WtDataRoot) 'T.Body'
     Set-WtResource $rootText 'FontFamily' 'Font.Mono'
     [void](Add-WtChild $col (New-WtSettingRow '데이터 폴더' $rootText))
+    foreach ($el in @(New-WtLaunchKeyRows)) { [void](Add-WtChild $col $el) }
     $win.Child = $col
     New-WtTabbedPage '도움말' @(@('단축키', $keys), @('탭', $tabsCard), @('정보', $win))
 }

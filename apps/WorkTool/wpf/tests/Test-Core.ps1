@@ -2407,6 +2407,7 @@ foreach ($t in (Get-ChildItem (Join-Path $root 'addons') -Filter 'Test-*.ps1' -R
 }
 & (Join-Path $PSScriptRoot 'Test-Reliability.ps1')
 & (Join-Path $PSScriptRoot 'Test-Notice.ps1')
+& (Join-Path $PSScriptRoot 'Test-Instance.ps1')
 if (-not $NoDesktop) { & (Join-Path $PSScriptRoot 'Test-Launcher.ps1') -NoDesktop:($env:WORKTOOL_TEST_HIDDEN -eq '1') }
 else { Write-Host 'SKIP 실행 파일 GUI 검사 (-NoDesktop)' }
 if ($NoDesktop) { Write-Host '제외: WPF 화면 · 입력, 활성 작업 · 업무 탭, 앱 강제 종료 · GUI 실행 파일' }

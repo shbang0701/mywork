@@ -2624,6 +2624,183 @@ function Open-WtMemoFromArgs($OpenArgs) {
     }
 }
 
+# ---- 빠른 메모 (바로 가기 키 → 코어 빠른 적기 -QuickCapture → 이 탭) ------------------------------------
+# 작은 창(core\Ui.psm1 New-WtCaptureWindow)에 적은 글은 매번 새 메모다. 첫 줄이 제목, 첫 줄이 비면 「빠른 메모 11/25 09:12」(창을 연 시각).
+# 쉬면 1초 뒤 · Ctrl+S · 닫을 때 저장한다. 빈 채로 닫으면 메모를 만들지 않고, 만들었다 비우면 지운다(메모 탭의 빈 메모 규칙과 같음).
+# 메모 화면이 떠 있으면 목록 · 색인 · 같은 메모를 연 칸도 같이 고친다. 이벤트 처리기는 $script:quick만 쓴다
+
+$script:capture = $null   # 떠 있는 빠른 메모 창 @{ Window; Frame; Box; Hint; Status; Open; Timer; Id; Saved; Started; Error }
+$script:captureShow = { param($Window) $Window.Show() }             # 검사가 바꿔 끼운다(창을 띄우지 않게)
+$script:captureClose = { param($Window) $Window.Close() }
+$script:captureArea = { [System.Windows.SystemParameters]::WorkArea }
+$script:captureOpenPage = { param($Id) Show-WtMainWindow; Open-WtPage -Id 'memo' -Args @{ Key = $Id; Edit = $true } }
+
+# 창 글 → 제목 · 본문. 첫 줄이 제목이고 나머지가 본문이다
+function Split-WtMemoCaptureText([string]$Text, [datetime]$Started) {
+    $parts = $Text -split '\r\n|\r|\n', 2
+    $title = $parts[0].Trim()
+    if (-not $title) { $title = '빠른 메모 ' + $Started.ToString('M/d HH:mm', [Globalization.CultureInfo]::InvariantCulture) }
+    @{ Title = $title; Body = $(if ($parts.Count -gt 1) { $parts[1] } else { '' }) }
+}
+
+# 단축키로 부른다. 이미 떠 있으면 새 창을 만들지 않고 그 창을 앞으로 가져온다
+function Show-WtMemoCapture {
+    if ($script:capture) { Set-WtMemoCaptureFront $script:capture; return $script:capture }
+    $parts = New-WtCaptureWindow 'WorkTool · 빠른 메모'
+    $grid = [System.Windows.Controls.Grid]::new()
+    $box = [System.Windows.Controls.TextBox]::new()
+    Set-WtStyle $box 'Capture.Box'
+    [System.Windows.Automation.AutomationProperties]::SetName($box, '빠른 메모 내용')
+    $hint = New-WtText '첫 줄이 제목이 됩니다' 'Capture.Hint'
+    [void]$grid.Children.Add($box); [void]$grid.Children.Add($hint)
+    $parts.Body.Child = $grid
+    $open = New-WtButton '메모에서 열기'
+    $close = New-WtButton '닫기'
+    foreach ($b in $open, $close) { Set-WtStyle $b 'Capture.Button'; [void]$parts.ToolRight.Children.Add($b) }
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [TimeSpan]::FromSeconds(1)
+    $q = @{ Window = $parts.Window; Frame = $parts.Frame; Box = $box; Hint = $hint; Status = $parts.Status; Open = $open; CloseButton = $close; ChromeClose = $parts.Close; Timer = $timer
+        Id = ''; Saved = ''; Started = (Get-Date); Error = ''; Closing = $false }
+    $script:capture = $q
+    $box.Add_TextChanged({
+            param($s, $e)
+            $q = $script:capture
+            if (-not $q) { return }
+            $q.Hint.Visibility = if ($q.Box.Text.Length) { 'Collapsed' } else { 'Visible' }
+            $q.Error = ''
+            $q.Timer.Stop(); $q.Timer.Start()
+            Update-WtMemoCaptureStatus $q
+        })
+    $timer.Add_Tick({ param($s, $e) $s.Stop(); [void](Save-WtMemoCapture) })
+    $parts.Frame.Add_PreviewKeyDown({ param($s, $e) Invoke-WtMemoCaptureKey $e })
+    $parts.Window.Add_Activated({ param($s, $e) $q = $script:capture; if ($q -and [object]::ReferenceEquals($q.Window, $s)) { [void]$q.Box.Focus() } })
+    $parts.Window.Add_Closing({
+            param($s, $e)
+            $q = $script:capture
+            if (-not $q -or $q.Closing -or -not [object]::ReferenceEquals($q.Window, $s)) { return }
+            # Alt+F4 · 작업 표시줄에서 닫기: 저장하지 못하면 글을 잃지 않게 닫지 않는다
+            if (-not (Save-WtMemoCapture)) { $e.Cancel = $true; return }
+            $q.Closing = $true; $q.Timer.Stop(); $script:capture = $null
+        })
+    $open.Add_Click({ param($s, $e) Open-WtMemoCaptureInTab })
+    $close.Add_Click({ param($s, $e) [void](Close-WtMemoCapture) })
+    $parts.Close.Add_Click({ param($s, $e) [void](Close-WtMemoCapture) })
+    $place = Get-WtCapturePlacement (& $script:captureArea) $parts.Window.Width $parts.Window.Height
+    $parts.Window.Left = $place.X; $parts.Window.Top = $place.Y
+    [System.Windows.Input.FocusManager]::SetFocusedElement($parts.Window, $box)
+    Update-WtMemoCaptureStatus $q
+    & $script:captureShow $parts.Window
+    [void]$box.Focus()
+    $q
+}
+
+function Set-WtMemoCaptureFront($Q) {
+    $w = $Q.Window
+    if (-not $w.IsVisible) { & $script:captureShow $w }
+    if ($w.WindowState -eq 'Minimized') { $w.WindowState = 'Normal' }
+    # 맨 위 무리 안에서도 가장 앞으로(나중에 뜬 알람 창보다 앞)
+    $w.Topmost = $false; $w.Topmost = $true
+    [void]$w.Activate()
+    [void]$Q.Box.Focus()
+}
+
+# Esc · Ctrl+Enter = 저장하고 닫기, Ctrl+S = 저장. 한글 조합 중 Esc는 조합 취소라 여기로 오지 않는다(ImeProcessed)
+function Invoke-WtMemoCaptureKey($KeyArgs) {
+    $ctrl = ((Get-WtMemoModifiers) -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
+    if ($KeyArgs.Key -eq 'Escape' -or ($ctrl -and $KeyArgs.Key -eq 'Return')) { $KeyArgs.Handled = $true; [void](Close-WtMemoCapture); return }
+    if ($ctrl -and $KeyArgs.Key -eq 'S') { $KeyArgs.Handled = $true; [void](Save-WtMemoCapture) }
+}
+
+# 저장 상태: 비었으면 없음, 고쳤거나 쓰는 중이면 「저장 중…」, 쓰였으면 「저장됨」, 실패면 「저장하지 못했습니다」(이유는 툴팁)
+function Update-WtMemoCaptureStatus($Q) {
+    $text = ''; $tip = $null; $style = 'Capture.Status'
+    $look = if ($Q.Id) { Get-WtMemoSaveLook } else { @('saved', '') }
+    if ($Q.Error -or $look[0] -eq 'error') {
+        $text = '저장하지 못했습니다'; $tip = if ($Q.Error) { "$($Q.Error) Ctrl+S로 다시 저장합니다." } else { $look[1] }; $style = 'Capture.Status.Error'
+    }
+    elseif ([string]$Q.Box.Text -cne $Q.Saved -or ($Q.Id -and $look[0] -eq 'writing')) { $text = '저장 중…' }
+    elseif ($Q.Id) { $text = '저장됨' }
+    $Q.Status.Text = $text; $Q.Status.ToolTip = $tip
+    Set-WtStyle $Q.Status $style
+    $Q.Open.IsEnabled = [bool]([string]$Q.Box.Text).Trim()
+    $Q.Open.ToolTip = if ($Q.Open.IsEnabled) { '저장하고 앱 창의 메모 탭에서 엽니다.' } else { '글을 쓰면 열 수 있습니다.' }
+}
+
+# 지금 글을 저장한다. 처음 저장할 때 새 메모를 목록 맨 앞에 넣고, 그다음은 그 메모의 제목 · 본문만 바꾼다. 비면 만든 메모를 지운다.
+# 저장 통로가 글을 받아들였으면 $true(쓰는 중 · 늦은 실패도 통로가 가지고 있다). 메모 화면과 겹친 저장을 못 하면 $false(글은 창에 남는다)
+function Save-WtMemoCapture {
+    $q = $script:capture
+    if (-not $q) { return $true }
+    $q.Timer.Stop()
+    $text = [string]$q.Box.Text
+    if ($text -ceq $q.Saved -and -not $q.Error) { Update-WtMemoCaptureStatus $q; return $true }
+    try {
+        if ($script:ui.Count) {
+            if (-not (Save-WtMemoNow)) { throw '메모 탭에서 고치던 메모를 먼저 저장하지 못했습니다.' }
+            if (-not (Test-WtMemoViewFresh)) { Update-WtMemoView }
+        }
+        # if 식으로 받으면 항목 하나짜리 목록이 풀려 나오므로 분기 안에서 대입한다
+        if ($script:ui.Count) { $items = @($script:items) } else { $items = @(Get-WtMemoItems) }
+        $index = -1
+        if ($q.Id) { for ($i = 0; $i -lt $items.Count; $i++) { if ([string]$items[$i].id -ceq $q.Id) { $index = $i; break } } }
+        $memo = $null; $removed = $null; $created = $false
+        if (-not $text.Trim()) {
+            $open = $false
+            if ($index -ge 0) { foreach ($p in $script:panes) { foreach ($t in $p.Tabs) { if ([string]$t.Id -ceq $q.Id) { $open = $true } } } }
+            if ($index -lt 0 -or $open) { $next = $null }
+            else { $removed = $items[$index]; $next = @(for ($i = 0; $i -lt $items.Count; $i++) { if ($i -ne $index) { $items[$i] } }) }
+            if (-not $open) { $q.Id = '' }
+        } else {
+            $c = Split-WtMemoCaptureText $text $q.Started
+            if ($index -ge 0) { $memo = Copy-WtItem $items[$index] }
+            else { $memo = New-WtMemo; $created = $true }
+            [void](Set-WtMemoContent $memo $c.Title $c.Body)
+            if ($created) { $next = @($memo) + $items } else { $next = [object[]]$items.Clone(); $next[$index] = $memo }
+        }
+        if ($null -ne $next) { Save-WtMemoItems $next }
+        if ($memo) { $q.Id = [string]$memo.id }
+        $q.Saved = $text; $q.Error = ''
+        if ($null -ne $next -and $script:ui.Count) {
+            $script:items = @(Get-WtMemoSorted $next)
+            $script:viewStamp = Get-WtMemoViewStamp
+            if ($memo) { Update-WtMemoIndexItem $memo }
+            if ($removed) { Update-WtMemoIndexItem $removed -Removed; $script:rowCache.Remove([string]$removed.id) }
+            foreach ($p in $script:panes) { if ($memo -and $p.Current -and [string]$p.Current.Id -ceq [string]$memo.id -and -not $p.Dirty) { Update-WtMemoPaneContent $p } }
+            Update-WtMemoTabTexts; Update-WtMemoList; Update-WtMemoToc
+        }
+        $script:relatedMap = $null
+        # 홈 바로 가기(최근 쓴 것)에 바로 보이게 쓴 기록을 남긴다(Add-WtMemoUse와 같음. 메모 화면이 없을 때도 제목을 안다)
+        if ($created) {
+            if ($next.Count -ge 256) { Invoke-WtQueuedStoreWrite -Action { param($id, $name) Add-WtUse -Page 'memo' -Key $id -Title $name -Sub '메모' -Icon 0xE70B } -ArgumentList $q.Id, $memo.title }
+            else { Add-WtUse -Page 'memo' -Key $q.Id -Title $memo.title -Sub '메모' -Icon 0xE70B }
+        }
+        Update-WtMemoCaptureStatus $q
+        $true
+    } catch {
+        $q.Error = $_.Exception.Message
+        Update-WtMemoCaptureStatus $q
+        $false
+    }
+}
+
+# 저장하고 닫는다(닫기 · X · Esc · Ctrl+Enter). 저장하지 못하면 창을 두고 이유를 보인다. -Force: 앱을 끝낼 때(그래도 닫는다)
+function Close-WtMemoCapture([switch]$Force) {
+    $q = $script:capture
+    if (-not $q) { return $true }
+    if (-not (Save-WtMemoCapture) -and -not $Force) { return $false }
+    $q.Closing = $true; $q.Timer.Stop(); $script:capture = $null
+    try { & $script:captureClose $q.Window } catch { }
+    $true
+}
+
+# [메모에서 열기]: 저장하고 닫은 뒤 앱 창을 앞으로 가져와 메모 탭에서 그 메모를 연다
+function Open-WtMemoCaptureInTab {
+    $q = $script:capture
+    if (-not $q -or -not ([string]$q.Box.Text).Trim()) { return }
+    if (-not (Close-WtMemoCapture)) { return }
+    if ($q.Id) { & $script:captureOpenPage $q.Id }
+}
+
 # ---- 도움말 -----------------------------------------------------------------------------------
 
 $script:helpMd = $null
@@ -2700,7 +2877,9 @@ function New-WtMemoMarkdownHelpCard {
 # memo.json의 저장 상태가 바뀌면(쓰임 · 실패로 남음) 칸의 표시만 고친다. 다시 저장하지 않는다 (내용은 저장 통로가 가지고 있다)
 Register-WtDataWriteHandler {
     param($path, $state)
-    if ($script:ui.Count -and $path -ieq (Get-WtStorePath 'memo')) { Update-WtMemoSaveStatus }
+    if ($path -ine (Get-WtStorePath 'memo')) { return }
+    if ($script:ui.Count) { Update-WtMemoSaveStatus }
+    if ($script:capture) { Update-WtMemoCaptureStatus $script:capture }
 }
 
 Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 40 -WarmUp Full `
@@ -2718,8 +2897,9 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
     -ShortcutTitle { param($Key) Get-WtMemoShortcutTitle $Key } `
     -PageKey { param($Key, $Modifiers) Invoke-WtMemoPageKey $Key $Modifiers } `
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
-    -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
-    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow); Close-WtMemoEmptyTabs }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
+    -QuickCapture @{ Name = '빠른 메모'; Key = 'Ctrl + Alt + M'; Open = { [void](Show-WtMemoCapture) } } `
+    -SavePending { (Save-WtMemoCapture) -and $(if ($script:ui.Count) { Save-WtMemoNow } else { $true }) } `
+    -OnExit { [void](Close-WtMemoCapture -Force); if ($script:ui.Count) { [void](Save-WtMemoNow); Close-WtMemoEmptyTabs }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
     -Help @('마크다운 메모를 탭과 두 칸으로 엽니다.', 'Ctrl+E로 편집 · 원문 · 읽기를 차례로 바꿉니다.', '찾기 칸에 #태그 · folder:업무 · updated:7d 같은 조건을 쓸 수 있습니다.',
         '백틱은 한 줄 선택을 인라인 코드로, 여러 줄 선택을 코드 블록으로 감싸며 빈 짝을 넣습니다. 닫는 백틱은 건너뛰고, 빈 짝 직후 Backspace는 둘 다 지웁니다.',
         '편집기 찾기 막대에서 Alt+C는 대소문자 구분, Alt+R은 정규식을 켜고 끕니다.',
@@ -2743,7 +2923,9 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
         @('정규식 바꾸기', '$1 · ${이름} · $$ · \1~\9(그룹) · \n(줄바꿈) · \t(탭) · \\(역슬래시)', '찾기 · 바꾸기'),
         @('Ctrl + Z / Ctrl + Y', '실행 취소 / 다시 실행', '편집 · 붙여넣기'), @('Ctrl + Shift + V', '바꾸지 않고 붙여넣기', '편집 · 붙여넣기'),
         @('붙여넣기', '글을 고르고 URL을 붙이면 링크, 파일 경로는 경로 링크로', '편집 · 붙여넣기'),
-        @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크', '편집 · 붙여넣기')) `
+        @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크', '편집 · 붙여넣기'),
+        @('Ctrl + Alt + M', '어디서든 빠른 메모 창 열기 (바로 가기 키를 만든 경우, 도움말 → 정보)', '빠른 메모'),
+        @('Esc / Ctrl + Enter', '저장하고 닫기 (비었으면 메모를 만들지 않음)', '빠른 메모'), @('Ctrl + S', '바로 저장', '빠른 메모')) `
     -HelpCard { New-WtMemoMarkdownHelpCard }
 
 Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Format-WtMemoTime, Import-WtMemoLegacy,

@@ -41,6 +41,11 @@ $script:forceOpaque = $false  # WORKTOOL_FORCE_OPAQUE=1: 설정을 저장하지 
 $script:writingDropped = $false   # 끝낼 때 사용자가 「저장을 기다리지 않고 끝내기」를 골랐는지
 $script:exitAsking = $false       # 끝내기 전에 묻는 중(그사이 트레이 종료 등이 또 와도 겹쳐 묻지 않게)
 $script:forwardingKey = $false    # 화면 밖 포커스의 키를 화면에 다시 올리는 중(Invoke-WtPageKey)
+$script:instance = $null          # 한 번만 뜨기: 진입 스크립트가 넘긴 신호 손잡이 @{ Show; Capture; Ready; Info } (Start-WorkTool.ps1 Enter-WtInstance)
+$script:instanceTimer = $null     # 그 신호를 보는 화면 스레드 타이머
+$script:frontTimer = $null        # 앞으로 못 가져왔을 때 잠깐 맨 위로 둔 것을 푸는 타이머
+$script:captureStale = $false     # 빠른 적기 뒤 앱 창을 다시 보면 지금 화면을 한 번 새로 그린다
+$script:entryPath = ''            # 바로 가기 대상에 쓸 진입 파일(Start-WorkTool.ps1 · WorkTool-WPF.ps1)
 
 $script:shellXaml = Get-WtShellXaml
 
@@ -687,6 +692,108 @@ function Show-WtMainWindow {
     [void]$script:window.Activate()
 }
 
+# ---- 한 번만 뜨기 · 빠른 적기 --------------------------------------------------------------------
+# 진입 스크립트가 이 데이터 폴더의 앱이 되면 신호 손잡이를 넘긴다(Start-WtApp -Instance). 다시 켠 실행 보조가 신호를 보내면
+# 화면 스레드 타이머가 WaitOne(0)으로 보고(다른 스레드 콜백 없음) 보이기 · 빠른 적기를 한 뒤 Ready로 다 했다고 알린다.
+# 그러면 실행 보조가 그 창을 앞으로 가져온다(단축키로 켠 실행 보조에만 Windows가 그 권한을 준다). 등록 자리는 탭 이름이 아니라
+# 쓰임새(Register-WtAddon -QuickCapture)다
+
+function Start-WtInstanceTimer {
+    if ($script:instanceTimer) { $script:instanceTimer.Stop() }
+    $script:instanceTimer = $null
+    if (-not $script:instance) { return }
+    $script:instanceTimer = [System.Windows.Threading.DispatcherTimer]::new()
+    $script:instanceTimer.Interval = [TimeSpan]::FromMilliseconds(200)
+    $script:instanceTimer.Add_Tick({ [void](Invoke-WtInstanceSignals) })
+    $script:instanceTimer.Start()
+}
+
+# 받은 신호를 처리한다. 하나라도 처리했으면 다 했다고 알리고 $true
+function Invoke-WtInstanceSignals {
+    $signals = $script:instance
+    if (-not $signals -or $script:exiting) { return $false }
+    $done = $false
+    try {
+        if ($signals.Show -and $signals.Show.WaitOne(0)) { $done = $true; Show-WtMainFront }
+        if ($signals.Capture -and $signals.Capture.WaitOne(0)) { $done = $true; Invoke-WtQuickCapture }
+    } catch { Show-WtError $_ '다시 켠 WorkTool의 요청' }
+    finally { if ($done -and $signals.Ready) { try { [void]$signals.Ready.Set() } catch { } } }
+    $done
+}
+
+# 끝내기를 시작할 때: 더 받지 않는다. 그사이 켠 실행 보조는 신호를 못 찾고 새 앱 프로세스를 띄우며,
+# 그 앱은 이 앱이 끝날 때까지 기다렸다가 이어서 뜬다(Start-WorkTool.ps1 Enter-WtInstance). 앱이 살아 있음(Mutex)은 진입 스크립트가 놓는다
+function Stop-WtInstanceSignals {
+    if ($script:instanceTimer) { $script:instanceTimer.Stop(); $script:instanceTimer = $null }
+    $signals = $script:instance
+    $script:instance = $null
+    if (-not $signals) { return }
+    foreach ($key in 'Show', 'Capture', 'Ready', 'Info') { if ($signals[$key]) { try { $signals[$key].Dispose() } catch { } } }
+}
+
+# 보이기: 트레이 · 최소화에서 꺼내 앞으로. 다른 프로그램이 앞에 있어 Windows가 바로 활성화하지 않으면 잠깐 맨 위로 올려 보이게 두고,
+# 활성화되거나(실행 보조가 앞으로 가져옴) 3초가 지나면 맨 위를 푼다. 그래도 못 가져오면 Windows가 작업 표시줄 단추를 깜빡인다
+function Show-WtMainFront {
+    if (-not $script:window) { return }
+    Show-WtMainWindow
+    if ($script:window.IsActive) { return }
+    # 이미 맨 위면 다시 맨 위 무리의 가장 앞으로 올린다(나중에 뜬 알람 창보다 앞)
+    $script:window.Topmost = $false
+    $script:window.Topmost = $true
+    if (-not $script:frontTimer) {
+        $script:frontTimer = [System.Windows.Threading.DispatcherTimer]::new()
+        $script:frontTimer.Interval = [TimeSpan]::FromSeconds(3)
+        $script:frontTimer.Add_Tick({ Clear-WtFrontHold })
+    }
+    $script:frontTimer.Stop()
+    $script:frontTimer.Start()
+}
+
+function Clear-WtFrontHold {
+    if ($script:frontTimer) { $script:frontTimer.Stop() }
+    if ($script:window -and $script:window.Topmost) { $script:window.Topmost = $false }
+}
+
+# 빠른 적기 신호: 등록한 켜진 탭의 창을 연다. 등록이 없거나 꺼졌거나, 앱이 대화상자로 묻는 중이거나, 실패하면 앱 창을 보인다
+function Invoke-WtQuickCapture {
+    $addon = Get-WtQuickCapture
+    if (-not $addon -or [System.Windows.Interop.ComponentDispatcher]::IsThreadModal) { Show-WtMainFront; return }
+    try {
+        [void](& $addon.QuickCapture.Open)
+        $script:captureStale = $true
+    } catch {
+        Show-WtMainFront
+        Show-WtError $_ "$($addon.QuickCapture.Name) 열기"
+    }
+}
+
+# 앱 창이 활성화될 때: 잠깐 맨 위로 둔 것을 풀고, 빠른 적기로 데이터가 바뀐 뒤면 지금 화면을 한 번 새로 그린다(홈 바로 가기 · 메모 목록)
+function Invoke-WtMainActivated {
+    Clear-WtFrontHold
+    if (-not $script:captureStale -or $script:selecting -or -not $script:current -or $script:exiting) { return }
+    $script:captureStale = $false
+    [void](Invoke-WtPageSelection $script:current)
+}
+
+<#
+바탕 화면 바로 가기의 「대상」 글(도움말 → 정보). 지금 쓰는 pwsh로 콘솔 창을 숨겨(-WindowStyle Hidden) 진입 파일을 부른다.
+옆에 개인 PC 실행 보조(Start-WorkTool-Launcher.ps1)가 있으면 그것을 부른다: 작은 파일이라 앱이 떠 있을 때 신호를 빨리 보낸다.
+앱은 바로 가기를 만들지 않는다. 사용자가 이 글로 만들고 Windows 기본 「바로 가기 키」를 단다.
+결과: @{ Text; File; Fast(작은 파일을 부름); TooLong(대상 칸 260자를 넘음) }. 진입 파일을 모르면 $null
+#>
+function Get-WtLaunchTarget([switch]$QuickCapture) {
+    $entry = $script:entryPath
+    if (-not $entry) { return $null }
+    $file = $entry
+    $launcher = Join-Path ([System.IO.Path]::GetDirectoryName($entry)) 'Start-WorkTool-Launcher.ps1'
+    # 앱 폴더가 응답 없는 공유 폴더여도 화면이 멈추지 않게 화면 밖에서 본다. 답이 늦으면 진입 파일을 쓴다
+    try { if (Invoke-WtWork -Call (New-WtCall ([System.IO.File]) Exists $launcher) -Key (Get-WtPathKey $launcher) -TimeoutMs 1500) { $file = $launcher } } catch { }
+    $text = '"{0}" -NoProfile -WindowStyle Hidden -File "{1}"' -f (Join-Path $PSHOME 'pwsh.exe'), $file
+    if ($QuickCapture) { $text += ' -QuickMemo' }
+    [pscustomobject]@{ Text = $text; File = $file; TooLong = $text.Length -gt 259
+        Fast = $file -cne $entry -or [System.IO.Path]::GetFileName($entry) -ceq 'Start-WorkTool.ps1' }
+}
+
 # 저장하지 못한 내용이 있을 때 묻는다. 'retry'(다시 시도) · 'proceed'(그대로 끝내기 · 이동) · 'cancel' 중 하나를 돌려준다.
 # -Text: 기본 문구 대신 보일 글. -NoCancel: [취소]가 없다 (정리를 시작한 뒤)
 function Show-WtPendingChoice([string]$Purpose, [string]$Title, [string]$Text = '', [switch]$NoCancel) {
@@ -847,10 +954,12 @@ function Stop-WtApp {
         } finally { $script:exitAsking = $false }
     }
     $script:exiting = $true
+    Stop-WtInstanceSignals   # 다시 켠 실행 보조는 이제 이 앱을 찾지 않고, 새 앱이 이 앱이 끝나기를 기다린다
     if ($script:writingDropped) { try { Stop-WtDataWrites } catch { } }   # 사용자가 기다리지 않고 끝내기를 골랐다
     try { Stop-WtAllWork } catch { }
     if ($script:warmTimer) { $script:warmTimer.Stop() }
     if ($script:badgeTimer) { $script:badgeTimer.Stop() }
+    if ($script:frontTimer) { $script:frontTimer.Stop() }
     try { Stop-WtAddonTicks } catch { }
     try { Clear-WtNotices } catch { }
     try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
@@ -962,10 +1071,14 @@ function Initialize-WtShellButtons {
     $script:ui.HelpButton.Add_Click({ Select-WtPage '_help' })
 }
 
+# -ScriptPath: 진입 파일(바로 가기 대상 글에 쓴다). -Instance: 진입 스크립트의 한 번만 뜨기 신호 손잡이(없으면 신호를 받지 않는다)
 function Start-WtApp {
-    param([Parameter(Mandatory)][string]$AppRoot)
+    param([Parameter(Mandatory)][string]$AppRoot, [string]$ScriptPath = '', [hashtable]$Instance)
 
     $script:exiting = $false
+    $script:entryPath = $ScriptPath
+    $script:instance = if ($Instance -and $Instance.Show -and $Instance.Capture) { $Instance } else { $null }
+    $script:captureStale = $false
     $script:notify = $null
     $script:views = @{}
     $script:utilityWindows = @{}
@@ -999,6 +1112,7 @@ function Start-WtApp {
 
     Update-WtAppIcon
     $w.Add_ContentRendered({ Update-WtAppIcon; Start-WtWarmUp })
+    $w.Add_Activated({ try { Invoke-WtMainActivated } catch { Show-WtError $_ '화면 새로 그리기' } })
     $w.Add_SizeChanged({ Update-WtCurrentSidePanels })
     $script:ui.StatusLeft.Add_SizeChanged({ param($s, $e) Set-WtStatusLayout $s })
 
@@ -1074,8 +1188,12 @@ function Start-WtApp {
     [void]$w.Activate()
     $initialPage = Initialize-WtMainPage
     Show-WtFirstWorkSetup $w $initialPage
+    # 다 뜬 뒤부터 다시 켠 실행 보조의 신호를 받는다(뜨는 동안 온 신호 · 자기 -QuickMemo도 첫 틱에 처리한다)
+    Start-WtInstanceTimer
     if (-not $script:exiting) { [System.Windows.Threading.Dispatcher]::PushFrame($script:frame) }
     } finally {
+        Stop-WtInstanceSignals
+        if ($script:frontTimer) { $script:frontTimer.Stop() }
         if ($script:badgeTimer) { $script:badgeTimer.Stop() }
         if ($script:warmTimer) { $script:warmTimer.Stop() }
         try { Stop-WtAddonTicks } catch { }
@@ -1091,4 +1209,4 @@ function Start-WtApp {
 Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Update-WtNavBadges, Register-WtKeyOwner, Test-WtKeyOwned,
     New-WtSidePanel, Switch-WtPanelCycle, Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp,
-    New-WtTrayMenu, Update-WtTrayMenu
+    New-WtTrayMenu, Update-WtTrayMenu, Get-WtLaunchTarget
