@@ -164,7 +164,7 @@ function Get-WtWorkHoursErrors([hashtable]$Hours) {
             }).Count) { $errors['work.days'] = '일하는 요일을 하나 이상 선택하세요.' }
     foreach ($k in 'work.start', 'work.end', 'work.lunchStart', 'work.lunchEnd') {
         if ($Hours[$k] -isnot [string] -or $Hours[$k] -cnotmatch '^([01][0-9]|2[0-3]):[0-5][0-9]$') {
-            $errors[$k] = '시각은 HH:mm 형식으로 입력하세요.'
+            $errors[$k] = Get-WtTimeInputHint
         }
     }
     if (-not $errors.Contains('work.start') -and -not $errors.Contains('work.end') -and $Hours['work.start'] -ge $Hours['work.end']) {
@@ -182,7 +182,7 @@ function Get-WtWorkHoursErrors([hashtable]$Hours) {
     # 반차 나누는 시각은 비울 수 있다(자동). 적으면 시작과 끝 사이
     $half = $Hours['work.halfDay']
     if ($null -ne $half -and '' -cne $half) {
-        if ($half -isnot [string] -or $half -cnotmatch '^([01][0-9]|2[0-3]):[0-5][0-9]$') { $errors['work.halfDay'] = '시각은 HH:mm 형식으로 입력하세요.' }
+        if ($half -isnot [string] -or $half -cnotmatch '^([01][0-9]|2[0-3]):[0-5][0-9]$') { $errors['work.halfDay'] = Get-WtTimeInputHint }
         elseif (-not $errors.Contains('work.start') -and -not $errors.Contains('work.end') -and ($half -le $Hours['work.start'] -or $half -ge $Hours['work.end'])) {
             $errors['work.halfDay'] = '반차 나누는 시각은 시작 시각과 끝 시각 사이여야 합니다.'
         }

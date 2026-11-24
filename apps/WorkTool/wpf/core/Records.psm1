@@ -95,6 +95,21 @@ function ConvertFrom-WtTimeText([string]$Text) {
     [timespan]::new([int]$Text.Substring(0, 2), [int]$Text.Substring(3, 2), 0)
 }
 
+# 사람이 시각 칸에 친 글 → 저장 모양 "HH:mm". 09:00 · 9:00 · 0900 · 900 · 9(시만)를 받고 앞뒤 공백은 뺀다. 못 읽으면 $null.
+# 저장된 기록을 읽을 때는 쓰지 않는다(기록은 ConvertFrom-WtTimeText로 HH:mm만). 일정 · 근태 · 설정의 시각 칸이 같이 쓴다
+function ConvertFrom-WtTimeInput([string]$Text) {
+    $t = "$Text".Trim()
+    if ($t -cmatch '^([0-9]{1,2}):([0-9]{2})$') { $hour = [int]$Matches[1]; $minute = [int]$Matches[2] }
+    elseif ($t -cmatch '^[0-9]{3,4}$') { $hour = [int]$t.Substring(0, $t.Length - 2); $minute = [int]$t.Substring($t.Length - 2) }
+    elseif ($t -cmatch '^[0-9]{1,2}$') { $hour = [int]$t; $minute = 0 }
+    else { return $null }
+    if ($hour -gt 23 -or $minute -gt 59) { return $null }
+    $hour.ToString('00', $script:inv) + ':' + $minute.ToString('00', $script:inv)
+}
+
+# 시각 칸이 틀렸을 때 칸 아래 문구(사람 말로, 형식 기호 HH:mm은 쓰지 않는다)
+function Get-WtTimeInputHint { '시각은 09:00처럼 입력하세요.' }
+
 # ---- 예전(WinForms) CSV 값 --------------------------------------------------------------------
 # Excel에서 열었다 저장하면 2026-10-01 → 2026/10/1, 09:30 → 9:30처럼 바뀔 수 있다. 읽을 수 있으면 정한 모양으로, 없으면 $null
 
@@ -604,6 +619,7 @@ function Get-WtQueryDateRange([string]$Value, [datetime]$Today = [datetime]::Tod
 }
 
 Export-ModuleMember -Function Get-WtStamp, ConvertFrom-WtStamp, ConvertFrom-WtDateText, ConvertTo-WtDateText, ConvertFrom-WtTimeText,
+    ConvertFrom-WtTimeInput, Get-WtTimeInputHint,
     ConvertFrom-WtWhole, ConvertFrom-WtNumber, ConvertFrom-WtLegacyDate, ConvertFrom-WtLegacyTime, ConvertFrom-WtLegacyStamp,
     Test-WtRecordObject, Get-WtField, Set-WtField, Copy-WtItem, Test-WtDeleted, Get-WtItemRevision, Set-WtItemEdited, Get-WtRecordProblem,
     Compress-WtDeletedItems, Get-WtRowKey, Get-WtChangedColumns, Copy-WtPathValue, Merge-WtLegacyItems,

@@ -348,11 +348,15 @@ $script:stylesXaml = @'
         </DockPanel>
       </Border>
       <Border x:Name="Rail" Width="{DynamicResource F.SidePanel.RailWidth}" Background="{DynamicResource B.Bg.Surface}" CornerRadius="{DynamicResource F.Radius.Card}">
-        <Grid Height="{DynamicResource F.Height.Header}" VerticalAlignment="Top">
-          <Button x:Name="Open" Style="{DynamicResource Btn.Icon}" VerticalAlignment="Center">
-            <TextBlock x:Name="OpenGlyph" Style="{DynamicResource T.Icon}"/>
-          </Button>
-        </Grid>
+        <StackPanel VerticalAlignment="Top">
+          <Grid Height="{DynamicResource F.Height.Header}">
+            <Button x:Name="Open" Style="{DynamicResource Btn.Icon}" VerticalAlignment="Center">
+              <TextBlock x:Name="OpenGlyph" Style="{DynamicResource T.Icon}"/>
+            </Button>
+          </Grid>
+          <!-- 접혀도 닿아야 하는 핵심 명령(일정 +)을 탭이 넣는 자리. 레일 제목 줄 바로 아래, 아이콘 단추 28 -->
+          <StackPanel x:Name="RailItems"/>
+        </StackPanel>
       </Border>
     </Grid>
   </DataTemplate>
@@ -2309,6 +2313,10 @@ function Get-WtStyleDictionary {
             }
         }
         $script:styles = [System.Windows.Markup.XamlReader]::Parse($script:stylesXaml.Replace('{NS}', $script:ns))
+        # 한 줄 입력 칸에 Tab으로 들어가면 글 전체를 고른다(Select-WtInputOnTab). Input을 바탕으로 한 스타일(시각 · 제목 칸 등)도 같이 받는다.
+        # XAML의 EventSetter는 코드 숨김 메서드 이름만 받으므로 스타일을 처음 쓰기 전에 여기서 단다
+        $script:styles['Input'].Setters.Add([System.Windows.EventSetter]::new([System.Windows.UIElement]::GotKeyboardFocusEvent,
+            [System.Windows.Input.KeyboardFocusChangedEventHandler]{ param($s, $e) Select-WtInputOnTab $s $e }))
     }
     $script:styles
 }
@@ -2795,6 +2803,69 @@ function Get-WtFormState([hashtable]$Fields) {
         }) -join "`n"
 }
 
+# ---- 입력 칸 공통 동작 (11-24 실사용 보고: Tab 선택 · 시각 모양 · 폼 저장 키 · 틀린 칸 포커스) ----------------------------
+
+# 지금 누른 보조 키. 검사는 이 함수를 바꿔 끼워 실제 키보드 없이 Ctrl 등을 준다(메모의 Get-WtMemoModifiers와 같음)
+function Get-WtKeyModifiers { [System.Windows.Input.Keyboard]::Modifiers }
+
+# 포커스가 Tab · Shift+Tab(키보드 이동)으로 옮겨지는 중인지. Ctrl+Tab은 탭 전환이라 뺀다. 검사가 바꿔 끼운다
+function Test-WtTabNavigation {
+    [System.Windows.Input.Keyboard]::IsKeyDown([System.Windows.Input.Key]::Tab) -and
+        -not ((Get-WtKeyModifiers) -band [System.Windows.Input.ModifierKeys]::Control)
+}
+
+# 한 줄 입력 칸(Input과 그 파생 스타일)에 Tab · Shift+Tab으로 들어가면 글 전체를 고른다(Windows 대화 상자와 같음, 바로 치면 바뀐다).
+# 마우스로 누를 때 · 코드가 포커스를 줄 때(창 다시 활성화 포함)는 커서를 그대로 둔다. 여러 줄 칸은 빼고, 메모 편집기의 섬은 Input 스타일이 아니라 들지 않는다.
+# Input 스타일의 GotKeyboardFocus 처리기(Get-WtStyleDictionary에서 단다)가 부른다
+function Select-WtInputOnTab($Box, $FocusEvent) {
+    if (-not [object]::ReferenceEquals($FocusEvent.NewFocus, $Box) -or $Box.AcceptsReturn -or -not (Test-WtTabNavigation)) { return }
+    $Box.SelectAll()
+}
+
+# 시각 칸: 칸을 떠날 때 0900 · 900 · 9:00 · 9를 09:00으로 바꿔 보인다(core\Records ConvertFrom-WtTimeInput). 못 읽는 글은 그대로 두고
+# 틀렸다는 표시는 저장하는 쪽이 칸 아래에 쓴다(Get-WtTimeInputHint). 저장 전에도 Update-WtTimeInput으로 같은 모양으로 바꾼다
+function Register-WtTimeInput($Box) {
+    $Box.Add_LostKeyboardFocus({ param($s, $e) Update-WtTimeInput $s })
+}
+function Update-WtTimeInput($Box) {
+    $text = [string]$Box.Text
+    $time = ConvertFrom-WtTimeInput $text
+    if ($null -ne $time -and $time -cne $text) { $Box.Text = $time }
+}
+
+# 편집 폼 저장 키(Windows 대화 상자 · Office와 같은 습관): 한 줄 입력 칸에서 Enter, 폼 어디서든 Ctrl+S.
+# 여러 줄 칸의 Enter(줄 바꿈) · 펼친 고르기 칸의 Enter(고르기) · 단추의 Enter(누르기)는 그 칸이 먼저 써서 여기 오지 않는다.
+# $Form = 폼 바깥 요소(키가 거쳐 올라오는 곳), $OnSave = 폼의 [저장]과 같은 일
+$script:formSaveKeys = [System.Runtime.CompilerServices.ConditionalWeakTable[object, object]]::new()
+function Register-WtFormSaveKeys($Form, [scriptblock]$OnSave) {
+    $script:formSaveKeys.AddOrUpdate($Form, $OnSave)
+    $Form.Add_KeyDown({ param($s, $e) Invoke-WtFormSaveKey $s $e })
+}
+function Invoke-WtFormSaveKey($Form, $KeyEvent) {
+    $save = $null
+    if ($KeyEvent.Handled -or -not $script:formSaveKeys.TryGetValue($Form, [ref]$save)) { return }
+    $mods = Get-WtKeyModifiers
+    $source = $KeyEvent.OriginalSource
+    $enter = $KeyEvent.Key -eq [System.Windows.Input.Key]::Return -and $mods -eq [System.Windows.Input.ModifierKeys]::None -and
+        $source -is [System.Windows.Controls.TextBox] -and -not $source.AcceptsReturn -and -not $source.IsReadOnly
+    $ctrlS = $KeyEvent.Key -eq [System.Windows.Input.Key]::S -and $mods -eq [System.Windows.Input.ModifierKeys]::Control
+    if (-not $enter -and -not $ctrlS) { return }
+    $KeyEvent.Handled = $true
+    & $save
+}
+
+# 저장했는데 칸 오류가 나면 틀린 칸으로 포커스를 옮긴다. 글 칸은 글 전체를 골라 바로 다시 치게 한다(Windows 대화 상자의 값 검사 실패와 같음).
+# 칸 묶음(요일 체크 상자 줄 등)은 첫 칸으로. 표에서 칸을 눌러 편집 폼의 그 칸으로 갈 때도 쓴다. 옮겼으면 $true
+function Set-WtInputFocus($Control) {
+    if ($Control -is [System.Windows.Controls.Panel]) {
+        $Control = @($Control.Children | Where-Object { $_ -is [System.Windows.UIElement] -and $_.Focusable -and $_.IsEnabled -and $_.IsVisible })[0]
+    }
+    if ($Control -isnot [System.Windows.UIElement] -or -not $Control.IsEnabled -or -not $Control.IsVisible) { return $false }
+    [void]$Control.Focus()
+    if ($Control -is [System.Windows.Controls.TextBox]) { $Control.SelectAll() }
+    $Control.IsKeyboardFocusWithin
+}
+
 function New-WtMinuteInput([int]$Value) {
     $row = New-WtStack Horizontal 12
     $box = [System.Windows.Controls.TextBox]::new(); Set-WtStyle $box 'Input'
@@ -2942,6 +3013,7 @@ function Get-WtVisualChild($Root, [type]$Type) {
 
 Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
 Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, Read-WtSaveChoice, Set-WtInputError, Get-WtFormState, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption,
+    Get-WtKeyModifiers, Register-WtTimeInput, Update-WtTimeInput, Register-WtFormSaveKeys, Set-WtInputFocus,
     Set-WtButtonMenuPlacement, Open-WtButtonMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,
     New-WtText, New-WtIcon, New-WtStack, Add-WtChild, New-WtCard, New-WtCardHeader, New-WtButton, New-WtButtonContent, New-WtSegmented, New-WtSearchBox, New-WtTag, New-WtFilterChip,

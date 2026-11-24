@@ -238,6 +238,91 @@ try {
     Assert-WtTest '입력칸 오류: 빨간 선 · 칸 안 오른쪽 오류 아이콘 · 이유 툴팁, 빈 문구로 지움, 글 칸이 아니면 그대로' (
         $marked -and -not [Windows.Controls.Validation]::GetHasError($errorBox) -and $icon.Visibility -eq 'Collapsed' -and $errorBox.BorderBrush.Color -eq $root.FindResource('B.Border.Control').Color) "선=$($errorBox.BorderBrush) 아이콘=$($icon.Visibility) 칸=$boxRect 아이콘자리=$iconRect"
     $root.Child = $null
+
+    # ---- 11-24 실사용 보고: 입력 칸 공통 동작 ----
+    # 시각 칸 글(ConvertFrom-WtTimeInput): 0900 · 900 · 9:00 · 9도 09:00으로 받고, 틀린 글은 $null. 틀렸을 때 문구는 사람 말(HH:mm 같은 형식 기호 없음)
+    $timeCases = [ordered]@{ '09:00' = '09:00'; '9:00' = '09:00'; '0900' = '09:00'; '900' = '09:00'; '9' = '09:00'; ' 22 ' = '22:00'; '2200' = '22:00'; '0' = '00:00'; '23:59' = '23:59'
+        '2400' = $null; '9:60' = $null; '25' = $null; '09:0' = $null; '12345' = $null; 'abc' = $null; '' = $null; '9시' = $null; '9.00' = $null; '１２' = $null; '-9' = $null }
+    $timeBad = @(foreach ($k in $timeCases.Keys) { $got = ConvertFrom-WtTimeInput $k; if ($got -cne $timeCases[$k]) { "[$k]→[$got]" } })
+    Assert-WtTest '시각 칸 글: 0900 · 900 · 9:00 · 9 → 09:00, 틀린 글은 못 읽음, 문구는 「시각은 09:00처럼 입력하세요.」' (
+        -not $timeBad.Count -and (Get-WtTimeInputHint) -ceq '시각은 09:00처럼 입력하세요.') ($timeBad -join ' ')
+    # 한 줄 입력 칸에 Tab · Shift+Tab으로 들어가면 글 전체를 고른다(그림 01: Tab으로 들어간 시각 칸에 22:00을 쳐서 22:0009:00).
+    # 실제 키 경로: Tab 키를 입력 관리자에 넣으면 WPF 키보드 이동이 포커스를 옮긴다. 키보드 상태(Tab이 눌려 있는지)만 검사용 값으로 바꾼다.
+    # Shift+Tab은 WPF가 하는 대로 앞 칸으로 이동(MoveFocus Previous). 마우스 · 코드 포커스는 커서 그대로, 여러 줄 칸은 고르지 않는다
+    $uiModule = Get-Module Ui
+    & $uiModule { $script:testTab = $false; $script:testMods = [Windows.Input.ModifierKeys]::None
+        $script:realTab = (Get-Item function:Test-WtTabNavigation).ScriptBlock; $script:realMods = (Get-Item function:Get-WtKeyModifiers).ScriptBlock
+        function script:Test-WtTabNavigation { $script:testTab }
+        function script:Get-WtKeyModifiers { $script:testMods } }
+    $sendKey = { param([string]$Key) $a = [Windows.Input.KeyEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $hostSource, 0, [Windows.Input.Key]$Key); $a.RoutedEvent = [Windows.Input.Keyboard]::PreviewKeyDownEvent; [void][Windows.Input.InputManager]::Current.ProcessInput($a) }
+    $keyForm = New-WtStack Vertical 8
+    $titleBox = [Windows.Controls.TextBox]::new(); Set-WtStyle $titleBox 'Input'; $titleBox.Text = '점검'
+    $allDayCheck = [Windows.Controls.CheckBox]::new(); Set-WtStyle $allDayCheck 'Check'; $allDayCheck.Content = '하루 종일'
+    $timeBox = [Windows.Controls.TextBox]::new(); Set-WtStyle $timeBox 'Setting.Time'; $timeBox.Text = '09:00'
+    $kindCombo = [Windows.Controls.ComboBox]::new(); Set-WtStyle $kindCombo 'Combo'; foreach ($v in '근무', '휴가') { [void]$kindCombo.Items.Add($v) }; $kindCombo.SelectedIndex = 0
+    $noteBox = [Windows.Controls.TextBox]::new(); Set-WtStyle $noteBox 'Attendance.Note'; $noteBox.Text = '메모'
+    foreach ($c in $titleBox, $allDayCheck, $timeBox, $kindCombo, $noteBox) { [void](Add-WtChild $keyForm $c) }
+    $root.Child = $keyForm; Set-UiLayout 480 400
+    try {
+        & $uiModule { $script:testTab = $true }
+        [void]$allDayCheck.Focus(); & $sendKey Tab
+        $tabIn = "$($timeBox.IsKeyboardFocused)|$($timeBox.SelectedText)"
+        [void]$allDayCheck.MoveFocus([Windows.Input.TraversalRequest]::new([Windows.Input.FocusNavigationDirection]::Previous))
+        $shiftTabIn = "$($titleBox.IsKeyboardFocused)|$($titleBox.SelectedText)"
+        [void]$kindCombo.Focus(); & $sendKey Tab
+        $multiIn = "$($noteBox.IsKeyboardFocused)|$($noteBox.SelectionLength)"
+        & $uiModule { $script:testTab = $false }
+        $timeBox.CaretIndex = 2; [void]$titleBox.Focus(); [void]$timeBox.Focus()
+        $codeIn = "$($timeBox.IsKeyboardFocused)|$($timeBox.SelectionLength)|$($timeBox.CaretIndex)"
+        Assert-WtTest '한 줄 입력 칸 Tab(실제 키 경로) · Shift+Tab은 글 전체 선택(Input 바탕 스타일도), 여러 줄 칸 · 코드(마우스) 포커스는 커서 그대로' (
+            $tabIn -ceq 'True|09:00' -and $shiftTabIn -ceq 'True|점검' -and $multiIn -ceq 'True|0' -and $codeIn -ceq 'True|0|2') "Tab $tabIn · Shift+Tab $shiftTabIn · 여러 줄 $multiIn · 코드 $codeIn"
+        # 시각 칸(Register-WtTimeInput): 칸을 떠나면 0900 → 09:00, 못 읽는 글은 그대로(오류 표시는 저장하는 쪽)
+        Register-WtTimeInput $timeBox
+        $timeBox.Text = '0900'; [void]$timeBox.Focus(); [void]$titleBox.Focus(); $leftGood = $timeBox.Text
+        $timeBox.Text = '9시'; [void]$timeBox.Focus(); [void]$titleBox.Focus(); $leftBad = $timeBox.Text
+        $timeBox.Text = '930'; Update-WtTimeInput $timeBox; $direct = $timeBox.Text
+        Assert-WtTest '시각 칸: 떠날 때 0900 → 09:00, 못 읽는 글은 그대로, 저장 전 Update-WtTimeInput도 같은 모양(930 → 09:30)' ($leftGood -ceq '09:00' -and $leftBad -ceq '9시' -and $direct -ceq '09:30') "$leftGood / $leftBad / $direct"
+        # 폼 저장 키(Register-WtFormSaveKeys): 한 줄 칸 Enter · 어디서든 Ctrl+S는 저장, 여러 줄 칸 Enter는 줄 바꿈, 고르기 칸 · 체크 상자의 Enter는 저장 아님
+        $global:uiSaves = 0
+        Register-WtFormSaveKeys $keyForm { $global:uiSaves++ }
+        [void]$titleBox.Focus(); & $sendKey Return; $enterSingle = $global:uiSaves
+        $noteBox.CaretIndex = $noteBox.Text.Length; [void]$noteBox.Focus(); & $sendKey Return; $enterMulti = "$global:uiSaves|$($noteBox.Text -match "`n")"
+        [void]$kindCombo.Focus(); & $sendKey Return; [void]$allDayCheck.Focus(); & $sendKey Return; $enterOther = $global:uiSaves
+        & $uiModule { $script:testMods = [Windows.Input.ModifierKeys]::Control }
+        [void]$allDayCheck.Focus(); & $sendKey S; [void]$noteBox.Focus(); & $sendKey S; $ctrlS = $global:uiSaves
+        & $uiModule { $script:testMods = [Windows.Input.ModifierKeys]::Shift }
+        [void]$titleBox.Focus(); & $sendKey Return; $shiftEnter = $global:uiSaves
+        & $uiModule { $script:testMods = [Windows.Input.ModifierKeys]::None }
+        Assert-WtTest '폼 저장 키(실제 키 경로): 한 줄 칸 Enter · 체크 상자 · 여러 줄 칸에서도 Ctrl+S는 저장, 여러 줄 칸 Enter는 줄 바꿈, 고르기 칸 · 체크 상자 Enter · Shift+Enter는 저장 아님' (
+            $enterSingle -eq 1 -and $enterMulti -ceq '1|True' -and $enterOther -eq 1 -and $ctrlS -eq 3 -and $shiftEnter -eq 3) "$enterSingle / $enterMulti / $enterOther / $ctrlS / $shiftEnter"
+        # 틀린 칸 포커스(Set-WtInputFocus): 글 칸은 글 전체 선택, 칸 묶음은 첫 칸, 끈 칸은 옮기지 않음
+        $days = [Windows.Controls.Primitives.UniformGrid]::new(); $days.Columns = 2
+        foreach ($n in '월', '화') { $d = [Windows.Controls.CheckBox]::new(); $d.Content = $n; [void]$days.Children.Add($d) }
+        [void](Add-WtChild $keyForm $days); Set-UiLayout 480 400
+        $timeBox.Text = '25:00'; [void]$titleBox.Focus()
+        $focusText = "$(Set-WtInputFocus $timeBox)|$($timeBox.IsKeyboardFocused)|$($timeBox.SelectedText)"
+        $focusGroup = "$(Set-WtInputFocus $days)|$($days.Children[0].IsKeyboardFocused)"
+        $titleBox.IsEnabled = $false; $focusOff = "$(Set-WtInputFocus $titleBox)|$($days.Children[0].IsKeyboardFocused)"; $titleBox.IsEnabled = $true
+        Assert-WtTest '틀린 칸 포커스: 글 칸은 포커스 + 글 전체 선택, 칸 묶음은 첫 칸, 끈 칸은 옮기지 않음' (
+            $focusText -ceq 'True|True|25:00' -and $focusGroup -ceq 'True|True' -and $focusOff -ceq 'False|True') "$focusText / $focusGroup / $focusOff"
+        # 설정 → 업무시간 시각 칸(그림 02와 같은 규칙): 830은 칸을 떠날 때, 1730은 Enter(실제 키 경로)로 저장하며 칸 글도 바뀐다. 못 읽는 글은 사람 말 오류 · 저장 안 함
+        $root.Child = $null
+        $workForm = & (Get-Module Pages) { New-WtWorkHoursForm }
+        $root.Child = $workForm.Root; Set-UiLayout 680 600
+        $startBox = $workForm.Boxes['work.start']; $endBox = $workForm.Boxes['work.end']
+        $startBox.Text = '830'; [void]$startBox.Focus(); [void]$endBox.Focus()
+        $leaveSave = "$($startBox.Text)|$((Get-WtWorkHours)['work.start'])"
+        $endBox.Text = '1730'; [void]$endBox.Focus(); & $sendKey Return
+        $enterSave = "$($endBox.Text)|$((Get-WtWorkHours)['work.end'])"
+        $startBox.Text = '8시'; [void]$startBox.Focus(); [void]$endBox.Focus()
+        $badSave = "$($workForm.Errors['work.start'].Text)|$((Get-WtWorkHours)['work.start'])|$([Windows.Controls.Validation]::GetHasError($startBox))"
+        Set-WtWorkHours @{ 'work.days' = @(1, 2, 3, 4, 5); 'work.start' = '09:00'; 'work.end' = '18:00'; 'work.lunchStart' = '12:00'; 'work.lunchEnd' = '13:00'; 'work.halfDay' = '' }
+        Assert-WtTest '설정 업무시간 시각 칸: 830 → 08:30(떠날 때) · 1730 → 17:30(Enter)으로 저장 · 칸 글도 바뀜, 못 읽는 글은 「시각은 09:00처럼 입력하세요.」 · 저장 안 함' (
+            $leaveSave -ceq '08:30|08:30' -and $enterSave -ceq '17:30|17:30' -and $badSave -ceq '시각은 09:00처럼 입력하세요.|08:30|True') "$leaveSave / $enterSave / $badSave"
+    } finally {
+        $root.Child = $null
+        & $uiModule { Set-Item function:script:Test-WtTabNavigation $script:realTab; Set-Item function:script:Get-WtKeyModifiers $script:realMods }
+    }
     # 단추 펼침 메뉴 자리(Set-WtButtonMenuPlacement): 오른쪽 끝 단추는 메뉴 오른쪽 끝을 단추 오른쪽 끝에 맞춰 단추 바로 아래. 팝업은 띄우지 않고 WPF가 쓰는 배치 함수로 계산한다
     $edgeButton = New-WtButton '' -Kind Icon -Icon 0xE710; $edgeButton.HorizontalAlignment = 'Right'; $edgeButton.VerticalAlignment = 'Top'
     $edgeButton.ContextMenu = New-WtHomePinContextMenu
