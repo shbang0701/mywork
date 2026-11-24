@@ -710,7 +710,8 @@ function Update-WtScheduleView {
             default { Update-WtScheduleTable }
         }
         $script:side.Title.Text = Format-WtDate $script:selected 'M월 d일 dddd'
-        $script:side.Add.IsEnabled = -not [bool]$data.Error; $script:side.Add.ToolTip = if ($data.Error) { $data.Error } else { '새로 만들기' }
+        # 접힌 레일의 +도 같은 상태(못 읽는 파일이면 비활성 + 이유 툴팁)
+        foreach ($button in $script:side.Add, $script:side.RailAdd) { $button.IsEnabled = -not [bool]$data.Error; $button.ToolTip = if ($data.Error) { $data.Error } else { '새로 만들기' } }
         if (-not $script:form) { Show-WtScheduleDay }
     }
 }

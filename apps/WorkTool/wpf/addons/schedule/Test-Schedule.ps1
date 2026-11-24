@@ -1978,7 +1978,8 @@ try {
         & $module { Set-WtScheduleViewMode 'calendar' }
         [IO.File]::WriteAllText((Get-WtStorePath 'schedule'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))
         & $module { Update-WtScheduleView }
-        Assert-WtTest '일정 화면: 못 읽는 파일은 이유 표시 · 새로 만들기 비활성' ((Get-WtTestTexts $view | Where-Object { $_ -like '*더 새 버전*' }).Count -gt 0 -and -not (& $module { $script:side.Add.IsEnabled }))
+        Assert-WtTest '일정 화면: 못 읽는 파일은 이유 표시 · 새로 만들기 비활성(접힌 레일의 +도)' ((Get-WtTestTexts $view | Where-Object { $_ -like '*더 새 버전*' }).Count -gt 0 -and -not (& $module { $script:side.Add.IsEnabled }) -and
+            -not (& $module { $script:side.RailAdd.IsEnabled }) -and (& $module { [string]$script:side.RailAdd.ToolTip }) -like '*더 새 버전*')
 
         # ---- 알람 2b 화면 (설계 16장): 앱 틱 → 알림 창 · 소리, 본문 → 그날 폼, 다시 알림, 이 일정 알람 끄기, 잠시 끄기, 폼 알람 자세히, 설정 행 ----
         # 창 · 소리는 실제로 내지 않는다. 코어 알림 부품의 OS 자리(창 보이기 · 작업 영역 · 재생기 · 기본 소리 · 앱 창 열기)만 가짜로 바꾸고 15초 타이머를 끈다
