@@ -183,6 +183,78 @@ try {
     $quoteBox = Get-WtMarkdownTableView $quoteHolder
     Assert-WtTest '표 칸: 인용 안 표 글자색 = 인용 글자색' ($quoteBox -and $quoteBox.Document.Foreground.Color -eq $quoteView.Document.Blocks.FirstBlock.Foreground.Color -and
         $quoteBox.Document.Foreground.Color -ne $quoteView.Document.Foreground.Color) "표=$($quoteBox.Document.Foreground) 인용=$($quoteView.Document.Blocks.FirstBlock.Foreground) 문서=$($quoteView.Document.Foreground)"
+    # 읽기 보기에서 고르면 표 칸 글도 다른 글처럼 선택 색(11-24 승호): 표를 지나는 고르기 · 표에서 시작하는 고르기 · 가로로 옮긴 표에서 끝나는 고르기.
+    # 색은 숨김 호스트를 그린 그림의 픽셀(공백 넷 가운데)로 견준다. 끌기는 실제 배치 좌표로 처리 함수를 부른다(OS 입력은 아님)
+    $selView = New-WtMarkdownView -Scroll; $selView.IsInactiveSelectionHighlightEnabled = $true; $root.Child = $selView
+    $root.Background = [Windows.Media.Brushes]::White
+    Set-WtMarkdownText $selView ("앞글ㄱ    ㄴ끝`n`n| 가 | 나 | 다 | 라 | 마 |`n|---|---|---|---|---|`n| ㄷ    ㄹ | 세째    칸 | 네번째칸입니다 | 다섯번째칸입니다 | ㅁ    ㅂ |`n`n뒤글ㅅ    ㅇ끝")
+    Set-UiLayout 260
+    $selHolder = @($selView.Document.Blocks | Where-Object { Get-WtMarkdownTableView $_ })[0]
+    $selBox = Get-WtMarkdownTableView $selHolder; $selScroll = $selHolder.Child
+    $markdown = Get-Module Markdown
+    # $Box 문서에서 $Needle 글자 바로 뒤 공백 넷의 가운데(보기 좌표), -At이면 그 글자 왼쪽 끝 + 1
+    function Get-UiTextPoint($Box, [string]$Needle, [switch]$At) {
+        $tp = $Box.Document.ContentStart
+        while ($tp) {
+            if ($tp.GetPointerContext('Forward') -eq 'Text') {
+                $k = $tp.GetTextInRun('Forward').IndexOf($Needle, [StringComparison]::Ordinal)
+                if ($k -ge 0) {
+                    $r = $tp.GetPositionAtOffset($(if ($At) { $k } else { $k + $Needle.Length + 2 })).GetCharacterRect('Forward')
+                    return $Box.TranslatePoint([Windows.Point]::new($r.X + 1, $r.Y + $r.Height / 2), $selView)
+                }
+            }
+            $tp = $tp.GetNextContextPosition('Forward')
+        }
+        throw "글 '$Needle' 없음"
+    }
+    function Get-UiPixel([Windows.Point]$Point) {
+        $p = $selView.TranslatePoint($Point, $root)
+        $bitmap = [Windows.Media.Imaging.RenderTargetBitmap]::new([int]$root.ActualWidth, [int]$root.ActualHeight, 96, 96, [Windows.Media.PixelFormats]::Pbgra32)
+        $bitmap.Render($root)
+        $pixel = [byte[]]::new(4); $bitmap.CopyPixels([Windows.Int32Rect]::new([int]$p.X, [int]$p.Y, 1, 1), $pixel, 4, 0)
+        '#{0:X2}{1:X2}{2:X2}' -f $pixel[2], $pixel[1], $pixel[0]
+    }
+    function New-UiMouse([Windows.Point]$Point) {
+        $o = [pscustomobject]@{ OriginalSource = $selView.InputHitTest($Point); Point = $Point; LeftButton = [Windows.Input.MouseButtonState]::Pressed; Handled = $false }
+        $o | Add-Member ScriptMethod GetPosition { param($el) $this.Point }
+        $o
+    }
+    $plainColor = Get-UiPixel (Get-UiTextPoint $selView '앞글ㄱ')
+    # 키보드 전체 고르기(실제 선택 변경 경로)
+    [void]$selView.Focus(); $selView.SelectAll(); Set-UiLayout 260
+    $outerColor = Get-UiPixel (Get-UiTextPoint $selView '앞글ㄱ'); $innerColor = Get-UiPixel (Get-UiTextPoint $selBox 'ㄷ')
+    Assert-WtTest '표 칸 선택 색: 전체 고르기 · 표 칸 글도 다른 글과 같은 선택 색' ($outerColor -ne $plainColor -and $innerColor -ceq $outerColor -and (Get-WtMarkdownSelectedText $selView).Contains('네번째칸입니다')) "바탕=$plainColor 본문=$outerColor 표=$innerColor"
+    # 바깥에서 시작해 가로로 옮긴 표의 끝 칸 안에서 끝나는 고르기: 표 칸은 끝난 자리까지만
+    $selView.Selection.Select($selView.Document.ContentStart, $selView.Document.ContentStart)
+    $selScroll.ScrollToRightEnd(); Set-UiLayout 260
+    [void]$selView.Focus()
+    & $markdown { param($v, $e) Start-WtMdDrag $v $e } $selView (New-UiMouse (Get-UiTextPoint $selView '앞글' -At))
+    & $markdown { param($v, $e) Update-WtMdDrag $v $e } $selView (New-UiMouse (Get-UiTextPoint $selBox 'ㅂ' -At))
+    & $markdown { param($v) Stop-WtMdDrag $v } $selView
+    Set-UiLayout 260
+    $endColor = Get-UiPixel (Get-UiTextPoint $selBox 'ㅁ'); $outerColor = Get-UiPixel (Get-UiTextPoint $selView '앞글ㄱ'); $afterColor = Get-UiPixel (Get-UiTextPoint $selView '뒤글ㅅ')
+    $copied = Get-WtMarkdownSelectedText $selView
+    Assert-WtTest '표 칸 선택 색: 본문에서 가로로 옮긴 표 칸 안까지 끌기 · 그 자리까지 같은 색, 뒤 글은 그대로 · 고른 글(끝 글자 앞까지)' (
+        $selScroll.HorizontalOffset -gt 0 -and $endColor -ceq $outerColor -and $outerColor -ne $plainColor -and $afterColor -ceq $plainColor -and $null -ne $selBox.Tag.Mark -and
+        $copied.Contains('앞글') -and $copied.Contains('세째') -and $copied.Contains('ㅁ') -and -not $copied.Contains('ㅂ') -and -not $copied.Contains('뒤글')) "끝 칸=$endColor 본문=$outerColor 뒤=$afterColor 고른 글=[$copied]"
+    # 표 칸 안에서 시작해 본문으로 나가는 고르기: 시작한 칸부터 표 끝까지 + 본문
+    $selScroll.ScrollToLeftEnd(); Set-UiLayout 260
+    & $markdown { param($v, $e) Start-WtMdDrag $v $e } $selView (New-UiMouse (Get-UiTextPoint $selBox '세째' -At))
+    & $markdown { param($v, $e) Update-WtMdDrag $v $e } $selView (New-UiMouse (Get-UiTextPoint $selView 'ㅇ끝' -At))
+    & $markdown { param($v) Stop-WtMdDrag $v } $selView
+    Set-UiLayout 260
+    $firstCell = Get-UiPixel (Get-UiTextPoint $selBox 'ㄷ'); $afterColor = Get-UiPixel (Get-UiTextPoint $selView '뒤글ㅅ'); $beforeColor = Get-UiPixel (Get-UiTextPoint $selView '앞글ㄱ')
+    $startColor = Get-UiPixel (Get-UiTextPoint $selBox '세째')
+    $copied = Get-WtMarkdownSelectedText $selView
+    Assert-WtTest '표 칸 선택 색: 표 칸에서 시작해 본문으로 끌기 · 시작 칸부터 표 끝까지와 본문이 같은 색, 앞 칸 · 앞 글은 그대로 · 고른 글' (
+        $afterColor -ne $plainColor -and $startColor -ceq $afterColor -and $firstCell -ceq $plainColor -and $beforeColor -ceq $plainColor -and $selView.IsKeyboardFocused -and
+        $copied.StartsWith('세째') -and $copied.Contains('ㅂ') -and $copied.Contains('뒤글') -and -not $copied.Contains('ㄷ')) "첫 칸=$firstCell 시작 칸=$startColor 뒤 글=$afterColor 앞 글=$beforeColor 고른 글=[$copied]"
+    # 새로 누르면 앞서 칠한 표 칸은 지운다
+    & $markdown { param($v, $e) Start-WtMdDrag $v $e } $selView (New-UiMouse (Get-UiTextPoint $selView '앞글' -At))
+    & $markdown { param($v) Stop-WtMdDrag $v } $selView
+    Set-UiLayout 260
+    Assert-WtTest '표 칸 선택 색: 새로 누르면 표 칸 칠을 지운다' (-not $selBox.Tag.Mark -and (Get-UiPixel (Get-UiTextPoint $selBox '세째')) -ceq $plainColor)
+    $root.ClearValue([Windows.Controls.Border]::BackgroundProperty)
     $styles = Get-WtStyleDictionary
     function Get-UiBounds($Element) { $Element.TransformToAncestor($root).TransformBounds([Windows.Rect]::new(0, 0, $Element.ActualWidth, $Element.ActualHeight)) }
     # 이름 묻는 창(Read-WtName): 창은 띄우지 않고 만든 내용(New-WtNameDialog)을 숨김 호스트에 붙여 모양 · 결과 · 좌표 경로를 본다.

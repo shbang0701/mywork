@@ -102,6 +102,7 @@ function New-WtMemoEditor {
     Set-WtStyle $live 'Memo.View'   # 문서 면: 바깥 포커스 네모 없음
     $live.Tag.Editor = $ed
     $live.Tag.TableFocus = $false   # 누름은 이 보기가 받아 섬을 연다. 표 칸 안 상자가 포커스를 가져가면 치는 글이 갈 곳을 잃는다
+    $live.Tag.TableKey = { param($holder) Get-WtMemoTableKey $holder }   # 섬을 열고 닫거나 다시 그려도 표마다 가로 위치를 기억한다
     # 문서에서 블록을 빼고 넣을 때 RichTextBox가 실행 취소용으로 뺀 요소를 XAML로 저장하려 한다.
     # 섬(Tag에 편집기 상태)을 저장하다 끝없이 파고들어 멈추므로 끈다. 실행 취소는 편집기가 따로 든다
     $live.IsUndoEnabled = $false
@@ -414,6 +415,7 @@ function Set-WtMemoEditorText($Ed, [AllowEmptyString()][string]$Text) {
         $Ed.Caret = @{ Line = 0; Col = 0 }
         $Ed.ReadText = $null
         $Ed.Cache.Clear()   # 다른 메모의 그린 블록을 붙잡고 있지 않게
+        $Ed.Live.Tag.TableScroll.Clear()   # 다른 메모의 표는 가로 처음부터
         switch ($Ed.Mode) {
             'source' { $Ed.Source.Text = $Text; $Ed.Source.CaretIndex = 0; $Ed.Source.ScrollToHome() }
             'live' { Update-WtMemoLive $Ed; Get-WtMemoScroller $Ed.Live | ForEach-Object { $_.ScrollToHome() } }
@@ -1682,6 +1684,22 @@ function Find-WtMemoLiveHit($Ed, [System.Windows.Point]$Point, [switch]$BlocksOn
     $isl = $Ed.Island
     if ($isl -and $u.Start -ge $isl.End) { $line += @($Ed.IslandBox.Text -split "\r?\n").Count - ($isl.End - $isl.Start) }
     @{ Line = $line; Col = $parts[-1].Length; Unit = $u }
+}
+
+# 편집 보기의 표 가로 위치를 기억하는 열쇠(Markdown.psm1 TableKey): 그 표가 든 단위의 시작 줄 + 단위 안 자리.
+# 섬을 열고 닫거나 다시 그려도 같은 표다. 섬에서 줄 수가 바뀌었으면 섬 아래 단위는 닫힌 뒤의 줄 번호로 맞춘다
+function Get-WtMemoTableKey($Holder) {
+    $sec = $Holder
+    while ($sec -and -not ($sec -is [System.Windows.Documents.Section] -and $sec.Tag -is [hashtable] -and $sec.Tag.ContainsKey('Kind'))) {
+        $sec = [System.Windows.LogicalTreeHelper]::GetParent($sec)
+    }
+    if (-not $sec) { return $null }
+    $u = $sec.Tag
+    $start = $u.Start
+    $ed = Find-WtMemoEditorFrom $sec.Parent
+    $isl = if ($ed) { $ed.Island }
+    if ($isl -and $u.Start -ge $isl.End) { $start += @($ed.IslandBox.Text -split "\r?\n").Count - ($isl.End - $isl.Start) }
+    '{0}:{1}' -f $start, $sec.ContentStart.GetOffsetToPosition($Holder.ElementStart)
 }
 
 # 그린 글의 [Start, End) 글자. TextRange.Text는 표 칸에 걸치면 칸 · 행 전체로 넓혀 버려서 직접 따라가며 모은다.

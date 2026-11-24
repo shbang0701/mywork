@@ -1420,12 +1420,33 @@ $script:stylesXaml = @'
     <Setter Property="IsUndoEnabled" Value="False"/>
     <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
     <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
-    <!-- 안쪽 스크롤 없이 문서만 그린다(가로 스크롤은 바깥 칸이 맡음, 표가 많은 메모도 가볍게). 안쪽 여백 -5가 문서의 PagePadding 5를 상쇄한다 -->
+    <!-- 안쪽 스크롤 없이 문서만 그린다(가로 스크롤은 바깥 칸이 맡음, 표가 많은 메모도 가볍게). 안쪽 여백 -5가 문서의 PagePadding 5를 상쇄한다.
+         Mark: 본문에서 이어진 끌기가 이 표 안에서 시작 · 끝날 때 고른 칸 글자 자리를 선택 색으로 덮는다(WPF 선택은 칸을 넘으면 칸 · 행 단위로 넓어져서 따로 칠함) -->
     <Setter Property="Template">
       <Setter.Value>
-        <ControlTemplate TargetType="RichTextBox"><Decorator x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/></ControlTemplate>
+        <ControlTemplate TargetType="RichTextBox">
+          <Grid>
+            <Decorator x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+            <Path x:Name="Mark" IsHitTestVisible="False" Fill="{TemplateBinding SelectionBrush}" Opacity="{TemplateBinding SelectionOpacity}"/>
+          </Grid>
+        </ControlTemplate>
       </Setter.Value>
     </Setter>
+    <!-- 선택 색은 바깥 보기를 따른다: 바깥에서 표를 지나게 고르면 포커스 없는 표 칸도 다른 글과 같은 색으로 칠한다
+         (WPF 기본은 포커스 없는 상자를 옅은 회색으로 칠함). 바깥이 고르기를 쉬면서 비활성 선택을 숨기면 표 칸도 숨기고, 표 칸 자신이 포커스를 가지면 강조 색 -->
+    <Setter Property="SelectionBrush" Value="{Binding SelectionBrush, RelativeSource={RelativeSource AncestorType=RichTextBox}}"/>
+    <Style.Triggers>
+      <MultiDataTrigger>
+        <MultiDataTrigger.Conditions>
+          <Condition Binding="{Binding IsSelectionActive, RelativeSource={RelativeSource AncestorType=RichTextBox}}" Value="False"/>
+          <Condition Binding="{Binding IsInactiveSelectionHighlightEnabled, RelativeSource={RelativeSource AncestorType=RichTextBox}}" Value="False"/>
+        </MultiDataTrigger.Conditions>
+        <Setter Property="SelectionBrush" Value="Transparent"/>
+      </MultiDataTrigger>
+      <Trigger Property="IsSelectionActive" Value="True">
+        <Setter Property="SelectionBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+      </Trigger>
+    </Style.Triggers>
   </Style>
   <Style x:Key="Md.Td" TargetType="TableCell">
     <Setter Property="Padding" Value="12,6"/>
@@ -3597,11 +3618,16 @@ function Set-WtDocumentTableWidths($Table) {
     }
     # 들어가면 상자는 칸 폭을 그대로 쓰고(가로 스크롤 끔), 넘치면 최소 폭 합 + 테두리 + 반올림 여유만큼 넓힌다
     $bar = if ($wide) { 'Auto' } else { 'Disabled' }
-    if ($scroll.HorizontalScrollBarVisibility -ne $bar) { $scroll.HorizontalScrollBarVisibility = $bar }
+    if ($scroll.HorizontalScrollBarVisibility -ne $bar) {
+        # 칸에 다 들어가면 가로 위치를 0으로: 가로 스크롤을 꺼도 WPF는 옮긴 값을 들고 있다가 다시 켜면 되살린다
+        if (-not $wide) { $scroll.ScrollToHorizontalOffset(0) }
+        $scroll.HorizontalScrollBarVisibility = $bar
+    }
     if ($wide) {
         $width = [Math]::Ceiling($need + $edge + 1)
         if ($box.Width -ne $width) { $box.Width = $width }
     } elseif (-not [double]::IsNaN($box.Width)) { $box.ClearValue([System.Windows.FrameworkElement]::WidthProperty) }
+    $Table.Tag.Laid = $true   # 폭을 정했다(가로 위치 되살리기는 이 뒤에, Markdown.psm1 Restore-WtMdTableScroll)
 }
 
 # 표 열마다 가장 긴 낱말 폭 + 칸 좌우 여백(최대 $script:tableColumnMax). 글은 그린 뒤 바뀌지 않으므로 글꼴이 같으면 잰 값을 다시 쓴다
