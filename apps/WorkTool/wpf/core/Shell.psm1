@@ -749,6 +749,7 @@ function Stop-WtInstanceSignals {
 function Show-WtMainFront {
     if (-not $script:window) { return }
     Show-WtMainWindow
+    Request-WtMainActivateLater
     if ($script:window.IsActive) { return }
     # 이미 맨 위면 다시 맨 위 무리의 가장 앞으로 올린다(나중에 뜬 알람 창보다 앞)
     $script:window.Topmost = $false
@@ -760,6 +761,22 @@ function Show-WtMainFront {
     }
     $script:frontTimer.Stop()
     $script:frontTimer.Start()
+}
+
+# 다시 켠 실행 보조는 Ready 뒤 AppActivate(프로세스 번호)로 앞으로 가져오는데, 같은 프로세스의 알람 창이 먼저 잡히면
+# 키보드가 알람 창에 가서 Ctrl+Alt+W 뒤 단축키를 앱 창이 못 받았다(11-25 노트북). 그 뒤엔 이 앱이 앞 프로세스라
+# 자기 창을 앞으로 할 수 있으므로 조금 뒤 앱 창을 한 번 더 활성화한다(이미 앱 창이 활성이면 아무것도 안 함)
+function Request-WtMainActivateLater {
+    if (-not $script:activateLater) {
+        $script:activateLater = [System.Windows.Threading.DispatcherTimer]::new()
+        $script:activateLater.Interval = [TimeSpan]::FromMilliseconds(400)
+        $script:activateLater.Add_Tick({
+                $script:activateLater.Stop()
+                if ($script:window -and $script:window.IsVisible -and -not $script:window.IsActive -and -not $script:exiting) { [void]$script:window.Activate() }
+            })
+    }
+    $script:activateLater.Stop()
+    $script:activateLater.Start()
 }
 
 function Clear-WtFrontHold {

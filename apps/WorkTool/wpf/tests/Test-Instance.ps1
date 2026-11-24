@@ -269,6 +269,10 @@ exit 0
             $script:window = [System.Windows.Window]::new()
             Show-WtMainFront
             $held = $script:window.Topmost -and $script:frontTimer.IsEnabled
+            # 실행 보조의 AppActivate가 같은 프로세스의 알람 창을 잡아도 조금 뒤 앱 창을 다시 활성화한다(11-25 노트북)
+            $later = $script:activateLater
+            $again = $later -is [System.Windows.Threading.DispatcherTimer] -and $later.IsEnabled -and $later.Interval.TotalMilliseconds -eq 400
+            if ($later) { $later.Stop() }
             Invoke-WtMainActivated
             $released = -not $script:window.Topmost -and -not $script:frontTimer.IsEnabled
             Register-WtAddon -Id 'cap-page' -Title '가짜 화면' -NewView { [System.Windows.Controls.Border]::new() } -Refresh { param($v) $global:wtInstanceProbe.Refresh++ }
@@ -282,7 +286,7 @@ exit 0
             $redrawn = $global:wtInstanceProbe.Refresh -eq $before + 1 -and -not $script:captureStale
             Invoke-WtMainActivated
             $once = $global:wtInstanceProbe.Refresh -eq $before + 1
-            @{ Held = $held; Released = $released; Quiet = $quiet; Redrawn = $redrawn; Once = $once; Detail = "맨 위 $held/$released · 다시 그림 $($global:wtInstanceProbe.Refresh - $before)" }
+            @{ Held = $held; Released = $released; Again = $again; Quiet = $quiet; Redrawn = $redrawn; Once = $once; Detail = "맨 위 $held/$released · 다시 활성화 $again · 다시 그림 $($global:wtInstanceProbe.Refresh - $before)" }
         } finally {
             if ($script:frontTimer) { $script:frontTimer.Stop() }
             $script:window = $saved.Window; $script:ui = $saved.Ui; $script:current = $saved.Current; $script:views = $saved.Views; $script:captureStale = $saved.Stale
@@ -290,6 +294,7 @@ exit 0
         }
     }
     Assert-WtInstance '앞으로 가져오기: 앞에 못 가져오면 잠깐 맨 위로 두고, 앱 창이 활성화되면 맨 위를 푼다' ($frontChecks.Held -and $frontChecks.Released) $frontChecks.Detail
+    Assert-WtInstance '앞으로 가져오기: 조금 뒤(0.4초) 앱 창을 한 번 더 활성화해 키보드가 알람 창에 남지 않게 한다' $frontChecks.Again $frontChecks.Detail
     Assert-WtInstance '빠른 적기 뒤: 앱 창을 다시 보면 지금 화면을 한 번만 새로 그리고, 평소 활성화에는 그리지 않는다' ($frontChecks.Quiet -and $frontChecks.Redrawn -and $frontChecks.Once) $frontChecks.Detail
     } } else { Write-Host 'SKIP 앞으로 가져오기 (Windows STA에서만)' }
 
