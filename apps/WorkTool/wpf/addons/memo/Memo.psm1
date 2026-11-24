@@ -1673,38 +1673,41 @@ function Set-WtMemoSortMenu($Menu) {
     }
 }
 
-# 메모 하나를 정리하는 메뉴 항목: 고정 · 보관 · 폴더 · 삭제. 칸의 ⋯ 단추와 목록 우클릭이 같이 쓴다
+# 메모 하나를 정리하는 메뉴: 고정(목록 위 · 홈) ─ 정리(보관 · 폴더) ─ 삭제. 칸의 ⋯ 단추와 목록 우클릭이 같이 쓴다.
+# 묶음 · 아이콘 · 위험 항목은 디자인 3판 7절 「메뉴」, 항목은 8절 메모
 function Set-WtMemoActionItems($Menu, [string]$Id, $Pane) {
     $Menu.Items.Clear()
     $m = Get-WtMemoById $Id
     if (-not $m) { return }
     $pinned = $m.pinned -eq $true; $archived = $m.archived -eq $true
-    [void]$Menu.Items.Add((New-WtMenuItem $(if ($pinned) { '고정 해제' } else { '고정' }) { param($v) Invoke-WtMemoAction pin $v.Id $v.Value } @{ Id = $Id; Value = -not $pinned }))
-    [void]$Menu.Items.Add((New-WtMenuItem $(if ($archived) { '보관 해제' } else { '보관' }) { param($v) Invoke-WtMemoAction archive $v.Id $v.Value } @{ Id = $Id; Value = -not $archived }))
+    $onHome = Test-WtHomePin -Page 'memo' -Key $Id
+    [void]$Menu.Items.Add((New-WtMenuItem $(if ($pinned) { '목록 위 고정 해제' } else { '목록 위에 고정' }) { param($v) Invoke-WtMemoAction pin $v.Id $v.Value } @{ Id = $Id; Value = -not $pinned } -Icon $(if ($pinned) { 0xE77A } else { 0xE718 })))
+    [void]$Menu.Items.Add((New-WtMenuItem $(if ($onHome) { '홈 고정 해제' } else { '홈에 고정' }) {
+                param($v) Set-WtHomePin -Page 'memo' -Key $v -Title (Get-WtMemoTitle $v) -Sub '메모' -Icon 0xE70B -Pinned:(-not (Test-WtHomePin -Page 'memo' -Key $v))
+            } $Id -Icon 0xE80F))
+    [void]$Menu.Items.Add([System.Windows.Controls.Separator]::new())
+    [void]$Menu.Items.Add((New-WtMenuItem $(if ($archived) { '보관 해제' } else { '보관' }) { param($v) Invoke-WtMemoAction archive $v.Id $v.Value } @{ Id = $Id; Value = -not $archived } -Icon 0xE7B8))
     $folders = @(try { Get-WtMemoFolders $script:memoStore } catch { })
     if ($folders.Count) {
-        $move = [System.Windows.Controls.MenuItem]::new()
-        $move.Header = '폴더로 옮기기'
-        Set-WtStyle $move 'Home.PinSubmenuItem'
+        $move = New-WtSubmenuItem '폴더로 옮기기' -Icon 0xE8DE
         [void]$Menu.Items.Add($move)
         foreach ($folder in @($folders) + @([pscustomobject]@{ id = ''; name = '폴더 없음' })) {
             $on = [string]$m.folder -ceq [string]$folder.id
             [void]$move.Items.Add((New-WtMenuItem ([string]$folder.name) { param($v) Invoke-WtMemoAction folder $v.Id $v.Value } @{ Id = $Id; Value = [string]$folder.id } -Checked:$on))
         }
     }
-    [void]$Menu.Items.Add((New-WtMenuItem '삭제' { param($v) Remove-WtMemoItem $v.Id $v.Pane } @{ Id = $Id; Pane = $Pane }))
+    [void]$Menu.Items.Add([System.Windows.Controls.Separator]::new())
+    [void]$Menu.Items.Add((New-WtMenuItem '삭제' { param($v) Remove-WtMemoItem $v.Id $v.Pane } @{ Id = $Id; Pane = $Pane } -Icon 0xE74D -Danger))
 }
 
-# 목록 우클릭: 열기 · 홈 고정 + 정리 항목
+# 목록 우클릭: 열기 묶음 + 정리 메뉴(Set-WtMemoActionItems)
 function Set-WtMemoListMenu($Menu, [string]$Id) {
     Set-WtMemoActionItems $Menu $Id $null
     $Menu.Tag = $Id
+    if ($Menu.Items.Count) { $Menu.Items.Insert(0, [System.Windows.Controls.Separator]::new()) }
     $open = @(
-        (New-WtMenuItem '새 탭에서 열기' { param($v) [void](Open-WtMemo $v 'tab') } $Id),
-        (New-WtMenuItem '오른쪽에 열기' { param($v) [void](Open-WtMemo $v 'side') } $Id),
-        (New-WtMenuItem $(if (Test-WtHomePin -Page 'memo' -Key $Id) { '홈 고정 해제' } else { '홈에 고정' }) {
-            param($v) Set-WtHomePin -Page 'memo' -Key $v -Title (Get-WtMemoTitle $v) -Sub '메모' -Icon 0xE70B -Pinned:(-not (Test-WtHomePin -Page 'memo' -Key $v))
-        } $Id))
+        (New-WtMenuItem '새 탭에서 열기' { param($v) [void](Open-WtMemo $v 'tab') } $Id -Icon 0xE8A7),
+        (New-WtMenuItem '오른쪽에 열기' { param($v) [void](Open-WtMemo $v 'side') } $Id -Icon 0xE90D))
     $open[0].InputGestureText = 'Ctrl+클릭'
     for ($i = $open.Count - 1; $i -ge 0; $i--) { $Menu.Items.Insert(0, $open[$i]) }
 }

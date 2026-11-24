@@ -205,17 +205,34 @@ function Add-WtMemoBoxHandlers($Box, [switch]$Island) {
     $Box.Add_PreviewDrop({ param($s, $e) Invoke-WtMemoBoxDrop $s $e })
 }
 
-# 본문 공통 메뉴. 그린 보기에서도 편집 명령은 현재 섬(없으면 커서의 블록)에 보낸다.
+# 본문 메뉴 항목 하나. 값(Tag.Value)의 Action이 할 일이고, 비활성 · 툴팁은 Update-WtMemoContextMenu가 정한다
+function New-WtMemoContextItem($Ed, [string]$Text, [string]$Action, [string]$Keys, [int]$Icon) {
+    $item = New-WtMenuItem $Text { param($v) Invoke-WtMemoContextAction $v.Ed $v.Action } @{ Ed = $Ed; Action = $Action } -Icon $Icon
+    $item.InputGestureText = $Keys
+    [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true)
+    $item
+}
+
+# 본문 공통 메뉴(디자인 3판 8절 메모): 고치기 ─ 서식 › ─ 모두 선택. 그린 보기에서도 편집 명령은 현재 섬(없으면 커서의 블록)에 보낸다.
 function Add-WtMemoContextMenu($Target, $Ed) {
     $menu = New-WtHomePinContextMenu
     $menu.Tag = $Ed
-    foreach ($spec in @(@('잘라내기', 'Cut', 'Ctrl+X'), @('복사', 'Copy', 'Ctrl+C'), @('붙여넣기', 'Paste', 'Ctrl+V'), @('모두 선택', 'SelectAll', 'Ctrl+A'))) {
-        $item = [System.Windows.Controls.MenuItem]::new()
-        $item.Header = $spec[0]; $item.Tag = $spec[1]; $item.InputGestureText = $spec[2]
-        [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($item, $true)
-        $item.Add_Click({ param($s, $e) Invoke-WtMemoContextAction $s.Parent.Tag $s.Tag })
-        [void]$menu.Items.Add($item)
+    foreach ($spec in @(@('잘라내기', 'Cut', 'Ctrl+X', 0xE8C6), @('복사', 'Copy', 'Ctrl+C', 0xE8C8), @('붙여넣기', 'Paste', 'Ctrl+V', 0xE77F),
+            @('서식 없이 붙여넣기', 'PastePlain', 'Ctrl+Shift+V', 0xF0E3))) {
+        [void]$menu.Items.Add((New-WtMemoContextItem $Ed @spec))
     }
+    [void]$menu.Items.Add([System.Windows.Controls.Separator]::new())
+    # 서식은 단축키와 같은 편집 명령(Get-WtMemoFormatEdit)을 부른다
+    $format = New-WtSubmenuItem '서식' -Icon 0xE8D2
+    $format.Tag = @{ Value = @{ Ed = $Ed; Action = 'Format' } }
+    [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($format, $true)
+    foreach ($spec in @(@('굵게', 'Bold', 'Ctrl+B', 0xE8DD), @('기울임', 'Italic', 'Ctrl+I', 0xE8DB), @('취소선', 'Strike', 'Alt+Shift+5', 0xEDE0),
+            @('인라인 코드', 'Code', '', 0xE943), @('링크', 'Link', 'Ctrl+K', 0xE71B), @('할 일', 'Task', 'Ctrl+L', 0xE73A))) {
+        [void]$format.Items.Add((New-WtMemoContextItem $Ed @spec))
+    }
+    [void]$menu.Items.Add($format)
+    [void]$menu.Items.Add([System.Windows.Controls.Separator]::new())
+    [void]$menu.Items.Add((New-WtMemoContextItem $Ed '모두 선택' 'SelectAll' 'Ctrl+A' 0xE8B3))
     $Target.ContextMenu = $menu
     $Target.Add_ContextMenuOpening({ param($s, $e) Update-WtMemoContextMenu $s.ContextMenu })
     $menu.Add_Closed({
@@ -226,15 +243,37 @@ function Add-WtMemoContextMenu($Target, $Ed) {
         })
 }
 
+# 쓸 수 없는 항목은 숨기지 않고 비활성 + 이유 툴팁. 서식 안 항목은 머리(서식 ›)가 대신 막는다
 function Update-WtMemoContextMenu($Menu) {
     $ed = $Menu.Tag
     $selected = [bool](Get-WtMemoSelectedText $ed)
     $paste = $false
     try { $paste = [System.Windows.Clipboard]::ContainsText() } catch { }
-    $allowed = @(($ed.Enabled -and $selected), $selected, ($ed.Enabled -and $paste), [bool](Get-WtMemoEditorText $ed))
-    for ($i = 0; $i -lt $Menu.Items.Count; $i++) {
-        $Menu.Items[$i].IsEnabled = $allowed[$i]
-        $Menu.Items[$i].ToolTip = if ($allowed[$i]) { $null } elseif (-not $ed.Enabled) { '메모를 먼저 선택하세요' } elseif ($i -eq 2) { '붙여넣을 글이 없습니다' } else { '글을 먼저 선택하세요' }
+    $hasText = [bool](Get-WtMemoEditorText $ed)
+    foreach ($item in @($Menu.Items | Where-Object { $_ -is [System.Windows.Controls.MenuItem] })) {
+        $action = [string]$item.Tag.Value.Action
+        $allowed, $reason = switch ($action) {
+            'Cut' { ($ed.Enabled -and $selected), '글을 먼저 선택하세요' }
+            'Copy' { $selected, '글을 먼저 선택하세요' }
+            { $_ -in 'Paste', 'PastePlain' } { ($ed.Enabled -and $paste), '붙여넣을 글이 없습니다' }
+            'SelectAll' { $hasText, '선택할 글이 없습니다' }
+            default { [bool]$ed.Enabled, '' }
+        }
+        $item.IsEnabled = [bool]$allowed
+        $item.ToolTip = if ($allowed) { $null } elseif (-not $ed.Enabled) { '메모를 먼저 선택하세요' } else { $reason }
+    }
+}
+
+# 본문 메뉴 「서식 ›」의 편집. 단축키(Invoke-WtMemoBoxKey)와 같은 MemoText.psm1 명령이다
+function Get-WtMemoFormatEdit($Box, [string]$Action) {
+    $st = Get-WtMemoBoxState $Box
+    switch ($Action) {
+        'Bold' { Get-WtMemoWrapEdit $st '**' }
+        'Italic' { Get-WtMemoWrapEdit $st '*' }
+        'Strike' { Get-WtMemoWrapEdit $st '~~' }
+        'Code' { Get-WtMemoWrapEdit $st '`' }
+        'Link' { Get-WtMemoLinkEdit $st }
+        'Task' { Get-WtMemoTaskEdit $st }
     }
 }
 
@@ -255,6 +294,10 @@ function Invoke-WtMemoContextAction($Ed, [string]$Action) {
         'Cut' { $box.Cut() }
         'Copy' { $box.Copy() }
         'Paste' { $box.Paste() }
+        'PastePlain' { Invoke-WtMemoPlainPaste $box }
+        default {
+            try { [void](Invoke-WtMemoBoxEdit $box (Get-WtMemoFormatEdit $box $Action)) } catch { Show-WtError $_ '메모 편집' }
+        }
     }
 }
 

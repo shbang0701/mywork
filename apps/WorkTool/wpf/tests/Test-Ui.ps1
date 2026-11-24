@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 저장 묻는 창(겹쳐 묻지 않음) · 폼 칸 값 · 입력칸 오류 · 단추 메뉴 자리 · 메뉴 항목 · 빈 화면 안내 · 설정 · 도움말 하위 탭의 첫 포커스.
+    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 저장 묻는 창(겹쳐 묻지 않음) · 폼 칸 값 · 입력칸 오류 · 단추 메뉴 자리 · 메뉴 항목(아이콘 자리 · 위험 항목) · 빈 화면 안내 · 설정 · 도움말 하위 탭의 첫 포커스.
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/tests/Test-Ui.ps1
 #>
@@ -374,6 +374,68 @@ try {
         try { & $invokeItem $menuItems[0] } catch { $captionBlocked = $true }
         Assert-WtTest '공통 메뉴 항목: 누르면 그 항목의 값으로 한 번씩 부르고(값 없는 항목도), 묶음 이름은 누를 수 없다' (($global:uiMenuPicked -join ',') -ceq 'title,updated,값 없음' -and $captionBlocked) ($global:uiMenuPicked -join ',')
     } finally { $menuSource.Dispose() }
+    # 11-24 둘째 판 그룹 D: 메뉴 항목 왼쪽 아이콘(Font.Icon 16 · B.Text.Secondary, 글자와 사이 12) · 위험 항목(글자 · 아이콘 Btn.Danger 빨강) · 하위 메뉴 머리 아이콘.
+    # 아이콘 없는 항목은 자리를 잡지 않아 다른 탭 메뉴 모양(글자 왼쪽 12) 그대로다. 숨김 호스트에 배치해 실제 좌표를 잰다
+    $findText = {
+        param($Root, [string]$Text)
+        $queue = [Collections.Generic.Queue[Windows.DependencyObject]]::new(); $queue.Enqueue($Root)
+        while ($queue.Count) {
+            $node = $queue.Dequeue()
+            if ($node -is [Windows.Controls.TextBlock] -and $node.Text -ceq $Text) { return $node }
+            for ($i = 0; $i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($node); $i++) { $queue.Enqueue([Windows.Media.VisualTreeHelper]::GetChild($node, $i)) }
+        }
+    }
+    $dangerProbe = New-WtButton '삭제' -Kind Danger
+    $root.Child = $dangerProbe; Set-UiLayout
+    $dangerColor = $dangerProbe.Foreground.Color
+    $root.Child = $null
+    $iconMenu = New-WtHomePinContextMenu
+    $iconMenu.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $iconMenu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    $global:uiIconPicked = [Collections.Generic.List[object]]::new()
+    $iconItems = @((New-WtMenuItem '새 탭에서 열기' { param($v) $global:uiIconPicked.Add($v) } 'open' -Icon 0xE8A7), (New-WtMenuItem '꺼진 항목' { } -Icon 0xE7B8),
+        (New-WtSubmenuItem '폴더로 옮기기' -Icon 0xE8DE), (New-WtMenuItem '삭제' { param($v) $global:uiIconPicked.Add($v) } 'delete' -Icon 0xE74D -Danger),
+        (New-WtMenuItem '꺼진 위험' { } -Icon 0xE74D -Danger), (New-WtMenuItem '아이콘 없음' { }))
+    [void]$iconItems[2].Items.Add((New-WtMenuItem '폴더 없음' { }))
+    $iconItems[1].IsEnabled = $false; $iconItems[4].IsEnabled = $false
+    foreach ($item in $iconItems[0..2]) { [void]$iconMenu.Items.Add($item) }
+    [void]$iconMenu.Items.Add([Windows.Controls.Separator]::new())
+    foreach ($item in $iconItems[3..5]) { [void]$iconMenu.Items.Add($item) }
+    $iconParameters = [Windows.Interop.HwndSourceParameters]::new('UI menu icon test'); $iconParameters.WindowStyle = 0; $iconParameters.Width = 320; $iconParameters.Height = 400
+    $iconSource = [Windows.Interop.HwndSource]::new($iconParameters)
+    try {
+        $iconSource.RootVisual = $iconMenu
+        [void]$iconMenu.ApplyTemplate(); $iconMenu.Measure([Windows.Size]::new(320, 400)); $iconMenu.Arrange([Windows.Rect]::new(0, 0, 320, 400)); $iconMenu.UpdateLayout()
+        [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
+        $color = { param($Key) $iconMenu.FindResource($Key).Color }
+        $rows = foreach ($item in $iconItems) {
+            $text = & $findText $item ([string]$item.Header)
+            $icon = $item.Icon
+            [pscustomobject]@{ Name = [string]$item.Header; TextX = $text.TranslatePoint([Windows.Point]::new(0, 0), $item).X; Height = $item.ActualHeight; Text = $item.Foreground.Color
+                IconX = if ($icon) { $icon.TranslatePoint([Windows.Point]::new(0, 0), $item).X } else { $null }; IconW = if ($icon) { $icon.ActualWidth } else { $null }
+                IconColor = if ($icon) { $icon.Foreground.Color } else { $null }; IconFont = if ($icon) { "$($icon.FontFamily.Source)|$($icon.FontSize)" } else { '' } }
+        }
+        $detail = ($rows | ForEach-Object { "$($_.Name): 글자x=$($_.TextX) 아이콘x=$($_.IconX) 폭=$($_.IconW) 높이=$($_.Height)" }) -join ' / '
+        $font = "$($iconMenu.FindResource('Font.Icon').Source)|$($iconMenu.FindResource('F.Icon'))"
+        $withIcon = @($rows[0..4])
+        Assert-WtTest '메뉴 아이콘 자리: 아이콘 왼쪽 12 · 폭 16 · 글자는 아이콘 뒤 12(40), 아이콘 없는 항목은 글자 왼쪽 12 그대로, 줄 높이 32' (
+            -not @($withIcon | Where-Object { $_.IconX -ne 12 -or $_.IconW -ne 16 -or $_.TextX -ne 40 -or $_.IconFont -cne $font }).Count -and
+            $rows[5].IconX -eq $null -and $rows[5].TextX -eq 12 -and -not @($rows | Where-Object { $_.Height -ne 32 }).Count) $detail
+        Assert-WtTest '메뉴 아이콘 색: 보통 B.Text.Secondary, 위험은 글자 · 아이콘 모두 Btn.Danger 빨강, 꺼지면 둘 다 B.Text.Disabled' (
+            $rows[0].IconColor -eq (& $color 'B.Text.Secondary') -and $rows[0].Text -eq (& $color 'B.Text.Primary') -and $rows[2].IconColor -eq (& $color 'B.Text.Secondary') -and
+            $rows[1].IconColor -eq (& $color 'B.Text.Disabled') -and $rows[1].Text -eq (& $color 'B.Text.Disabled') -and
+            $rows[3].Text -eq $dangerColor -and $rows[3].IconColor -eq $dangerColor -and $dangerColor -eq (& $color 'B.Status.Error.Text') -and
+            $rows[4].Text -eq (& $color 'B.Text.Disabled') -and $rows[4].IconColor -eq (& $color 'B.Text.Disabled')) (($rows | ForEach-Object { "$($_.Name) 글자=$($_.Text) 아이콘=$($_.IconColor)" }) -join ' / ')
+        $chevron = $iconItems[2].Template.FindName('SubmenuChevron', $iconItems[2])
+        Assert-WtTest '메뉴 아이콘: 하위 메뉴 머리도 같은 자리 · 오른쪽 › 그대로' ($chevron -and $chevron.Text -ceq [string][char]0xE76C -and $chevron.IsVisible -and
+            [object]::ReferenceEquals($iconItems[2].Style, $iconMenu.FindResource('Home.PinSubmenuItem')))
+        foreach ($item in $iconItems[0], $iconItems[3]) {
+            $route = Test-WtTestInputPath -View $iconMenu -Element $item.Icon -Target $item
+            Assert-WtTest "메뉴 아이콘 숨김 좌표 경로: $($item.Header)의 아이콘 자리를 누르면 그 항목" $route.Ok $route.Path
+        }
+        foreach ($item in $iconItems[0], $iconItems[3]) { & $invokeItem $item }
+        [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle)
+        Assert-WtTest '메뉴 아이콘: 아이콘 · 위험 항목도 누르면 값으로 한 번씩 부른다' (($global:uiIconPicked -join ',') -ceq 'open,delete') ($global:uiIconPicked -join ',')
+    } finally { $iconSource.Dispose() }
     # 빈 화면 안내(New-WtEmptyState): 가운데에 한 줄 + 버튼. 버튼 하나는 글 아래 12, 여럿이면 한 줄에 사이 8. 숨긴 버튼은 그 간격도 빠진다
     $middle = { param($r) ($r.Left + $r.Right) / 2 }
     $folderAdd = New-WtButton '폴더 추가' -Icon 0xE710
