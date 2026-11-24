@@ -3280,7 +3280,7 @@ function Set-WtTimelineLayout($Timeline) {
     # 막대는 두 줄까지 쌓고, 넘치면 숨긴 뒤 오른쪽에 +n으로 묶는다.
     # [Math]::Max · Min의 첫 값은 0.0처럼 실수로 쓴다: PowerShell은 Max(0, 636.67)을 정수 판으로 불러 637을 돌려주고,
     # 올림된 이름 자리가 오른쪽 끝을 넘어 숨겨졌다(11-22 재확인, 배율 150%)
-    $ends =@([double]::NegativeInfinity, [double]::NegativeInfinity); $hidden = [System.Collections.Generic.List[string]]::new(); $placed = [System.Collections.Generic.List[object]]::new()
+    $ends =@([double]::NegativeInfinity, [double]::NegativeInfinity); $hidden = [System.Collections.Generic.List[object]]::new(); $placed = [System.Collections.Generic.List[object]]::new()
     foreach ($event in $state.Events) {
         $left = [Math]::Clamp($event.Start, $state.Start, $state.End); $right = [Math]::Clamp($event.End, $state.Start, $state.End)
         $barWidth = [Math]::Max(10.0, $width * ($right - $left) / $span)
@@ -3289,7 +3289,7 @@ function Set-WtTimelineLayout($Timeline) {
         if ($lane -lt 0) {
             $event.Button.Visibility = 'Collapsed'; $event.Caption.Visibility = 'Collapsed'
             if ($event.Alarm) { $event.Alarm.Visibility = 'Collapsed' }
-            $hidden.Add($event.Entry.ToolTip); continue
+            $hidden.Add($event); continue
         }
         $ends[$lane] = $x + $barWidth
         $event.Button.Visibility = 'Visible'; if ($event.Alarm) { $event.Alarm.Visibility = 'Visible' }
@@ -3297,12 +3297,6 @@ function Set-WtTimelineLayout($Timeline) {
     }
     $stacked = @($placed | Where-Object { $_.Lane -eq 1 }).Count -gt 0
     $infinite = [System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)
-    # +n은 이름 첫 줄의 오른쪽 끝이다. 첫 줄 이름은 +n 앞 12까지만 쓰고, 둘째 줄은 막대 오른쪽 끝까지 쓴다
-    $state.More.Text = "+$($hidden.Count)"; $state.More.ToolTip = $hidden -join "`n`n"
-    $limits = @($width, $width)
-    if ($hidden.Count) { $limits[0] = $width - (Measure-WtTimelinePart $state.More $infinite) - 12 }
-    $state.More.Visibility = if ($hidden.Count) { 'Visible' } else { 'Collapsed' }
-    $captionEnds = @([double]::NegativeInfinity, [double]::NegativeInfinity)
     foreach ($item in $placed) {
         $event = $item.Event; $button = $event.Button
         $button.Width = $item.Width; $button.Height = if ($stacked) { 8 } else { 14 }
@@ -3324,20 +3318,36 @@ function Set-WtTimelineLayout($Timeline) {
             $alarm.Visibility = if ($null -eq $alarmX) { 'Collapsed' } else { 'Visible' }
             if ($null -ne $alarmX) { [System.Windows.Controls.Canvas]::SetLeft($alarm, $alarmX); [System.Windows.Controls.Canvas]::SetTop($alarm, $top - 2) }
         }
-        # 이름은 막대 시작에 두고, 오른쪽 끝(첫 줄은 +n 앞)을 넘으면 끝에 맞춘다. 앞 이름과 12 안으로 붙으면 둘째 줄, 둘째 줄도 겹치면 쓰지 않는다
         $event.Caption.MaxWidth = $width
-        $captionWidth = Measure-WtTimelinePart $event.Caption $infinite
-        $line = -1; $captionX = 0
-        for ($l = 0; $l -lt 2 -and $line -lt 0; $l++) {
-            $x = [Math]::Max(0.0, [Math]::Min($item.X, $limits[$l] - $captionWidth))
-            if ($x -ge $captionEnds[$l] -and $x + $captionWidth -le $limits[$l] + 0.01) { $line = $l; $captionX = $x }
-        }
-        $event.Caption.Visibility = if ($line -lt 0) { 'Collapsed' } else { 'Visible' }
-        if ($line -ge 0) {
-            $captionEnds[$line] = $captionX + $captionWidth + 12
-            [System.Windows.Controls.Canvas]::SetLeft($event.Caption, $captionX); [System.Windows.Controls.Canvas]::SetTop($event.Caption, 70 + $line * 18)
-        }
+        $item.CaptionWidth = Measure-WtTimelinePart $event.Caption $infinite
     }
+    # 이름은 막대 시작에 두고, 오른쪽 끝(첫 줄은 +n 앞)을 넘으면 끝에 맞춘다. 앞 이름과 12 안으로 붙으면 둘째 줄, 둘째 줄도 겹치면 쓰지 않는다.
+    # +n은 이름 첫 줄의 오른쪽 끝이고, 숨긴 막대와 막대는 보여도 이름을 못 놓은 일정을 함께 센다(11-24 실사용: 넷째 막대 이름이 빠지고 +n에도 없었다).
+    # 첫 줄 이름은 +n 앞 12까지만 쓰므로, +n이 생기거나 자릿수가 바뀌면 이름 자리를 다시 정한다(몇 번이면 굳는다)
+    $assumed = $hidden.Count; $unnamed = [System.Collections.Generic.List[object]]::new()
+    for ($pass = 0; $pass -lt 4; $pass++) {
+        $state.More.Text = "+$assumed"
+        $limits = @($width, $width)
+        if ($assumed) { $limits[0] = $width - (Measure-WtTimelinePart $state.More $infinite) - 12 }
+        $captionEnds = @([double]::NegativeInfinity, [double]::NegativeInfinity); $unnamed.Clear()
+        foreach ($item in $placed) {
+            $caption = $item.Event.Caption; $captionWidth = $item.CaptionWidth
+            $line = -1; $captionX = 0
+            for ($l = 0; $l -lt 2 -and $line -lt 0; $l++) {
+                $x = [Math]::Max(0.0, [Math]::Min($item.X, $limits[$l] - $captionWidth))
+                if ($x -ge $captionEnds[$l] -and $x + $captionWidth -le $limits[$l] + 0.01) { $line = $l; $captionX = $x }
+            }
+            $caption.Visibility = if ($line -lt 0) { 'Collapsed' } else { 'Visible' }
+            if ($line -lt 0) { $unnamed.Add($item.Event); continue }
+            $captionEnds[$line] = $captionX + $captionWidth + 12
+            [System.Windows.Controls.Canvas]::SetLeft($caption, $captionX); [System.Windows.Controls.Canvas]::SetTop($caption, 70 + $line * 18)
+        }
+        if ($hidden.Count + $unnamed.Count -eq $assumed) { break }
+        $assumed = $hidden.Count + $unnamed.Count
+    }
+    $rest = @(@($hidden) + @($unnamed) | Sort-Object { $_.Start }, { $_.End })
+    $state.More.Text = "+$($rest.Count)"; $state.More.ToolTip = @($rest | ForEach-Object { $_.Entry.ToolTip }) -join "`n`n"
+    $state.More.Visibility = if ($rest.Count) { 'Visible' } else { 'Collapsed' }
     $minute = ($state.Now - $state.Date.Date).TotalMinutes
     $visible = $minute -ge $state.Start -and $minute -le $state.End
     $state.Line.Visibility = $state.Label.Visibility = if ($visible) { 'Visible' } else { 'Collapsed' }

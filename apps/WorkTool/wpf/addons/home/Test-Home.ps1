@@ -173,6 +173,41 @@ try {
         foreach ($n in $late.Names) { if ($n.L -lt -0.5 -or $n.R -gt $width + 0.5) { $lateProblems.Add("폭 $width 이름 $($n.Id) 범위 밖 $([Math]::Round($n.R, 2))") } }
     }
     Assert-WtTest '시간 막대 밤(재확인): 일정이 모두 범위 뒤여도 쌓인 막대마다 이름 · 나머지는 +n, 폭 소수 부분과 상관없이' (-not $lateProblems.Count) ($lateProblems -join ' | ')
+    # 11-24 실사용(그림 04): 낮 16:30 · 범위 08~20 · 1280×800 창(카드 안 폭 856)에서 오늘 일정 4개 · 막대 4개인데 이름은 3개, 넷째(18:40) 막대는 이름도 +n도 없었다.
+    # 앞 두 이름(15:00 · 16:15)이 첫 줄과 둘째 줄을 차지하고 17:30 이름이 첫 줄을 이어 써서 18:40 이름은 놓을 줄이 없다. 이름을 못 놓으면 쓰지 않는 규칙은 맞지만
+    # +n에는 숨긴 막대만 셌다(c68a4af의 [Math]::Max 정수 판 올림과 다른 원인: 반올림 없이도 두 줄이 다 찬다). 시험 자료(realistic-1122)의 제목 · 시각 · 알람 그대로,
+    # 배치(Measure · Arrange, 화면처럼 UseLayoutRounding) 뒤 실제 자리로 본다: 일정마다 이름이 보이거나 +n에 세고, +n 툴팁에 그 일정이 있다. +n도 첫 줄 이름과 12 띄운다
+    $dayItems = @(
+        @('15:00', '15:45', '백업 로그 일일 점검', $false), @('16:15', '17:05', 'SRV-01 펌웨어 적용 및 서비스 확인', $true),
+        @('17:30', '18:10', '방화벽 정책 변경 검토', $false), @('18:40', '19:20', '주간 인프라 운영 보고', $false)
+    ) | ForEach-Object { [pscustomobject]@{ Id = $_[0]; Title = $_[2]; Start = $date.Add([timespan]::Parse($_[0])); End = $date.Add([timespan]::Parse($_[1])); AllDay = $false; Alarm = $_[3]; ToolTip = "$($_[0]) $($_[2])" } }
+    $endLine = (New-WtTimeline $dayItems $date test-before).Timeline
+    $endLine.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $endLine.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+    $endLine.UseLayoutRounding = $true
+    $dayProblems = [System.Collections.Generic.List[string]]::new(); $dayReport = ''
+    foreach ($width in 856, 856.4, 856.7, 600, 700, 800, 900, 1000, 1200) {
+        $endLine.Measure([Windows.Size]::new($width, 116)); $endLine.Arrange([Windows.Rect]::new(0, 0, $width, 116)); $endLine.UpdateLayout()
+        Update-WtTimelineNow $endLine $date.Add([timespan]::Parse('16:30')); $endLine.UpdateLayout()
+        $dayRead = & $readEnd
+        $s = $endLine.Tag
+        $bars = @($s.Events | Where-Object { $_.Button.Visibility -eq 'Visible' }).Count
+        $named = @($dayRead.Names | ForEach-Object Id)
+        $moreCount = if ($dayRead.More) { [int]$s.More.Text.Substring(1) } else { 0 }
+        $moreTips = @([string]$s.More.ToolTip -split "`n`n" | Where-Object { $_ })
+        $missing = @($dayItems | Where-Object { $_.Id -notin $named } | ForEach-Object ToolTip)
+        if ($width -eq 856) { $dayReport = "막대 $bars · 이름 $($named -join ',') · $(if ($dayRead.More) { $s.More.Text } else { '+n 없음' }) [$($moreTips -join ' / ')]" }
+        if ($named.Count + $moreCount -ne $dayItems.Count -or ($missing -join '|') -cne ($moreTips -join '|')) {
+            $dayProblems.Add("폭 $width 막대 $bars · 이름 $($named -join ',') · +n $moreCount [$($moreTips -join ' / ')] · 빠진 이름 [$($missing -join ' / ')]")
+        }
+        if ($dayRead.More) {
+            foreach ($n in @($dayRead.Names | Where-Object { [Math]::Abs($_.T - $dayRead.More.T) -lt 0.5 })) {
+                if ($n.R + 11.5 -gt $dayRead.More.L) { $dayProblems.Add("폭 $width 이름 $($n.Id)가 +n에 붙음 $([Math]::Round($n.R, 1)) / +n $([Math]::Round($dayRead.More.L, 1))") }
+            }
+            if ($dayRead.More.R -gt $width + 0.5) { $dayProblems.Add("폭 $width +n 범위 밖") }
+        }
+    }
+    Assert-WtTest '시간 막대 낮(11-24 그림 04): 16:30 · 폭 856에 막대 4 · 이름 3 · 넷째(18:40)는 +1(툴팁에 그 일정), 둘레 폭에서도 이름을 못 놓은 일정은 모두 +n에' (
+        -not $dayProblems.Count -and $dayReport -ceq '막대 4 · 이름 15:00,16:15,17:30 · +1 [18:40 주간 인프라 운영 보고]') "$dayReport | $($dayProblems -join ' | ')"
     $next = New-WtNextEventLine $day
     Update-WtNextEventLine $next $date.AddHours(12).AddMinutes(20)
     $soon = "$($next.Tag.Pill.Child.Text)|$($next.Tag.Title.Text)"
