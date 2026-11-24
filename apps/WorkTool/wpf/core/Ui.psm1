@@ -1579,8 +1579,8 @@ $script:stylesXaml = @'
         <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.Hover}"/></Trigger>
         <Trigger Property="IsPressed" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.AccentSoft}"/></Trigger>
         <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Text}"/><Setter TargetName="Box" Property="BorderThickness" Value="2"/></Trigger>
-        <!-- 닫을 수 없는 줄 · 묶음: 값 문서 2절 비활성(Check와 같은 상자), 이유는 툴팁 (11-24 실사용) -->
-        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter TargetName="Mark" Property="Stroke" Value="{DynamicResource B.Text.Disabled}"/><Setter TargetName="Dash" Property="Background" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
+        <!-- 닫을 수 없는 줄 · 묶음: 값 문서 2절 비활성(Check와 같은 상자), 이유는 툴팁, 올림 바탕 없음 (11-24 실사용) -->
+        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="HitArea" Property="Background" Value="Transparent"/><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter TargetName="Mark" Property="Stroke" Value="{DynamicResource B.Text.Disabled}"/><Setter TargetName="Dash" Property="Background" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
     <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
@@ -1629,6 +1629,8 @@ $script:stylesXaml = @'
     <Setter Property="BorderThickness" Value="0"/>
     <Style.Triggers>
       <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
+      <!-- 여기서 닫을 수 없는 줄은 누를 수 없으므로 올림 바탕이 없다(apps/design.md 11장, 값 문서 8절 활성 작업) -->
+      <DataTrigger Binding="{Binding CanClose}" Value="False"><Setter Property="Background" Value="{DynamicResource B.Bg.Surface}"/></DataTrigger>
       <DataTrigger Binding="{Binding Selected}" Value="True"><Setter Property="Background" Value="{DynamicResource B.Bg.Selected}"/></DataTrigger>
     </Style.Triggers>
   </Style>

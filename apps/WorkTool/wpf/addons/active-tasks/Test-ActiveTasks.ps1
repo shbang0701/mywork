@@ -216,6 +216,22 @@ try {
                 })
             if (-not ($picked -and $focusOk -and -not $weak.Count)) { Write-Host "줄 고르기=$picked/$($taskRows.Off.Background.Color) 포커스=$focusOk/$cellFocused/$insideLeft 약한 대비=$($weak -join ',')" }
             Assert-Active '흐린 줄: 표 줄 고르기 · 칸 키보드 포커스와 겹쳐도 글자가 흐린 채 보이고, 올림 면 대비 2:1 이상(일곱 색)' ($picked -and $focusOk -and -not $weak.Count)
+            # 누를 수 없는 흐린 줄 · 그 묶음 머리의 체크 자리는 마우스를 올려도 바탕이 그대로다(apps/design.md 11장). 닫을 수 있는 줄 · 체크 상자는 올림 바탕.
+            # 실제 마우스 없이 WPF가 올림 때 바꾸는 IsMouseOver 값을 내부 키로 켜서 스타일이 고른 바탕을 읽는다(OS 입력 검사는 아님)
+            $overKey = [Windows.UIElement].GetField('IsMouseOverPropertyKey', [Reflection.BindingFlags]'Static,NonPublic').GetValue($null)
+            $hoverColor = $view.FindResource('B.Fill.Hover.Surface').Color
+            $okRowCheck = Get-WtVisualChild $taskRows.On ([Windows.Controls.CheckBox])
+            $hover = foreach ($pair in @(@('흐린 줄', $taskRows.Off), @('고를 수 있는 줄', $taskRows.On), @('흐린 줄 체크', $look.Row), @('흐린 묶음 체크', $look.Group), @('고를 수 있는 줄 체크', $okRowCheck))) {
+                $target = $pair[1]; $target.SetValue($overKey, $true); $target.UpdateLayout()
+                $over = [bool]$target.GetValue([Windows.UIElement]::IsMouseOverProperty)
+                $paint = if ($target -is [Windows.Controls.CheckBox]) { $target.Template.FindName('HitArea', $target).Background } else { $target.Background }
+                $target.SetValue($overKey, $false)
+                [pscustomobject]@{ Name = $pair[0]; Over = $over; Color = $(if ($paint -is [Windows.Media.SolidColorBrush]) { $paint.Color } else { $null }) }
+            }
+            $hoverOk = @($hover | Where-Object { -not $_.Over }).Count -eq 0 -and $hover[0].Color -eq $surface -and $hover[1].Color -eq $hoverColor -and
+                @($hover[2], $hover[3] | Where-Object { $_.Color -and $_.Color.A -ne 0 }).Count -eq 0 -and $hover[4].Color -eq $hoverColor
+            if (-not $hoverOk) { Write-Host "올림 바탕=$(@($hover | ForEach-Object { "$($_.Name):$($_.Color)" }) -join ', ')" }
+            Assert-Active '흐린 줄 · 그 묶음 머리 체크 자리는 마우스를 올려도 바탕이 그대로, 닫을 수 있는 줄 · 체크 상자는 올림 바탕 (11-24 승호)' $hoverOk
         } finally {
             & $shellModule { param($s) $script:current = $s.Current; $script:ui = $s.Ui } $savedShell
             & $module { Set-Item Function:script:Get-WtTaskModifiers -Value $script:originalMods }
