@@ -8,23 +8,123 @@
       예전 데이터는 바꾸지 않는다. 새 버전 데이터는 문서\WorkTool 에 저장된다.
     - 일정 알람은 앱이 떠 있는 동안(트레이로 숨었을 때도) 화면 오른쪽 아래 작은 창과 소리로 알린다.
 
+    - 같은 데이터 폴더를 쓰는 앱은 하나만 뜬다. 이미 떠 있으면 새로 켠 쪽은 그 앱에 알리고(창을 앞으로 · 빠른 메모) 바로 끝난다.
+
+.PARAMETER QuickMemo
+    빠른 메모 창을 연다. 앱이 떠 있으면 그 앱이 열고, 없으면 앱 창은 트레이에 숨긴 채 켜고 빠른 메모 창만 띄운다.
+    바탕 화면 바로 가기의 「바로 가기 키」용이다.
+
 .EXAMPLE
     .\Start-WorkTool.ps1
-    새 버전을 띄운다. 창의 X를 누르면 끝난다 (설정에서 트레이로 숨기기를 고를 수 있다).
+    새 버전을 띄운다. 창의 X를 누르면 끝난다 (설정에서 트레이로 숨기기를 고를 수 있다). 이미 떠 있으면 그 창을 앞으로 가져온다.
+
+.EXAMPLE
+    .\Start-WorkTool.ps1 -QuickMemo
+    빠른 메모 창을 연다.
 #>
 # WorkTool 새 버전(WPF) — 파일 하나로 묶은 버전 (자동 생성)
 # 이 파일은 직접 고치지 않는다. apps/WorkTool/wpf의 원본을 고친 뒤 wpf/build/Build-Bundle.ps1로 다시 만든다.
 #Requires -Version 7.0
 [CmdletBinding()]
 param(
+    [switch]$QuickMemo, # 빠른 메모 창을 연다 (이미 떠 있으면 그 앱이 연다)
     [Parameter(DontShow)][switch]$AppProcess # 실행 보조가 콘솔 없는 앱 프로세스에만 전달한다
 )
 
 $ErrorActionPreference = 'Stop'
 
+#region 한 번만 뜨기
+# 같은 데이터 폴더를 쓰는 WorkTool은 하나만 띄운다. 이미 떠 있으면 새로 켠 쪽은 그 앱에 신호(보이기 · 빠른 적기)만 보내고 끝난다.
+# .NET 기본 이름 있는 객체만 쓴다: Mutex(앱이 살아 있음) · EventWaitHandle(신호 · 다 했음) · MemoryMappedFile(앱 프로세스 번호).
+# 이름은 데이터 폴더 경로로 정한다(core\Storage.psm1 Get-WtDataRoot와 같은 규칙: 앱 폴더 datapath.txt 첫 줄, 없으면 문서\WorkTool).
+# Get-WtInstanceName · Send-WtInstanceSignal은 build\start-launcher.ps1에도 똑같이 있다. 고치면 둘 다 고친다(tests\Test-Instance.ps1이 같은지 본다)
+function Get-WtInstanceName([string]$AppRoot) {
+    $line = $null
+    try { $line = @([System.IO.File]::ReadAllText((Join-Path $AppRoot 'datapath.txt')) -split "\r?\n", 2)[0] } catch { }
+    $path = if ($line -and $line.Trim()) { [Environment]::ExpandEnvironmentVariables($line.Trim()) } else { $null }
+    if (-not $path) {
+        $docs = [Environment]::GetFolderPath('MyDocuments', 'DoNotVerify')
+        if (-not $docs) { $docs = $HOME }
+        $path = Join-Path $docs 'WorkTool'
+    }
+    $full = [System.IO.Path]::GetFullPath($path, $AppRoot).TrimEnd('\', '/').ToUpperInvariant()
+    'Local\WorkTool.' + [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($full))).Substring(0, 32)
+}
+
+# 떠 있는 앱에 신호를 보낸다. 신호를 받는 앱이 없으면(안 떴거나 끝나는 중) $false.
+# 앱이 창을 보인 뒤 「다 했음」을 받으면 그 창을 앞으로 가져온다. 단축키로 켠 이 프로세스에는 Windows가 그 권한을 주지만,
+# 트레이에 있던 앱 프로세스에는 없다. 못 가져오면 앱 창은 잠깐 맨 위에 떠 있고 Windows가 작업 표시줄 단추를 깜빡인다
+function Send-WtInstanceSignal([string]$Name, [switch]$QuickCapture) {
+    $signal = $null
+    $kind = if ($QuickCapture) { 'Capture' } else { 'Show' }
+    if (-not [System.Threading.EventWaitHandle]::TryOpenExisting("$Name.$kind", [ref]$signal)) { return $false }
+    $ready = $null
+    try {
+        $appId = 0
+        try {
+            $info = [System.IO.MemoryMappedFiles.MemoryMappedFile]::OpenExisting("$Name.Info", [System.IO.MemoryMappedFiles.MemoryMappedFileRights]::Read)
+            try {
+                $view = $info.CreateViewAccessor(0, 4, [System.IO.MemoryMappedFiles.MemoryMappedFileAccess]::Read)
+                try { $appId = $view.ReadInt32(0) } finally { $view.Dispose() }
+            } finally { $info.Dispose() }
+        } catch { $appId = 0 }
+        if ([System.Threading.EventWaitHandle]::TryOpenExisting("$Name.Ready", [ref]$ready)) { [void]$ready.Reset() }
+        [void]$signal.Set()
+        if ($ready -and $appId -gt 0 -and $ready.WaitOne(3000)) {
+            try {
+                Add-Type -AssemblyName Microsoft.VisualBasic
+                [Microsoft.VisualBasic.Interaction]::AppActivate($appId)
+            } catch { }
+        }
+    } finally {
+        $signal.Dispose()
+        if ($ready) { $ready.Dispose() }
+    }
+    $true
+}
+
+# 앱 프로세스: 이 데이터 폴더의 앱이 되면 신호 손잡이를 돌려준다. 이미 떠 있는 앱이 신호를 받으면 알리고 $null(이 프로세스는 끝난다).
+# 떠 있는 앱이 끝나는 중이면(신호를 닫음) 끝날 때까지 기다렸다가 이어서 뜬다. 오래 안 끝나면 신호 없이 이어 가고,
+# 그 앱이 데이터 폴더를 아직 잡고 있으면 시작 오류(중복 실행)로 알린다(core\Storage.psm1 Open-WtDataLock)
+function Enter-WtInstance([string]$Name, [switch]$QuickCapture, [int]$WaitMs = 15000) {
+    $mutex = [System.Threading.Mutex]::new($false, $Name)
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $owned = $false
+        try { $owned = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $owned = $true }
+        if ($owned) { break }
+        if (Send-WtInstanceSignal $Name -QuickCapture:$QuickCapture) { $mutex.Dispose(); return $null }
+        if ($watch.ElapsedMilliseconds -ge $WaitMs) { $mutex.Dispose(); return @{ Name = $Name } }
+        Start-Sleep -Milliseconds 100
+    }
+    $info = [System.IO.MemoryMappedFiles.MemoryMappedFile]::CreateOrOpen("$Name.Info", 4)
+    $view = $info.CreateViewAccessor(0, 4)
+    try { $view.Write(0, [int]$PID) } finally { $view.Dispose() }
+    $reset = [System.Threading.EventResetMode]::AutoReset
+    @{
+        Name = $Name; Mutex = $mutex; Info = $info
+        Show = [System.Threading.EventWaitHandle]::new($false, $reset, "$Name.Show")
+        Capture = [System.Threading.EventWaitHandle]::new($false, $reset, "$Name.Capture")
+        Ready = [System.Threading.EventWaitHandle]::new($false, $reset, "$Name.Ready")
+    }
+}
+
+# 앱이 끝날 때. 셸이 끝내기를 시작하면서 신호는 먼저 닫았고(core\Shell.psm1 Stop-WtInstanceSignals), 여기서 나머지를 놓는다
+function Close-WtInstance($Instance) {
+    if (-not $Instance) { return }
+    foreach ($key in 'Show', 'Capture', 'Ready', 'Info') { if ($Instance[$key]) { try { $Instance[$key].Dispose() } catch { } } }
+    if ($Instance.Mutex) {
+        try { $Instance.Mutex.ReleaseMutex() } catch { }
+        $Instance.Mutex.Dispose()
+    }
+}
+#endregion
+
 # 단일 파일로 실행해도 개인 PC 실행 보조와 같이 GUI만 남긴다.
 # 사용자가 열어 둔 터미널은 건드리지 않고 즉시 돌려주며, -File 전용 실행 프로세스는 여기서 끝난다.
+# 같은 데이터 폴더의 앱이 이미 떠 있으면 앱 프로세스를 새로 띄우지 않고 그 앱에 알린다(바로 가기 키로 누를 때 빠르게)
 if (-not $AppProcess) {
+    if (Send-WtInstanceSignal (Get-WtInstanceName $PSScriptRoot) -QuickCapture:$QuickMemo) { return }
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
@@ -55,6 +155,13 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
     Write-Host "  pwsh -STA -File `"$PSCommandPath`""
     return
 }
+
+# 같은 데이터 폴더의 앱이 이미 떠 있으면 그 앱에 알리고 이 프로세스는 창 없이 끝난다(개인 PC 실행 보조 · 동시에 두 번 켬).
+# 모듈을 불러오기 전이라 빠르고, 두 앱이 같은 데이터를 같이 만지지 않는다
+$instance = Enter-WtInstance (Get-WtInstanceName $PSScriptRoot) -QuickCapture:$QuickMemo
+if (-not $instance) { return }
+# 이 프로세스가 앱이 됐다: -QuickMemo면 빠른 적기 창을 연다(셸이 다른 실행 보조의 신호와 같은 길로 받는다)
+if ($QuickMemo -and $instance.Capture) { [void]$instance.Capture.Set() }
 
 $previousRenderMode = $null
 $renderModeChanged = $false
@@ -5171,6 +5278,35 @@ $script:stylesXaml = @'
     <Setter Property="FontSize" Value="{DynamicResource F.Memo.H1}"/><Setter Property="FontWeight" Value="{DynamicResource F.Memo.H1.Weight}"/><Setter Property="LineHeight" Value="{DynamicResource F.Memo.H1.LineHeight}"/>
   </Style>
   <Style x:Key="MemoWindow.Meta" TargetType="TextBlock" BasedOn="{StaticResource T.CaptionMuted}"><Setter Property="Margin" Value="0,4,0,12"/></Style>
+  <!-- 빠른 적기 창(New-WtCaptureWindow, 디자인 7절 「빠른 적기 창」): 창 바탕 위 흰 카드(좌우 8, 모서리 8), 본문 글은 메모 본문 단계(F.Memo.Body),
+       글 안쪽 위 12 · 좌우 16. 아래 줄 48(위아래 8 · 단추 32): 상태 글은 본문 글과 같은 x 24, 단추 오른쪽 끝은 카드와 같은 8 -->
+  <Style x:Key="Capture.Body" TargetType="Border" BasedOn="{StaticResource Panel.Surface}"><Setter Property="Margin" Value="8,0,8,0"/></Style>
+  <Style x:Key="Capture.Bar" TargetType="DockPanel"><Setter Property="Margin" Value="24,8,8,8"/></Style>
+  <Style x:Key="Capture.Status" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+    <Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="Margin" Value="0,0,12,0"/>
+  </Style>
+  <Style x:Key="Capture.Status.Error" TargetType="TextBlock" BasedOn="{StaticResource Capture.Status}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></Style>
+  <Style x:Key="Capture.Button" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="ToolTipService.ShowOnDisabled" Value="True"/></Style>
+  <!-- 본문 칸: 문서처럼 이어 쓰는 면이라 포커스 네모 · 테두리가 없다(메모 원문 칸 · 섬과 같음). 줄이 넘치면 칸 안에서 세로로 스크롤한다 -->
+  <Style x:Key="Capture.Box" TargetType="TextBox">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Padding" Value="16,12,16,12"/>
+    <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/>
+    <Setter Property="FontSize" Value="{DynamicResource F.Memo.Body}"/>
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="CaretBrush" Value="{DynamicResource B.Text.Primary}"/>
+    <Setter Property="TextBlock.LineHeight" Value="{DynamicResource F.Memo.Body.LineHeight}"/>
+    <Setter Property="TextBlock.LineStackingStrategy" Value="BlockLineHeight"/>
+    <Setter Property="TextWrapping" Value="Wrap"/>
+    <Setter Property="AcceptsReturn" Value="True"/>
+    <Setter Property="AcceptsTab" Value="False"/>
+    <Setter Property="VerticalContentAlignment" Value="Top"/>
+    <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+    <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+  </Style>
+  <!-- 빈 본문의 예시 글자: 본문 글자 자리(안쪽 16 + 편집 칸 글자 여백 2, 위 12)에 겹친다 -->
   <!-- 설정 → 휴무일: 해 이동 줄과 간단한 표(폭 720, 머리 32 · 행 32, 셀 좌우 12, 행 사이 선 B.Border.Muted). 행은 우클릭 · Delete · F2 -->
   <Style x:Key="T.Error" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}"><Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/></Style>
   <Style x:Key="Holiday.Bar" TargetType="DockPanel"><Setter Property="Width" Value="720"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0,4,0,8"/></Style>
@@ -6875,6 +7011,64 @@ function Get-WtUtilityWindowXaml {
 
 function New-WtUtilityWindow([string]$Title) { New-WtSideWindow $Title -Width 960 -Height 680 -Utility }
 Export-ModuleMember -Function New-WtUtilityWindow
+
+# ---- 빠른 적기 창 (단축키로 어디서든 띄우는 작은 창, 디자인 7절 「빠른 적기 창」) ------------------------------------
+# 32 제목 줄(표식 · 제목 · 닫기) + 흰 카드 본문 + 아래 줄 48(왼쪽 상태 글 · 오른쪽 단추). 처음 440 × 280(최소 360 × 200).
+# 늘 맨 위에 있고 앱 창에 붙지 않는다(트레이로 숨었을 때도 뜬다). 작업 표시줄 단추가 있어서 Windows가 앞으로 못 가져오면 깜빡인다.
+# 모양은 여기서만 정하고, 본문 · 단추는 부르는 탭이 채운다. 보이기(Show) · 자리는 부르는 쪽이 한다(Get-WtCapturePlacement)
+function Get-WtCaptureWindowXaml {
+@'
+<Window {NS} Width="440" Height="280" MinWidth="360" MinHeight="200" WindowStyle="None" ResizeMode="CanResize" ShowInTaskbar="True" Topmost="True"
+    ShowActivated="True" WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Ideal"
+    FontFamily="{DynamicResource Font.UI}" FontSize="{DynamicResource F.Body}" Foreground="{DynamicResource B.Text.Primary}" Background="{DynamicResource B.Bg.Canvas}">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="32" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+  </WindowChrome.WindowChrome>
+  <Grid x:Name="Frame">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <DockPanel Height="{DynamicResource F.Chrome.Height}">
+      <Button x:Name="CloseButton" DockPanel.Dock="Right" Style="{DynamicResource Btn.Close}" WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="닫기 (Esc)" AutomationProperties.Name="닫기">
+        <TextBlock Text="&#xE8BB;" Style="{DynamicResource T.Icon}" FontSize="10"/>
+      </Button>
+      <StackPanel Orientation="Horizontal">
+        <Border Style="{DynamicResource Shell.Brand}"><TextBlock Text="W" Style="{DynamicResource Shell.BrandLetter}"/></Border>
+        <TextBlock x:Name="TitleText" Style="{DynamicResource T.Sub}" Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+      </StackPanel>
+    </DockPanel>
+    <Border x:Name="Body" Grid.Row="1" Style="{DynamicResource Capture.Body}"/>
+    <DockPanel Grid.Row="2" Style="{DynamicResource Capture.Bar}">
+      <StackPanel x:Name="ToolRight" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"/>
+      <TextBlock x:Name="StatusText" Style="{DynamicResource Capture.Status}"/>
+    </DockPanel>
+    <Border x:Name="WindowBorder" Grid.RowSpan="3" BorderBrush="{DynamicResource B.Border.Default}" BorderThickness="1" IsHitTestVisible="False"/>
+  </Grid>
+</Window>
+'@
+}
+
+# 결과: @{ Window; Frame(창 안 전체, 검사는 이것을 숨김 호스트에 옮겨 잰다); Title; Body(Border); Status(TextBlock); ToolRight; Close(Button) }
+# 앱 창이 있으면 그 자원(테마 · 글자 크기)을 합쳐 바꾸면 같이 바뀌고, 아이콘도 같이 쓴다
+function New-WtCaptureWindow([string]$Title) {
+    $xaml = Get-WtCaptureWindowXaml
+    $w = ConvertFrom-WtXaml $xaml
+    $main = if (Get-Command Get-WtWindow -ErrorAction Ignore) { Get-WtWindow } else { $null }
+    if ($main) {
+        $w.Resources.MergedDictionaries.Add($main.Resources)
+        if ($main.Icon) { $w.Icon = $main.Icon }
+    } else { $w.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $w.Resources.MergedDictionaries.Add((Get-WtStyleDictionary)) }
+    $w.Title = $Title
+    $named = Get-WtNamedElements $w $xaml
+    $named.TitleText.Text = $Title
+    @{ Window = $w; Frame = $named.Frame; Title = $named.TitleText; Body = $named.Body; Status = $named.StatusText; ToolRight = $named.ToolRight; Close = $named.CloseButton }
+}
+
+# 자리: 작업 영역 가로 가운데, 위에서 96(알람 창이 쌓이는 오른쪽 아래와 겹치지 않게). 작업 영역이 낮으면 위 16까지 올린다. 왼쪽 위 점
+function Get-WtCapturePlacement([System.Windows.Rect]$WorkArea, [double]$Width = 440, [double]$Height = 280) {
+    $left = [Math]::Max($WorkArea.Left, [Math]::Round($WorkArea.Left + ($WorkArea.Width - $Width) / 2))
+    $top = [Math]::Max($WorkArea.Top + 16, [Math]::Min($WorkArea.Top + 96, $WorkArea.Bottom - 16 - $Height))
+    [System.Windows.Point]::new($left, $top)
+}
+Export-ModuleMember -Function New-WtCaptureWindow, Get-WtCapturePlacement
 
 # 기본 컨트롤이 먼저 처리한 Esc는 창에 오지 않는다. 남아 있는 펼침만 한 번 닫는다.
 function Close-WtOpenTransient($Root) {
@@ -10726,6 +10920,10 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
                실패는 그 탭 기록(Get-WtAddonTickError)에만 남기고 다음 틱을 막지 않는다(대화상자를 띄우지 않는다)
   SettingRows  { } → 설정 화면에 넣을 행 @(@{ Group = '알림'; Label = '라벨'; Control = 화면 요소; Note = '툴팁' }) (선택)
                지금 받는 묶음은 일반 탭의 '알림'뿐이다. 켜진 탭만, 탭 순서대로 코어 행 앞에 놓는다
+  QuickCapture 빠른 적기: 바탕 화면 바로 가기 키(진입 스크립트 -QuickMemo)로 어디서든 바로 적는 작은 창 (선택)
+               @{ Name = '도움말 · 오류에 보일 이름'; Key = '권하는 바로 가기 키 글(선택)'; Open = { } → 창을 띄우거나 이미 떠 있으면 앞으로 }
+               셸은 신호를 받으면 켜진 탭 중 메뉴 순서로 처음 등록한 하나의 Open을 부른다. 없거나 꺼졌거나 실패하면 앱 창을 보인다.
+               Open은 화면 스레드에서 부르고, 끝나면 셸이 실행 보조에 다 했다고 알려 그 창을 앞으로 가져오게 한다
 #>
 function Register-WtAddon {
     param(
@@ -10764,7 +10962,8 @@ function Register-WtAddon {
         [scriptblock]$DateMenu,
         [scriptblock]$Tick,
         [ValidateRange(5, 3600)][int]$TickSeconds = 60,
-        [scriptblock]$SettingRows
+        [scriptblock]$SettingRows,
+        [hashtable]$QuickCapture
     )
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
@@ -10793,6 +10992,12 @@ function Register-WtAddon {
         }
         $exitEntry = [pscustomobject]@{ Pending = $ConfirmExit.Pending; Confirm = $ConfirmExit.Confirm }
     }
+    $captureEntry = $null
+    if ($QuickCapture) {
+        if (-not ($QuickCapture.Name -is [string] -and $QuickCapture.Name.Trim())) { throw "애드온 '$Id'의 QuickCapture에는 Name(글)이 필요합니다." }
+        if ($QuickCapture.Open -isnot [scriptblock]) { throw "애드온 '$Id'의 QuickCapture에는 Open(함수)이 필요합니다." }
+        $captureEntry = [pscustomobject]@{ Name = $QuickCapture.Name.Trim(); Key = [string]$QuickCapture.Key; Open = $QuickCapture.Open }
+    }
     $cards = @($HomeCards)
     if (-not $PSBoundParameters.ContainsKey('HomeCards') -and $HomeCard) {
         $cards = @(@{ Slot = $HomeSlot; Order = $HomeOrder; Card = $HomeCard })
@@ -10815,7 +11020,7 @@ function Register-WtAddon {
             SavePending = $SavePending; ConfirmExit = $exitEntry; WarmUp = $WarmUp
             Help = @($Help); Shortcuts = @($Shortcuts); HelpCard = $HelpCard
             Related = $relatedEntry; DateMenu = $DateMenu
-            Tick = $Tick; TickSeconds = $TickSeconds; SettingRows = $SettingRows
+            Tick = $Tick; TickSeconds = $TickSeconds; SettingRows = $SettingRows; QuickCapture = $captureEntry
         })
     # 같은 탭을 다시 등록하면서 표시 함수를 뺐으면 옛 등록도 없앤다.
     Register-WtCalendarSource -Id "addon:$Id" -Page $Id -CalendarItems $CalendarItems
@@ -10889,6 +11094,9 @@ function Stop-WtAddonTicks {
     foreach ($timer in $script:tickTimers) { $timer.Stop() }
     $script:tickTimers.Clear()
 }
+
+# 빠른 적기를 등록한 켜진 탭 하나(메뉴 순서로 처음). 없으면 $null
+function Get-WtQuickCapture { @(Get-WtAddon | Where-Object { $_.QuickCapture }) | Select-Object -First 1 }
 
 # 설정 화면 묶음(Group)에 넣을 탭의 행. 켜진 탭만 탭 순서대로. 한 탭이 실패하면 그 탭의 오류 줄 하나(Error)로 바꾼다
 function Get-WtAddonSettingRows([string]$Group) {
@@ -11016,7 +11224,7 @@ function Get-WtCalendarItems([datetime]$From, [datetime]$To, [string[]]$Exclude 
 }
 
 Export-ModuleMember -Function Get-WtCalendarStores, Register-WtAddon, Get-WtAddon, Get-WtCalendarItems, Get-WtHomeCards, Get-WtCalendarHost, Get-WtCalendarMark, Get-WtRelatedSource,
-    Get-WtDateMenuItems, Test-WtCalendarPartDay, Invoke-WtAddonTick, Get-WtAddonTickError, Start-WtAddonTicks, Stop-WtAddonTicks, Get-WtAddonSettingRows
+    Get-WtDateMenuItems, Test-WtCalendarPartDay, Invoke-WtAddonTick, Get-WtAddonTickError, Start-WtAddonTicks, Stop-WtAddonTicks, Get-WtAddonSettingRows, Get-WtQuickCapture
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Addons.psm1 끝 ----
 
@@ -11981,6 +12189,72 @@ function Get-WtShortcutGroups {
     }
 }
 
+$script:setClipboard = { param($Text) [System.Windows.Clipboard]::SetText($Text) }   # 검사가 바꿔 끼운다(사용자 클립보드를 건드리지 않게)
+
+<#
+도움말 → 정보의 「바로 가기 키」 묶음: 바탕 화면 바로 가기에 붙여 넣을 「대상」 글 · [복사] · 짧은 만드는 법.
+보이기(코어)와, 빠른 적기를 등록한 켜진 탭이 있으면 그 줄. 앱은 바로 가기를 만들거나 단축키를 등록하지 않는다
+(사용자가 Windows 기본 「바로 가기 키」를 직접 단다). 대상 글은 Get-WtLaunchTarget(core\Shell.psm1)이 만든다
+#>
+function New-WtLaunchKeyRows {
+    $items = @(@{ Label = 'WorkTool 보이기'; Key = 'Ctrl + Alt + W'; Target = (Get-WtLaunchTarget) })
+    $capture = Get-WtQuickCapture
+    if ($capture) { $items += @{ Label = $capture.QuickCapture.Name; Key = $capture.QuickCapture.Key; Target = (Get-WtLaunchTarget -QuickCapture) } }
+    if (-not $items[0].Target) { return }
+    $group = New-WtText '바로 가기 키' 'T.Strong'
+    $group.Margin = [System.Windows.Thickness]::new(0, 24, 0, 0)
+    $group
+    $slow = $false; $long = $false
+    foreach ($item in $items) {
+        if (-not $item.Target) { continue }
+        if (-not $item.Target.Fast) { $slow = $true }
+        if ($item.Target.TooLong) { $long = $true }
+        $box = New-WtStack Vertical 8
+        $line = [System.Windows.Controls.DockPanel]::new()
+        $copy = New-WtButton '복사' -Icon 0xE8C8
+        $copy.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
+        $copy.VerticalAlignment = 'Top'
+        $copy.Tag = @{ Text = $item.Target.Text; Label = $item.Label; Timer = $null }
+        [System.Windows.Automation.AutomationProperties]::SetName($copy, "$($item.Label) 대상 복사")
+        $copy.ToolTip = '대상 글을 복사합니다.'
+        $copy.Add_Click({ param($s, $e) Copy-WtLaunchTarget $s })
+        [System.Windows.Controls.DockPanel]::SetDock($copy, 'Right')
+        $text = New-WtText $item.Target.Text 'T.Body'
+        Set-WtResource $text 'FontFamily' 'Font.Mono'
+        [void]$line.Children.Add($copy); [void]$line.Children.Add($text)
+        [void](Add-WtChild $box $line)
+        if ($item.Key) { [void](Add-WtChild $box (New-WtText "권하는 키 $($item.Key)" 'T.Sub')) }
+        New-WtSettingRow $item.Label $box
+    }
+    $steps = New-WtStack Vertical 4
+    foreach ($t in @(
+            '1. 바탕 화면 빈 곳을 우클릭 → 새로 만들기 → 바로 가기를 고릅니다.',
+            '2. 「항목 위치」에 위 대상을 붙여 넣고 [다음], 이름을 정하고 [마침]을 누릅니다.',
+            '3. 만든 바로 가기를 우클릭 → 속성에서 「바로 가기 키」 칸을 누른 뒤 권하는 키를 누릅니다.',
+            '4. 같은 창의 「실행」을 「최소화」로 바꿉니다. 키를 누를 때 잠깐 생기는 콘솔 창을 작업 표시줄로 내립니다.',
+            '5. [확인]을 누르면 어디서든 그 키로 뜹니다. 바로 가기는 바탕 화면이나 시작 메뉴에 두어야 키가 듣습니다.')) {
+        [void](Add-WtChild $steps (New-WtText $t 'T.Body'))
+    }
+    if ($long) { [void](Add-WtChild $steps (New-WtText '대상이 260자를 넘어 바로 가기에 다 들어가지 않습니다. 앱 폴더를 더 짧은 경로로 옮기세요.' 'T.Error')) }
+    if ($slow) { [void](Add-WtChild $steps (New-WtText '같은 폴더에 worktool.zip의 Start-WorkTool-Launcher.ps1을 두면 키를 누른 뒤 더 빨리 뜹니다.' 'T.Sub')) }
+    New-WtSettingRow '만드는 법' $steps
+}
+
+# [복사]: 대상 글을 클립보드에 넣고 단추 글을 2초 동안 「복사함」으로 바꾼다
+function Copy-WtLaunchTarget($Button) {
+    try { & $script:setClipboard ([string]$Button.Tag.Text) }
+    catch { Show-WtMessage '클립보드를 다른 프로그램이 쓰고 있어서 복사하지 못했습니다. 다시 누르세요.' 'WorkTool' 'Warning'; return }
+    $Button.Content = New-WtButtonContent '복사함' 0xE73E
+    if (-not $Button.Tag.Timer) {
+        $timer = [System.Windows.Threading.DispatcherTimer]::new()
+        $timer.Interval = [TimeSpan]::FromSeconds(2)
+        $timer.Tag = $Button
+        $timer.Add_Tick({ param($s, $e) $s.Stop(); $s.Tag.Content = New-WtButtonContent '복사' 0xE8C8 })
+        $Button.Tag.Timer = $timer
+    }
+    $Button.Tag.Timer.Stop(); $Button.Tag.Timer.Start()
+}
+
 function New-WtHelpPage {
     $keys = New-WtCard
     $col = New-WtStack Vertical
@@ -12030,6 +12304,7 @@ function New-WtHelpPage {
     $rootText = New-WtText (Get-WtDataRoot) 'T.Body'
     Set-WtResource $rootText 'FontFamily' 'Font.Mono'
     [void](Add-WtChild $col (New-WtSettingRow '데이터 폴더' $rootText))
+    foreach ($el in @(New-WtLaunchKeyRows)) { [void](Add-WtChild $col $el) }
     $win.Child = $col
     New-WtTabbedPage '도움말' @(@('단축키', $keys), @('탭', $tabsCard), @('정보', $win))
 }
@@ -12083,6 +12358,14 @@ $script:forceOpaque = $false  # WORKTOOL_FORCE_OPAQUE=1: 설정을 저장하지 
 $script:writingDropped = $false   # 끝낼 때 사용자가 「저장을 기다리지 않고 끝내기」를 골랐는지
 $script:exitAsking = $false       # 끝내기 전에 묻는 중(그사이 트레이 종료 등이 또 와도 겹쳐 묻지 않게)
 $script:forwardingKey = $false    # 화면 밖 포커스의 키를 화면에 다시 올리는 중(Invoke-WtPageKey)
+$script:instance = $null          # 한 번만 뜨기: 진입 스크립트가 넘긴 신호 손잡이 @{ Show; Capture; Ready; Info } (Start-WorkTool.ps1 Enter-WtInstance)
+$script:instanceTimer = $null     # 그 신호를 보는 화면 스레드 타이머
+$script:frontTimer = $null        # 앞으로 못 가져왔을 때 잠깐 맨 위로 둔 것을 푸는 타이머
+$script:captureStale = $false     # 빠른 적기 뒤 앱 창을 다시 보면 지금 화면을 한 번 새로 그린다
+$script:entryPath = ''            # 바로 가기 대상에 쓸 진입 파일(Start-WorkTool.ps1 · WorkTool-WPF.ps1)
+$script:mainStarted = $false      # 앱 창의 첫 화면을 만들었는지. 트레이에 숨긴 채 켜면(-StartInTray) 앱 창을 처음 보일 때 만든다
+$script:showMain = { param($Window) $Window.Show() }        # 검사가 바꿔 끼운다(창을 띄우지 않게)
+$script:newTray = { param($Icon) New-WtTrayIcon $Icon }     # 검사가 바꿔 끼운다(트레이 아이콘을 띄우지 않게)
 
 $script:shellXaml = Get-WtShellXaml
 
@@ -12724,9 +13007,138 @@ function Update-WtAppIcon {
 }
 
 function Show-WtMainWindow {
-    $script:window.Show()
+    & $script:showMain $script:window
+    # 실행 파일이 콘솔을 최소화해서 띄우면(start /min · 바로 가기 「실행: 최소화」) 첫 창도 최소화돼서 뜬다 → 원래 크기로 앞에 띄운다
     if ($script:window.WindowState -eq 'Minimized') { $script:window.WindowState = 'Normal' }
     [void]$script:window.Activate()
+    if (-not $script:mainStarted) { Start-WtMainPage }
+}
+
+# 앱 창의 첫 화면(첫 탭 · 첫 업무시간 입력). 보통은 켜자마자, 트레이에 숨긴 채 켰으면 앱 창을 처음 보일 때(트레이 열기 · 보이기 신호) 한 번
+function Start-WtMainPage {
+    $script:mainStarted = $true
+    $script:captureStale = $false   # 지금 새로 만드는 화면이라 빠른 적기 뒤 다시 그릴 것이 없다
+    $initialPage = Initialize-WtMainPage
+    Show-WtFirstWorkSetup $script:window $initialPage
+}
+
+# ---- 한 번만 뜨기 · 빠른 적기 --------------------------------------------------------------------
+# 진입 스크립트가 이 데이터 폴더의 앱이 되면 신호 손잡이를 넘긴다(Start-WtApp -Instance). 다시 켠 실행 보조가 신호를 보내면
+# 화면 스레드 타이머가 WaitOne(0)으로 보고(다른 스레드 콜백 없음) 보이기 · 빠른 적기를 한 뒤 Ready로 다 했다고 알린다.
+# 그러면 실행 보조가 그 창을 앞으로 가져온다(단축키로 켠 실행 보조에만 Windows가 그 권한을 준다). 등록 자리는 탭 이름이 아니라
+# 쓰임새(Register-WtAddon -QuickCapture)다
+
+function Start-WtInstanceTimer {
+    if ($script:instanceTimer) { $script:instanceTimer.Stop() }
+    $script:instanceTimer = $null
+    if (-not $script:instance) { return }
+    $script:instanceTimer = [System.Windows.Threading.DispatcherTimer]::new()
+    $script:instanceTimer.Interval = [TimeSpan]::FromMilliseconds(200)
+    $script:instanceTimer.Add_Tick({ [void](Invoke-WtInstanceSignals) })
+    $script:instanceTimer.Start()
+}
+
+# 받은 신호를 처리한다. 하나라도 처리했으면 다 했다고 알리고 $true
+function Invoke-WtInstanceSignals {
+    $signals = $script:instance
+    if (-not $signals -or $script:exiting) { return $false }
+    $done = $false
+    try {
+        if ($signals.Show -and $signals.Show.WaitOne(0)) { $done = $true; Show-WtMainFront }
+        if ($signals.Capture -and $signals.Capture.WaitOne(0)) { $done = $true; Invoke-WtQuickCapture }
+    } catch { Show-WtError $_ '다시 켠 WorkTool의 요청' }
+    finally { if ($done -and $signals.Ready) { try { [void]$signals.Ready.Set() } catch { } } }
+    $done
+}
+
+# 끝내기를 시작할 때: 더 받지 않는다. 그사이 켠 실행 보조는 신호를 못 찾고 새 앱 프로세스를 띄우며,
+# 그 앱은 이 앱이 끝날 때까지 기다렸다가 이어서 뜬다(Start-WorkTool.ps1 Enter-WtInstance). 앱이 살아 있음(Mutex)은 진입 스크립트가 놓는다
+function Stop-WtInstanceSignals {
+    if ($script:instanceTimer) { $script:instanceTimer.Stop(); $script:instanceTimer = $null }
+    $signals = $script:instance
+    $script:instance = $null
+    if (-not $signals) { return }
+    foreach ($key in 'Show', 'Capture', 'Ready', 'Info') { if ($signals[$key]) { try { $signals[$key].Dispose() } catch { } } }
+}
+
+# 보이기: 트레이 · 최소화에서 꺼내 앞으로. 다른 프로그램이 앞에 있어 Windows가 바로 활성화하지 않으면 잠깐 맨 위로 올려 보이게 두고,
+# 활성화되거나(실행 보조가 앞으로 가져옴) 3초가 지나면 맨 위를 푼다. 그래도 못 가져오면 Windows가 작업 표시줄 단추를 깜빡인다
+function Show-WtMainFront {
+    if (-not $script:window) { return }
+    Show-WtMainWindow
+    Request-WtMainActivateLater
+    if ($script:window.IsActive) { return }
+    # 이미 맨 위면 다시 맨 위 무리의 가장 앞으로 올린다(나중에 뜬 알람 창보다 앞)
+    $script:window.Topmost = $false
+    $script:window.Topmost = $true
+    if (-not $script:frontTimer) {
+        $script:frontTimer = [System.Windows.Threading.DispatcherTimer]::new()
+        $script:frontTimer.Interval = [TimeSpan]::FromSeconds(3)
+        $script:frontTimer.Add_Tick({ Clear-WtFrontHold })
+    }
+    $script:frontTimer.Stop()
+    $script:frontTimer.Start()
+}
+
+# 다시 켠 실행 보조는 Ready 뒤 AppActivate(프로세스 번호)로 앞으로 가져오는데, 같은 프로세스의 알람 창이 먼저 잡히면
+# 키보드가 알람 창에 가서 Ctrl+Alt+W 뒤 단축키를 앱 창이 못 받았다(11-25 노트북). 그 뒤엔 이 앱이 앞 프로세스라
+# 자기 창을 앞으로 할 수 있으므로 조금 뒤 앱 창을 한 번 더 활성화한다(이미 앱 창이 활성이면 아무것도 안 함)
+function Request-WtMainActivateLater {
+    if (-not $script:activateLater) {
+        $script:activateLater = [System.Windows.Threading.DispatcherTimer]::new()
+        $script:activateLater.Interval = [TimeSpan]::FromMilliseconds(400)
+        $script:activateLater.Add_Tick({
+                $script:activateLater.Stop()
+                if ($script:window -and $script:window.IsVisible -and -not $script:window.IsActive -and -not $script:exiting) { [void]$script:window.Activate() }
+            })
+    }
+    $script:activateLater.Stop()
+    $script:activateLater.Start()
+}
+
+function Clear-WtFrontHold {
+    if ($script:frontTimer) { $script:frontTimer.Stop() }
+    if ($script:window -and $script:window.Topmost) { $script:window.Topmost = $false }
+}
+
+# 빠른 적기 신호: 등록한 켜진 탭의 창을 연다. 등록이 없거나 꺼졌거나, 앱이 대화상자로 묻는 중이거나, 실패하면 앱 창을 보인다
+function Invoke-WtQuickCapture {
+    $addon = Get-WtQuickCapture
+    if (-not $addon -or [System.Windows.Interop.ComponentDispatcher]::IsThreadModal) { Show-WtMainFront; return }
+    try {
+        [void](& $addon.QuickCapture.Open)
+        $script:captureStale = $true
+    } catch {
+        Show-WtMainFront
+        Show-WtError $_ "$($addon.QuickCapture.Name) 열기"
+    }
+}
+
+# 앱 창이 활성화될 때: 잠깐 맨 위로 둔 것을 풀고, 빠른 적기로 데이터가 바뀐 뒤면 지금 화면을 한 번 새로 그린다(홈 바로 가기 · 메모 목록)
+function Invoke-WtMainActivated {
+    Clear-WtFrontHold
+    if (-not $script:captureStale -or $script:selecting -or -not $script:current -or $script:exiting) { return }
+    $script:captureStale = $false
+    [void](Invoke-WtPageSelection $script:current)
+}
+
+<#
+바탕 화면 바로 가기의 「대상」 글(도움말 → 정보). 지금 쓰는 pwsh로 콘솔 창을 숨겨(-WindowStyle Hidden) 진입 파일을 부른다.
+옆에 개인 PC 실행 보조(Start-WorkTool-Launcher.ps1)가 있으면 그것을 부른다: 작은 파일이라 앱이 떠 있을 때 신호를 빨리 보낸다.
+앱은 바로 가기를 만들지 않는다. 사용자가 이 글로 만들고 Windows 기본 「바로 가기 키」를 단다.
+결과: @{ Text; File; Fast(작은 파일을 부름); TooLong(대상 칸 260자를 넘음) }. 진입 파일을 모르면 $null
+#>
+function Get-WtLaunchTarget([switch]$QuickCapture) {
+    $entry = $script:entryPath
+    if (-not $entry) { return $null }
+    $file = $entry
+    $launcher = Join-Path ([System.IO.Path]::GetDirectoryName($entry)) 'Start-WorkTool-Launcher.ps1'
+    # 앱 폴더가 응답 없는 공유 폴더여도 화면이 멈추지 않게 화면 밖에서 본다. 답이 늦으면 진입 파일을 쓴다
+    try { if (Invoke-WtWork -Call (New-WtCall ([System.IO.File]) Exists $launcher) -Key (Get-WtPathKey $launcher) -TimeoutMs 1500) { $file = $launcher } } catch { }
+    $text = '"{0}" -NoProfile -WindowStyle Hidden -File "{1}"' -f (Join-Path $PSHOME 'pwsh.exe'), $file
+    if ($QuickCapture) { $text += ' -QuickMemo' }
+    [pscustomobject]@{ Text = $text; File = $file; TooLong = $text.Length -gt 259
+        Fast = $file -cne $entry -or [System.IO.Path]::GetFileName($entry) -ceq 'Start-WorkTool.ps1' }
 }
 
 # 저장하지 못한 내용이 있을 때 묻는다. 'retry'(다시 시도) · 'proceed'(그대로 끝내기 · 이동) · 'cancel' 중 하나를 돌려준다.
@@ -12889,10 +13301,12 @@ function Stop-WtApp {
         } finally { $script:exitAsking = $false }
     }
     $script:exiting = $true
+    Stop-WtInstanceSignals   # 다시 켠 실행 보조는 이제 이 앱을 찾지 않고, 새 앱이 이 앱이 끝나기를 기다린다
     if ($script:writingDropped) { try { Stop-WtDataWrites } catch { } }   # 사용자가 기다리지 않고 끝내기를 골랐다
     try { Stop-WtAllWork } catch { }
     if ($script:warmTimer) { $script:warmTimer.Stop() }
     if ($script:badgeTimer) { $script:badgeTimer.Stop() }
+    if ($script:frontTimer) { $script:frontTimer.Stop() }
     try { Stop-WtAddonTicks } catch { }
     try { Clear-WtNotices } catch { }
     try { $script:notify.Visible = $false; $script:notify.Dispose() } catch { }
@@ -13004,10 +13418,15 @@ function Initialize-WtShellButtons {
     $script:ui.HelpButton.Add_Click({ Select-WtPage '_help' })
 }
 
+# -ScriptPath: 진입 파일(바로 가기 대상 글에 쓴다). -Instance: 진입 스크립트의 한 번만 뜨기 신호 손잡이(없으면 신호를 받지 않는다)
+# -StartInTray: 앱 창을 트레이에 숨긴 채 켜고 빠른 적기 창만 띄운다(앱이 꺼져 있을 때 -QuickMemo). 신호 손잡이가 없으면 보통처럼 앱 창을 보인다
 function Start-WtApp {
-    param([Parameter(Mandatory)][string]$AppRoot)
+    param([Parameter(Mandatory)][string]$AppRoot, [string]$ScriptPath = '', [hashtable]$Instance, [switch]$StartInTray)
 
     $script:exiting = $false
+    $script:entryPath = $ScriptPath
+    $script:instance = if ($Instance -and $Instance.Show -and $Instance.Capture) { $Instance } else { $null }
+    $script:captureStale = $false
     $script:notify = $null
     $script:views = @{}
     $script:utilityWindows = @{}
@@ -13041,6 +13460,7 @@ function Start-WtApp {
 
     Update-WtAppIcon
     $w.Add_ContentRendered({ Update-WtAppIcon; Start-WtWarmUp })
+    $w.Add_Activated({ try { Invoke-WtMainActivated } catch { Show-WtError $_ '화면 새로 그리기' } })
     $w.Add_SizeChanged({ Update-WtCurrentSidePanels })
     $script:ui.StatusLeft.Add_SizeChanged({ param($s, $e) Set-WtStatusLayout $s })
 
@@ -13097,27 +13517,37 @@ function Start-WtApp {
     # 설정이 바뀌면 바로 반영한다
     Initialize-WtShellSettings
 
-    # 처음 실행이면 예전 WorkTool 데이터를 가져온다 (이미 가져온 탭은 건너뜀)
+    # 처음 실행이면 예전 WorkTool 데이터를 가져온다 (이미 가져온 탭은 건너뜀). 빠른 적기 창보다 먼저 한다(가져오기 전에 새 메모를 쓰지 않게)
     try { [void](Import-WtLegacyData) } catch { Show-WtError $_ '예전 데이터 가져오기' }
+    # 트레이 아이콘은 늘 둔다. 앱 창이 숨어 있는 동안(트레이에 숨긴 채 시작 포함)은 닫기 설정과 상관없이 트레이로 다시 연다
+    $script:notify = & $script:newTray $script:icon
 
+    # 창이 닫힐 때까지 메시지를 돌린다. Dispatcher를 끄지 않으므로 같은 창에서 다시 실행해도 된다.
+    $script:frame = [System.Windows.Threading.DispatcherFrame]::new()
+    $script:mainStarted = $false
+    $inTray = $StartInTray -and $script:instance
+    if ($inTray) {
+        # 빠른 적기로 켰다(-QuickMemo): 앱 창은 숨긴 채 두고, 메뉴 · 첫 화면을 만들기 전에 빠른 적기 창부터 띄운다.
+        # 첫 화면은 앱 창을 처음 보일 때 만든다(Show-WtMainWindow). 연 것이 없으면(등록 없음 · 신호 없음) 앱 창을 보인다
+        Start-WtInstanceTimer
+        if (-not (Invoke-WtInstanceSignals)) { $inTray = $false }
+    }
     Update-WtNav
     Start-WtNavBadgeTimer
     # 탭이 등록한, 화면에 묶지 않은 작업(일정 알람 확인 등). 트레이로 숨거나 다른 탭을 볼 때도 돈다
     [void](Start-WtAddonTicks)
     Update-WtCloseTip
     Set-WtOpacity
-    $script:notify = New-WtTrayIcon $script:icon
-
-    # 창이 닫힐 때까지 메시지를 돌린다. Dispatcher를 끄지 않으므로 같은 창에서 다시 실행해도 된다.
-    $script:frame = [System.Windows.Threading.DispatcherFrame]::new()
-    $w.Show()
-    # 실행 파일이 콘솔을 최소화해서 띄우면(start /min) 첫 창도 최소화돼서 뜬다 → 원래 크기로 앞에 띄운다
-    if ($w.WindowState -eq 'Minimized') { $w.WindowState = 'Normal' }
-    [void]$w.Activate()
-    $initialPage = Initialize-WtMainPage
-    Show-WtFirstWorkSetup $w $initialPage
+    if (-not $inTray -and -not $script:mainStarted) {
+        Show-WtMainWindow
+        # 다 뜬 뒤부터 다시 켠 실행 보조의 신호를 받는다(뜨는 동안 온 신호도 바로 처리한다)
+        Start-WtInstanceTimer
+        [void](Invoke-WtInstanceSignals)
+    }
     if (-not $script:exiting) { [System.Windows.Threading.Dispatcher]::PushFrame($script:frame) }
     } finally {
+        Stop-WtInstanceSignals
+        if ($script:frontTimer) { $script:frontTimer.Stop() }
         if ($script:badgeTimer) { $script:badgeTimer.Stop() }
         if ($script:warmTimer) { $script:warmTimer.Stop() }
         try { Stop-WtAddonTicks } catch { }
@@ -13133,7 +13563,7 @@ function Start-WtApp {
 Export-ModuleMember -Function Get-WtWindow, Select-WtPage, Open-WtPage, Reset-WtViews, Update-WtNav, Update-WtNavBadges, Register-WtKeyOwner, Test-WtKeyOwned,
     New-WtSidePanel, Switch-WtPanelCycle, Set-WtOpacity, Test-WtOpacityNeedsRestart,
     Switch-WtMaximize, Switch-WtFullScreen, Show-WtMainWindow, Exit-WtApp, Import-WtLegacyData, Get-WtLastImport, Start-WtApp,
-    New-WtTrayMenu, Update-WtTrayMenu
+    New-WtTrayMenu, Update-WtTrayMenu, Get-WtLaunchTarget
 } | Import-Module -Force -DisableNameChecking
 # ---- core\Shell.psm1 끝 ----
 
@@ -18443,6 +18873,181 @@ function Open-WtMemoFromArgs($OpenArgs) {
     }
 }
 
+# ---- 빠른 메모 (바로 가기 키 → 코어 빠른 적기 -QuickCapture → 이 탭) ------------------------------------
+# 작은 창(core\Ui.psm1 New-WtCaptureWindow)에 적은 글은 매번 새 메모다. 제목은 늘 「20261125-091230-빠른메모」(창을 연 시각),
+# 적은 글은 첫 줄까지 모두 본문이다(11-25 승호: 「첫 줄 제목」 안내 글자 없이).
+# 쉬면 1초 뒤 · Ctrl+S · 닫을 때 저장한다. 빈 채로 닫으면 메모를 만들지 않고, 만들었다 비우면 지운다(메모 탭의 빈 메모 규칙과 같음).
+# 메모 화면이 떠 있으면 목록 · 색인 · 같은 메모를 연 칸도 같이 고친다. 이벤트 처리기는 $script:quick만 쓴다
+
+$script:capture = $null   # 떠 있는 빠른 메모 창 @{ Window; Frame; Box; Status; Open; Timer; Id; Saved; Started; Error }
+$script:captureShow = { param($Window) $Window.Show() }             # 검사가 바꿔 끼운다(창을 띄우지 않게)
+$script:captureClose = { param($Window) $Window.Close() }
+$script:captureArea = { [System.Windows.SystemParameters]::WorkArea }
+$script:captureOpenPage = { param($Id) Show-WtMainWindow; Open-WtPage -Id 'memo' -Args @{ Key = $Id; Edit = $true } }
+
+# 창 글 → 제목 · 본문. 제목은 창을 연 시각 「년월일-시분초-빠른메모」, 글은 그대로 본문이다
+function Split-WtMemoCaptureText([string]$Text, [datetime]$Started) {
+    @{ Title = $Started.ToString('yyyyMMdd-HHmmss', [Globalization.CultureInfo]::InvariantCulture) + '-빠른메모'; Body = $Text }
+}
+
+# 단축키로 부른다. 이미 떠 있으면 새 창을 만들지 않고 그 창을 앞으로 가져온다
+function Show-WtMemoCapture {
+    if ($script:capture) { Set-WtMemoCaptureFront $script:capture; return $script:capture }
+    $parts = New-WtCaptureWindow 'WorkTool · 빠른 메모'
+    $grid = [System.Windows.Controls.Grid]::new()
+    $box = [System.Windows.Controls.TextBox]::new()
+    Set-WtStyle $box 'Capture.Box'
+    [System.Windows.Automation.AutomationProperties]::SetName($box, '빠른 메모 내용')
+    [void]$grid.Children.Add($box)
+    $parts.Body.Child = $grid
+    $open = New-WtButton '메모에서 열기'
+    $close = New-WtButton '닫기'
+    foreach ($b in $open, $close) { Set-WtStyle $b 'Capture.Button'; [void]$parts.ToolRight.Children.Add($b) }
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [TimeSpan]::FromSeconds(1)
+    $q = @{ Window = $parts.Window; Frame = $parts.Frame; Box = $box; Status = $parts.Status; Open = $open; CloseButton = $close; ChromeClose = $parts.Close; Timer = $timer
+        Id = ''; Saved = ''; Started = (Get-Date); Error = ''; Closing = $false }
+    $script:capture = $q
+    $box.Add_TextChanged({
+            param($s, $e)
+            $q = $script:capture
+            if (-not $q) { return }
+            $q.Error = ''
+            $q.Timer.Stop(); $q.Timer.Start()
+            Update-WtMemoCaptureStatus $q
+        })
+    $timer.Add_Tick({ param($s, $e) $s.Stop(); [void](Save-WtMemoCapture) })
+    $parts.Frame.Add_PreviewKeyDown({ param($s, $e) Invoke-WtMemoCaptureKey $e })
+    $parts.Window.Add_Activated({ param($s, $e) $q = $script:capture; if ($q -and [object]::ReferenceEquals($q.Window, $s)) { [void]$q.Box.Focus() } })
+    $parts.Window.Add_Closing({
+            param($s, $e)
+            $q = $script:capture
+            if (-not $q -or $q.Closing -or -not [object]::ReferenceEquals($q.Window, $s)) { return }
+            # Alt+F4 · 작업 표시줄에서 닫기: 저장하지 못하면 글을 잃지 않게 닫지 않는다
+            if (-not (Save-WtMemoCapture)) { $e.Cancel = $true; return }
+            $q.Closing = $true; $q.Timer.Stop(); $script:capture = $null
+        })
+    $open.Add_Click({ param($s, $e) Open-WtMemoCaptureInTab })
+    $close.Add_Click({ param($s, $e) [void](Close-WtMemoCapture) })
+    $parts.Close.Add_Click({ param($s, $e) [void](Close-WtMemoCapture) })
+    $place = Get-WtCapturePlacement (& $script:captureArea) $parts.Window.Width $parts.Window.Height
+    $parts.Window.Left = $place.X; $parts.Window.Top = $place.Y
+    [System.Windows.Input.FocusManager]::SetFocusedElement($parts.Window, $box)
+    Update-WtMemoCaptureStatus $q
+    & $script:captureShow $parts.Window
+    # 앱을 막 켠 프로세스의 첫 창이면 바로 가기 「실행: 최소화」를 따라 최소화돼서 뜰 수 있다 → 원래 크기로
+    if ($parts.Window.WindowState -eq 'Minimized') { $parts.Window.WindowState = 'Normal'; [void]$parts.Window.Activate() }
+    [void]$box.Focus()
+    $q
+}
+
+function Set-WtMemoCaptureFront($Q) {
+    $w = $Q.Window
+    if (-not $w.IsVisible) { & $script:captureShow $w }
+    if ($w.WindowState -eq 'Minimized') { $w.WindowState = 'Normal' }
+    # 맨 위 무리 안에서도 가장 앞으로(나중에 뜬 알람 창보다 앞)
+    $w.Topmost = $false; $w.Topmost = $true
+    [void]$w.Activate()
+    [void]$Q.Box.Focus()
+}
+
+# Esc · Ctrl+Enter = 저장하고 닫기, Ctrl+S = 저장. 한글 조합 중 Esc는 조합 취소라 여기로 오지 않는다(ImeProcessed)
+function Invoke-WtMemoCaptureKey($KeyArgs) {
+    $ctrl = ((Get-WtMemoModifiers) -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
+    if ($KeyArgs.Key -eq 'Escape' -or ($ctrl -and $KeyArgs.Key -eq 'Return')) { $KeyArgs.Handled = $true; [void](Close-WtMemoCapture); return }
+    if ($ctrl -and $KeyArgs.Key -eq 'S') { $KeyArgs.Handled = $true; [void](Save-WtMemoCapture) }
+}
+
+# 저장 상태: 비었으면 없음, 고쳤거나 쓰는 중이면 「저장 중…」, 쓰였으면 「저장됨」, 실패면 「저장하지 못했습니다」(이유는 툴팁)
+function Update-WtMemoCaptureStatus($Q) {
+    $text = ''; $tip = $null; $style = 'Capture.Status'
+    $look = if ($Q.Id) { Get-WtMemoSaveLook } else { @('saved', '') }
+    if ($Q.Error -or $look[0] -eq 'error') {
+        $text = '저장하지 못했습니다'; $tip = if ($Q.Error) { "$($Q.Error) Ctrl+S로 다시 저장합니다." } else { $look[1] }; $style = 'Capture.Status.Error'
+    }
+    elseif ([string]$Q.Box.Text -cne $Q.Saved -or ($Q.Id -and $look[0] -eq 'writing')) { $text = '저장 중…' }
+    elseif ($Q.Id) { $text = '저장됨' }
+    $Q.Status.Text = $text; $Q.Status.ToolTip = $tip
+    Set-WtStyle $Q.Status $style
+    $Q.Open.IsEnabled = [bool]([string]$Q.Box.Text).Trim()
+    $Q.Open.ToolTip = if ($Q.Open.IsEnabled) { '저장하고 앱 창의 메모 탭에서 엽니다.' } else { '글을 쓰면 열 수 있습니다.' }
+}
+
+# 지금 글을 저장한다. 처음 저장할 때 새 메모를 목록 맨 앞에 넣고, 그다음은 그 메모의 제목 · 본문만 바꾼다. 비면 만든 메모를 지운다.
+# 저장 통로가 글을 받아들였으면 $true(쓰는 중 · 늦은 실패도 통로가 가지고 있다). 메모 화면과 겹친 저장을 못 하면 $false(글은 창에 남는다)
+function Save-WtMemoCapture {
+    $q = $script:capture
+    if (-not $q) { return $true }
+    $q.Timer.Stop()
+    $text = [string]$q.Box.Text
+    if ($text -ceq $q.Saved -and -not $q.Error) { Update-WtMemoCaptureStatus $q; return $true }
+    try {
+        if ($script:ui.Count) {
+            if (-not (Save-WtMemoNow)) { throw '메모 탭에서 고치던 메모를 먼저 저장하지 못했습니다.' }
+            if (-not (Test-WtMemoViewFresh)) { Update-WtMemoView }
+        }
+        # if 식으로 받으면 항목 하나짜리 목록이 풀려 나오므로 분기 안에서 대입한다
+        if ($script:ui.Count) { $items = @($script:items) } else { $items = @(Get-WtMemoItems) }
+        $index = -1
+        if ($q.Id) { for ($i = 0; $i -lt $items.Count; $i++) { if ([string]$items[$i].id -ceq $q.Id) { $index = $i; break } } }
+        $memo = $null; $removed = $null; $created = $false
+        if (-not $text.Trim()) {
+            $open = $false
+            if ($index -ge 0) { foreach ($p in $script:panes) { foreach ($t in $p.Tabs) { if ([string]$t.Id -ceq $q.Id) { $open = $true } } } }
+            if ($index -lt 0 -or $open) { $next = $null }
+            else { $removed = $items[$index]; $next = @(for ($i = 0; $i -lt $items.Count; $i++) { if ($i -ne $index) { $items[$i] } }) }
+            if (-not $open) { $q.Id = '' }
+        } else {
+            $c = Split-WtMemoCaptureText $text $q.Started
+            if ($index -ge 0) { $memo = Copy-WtItem $items[$index] }
+            else { $memo = New-WtMemo; $created = $true }
+            [void](Set-WtMemoContent $memo $c.Title $c.Body)
+            if ($created) { $next = @($memo) + $items } else { $next = [object[]]$items.Clone(); $next[$index] = $memo }
+        }
+        if ($null -ne $next) { Save-WtMemoItems $next }
+        if ($memo) { $q.Id = [string]$memo.id }
+        $q.Saved = $text; $q.Error = ''
+        if ($null -ne $next -and $script:ui.Count) {
+            $script:items = @(Get-WtMemoSorted $next)
+            $script:viewStamp = Get-WtMemoViewStamp
+            if ($memo) { Update-WtMemoIndexItem $memo }
+            if ($removed) { Update-WtMemoIndexItem $removed -Removed; $script:rowCache.Remove([string]$removed.id) }
+            foreach ($p in $script:panes) { if ($memo -and $p.Current -and [string]$p.Current.Id -ceq [string]$memo.id -and -not $p.Dirty) { Update-WtMemoPaneContent $p } }
+            Update-WtMemoTabTexts; Update-WtMemoList; Update-WtMemoToc
+        }
+        $script:relatedMap = $null
+        # 홈 바로 가기(최근 쓴 것)에 바로 보이게 쓴 기록을 남긴다(Add-WtMemoUse와 같음. 메모 화면이 없을 때도 제목을 안다)
+        if ($created) {
+            if ($next.Count -ge 256) { Invoke-WtQueuedStoreWrite -Action { param($id, $name) Add-WtUse -Page 'memo' -Key $id -Title $name -Sub '메모' -Icon 0xE70B } -ArgumentList $q.Id, $memo.title }
+            else { Add-WtUse -Page 'memo' -Key $q.Id -Title $memo.title -Sub '메모' -Icon 0xE70B }
+        }
+        Update-WtMemoCaptureStatus $q
+        $true
+    } catch {
+        $q.Error = $_.Exception.Message
+        Update-WtMemoCaptureStatus $q
+        $false
+    }
+}
+
+# 저장하고 닫는다(닫기 · X · Esc · Ctrl+Enter). 저장하지 못하면 창을 두고 이유를 보인다. -Force: 앱을 끝낼 때(그래도 닫는다)
+function Close-WtMemoCapture([switch]$Force) {
+    $q = $script:capture
+    if (-not $q) { return $true }
+    if (-not (Save-WtMemoCapture) -and -not $Force) { return $false }
+    $q.Closing = $true; $q.Timer.Stop(); $script:capture = $null
+    try { & $script:captureClose $q.Window } catch { }
+    $true
+}
+
+# [메모에서 열기]: 저장하고 닫은 뒤 앱 창을 앞으로 가져와 메모 탭에서 그 메모를 연다
+function Open-WtMemoCaptureInTab {
+    $q = $script:capture
+    if (-not $q -or -not ([string]$q.Box.Text).Trim()) { return }
+    if (-not (Close-WtMemoCapture)) { return }
+    if ($q.Id) { & $script:captureOpenPage $q.Id }
+}
+
 # ---- 도움말 -----------------------------------------------------------------------------------
 
 $script:helpMd = $null
@@ -18519,7 +19124,9 @@ function New-WtMemoMarkdownHelpCard {
 # memo.json의 저장 상태가 바뀌면(쓰임 · 실패로 남음) 칸의 표시만 고친다. 다시 저장하지 않는다 (내용은 저장 통로가 가지고 있다)
 Register-WtDataWriteHandler {
     param($path, $state)
-    if ($script:ui.Count -and $path -ieq (Get-WtStorePath 'memo')) { Update-WtMemoSaveStatus }
+    if ($path -ine (Get-WtStorePath 'memo')) { return }
+    if ($script:ui.Count) { Update-WtMemoSaveStatus }
+    if ($script:capture) { Update-WtMemoCaptureStatus $script:capture }
 }
 
 Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 40 -WarmUp Full `
@@ -18537,8 +19144,9 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
     -ShortcutTitle { param($Key) Get-WtMemoShortcutTitle $Key } `
     -PageKey { param($Key, $Modifiers) Invoke-WtMemoPageKey $Key $Modifiers } `
     -ImportLegacy { param($folder) Import-WtMemoLegacy $folder } `
-    -SavePending { if ($script:ui.Count) { Save-WtMemoNow } else { $true } } `
-    -OnExit { if ($script:ui.Count) { [void](Save-WtMemoNow); Close-WtMemoEmptyTabs }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
+    -QuickCapture @{ Name = '빠른 메모'; Key = 'Ctrl + Alt + M'; Open = { [void](Show-WtMemoCapture) } } `
+    -SavePending { (Save-WtMemoCapture) -and $(if ($script:ui.Count) { Save-WtMemoNow } else { $true }) } `
+    -OnExit { [void](Close-WtMemoCapture -Force); if ($script:ui.Count) { [void](Save-WtMemoNow); Close-WtMemoEmptyTabs }; foreach ($w in @($script:memoWindows.Values)) { try { $w.Window.Close() } catch { } }; foreach ($timer in $script:saveTimer, $script:undoTimer, $script:indexTimer, $script:linkTimer, $script:searchTimer) { if ($timer) { $timer.Stop() } } } `
     -Help @('마크다운 메모를 탭과 두 칸으로 엽니다.', 'Ctrl+E로 편집 · 원문 · 읽기를 차례로 바꿉니다.', '찾기 칸에 #태그 · folder:업무 · updated:7d 같은 조건을 쓸 수 있습니다.',
         '백틱은 한 줄 선택을 인라인 코드로, 여러 줄 선택을 코드 블록으로 감싸며 빈 짝을 넣습니다. 닫는 백틱은 건너뛰고, 빈 짝 직후 Backspace는 둘 다 지웁니다.',
         '편집기 찾기 막대에서 Alt+C는 대소문자 구분, Alt+R은 정규식을 켜고 끕니다.',
@@ -18562,7 +19170,9 @@ Register-WtAddon -Id 'memo' -Title '메모' -Icon 0xE70B -Group '작업' -Order 
         @('정규식 바꾸기', '$1 · ${이름} · $$ · \1~\9(그룹) · \n(줄바꿈) · \t(탭) · \\(역슬래시)', '찾기 · 바꾸기'),
         @('Ctrl + Z / Ctrl + Y', '실행 취소 / 다시 실행', '편집 · 붙여넣기'), @('Ctrl + Shift + V', '바꾸지 않고 붙여넣기', '편집 · 붙여넣기'),
         @('붙여넣기', '글을 고르고 URL을 붙이면 링크, 파일 경로는 경로 링크로', '편집 · 붙여넣기'),
-        @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크', '편집 · 붙여넣기')) `
+        @('끌어 놓기', '탐색기의 파일 · 폴더를 놓으면 링크', '편집 · 붙여넣기'),
+        @('Ctrl + Alt + M', '어디서든 빠른 메모 창 열기 (바로 가기 키를 만든 경우, 도움말 → 정보)', '빠른 메모'),
+        @('Esc / Ctrl + Enter', '저장하고 닫기 (비었으면 메모를 만들지 않음)', '빠른 메모'), @('Ctrl + S', '바로 저장', '빠른 메모')) `
     -HelpCard { New-WtMemoMarkdownHelpCard }
 
 Export-ModuleMember -Function Get-WtMemoItems, Get-WtMemoSorted, Format-WtMemoTime, Import-WtMemoLegacy,
@@ -29116,7 +29726,8 @@ Export-ModuleMember -Function Read-WtFlowScript, Find-WtFlowScripts, Test-WtFlow
 # ---- addons\workflows\Workflows.psm1 끝 ----
 #endregion
 
-    Start-WtApp -AppRoot $PSScriptRoot
+    # -QuickMemo로 켰으면 앱 창은 트레이에 숨긴 채 두고 빠른 메모 창만 띄운다(트레이 · 보이기 신호로 앱 창을 연다)
+    Start-WtApp -AppRoot $PSScriptRoot -ScriptPath $PSCommandPath -Instance $instance -StartInTray:$QuickMemo
 } catch {
     $msg = "$($_.Exception.Message)`n`n위치: $($_.InvocationInfo.PositionMessage)"
     Write-Host $msg -ForegroundColor Red
@@ -29130,6 +29741,7 @@ Export-ModuleMember -Function Read-WtFlowScript, Find-WtFlowScripts, Test-WtFlow
     if ($renderModeChanged) {
         [System.Windows.Media.RenderOptions]::ProcessRenderMode = $previousRenderMode
     }
+    Close-WtInstance $instance
 }
 
 # 이 앱만을 위해 띄운 프로세스(-File로 이 파일을 실행)면 여기서 프로세스를 끝낸다. 응답 없는 공유 폴더를 기다리다
