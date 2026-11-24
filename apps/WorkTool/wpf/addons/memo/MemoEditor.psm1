@@ -1983,6 +1983,12 @@ function Invoke-WtMemoBoxKey($S, $E) {
                     $edit = Get-WtMemoIndentEdit (Get-WtMemoBoxState $S) -Outdent:$shift
                     $handled = [bool]$edit -or $shift
                 }
+                'Space' {
+                    # TextBox는 스페이스를 KeyDown에서 바로 넣고 PreviewTextInput을 올리지 않는다(실제 타자, 11-24 노트북).
+                    # 그래서 공백 입력 보조(Get-WtMemoTypeEdit ' ', 표지 겹침 막기)는 여기서 부른다. 한글 조합 중 스페이스는 위 ImeProcessed에서 끝난다
+                    $edit = Get-WtMemoTypeEdit $st ' '
+                    $handled = [bool]$edit
+                }
             }
         }
         if ($handled) {

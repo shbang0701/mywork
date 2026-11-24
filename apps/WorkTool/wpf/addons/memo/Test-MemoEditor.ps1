@@ -247,8 +247,10 @@ function Send-EdKey($Ed, [string]$Key, [int]$Times = 1) {
         $target = Get-EdBox $Ed
         $handled = $false
         $enter = $Key -in 'Return', 'Enter'
-        # Enter는 PreviewKeyDown만 올린다. 시험 창에서 TextBox의 KeyDown은 Enter를 처리됨으로만 표시하고 줄을 바로 바꾸지 않아서
-        $events = if ($enter) { @([System.Windows.Input.Keyboard]::PreviewKeyDownEvent) } else { @([System.Windows.Input.Keyboard]::PreviewKeyDownEvent, [System.Windows.Input.Keyboard]::KeyDownEvent) }
+        $space = $Key -eq 'Space'
+        # Enter · 스페이스는 PreviewKeyDown만 올린다. 시험 창에서 TextBox의 KeyDown은 처리됨으로만 표시하고 글을 바로 넣지 않아서.
+        # 실제 TextBox도 스페이스는 KeyDown에서 넣고 PreviewTextInput을 올리지 않는다(11-24 노트북) — 그래서 Send-EdText ' '가 아니라 이 길로 친다
+        $events = if ($enter -or $space) { @([System.Windows.Input.Keyboard]::PreviewKeyDownEvent) } else { @([System.Windows.Input.Keyboard]::PreviewKeyDownEvent, [System.Windows.Input.Keyboard]::KeyDownEvent) }
         foreach ($ev in $events) {
             $a = [System.Windows.Input.KeyEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $src, 0, [System.Windows.Input.Key]$Key)
             $a.RoutedEvent = $ev
@@ -260,6 +262,11 @@ function Send-EdKey($Ed, [string]$Key, [int]$Times = 1) {
             $i = $target.SelectionStart
             $target.SelectedText = "`r`n"
             $target.Select($i + 2, 0)
+        }
+        if (-not $handled -and $space) {
+            $i = $target.SelectionStart
+            $target.SelectedText = ' '
+            $target.Select($i + 1, 0)
         }
         Sync-EdUi
     }
@@ -2379,9 +2386,9 @@ try {
             Set-EdText $ed '- 첫째 줄'
             if ($mode -eq 'live') { Open-EdAt $ed 0 6 } else { $ed.Source.Select($ed.Source.Text.Length, 0) }
             Send-EdKey $ed Return
-            foreach ($ch in '-', ' ', '둘', '째') { Send-EdText $ed $ch }
+            Send-EdText $ed '-'; Send-EdKey $ed Space; foreach ($ch in '둘', '째') { Send-EdText $ed $ch }
             Send-EdKey $ed Return
-            foreach ($ch in '1', '.', ' ') { Send-EdText $ed $ch }   # 다른 종류 표지는 그대로 (하위 목록)
+            Send-EdText $ed '1'; Send-EdText $ed '.'; Send-EdKey $ed Space   # 다른 종류 표지는 그대로 (하위 목록)
             $typed = Get-EdText $ed
             # Tab으로 하위 목록 만들기는 그대로
             Set-EdText $ed '- 첫째 줄'
