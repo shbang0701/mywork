@@ -101,6 +101,7 @@ function New-WtMemoEditor {
     $live = New-WtMarkdownView -Scroll -OnLink { param($link, $st) Invoke-WtMemoEditorLink $link $st } -OnTask { param($line, $el) Invoke-WtMemoTaskClick $line $el }
     Set-WtStyle $live 'Memo.View'   # 문서 면: 바깥 포커스 네모 없음
     $live.Tag.Editor = $ed
+    $live.Tag.TableFocus = $false   # 누름은 이 보기가 받아 섬을 연다. 표 칸 안 상자가 포커스를 가져가면 치는 글이 갈 곳을 잃는다
     # 문서에서 블록을 빼고 넣을 때 RichTextBox가 실행 취소용으로 뺀 요소를 XAML로 저장하려 한다.
     # 섬(Tag에 편집기 상태)을 저장하다 끝없이 파고들어 멈추므로 끈다. 실행 취소는 편집기가 따로 든다
     $live.IsUndoEnabled = $false
@@ -1650,10 +1651,11 @@ function Find-WtMemoBlankHit($Ed, $Point, $Block) {
     $null
 }
 
-# 보기 좌표 → 원문 줄 · 칸. 그린 글자를 원문과 차례로 맞춰 본다 (기호 · 아이콘은 건너뜀)
+# 보기 좌표 → 원문 줄 · 칸. 그린 글자를 원문과 차례로 맞춰 본다 (기호 · 아이콘은 건너뜀).
+# 표는 가로 스크롤 칸 안의 문서라서 그 안 자리를 찾고(옮긴 만큼 따라감), 그린 글은 표 블록 앞까지 + 표 문서 처음부터 그 자리까지다
 function Find-WtMemoLiveHit($Ed, [System.Windows.Point]$Point, [switch]$BlocksOnly) {
     $view = $Ed.Live
-    $tp = $view.GetPositionFromPoint($Point, $true)
+    $tp = Get-WtMarkdownPositionFromPoint $view $Point
     if (-not $tp) { return $null }
     $block = $tp.Parent
     while ($block -and -not [object]::ReferenceEquals($block.Parent, $view.Document)) { $block = [System.Windows.LogicalTreeHelper]::GetParent($block) }
@@ -1668,7 +1670,11 @@ function Find-WtMemoLiveHit($Ed, [System.Windows.Point]$Point, [switch]$BlocksOn
     if (-not $sec) { return $null }
     $u = $sec.Tag
     $rendered = ''
-    try { $rendered = Get-WtMemoRenderedPrefix $sec.ContentStart $tp } catch { }
+    try {
+        $table = Get-WtMarkdownTableBlock $tp
+        $rendered = if ($table) { (Get-WtMemoRenderedPrefix $sec.ContentStart $table.ElementStart) + "`n" + (Get-WtMemoRenderedPrefix $tp.DocumentStart $tp) }
+        else { Get-WtMemoRenderedPrefix $sec.ContentStart $tp }
+    } catch { }
     $offset = Get-WtMemoSourceOffset $rendered $u.Text
     $parts = @($u.Text.Substring(0, $offset) -split "`n")
     $line = $u.Start + $parts.Count - 1
@@ -2430,7 +2436,7 @@ function Get-WtMemoSelectedText($Ed) {
     switch ($Ed.Mode) {
         'source' { return $Ed.Source.SelectedText }
         'live' { if ($Ed.Island) { return $Ed.IslandBox.SelectedText } }
-        'read' { return $Ed.View.Selection.Text }
+        'read' { return Get-WtMarkdownSelectedText $Ed.View }   # 표 칸에서 고른 글도
     }
     ''
 }
@@ -2628,19 +2634,35 @@ function Invoke-WtMemoFind($Ed, [switch]$Back, [switch]$Here) {
     }
 }
 
+# 읽기 보기의 글 조각을 문서 차례로 모은다: @{ Start; Text }(Run 하나) · @{ Break = 'line' | 'para' }(줄바꿈 · 문단 시작).
+# 표는 가로 스크롤 칸 안의 문서라서 그 블록 자리에서 안 문서로 들어간다
+function Add-WtMemoReadPieces($Document, $Out) {
+    $tp = $Document.ContentStart
+    while ($tp) {
+        $context = $tp.GetPointerContext('Forward')
+        if ($context -eq 'Text') { $Out.Add(@{ Start = $tp; Text = $tp.GetTextInRun('Forward') }) }
+        elseif ($context -eq 'ElementStart') {
+            $element = $tp.GetAdjacentElement('Forward')
+            if ($element -is [System.Windows.Documents.LineBreak]) { $Out.Add(@{ Break = 'line' }) }
+            elseif ($element -is [System.Windows.Documents.Paragraph]) { $Out.Add(@{ Break = 'para' }) }
+            $table = Get-WtMarkdownTableView $element
+            if ($table -and $table.Document) { Add-WtMemoReadPieces $table.Document $Out }
+        }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
+}
+
 # 읽기 모드: 그린 글(Run)에서 찾는다. 여러 Run에 걸친 글은 찾지 않는다
 function Get-WtMemoReadMatches($Ed, [string]$Query) {
     if ($Ed.Find.Regex.IsChecked) { return , (Get-WtMemoReadRegexMatches $Ed $Query) }
     $out = [System.Collections.Generic.List[object]]::new()
-    $tp = $Ed.View.Document.ContentStart
-    while ($tp) {
-        if ($tp.GetPointerContext('Forward') -eq 'Text') {
-            $run = $tp.GetTextInRun('Forward')
-            foreach ($hit in (Get-WtMemoMatches $run $Query -CaseSensitive:($Ed.Find.Case.IsChecked -eq $true) -RegexMode:($Ed.Find.Regex.IsChecked -eq $true))) {
-                $out.Add(@{ Start = $tp.GetPositionAtOffset($hit.Index); End = $tp.GetPositionAtOffset($hit.Index + $hit.Length) })
-            }
+    $pieces = [System.Collections.Generic.List[object]]::new()
+    Add-WtMemoReadPieces $Ed.View.Document $pieces
+    foreach ($piece in $pieces) {
+        if ($piece.Break) { continue }
+        foreach ($hit in (Get-WtMemoMatches $piece.Text $Query -CaseSensitive:($Ed.Find.Case.IsChecked -eq $true) -RegexMode:($Ed.Find.Regex.IsChecked -eq $true))) {
+            $out.Add(@{ Start = $piece.Start.GetPositionAtOffset($hit.Index); End = $piece.Start.GetPositionAtOffset($hit.Index + $hit.Length) })
         }
-        $tp = $tp.GetNextContextPosition('Forward')
     }
     , $out
 }
@@ -2650,19 +2672,13 @@ function Get-WtMemoReadMatches($Ed, [string]$Query) {
 function Get-WtMemoReadRegexMatches($Ed, [string]$Query) {
     $text = [System.Text.StringBuilder]::new()
     $segments = [System.Collections.Generic.List[object]]::new()
-    $tp = $Ed.View.Document.ContentStart
-    while ($tp) {
-        $context = $tp.GetPointerContext('Forward')
-        if ($context -eq 'Text') {
-            $run = $tp.GetTextInRun('Forward')
-            $segments.Add(@{ Offset = $text.Length; Length = $run.Length; Start = $tp })
-            [void]$text.Append($run)
-        } elseif ($context -eq 'ElementStart') {
-            $element = $tp.GetAdjacentElement('Forward')
-            if ($element -is [System.Windows.Documents.LineBreak] -or
-                ($element -is [System.Windows.Documents.Paragraph] -and $text.Length -gt 0)) { [void]$text.Append("`n") }
-        }
-        $tp = $tp.GetNextContextPosition('Forward')
+    $pieces = [System.Collections.Generic.List[object]]::new()
+    Add-WtMemoReadPieces $Ed.View.Document $pieces
+    foreach ($piece in $pieces) {
+        if ($piece.Break -eq 'line' -or ($piece.Break -eq 'para' -and $text.Length -gt 0)) { [void]$text.Append("`n"); continue }
+        if ($piece.Break) { continue }
+        $segments.Add(@{ Offset = $text.Length; Length = $piece.Text.Length; Start = $piece.Start })
+        [void]$text.Append($piece.Text)
     }
     $out = [System.Collections.Generic.List[object]]::new()
     foreach ($hit in (Get-WtMemoMatches $text.ToString() $Query -RegexMode -CaseSensitive:($Ed.Find.Case.IsChecked -eq $true))) {
@@ -2693,9 +2709,8 @@ function Invoke-WtMemoFindRead($Ed, [string]$Query, [switch]$Back, [switch]$Here
     if ($k -lt 0) { $k = $hits.Count - 1 }
     if ($k -ge $hits.Count) { $k = 0 }
     $f.ReadIndex = $k
-    $Ed.View.Selection.Select($hits[$k].Start, $hits[$k].End)
-    $p = $hits[$k].Start.Parent
-    if ($p -is [System.Windows.FrameworkContentElement]) { $p.BringIntoView() }
+    # 표 안이면 그 표 칸에서 고르고 찾은 곳이 보이게 표를 가로로 옮긴다
+    Select-WtMarkdownRange $Ed.View $hits[$k].Start $hits[$k].End
     Update-WtMemoFindCount $Ed $k $hits.Count
 }
 
