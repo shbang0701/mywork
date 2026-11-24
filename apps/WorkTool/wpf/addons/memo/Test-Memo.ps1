@@ -1508,7 +1508,7 @@ try {
         @{ Filter = @($script:ui.FilterButton.ContextMenu.Items | ForEach-Object Header) -join '|'; Sort = @($script:ui.SortButton.ContextMenu.Items | ForEach-Object Header) -join '|'; List = @($script:ui.List.ContextMenu.Items | ForEach-Object Header) -join '|' }
     }
     Assert-WtTest '메모 메뉴: 조건 · 정렬 · 목록 우클릭 항목' ($menus.Filter -like '수정일|오늘|최근 7일|최근 30일|상태|고정|*#장애*' -and $menus.Sort -ceq '✓ 기본|수정일|생성일|제목|최근 열기|받은 연결 수' -and
-        $menus.List -like '새 탭에서 열기|오른쪽에 열기|홈에 고정|고정|보관|폴더로 옮기기|*삭제') ($menus | ConvertTo-Json -Compress)
+        $menus.List -like '새 탭에서 열기|오른쪽에 열기||목록 위*고정*|홈*고정*||보관*|폴더로 옮기기||삭제') ($menus | ConvertTo-Json -Compress)
     $folderMenu = & $memoModule {
         $menu = $script:ui.List.ContextMenu
         $menu.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $menu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
@@ -1518,12 +1518,55 @@ try {
             Popup = $move.Template.FindName('PART_Popup', $move); Count = $move.Items.Count; Chevron = $move.Template.FindName('SubmenuChevron', $move) }
     }
     Assert-WtTest 'ListContextMenu-FolderSubmenu: 폴더는 하위 메뉴 · 공통 스타일 · 펼침 템플릿' (
-        $folderMenu.TopCount -eq 7 -and $folderMenu.Count -gt 1 -and $folderMenu.Names.EndsWith('폴더 없음') -and
+        $folderMenu.TopCount -eq 10 -and $folderMenu.Count -gt 1 -and $folderMenu.Names.EndsWith('폴더 없음') -and
         $folderMenu.Popup -is [System.Windows.Controls.Primitives.Popup] -and
         [object]::ReferenceEquals($folderMenu.Style, $view.FindResource('Home.PinSubmenuItem'))) $folderMenu.Names
     Assert-WtTest 'FolderSubmenu-IconChevron: 공통 아이콘 글꼴 · 펼침 화살표 · 기존 크기' (
         $folderMenu.Chevron.Text -ceq [string][char]0xE76C -and $folderMenu.Chevron.FontFamily.Source -ceq $view.FindResource('Font.Icon').Source -and
         $folderMenu.Chevron.FontSize -eq $view.FindResource('F.Icon'))
+    # 11-24 둘째 판 그룹 D: 목록 우클릭 · ⋯ 메뉴는 열기 ─ 고정 ─ 정리 ─ 삭제 묶음, 항목마다 아이콘(9절 표), 삭제는 위험 항목(맨 아래).
+    # 「목록 위에 고정」은 홈 고정과 다른 말이고, ⋯ 메뉴에도 홈 고정이 있다. 누름은 각 항목의 Click 처리기다
+    $groupMenus = & $memoModule {
+        $codes = { param($list) @($list | ForEach-Object { if ($_ -is [System.Windows.Controls.Separator]) { '|' } elseif ($_.Icon) { '{0:X4}' -f [int][char]$_.Icon.Text } else { '-' } }) -join ',' }
+        $click = { param($menu, $like) @($menu.Items | Where-Object { $_ -is [System.Windows.Controls.MenuItem] -and $_.Header -like $like })[0].RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.MenuItem]::ClickEvent)) }
+        $list = $script:ui.List.ContextMenu
+        Set-WtMemoListMenu $list 'toc'
+        $delete = @($list.Items)[-1]
+        $p = $script:panes[0]
+        $more = $p.More.ContextMenu
+        $more.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $more.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+        Set-WtMemoActionItems $more 'toc' $p
+        $a = @{ List = & $codes $list.Items; More = & $codes $more.Items; MoreHeaders = @($more.Items | ForEach-Object Header) -join '|'
+            DeleteStyle = $delete.Style; Gesture = @($list.Items)[0].InputGestureText }
+        # 아이콘 모양은 항목 틀 안에서 정해지므로 ⋯ 메뉴를 숨김 호스트에 배치해서 읽는다(팝업 · 창은 띄우지 않음)
+        $hostParameters = [System.Windows.Interop.HwndSourceParameters]::new('memo menu test'); $hostParameters.WindowStyle = 0; $hostParameters.Width = 320; $hostParameters.Height = 480
+        $menuHost = [System.Windows.Interop.HwndSource]::new($hostParameters)
+        try {
+            $menuHost.RootVisual = $more
+            $more.Measure([System.Windows.Size]::new(320, 480)); $more.Arrange([System.Windows.Rect]::new(0, 0, 320, 480)); $more.UpdateLayout()
+            $moreDelete = @($more.Items)[-1]; $morePin = @($more.Items)[0]
+            $a.DeleteIconStyle = $moreDelete.Icon.Style; $a.OtherIconStyle = $morePin.Icon.Style
+            $a.Colors = "$($moreDelete.Foreground.Color)|$($moreDelete.Icon.Foreground.Color)|$($morePin.Icon.Foreground.Color)"
+            $a.WantColors = "$($more.FindResource('B.Status.Error.Text').Color)|$($more.FindResource('B.Status.Error.Text').Color)|$($more.FindResource('B.Text.Secondary').Color)"
+        } finally { $menuHost.RootVisual = $null; $menuHost.Dispose() }
+        $wasPinned = (Get-WtMemoById 'toc').pinned -eq $true; $wasHome = Test-WtHomePin -Page 'memo' -Key 'toc'
+        & $click $more '홈*고정*'; & $click $more '목록 위*고정*'
+        Set-WtMemoActionItems $more 'toc' $p
+        $a.Toggled = "$((Test-WtHomePin -Page 'memo' -Key 'toc') -ne $wasHome)|$(((Get-WtMemoById 'toc').pinned -eq $true) -ne $wasPinned)|$(@($more.Items | ForEach-Object Header) -join '|')"
+        & $click $more '홈*고정*'; & $click $more '목록 위*고정*'
+        $a.Restored = "$((Test-WtHomePin -Page 'memo' -Key 'toc') -eq $wasHome)|$(((Get-WtMemoById 'toc').pinned -eq $true) -eq $wasPinned)"
+        $a
+    }
+    Assert-WtTest 'MemoMenu-Groups: 목록 우클릭 = 열기 ─ 고정 ─ 정리 ─ 삭제, ⋯ = 열기만 뺀 같은 메뉴(홈 고정 포함), 아이콘 9절 표' (
+        $groupMenus.List -match '^E8A7,E90D,\|,(E718|E77A),E80F,\|,E7B8,E8DE,\|,E74D$' -and $groupMenus.More -match '^(E718|E77A),E80F,\|,E7B8,E8DE,\|,E74D$' -and
+        $groupMenus.MoreHeaders -like '목록 위*고정*|홈*고정*||보관*|폴더로 옮기기||삭제' -and $groupMenus.Gesture -ceq 'Ctrl+클릭') "$($groupMenus.List) / $($groupMenus.More) / $($groupMenus.MoreHeaders)"
+    Assert-WtTest 'MemoMenu-Groups: 삭제는 위험 항목(글자 · 아이콘 빨강 스타일), 나머지 아이콘은 보통' (
+        [object]::ReferenceEquals($groupMenus.DeleteStyle, $view.FindResource('Menu.Item.Danger')) -and
+        [object]::ReferenceEquals($groupMenus.DeleteIconStyle, $view.FindResource('Menu.Icon.Danger')) -and
+        [object]::ReferenceEquals($groupMenus.OtherIconStyle, $view.FindResource('Menu.Icon')) -and $groupMenus.Colors -ceq $groupMenus.WantColors) "$($groupMenus.DeleteStyle) / $($groupMenus.DeleteIconStyle) / $($groupMenus.OtherIconStyle) / $($groupMenus.Colors)"
+    Assert-WtTest 'MemoMenu-Groups: ⋯ 메뉴의 홈에 고정 · 목록 위에 고정을 누르면 바뀌고 말이 해제로 바뀜, 다시 누르면 돌아옴' (
+        $groupMenus.Toggled -like 'True|True|목록 위*고정*|홈*고정*||보관*|폴더로 옮기기||삭제' -and $groupMenus.Restored -ceq 'True|True' -and
+        @($groupMenus.Toggled -split '\|')[2] -cne @($groupMenus.MoreHeaders -split '\|')[0] -and @($groupMenus.Toggled -split '\|')[3] -cne @($groupMenus.MoreHeaders -split '\|')[1]) "$($groupMenus.Toggled) / $($groupMenus.Restored)"
     $toc = & $memoModule {
         [void](Open-WtMemo 'toc' 'tab')
         $p = Get-WtMemoActivePane

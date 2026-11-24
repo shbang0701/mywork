@@ -1830,23 +1830,39 @@ $script:stylesXaml = @'
     <Setter Property="FontFamily" Value="{DynamicResource Font.UI}"/><Setter Property="FontSize" Value="{DynamicResource F.Body}"/>
     <Setter Property="Foreground" Value="{DynamicResource B.Text.Primary}"/><Setter Property="Background" Value="{DynamicResource B.Bg.Raised}"/>
     <Setter Property="MinHeight" Value="32"/><Setter Property="Padding" Value="12,0"/><Setter Property="FocusVisualStyle" Value="{StaticResource Focus.Inside}"/>
+    <!-- 왼쪽 아이콘 자리(디자인 7절 「메뉴」): Icon이 있을 때만 16 + 간격 12를 잡는다. 없으면 접혀서 글자가 왼쪽 12에서 시작한다(아이콘 없는 메뉴 모양 그대로) -->
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem">
       <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="4">
-        <DockPanel LastChildFill="True"><TextBlock DockPanel.Dock="Right" Text="{TemplateBinding InputGestureText}" Margin="12,0,0,0" VerticalAlignment="Center" Style="{StaticResource T.Sub}"/>
+        <DockPanel LastChildFill="True"><ContentPresenter x:Name="IconSlot" DockPanel.Dock="Left" ContentSource="Icon" Margin="0,0,12,0" VerticalAlignment="Center"/>
+          <TextBlock DockPanel.Dock="Right" Text="{TemplateBinding InputGestureText}" Margin="12,0,0,0" VerticalAlignment="Center" Style="{StaticResource T.Sub}"/>
           <ContentPresenter ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="True"/>
         </DockPanel>
       </Border>
+      <ControlTemplate.Triggers><Trigger Property="Icon" Value="{x:Null}"><Setter TargetName="IconSlot" Property="Visibility" Value="Collapsed"/></Trigger></ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
     <Style.Triggers><Trigger Property="IsHighlighted" Value="True"><Setter Property="Background" Value="{DynamicResource B.Fill.Hover.Surface}"/></Trigger>
       <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
     </Style.Triggers>
+  </Style>
+  <!-- 위험 항목(New-WtMenuItem -Danger): 글자는 위험 단추(Btn.Danger)와 같은 빨강. 올림 · 비활성은 보통 항목 그대로 -->
+  <Style x:Key="Menu.Item.Danger" TargetType="MenuItem" BasedOn="{StaticResource Home.PinMenuItem}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/>
+  </Style>
+  <!-- 메뉴 항목 왼쪽 아이콘(New-WtMenuIcon). 항목이 꺼지면 아이콘도 비활성 색 -->
+  <Style x:Key="Menu.Icon" TargetType="TextBlock" BasedOn="{StaticResource T.Icon}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Secondary}"/>
+    <Style.Triggers><Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></Trigger></Style.Triggers>
+  </Style>
+  <Style x:Key="Menu.Icon.Danger" TargetType="TextBlock" BasedOn="{StaticResource Menu.Icon}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Status.Error.Text}"/>
   </Style>
   <!-- 공통 메뉴의 하위 메뉴. 보통 항목의 글꼴·상태·높이를 이어 쓰고 WPF 메뉴 키보드 동작을 유지한다. -->
   <Style x:Key="Home.PinSubmenuItem" TargetType="MenuItem" BasedOn="{StaticResource Home.PinMenuItem}">
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem">
       <Grid>
         <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="4">
-          <DockPanel><TextBlock x:Name="SubmenuChevron" DockPanel.Dock="Right" Text="&#xE76C;" Margin="12,0,0,0" Style="{StaticResource T.Icon}"/>
+          <DockPanel><ContentPresenter x:Name="IconSlot" DockPanel.Dock="Left" ContentSource="Icon" Margin="0,0,12,0" VerticalAlignment="Center"/>
+            <TextBlock x:Name="SubmenuChevron" DockPanel.Dock="Right" Text="&#xE76C;" Margin="12,0,0,0" Style="{StaticResource T.Icon}"/>
             <ContentPresenter ContentSource="Header" VerticalAlignment="Center" RecognizesAccessKey="True"/>
           </DockPanel>
         </Border>
@@ -1857,6 +1873,7 @@ $script:stylesXaml = @'
           </Border>
         </Popup>
       </Grid>
+      <ControlTemplate.Triggers><Trigger Property="Icon" Value="{x:Null}"><Setter TargetName="IconSlot" Property="Visibility" Value="Collapsed"/></Trigger></ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
   <!-- 항목 모양은 ItemContainerStyle 대신 이 메뉴 안의 기본 모양으로 준다. ItemContainerStyle은 구분선(Separator)에도 씌우려다
@@ -2980,13 +2997,32 @@ function New-WtContextMenu {
     $menu
 }
 
+# 메뉴 항목 왼쪽 아이콘(디자인 7절 「메뉴」 · 9절 아이콘 표). -Danger면 위험 항목의 빨강
+function New-WtMenuIcon([int]$Code, [switch]$Danger) {
+    $icon = New-WtIcon $Code
+    Set-WtStyle $icon $(if ($Danger) { 'Menu.Icon.Danger' } else { 'Menu.Icon' })
+    $icon
+}
+
 # 메뉴 항목 하나. 누르면 & $OnClick $Value (항목마다 다른 값은 -Value로 넘긴다). -Checked면 글 앞에 ✓
-# 모양은 넣는 메뉴(New-WtHomePinContextMenu)의 항목 모양을 따른다. 하위 메뉴를 여는 머리 항목에는 쓰지 않는다(하위 항목의 누름이 올라온다)
-function New-WtMenuItem([string]$Text, [scriptblock]$OnClick, $Value, [switch]$Checked) {
+# -Icon: 왼쪽 아이콘(글리프 코드). 없으면 아이콘 자리를 잡지 않는다. -Danger: 지우기처럼 되돌리기 어려운 명령(글자 · 아이콘 빨강)
+# 모양은 넣는 메뉴(New-WtHomePinContextMenu)의 항목 모양을 따른다. 하위 메뉴를 여는 머리 항목에는 쓰지 않는다(하위 항목의 누름이 올라온다. New-WtSubmenuItem)
+function New-WtMenuItem([string]$Text, [scriptblock]$OnClick, $Value, [switch]$Checked, [int]$Icon, [switch]$Danger) {
     $item = [System.Windows.Controls.MenuItem]::new()
     $item.Header = if ($Checked) { "✓ $Text" } else { $Text }
     $item.Tag = @{ OnClick = $OnClick; Value = $Value }
+    if ($Danger) { Set-WtStyle $item 'Menu.Item.Danger' }
+    if ($Icon) { $item.Icon = New-WtMenuIcon $Icon -Danger:$Danger }
     $item.Add_Click({ param($s, $e) & $s.Tag.OnClick $s.Tag.Value })
+    $item
+}
+
+# 하위 메뉴를 여는 머리 항목(오른쪽 ›). 하위 항목은 .Items에 New-WtMenuItem으로 넣는다
+function New-WtSubmenuItem([string]$Text, [int]$Icon) {
+    $item = [System.Windows.Controls.MenuItem]::new()
+    $item.Header = $Text
+    Set-WtStyle $item 'Home.PinSubmenuItem'
+    if ($Icon) { $item.Icon = New-WtMenuIcon $Icon }
     $item
 }
 
@@ -3030,7 +3066,7 @@ function Get-WtVisualChild($Root, [type]$Type) {
 }
 
 Export-ModuleMember -Function New-WtMonthPicker, Update-WtMonthPicker, Open-WtMonthPicker, Invoke-WtMonthPickerKey, Get-WtPageStep
-Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, Read-WtSaveChoice, Set-WtInputError, Get-WtFormState, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuCaption,
+Export-ModuleMember -Function Get-WtUiWorkBudget, New-WtPollTimer, New-WtTaskGrid, New-WtTaskPage, New-WtModal, Read-WtName, Read-WtSaveChoice, Set-WtInputError, Get-WtFormState, New-WtMinuteInput, New-WtContextMenu, New-WtMenuItem, New-WtMenuIcon, New-WtSubmenuItem, New-WtMenuCaption,
     Get-WtKeyModifiers, Register-WtTimeInput, Update-WtTimeInput, Register-WtFormSaveKeys, Set-WtInputFocus,
     Set-WtButtonMenuPlacement, Open-WtButtonMenu, Get-WtVisualChild,
     Get-WtStyleDictionary, ConvertFrom-WtXaml, Get-WtNamedElements, Set-WtStyle, Set-WtResource,

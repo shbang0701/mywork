@@ -1647,9 +1647,14 @@ try {
         $focusArgs = [System.Windows.Input.KeyboardFocusChangedEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, 0, $ed.IslandBox, $menu.Items[1])
         $focusArgs.RoutedEvent = [System.Windows.Input.Keyboard]::LostKeyboardFocusEvent
         $ed.IslandBox.RaiseEvent($focusArgs)
-        Assert-Ed 'IslandContextMenu-KeepsEditing: 메뉴 포커스가 섬을 닫지 않고 선택 · 한글 메뉴 유지' (
+        # 11-24 둘째 판: 서식 › 하위 메뉴 항목으로 포커스가 가도 같은 편집기 메뉴다(하위 항목 → 서식 머리 → 메뉴)
+        $format = @($menu.Items | Where-Object { $_ -is [System.Windows.Controls.MenuItem] -and $_.Header -ceq '서식' })[0]
+        $subArgs = [System.Windows.Input.KeyboardFocusChangedEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, 0, $ed.IslandBox, $format.Items[0])
+        $subArgs.RoutedEvent = [System.Windows.Input.Keyboard]::LostKeyboardFocusEvent
+        $ed.IslandBox.RaiseEvent($subArgs)
+        Assert-Ed 'IslandContextMenu-KeepsEditing: 메뉴 · 서식 하위 메뉴 포커스가 섬을 닫지 않고 선택 · 한글 메뉴 유지' (
             [object]::ReferenceEquals($ed.Island, $island) -and $ed.IslandBox.SelectedText -ceq '본문' -and
-            ($menu.Items.Header -join ',') -ceq '잘라내기,복사,붙여넣기,모두 선택' -and $ed.TestLeft -eq 0) "섬=$([bool]$ed.Island) 저장이탈=$($ed.TestLeft)"
+            ($menu.Items.Header -join ',') -ceq '잘라내기,복사,붙여넣기,서식 없이 붙여넣기,서식,모두 선택' -and $ed.TestLeft -eq 0) "섬=$([bool]$ed.Island) 저장이탈=$($ed.TestLeft)"
         [void]$edHost.Children.Remove($outside)
         [void]$ed.IslandBox.Focus()
         $menu.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.ContextMenu]::ClosedEvent))
@@ -2180,11 +2185,14 @@ try {
             $target.ContextMenu.Resources.MergedDictionaries.Add((New-WtThemeDictionary))
             $target.ContextMenu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
             & $em { param($m) Update-WtMemoContextMenu $m } $target.ContextMenu
-            Assert-Ed 'BodyContextMenu-KoreanCommands: 한글 · 단축키 · 공통 스타일 · 선택 전 비활성' (
-                ($target.ContextMenu.Items.Header -join ',') -ceq '잘라내기,복사,붙여넣기,모두 선택' -and
-                ($target.ContextMenu.Items.InputGestureText -join ',') -ceq 'Ctrl+X,Ctrl+C,Ctrl+V,Ctrl+A' -and
-                -not $target.ContextMenu.Items[0].IsEnabled -and -not $target.ContextMenu.Items[1].IsEnabled -and
-                [object]::ReferenceEquals($target.ContextMenu.Style, $edHost.FindResource('Home.PinMenu')))
+            # 11-24 둘째 판: 고치기 ─ 서식 › ─ 모두 선택 묶음, 서식 없이 붙여넣기를 더함 (.Header 모으기는 구분선을 건너뛴다)
+            $items = $target.ContextMenu.Items
+            Assert-Ed 'BodyContextMenu-KoreanCommands: 한글 · 단축키 · 묶음 구분선 · 공통 스타일 · 선택 전 비활성' (
+                ($items.Header -join ',') -ceq '잘라내기,복사,붙여넣기,서식 없이 붙여넣기,서식,모두 선택' -and
+                ($items.InputGestureText -join ',') -ceq 'Ctrl+X,Ctrl+C,Ctrl+V,Ctrl+Shift+V,,Ctrl+A' -and $items.Count -eq 8 -and
+                $items[4] -is [System.Windows.Controls.Separator] -and $items[6] -is [System.Windows.Controls.Separator] -and
+                -not $items[0].IsEnabled -and -not $items[1].IsEnabled -and $items[5].IsEnabled -and
+                [object]::ReferenceEquals($target.ContextMenu.Style, $edHost.FindResource('Home.PinMenu'))) (($items.Header -join ',') + ' / ' + ($items.InputGestureText -join ','))
         }
         & $em { param($x) Invoke-WtMemoContextAction $x 'SelectAll'; Update-WtMemoContextMenu $x.IslandBox.ContextMenu } $ed
         Assert-Ed 'BodyContextMenu-KoreanCommands: 모두 선택은 본문 전체 섬 · 잘라내기와 복사 가능' (
@@ -2192,6 +2200,68 @@ try {
         $ed.IslandBox.SelectedText = "본문`r`n둘째"
         & $em { param($x) Invoke-WtMemoContextAction $x 'SelectAll' } $ed
         Assert-Ed 'BodyContextMenu-KoreanCommands: 아직 저장하지 않은 새 줄도 모두 선택' ($ed.IslandBox.SelectedText -ceq "본문`r`n둘째")
+    }
+    # 11-24 둘째 판 그룹 D: 본문 메뉴 아이콘 · 서식 › 하위 메뉴(단축키와 같은 편집 명령) · 서식 없이 붙여넣기 · 비활성 이유.
+    # 항목 누름은 UIA 누르기(MenuItem 클릭 경로)다. 팝업 창 · OS 입력은 보지 않는다
+    Invoke-EdCase 'BodyContextMenu-FormatCommands' {
+        $invoke = { param($Item) ([Windows.Automation.Provider.IInvokeProvider]([Windows.Automation.Peers.MenuItemAutomationPeer]::new($Item).GetPattern([Windows.Automation.Peers.PatternInterface]::Invoke))).Invoke() }
+        $ed = New-EdEditor
+        Set-EdText $ed '본문'
+        $menu = $ed.Source.ContextMenu
+        $menu.Resources.MergedDictionaries.Add((New-WtThemeDictionary)); $menu.Resources.MergedDictionaries.Add((Get-WtStyleDictionary))
+        $format =@($menu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] -and $_.Header -ceq '서식' })[0]
+        $codes = { param($list) @($list | Where-Object { $_ -is [Windows.Controls.MenuItem] } | ForEach-Object { if ($_.Icon) { '{0:X4}' -f [int][char]$_.Icon.Text } else { '-' } }) -join ',' }
+        $topIcons = & $codes $menu.Items; $subIcons = & $codes $format.Items
+        Assert-Ed 'BodyContextMenu-FormatCommands: 모든 항목에 아이콘(9절 표) · 서식은 하위 메뉴 · 하위 항목 이름과 단축키' (
+            $topIcons -ceq 'E8C6,E8C8,E77F,F0E3,E8D2,E8B3' -and $subIcons -ceq 'E8DD,E8DB,EDE0,E943,E71B,E73A' -and
+            [object]::ReferenceEquals($format.Style, $edHost.FindResource('Home.PinSubmenuItem')) -and
+            (@($format.Items.Header) -join ',') -ceq '굵게,기울임,취소선,인라인 코드,링크,할 일' -and
+            (@($format.Items.InputGestureText) -join ',') -ceq 'Ctrl+B,Ctrl+I,Alt+Shift+5,,Ctrl+K,Ctrl+L') "$topIcons / $subIcons"
+        # 서식 항목 = 같은 상태에 MemoText 명령을 바로 적용한 결과(원문 보기 · 편집 보기의 섬 · 섬 없이 커서 블록)
+        $commands = @{ '굵게' = { param($st) Get-WtMemoWrapEdit $st '**' }; '기울임' = { param($st) Get-WtMemoWrapEdit $st '*' }; '취소선' = { param($st) Get-WtMemoWrapEdit $st '~~' }
+            '인라인 코드' = { param($st) Get-WtMemoWrapEdit $st '`' }; '링크' = { param($st) Get-WtMemoLinkEdit $st }; '할 일' = { param($st) Get-WtMemoTaskEdit $st } }
+        $bad = @()
+        foreach ($mode in 'source', 'live', 'live-closed') {
+            foreach ($name in '굵게', '기울임', '취소선', '인라인 코드', '링크', '할 일') {
+                Set-WtMemoEditorMode $ed $(if ($mode -eq 'source') { 'source' } else { 'live' })
+                Set-EdText $ed '본문'
+                if ($mode -eq 'source') { $box = $ed.Source; $box.Select(0, 1) }
+                elseif ($mode -eq 'live') { & $em { param($x) Open-WtMemoIslandAt $x 0 0 } $ed; $box = $ed.IslandBox; $box.Select(0, 1) }
+                else { & $em { param($x) if ($x.Island) { Close-WtMemoIsland $x }; $x.Caret = @{ Line = 0; Col = 1 } } $ed; $box = $null }
+                $st = if ($box) { @{ Text = '본문'; Start = 0; Length = 1 } } else { @{ Text = '본문'; Start = 1; Length = 0 } }
+                $edit = & $commands[$name] $st
+                $want = $st.Text.Substring(0, $edit.Start) + $edit.Insert + $st.Text.Substring($edit.Start + $edit.Length)
+                $target = if ($mode -eq 'source') { $ed.Source } else { $ed.Live }
+                $item = @(@($target.ContextMenu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] -and $_.Header -ceq '서식' })[0].Items | Where-Object Header -CEQ $name)[0]
+                & $invoke $item; Sync-EdUi
+                $got = Get-EdText $ed
+                if ($got -cne $want) { $bad += "$mode $name 기대=$want 실제=$got" }
+            }
+        }
+        Set-WtMemoEditorMode $ed 'source'
+        Assert-Ed 'BodyContextMenu-FormatCommands: 굵게 · 기울임 · 취소선 · 인라인 코드 · 링크 · 할 일 = 단축키와 같은 편집 (원문 · 섬 · 커서 블록)' (-not $bad.Count) ($bad -join ' | ')
+        Set-EdText $ed '본문'; $ed.Source.Select(0, 2)
+        & $invoke @($format.Items)[0]; Sync-EdUi   # UIA 누르기는 디스패처에 올라간 뒤 처리된다
+        Assert-Ed 'BodyContextMenu-FormatCommands: 고른 글 굵게 = **본문**' ((Get-EdText $ed) -ceq '**본문**') (Get-EdText $ed)
+        # 서식 없이 붙여넣기는 Ctrl+Shift+V 명령(Invoke-WtMemoPlainPaste)을 그 칸에 부른다. 사용자 클립보드는 건드리지 않게 바꿔 끼운다
+        & $em { $script:realPlainPaste = ${function:Invoke-WtMemoPlainPaste}; $script:plainPasteBox = $null; Set-Item function:script:Invoke-WtMemoPlainPaste { param($Box) $script:plainPasteBox = $Box } }
+        try {
+            & $invoke @($menu.Items | Where-Object { $_ -is [Windows.Controls.MenuItem] -and $_.Header -ceq '서식 없이 붙여넣기' })[0]; Sync-EdUi
+            $plainBox = & $em { $script:plainPasteBox }
+        } finally { & $em { Set-Item function:script:Invoke-WtMemoPlainPaste $script:realPlainPaste } }
+        Assert-Ed 'BodyContextMenu-FormatCommands: 서식 없이 붙여넣기 = Ctrl+Shift+V 명령을 원문 칸에' ([object]::ReferenceEquals($plainBox, $ed.Source))
+        # 비활성 이유: 메모 없음은 모두 「메모를 먼저 선택하세요」, 빈 본문의 모두 선택은 「선택할 글이 없습니다」
+        Set-EdText $ed ''
+        & $em { param($m) Update-WtMemoContextMenu $m } $menu
+        $selectAll = @($menu.Items)[-1]
+        $emptyTip = "$($selectAll.IsEnabled)|$($selectAll.ToolTip)|$($format.IsEnabled)"
+        Set-WtMemoEditorEnabled $ed $false
+        & $em { param($m) Update-WtMemoContextMenu $m } $menu
+        $offTips = @(@($menu.Items) | Where-Object { $_ -is [Windows.Controls.MenuItem] } | ForEach-Object { "$($_.IsEnabled)|$($_.ToolTip)" } | Select-Object -Unique)
+        Set-WtMemoEditorEnabled $ed $true
+        Assert-Ed 'BodyContextMenu-FormatCommands: 비활성 이유 툴팁 (빈 본문 · 메모 없음)' (
+            $emptyTip -ceq 'False|선택할 글이 없습니다|True' -and ($offTips -join ',') -ceq 'False|메모를 먼저 선택하세요' -and
+            [Windows.Controls.ToolTipService]::GetShowOnDisabled($format)) "$emptyTip / $($offTips -join ',')"
     }
 
     # ---- 11-22 실사용 보고 회귀 (번호 = 보고서 번호) ----
