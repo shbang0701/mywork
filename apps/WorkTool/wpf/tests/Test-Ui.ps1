@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계 · 이름 묻는 창 · 저장 묻는 창(겹쳐 묻지 않음) · 폼 칸 값 · 입력칸 오류 · 단추 메뉴 자리 · 메뉴 항목 · 빈 화면 안내 · 설정 · 도움말 하위 탭의 첫 포커스.
+    공통 화면 부품을 숨김 호스트로 검사한다: 체크 줄 콜백·좌표 경로 · 표 낱말 폭·실제 경계·좁은 칸 가로 스크롤(좌표 경로 · 휠 · 복사 글) · 이름 묻는 창 · 저장 묻는 창(겹쳐 묻지 않음) · 폼 칸 값 · 입력칸 오류 · 단추 메뉴 자리 · 메뉴 항목 · 빈 화면 안내 · 설정 · 도움말 하위 탭의 첫 포커스.
 .EXAMPLE
     pwsh -NoProfile -STA -File apps/WorkTool/wpf/tests/Test-Ui.ps1
 #>
@@ -87,22 +87,31 @@ try {
     $root.Child = $plain; Set-UiLayout
     $plainRoute = Test-WtTestInputPath -View $plain -Element $plainBox -Target $plainBox
     Assert-WtTest '체크리스트 OnTask 없음: 부착 뒤 표시 Run 도달 · 링크·포커스 없음' ($plainRoute.Ok -and $plainBox.Parent -isnot [Windows.Documents.Hyperlink] -and -not $plainBox.Focusable) $plainRoute.Path
-    # 남는 열에서 폭을 가져오고, 화면이 정말 부족할 때만 최소 낱말 폭보다 작게 만든다.
+    # 표는 가로 스크롤 칸 안의 문서다(값 문서 8절 메모 「표」). 칸이 넉넉하면 남는 열에서 폭을 가져와 글 폭을 채우고,
+    # 모자라면 열을 낱말 최소 폭까지만 줄이고 표만 가로로 스크롤한다(11-24 승호: 좁은 칸에서 내/부/망처럼 한 자씩 쪼개지던 것)
     foreach ($unitView in $false, $true) {
         $view = New-WtMarkdownView -Scroll; $root.Child = $view
-        $body = "| 호스트 | 구간 | 확인 포트 | 담당 역할 |`n| --- | --- | --- | --- |`n| SRV-01 | 내부망 | 443, 5985 | 웹 앞단 |`n| SRV-02 | 내부망 | 5432 | 데이터베이스 |`n| NAS-01 | 백업망 | 445, 2049 | 소산 스토리지 |"
+        $body = "| 호스트 | 구간 | 확인 포트 | 담당 역할 |`n| --- | --- | --- | --- |`n| SRV-01 | 내부망 | 443, 5985 | 웹 앞단 |`n| SRV-02 | 내부망 | 5432 | 데이터베이스 |`n| NAS-01 | 백업망 | 445, 2049 | 소산 스토리지 |" +
+            ((1..30 | ForEach-Object { "`n`n뒤 문단 $_" }) -join '')
         if ($unitView) {
             $doc = [Windows.Documents.FlowDocument]::new(); $doc.Style = (Get-WtStyleDictionary)['Md.Doc']; $view.Document = $doc
             foreach ($unit in (Get-WtMarkdownUnits $body)) { $doc.Blocks.Add((New-WtMarkdownUnitSection $view $unit)) }
-            $table = $doc.Blocks.FirstBlock.Blocks.FirstBlock
-        } else { Set-WtMarkdownText $view $body; $table = $view.Document.Blocks.FirstBlock }
+            $holder = $doc.Blocks.FirstBlock.Blocks.FirstBlock
+        } else { Set-WtMarkdownText $view $body; $holder = $view.Document.Blocks.FirstBlock }
+        Assert-WtTest "표 칸: 편집 단위=$unitView · 블록 > 가로 스크롤 > 읽기 전용 상자 > 표" (
+            $holder -is [Windows.Documents.BlockUIContainer] -and $holder.Child -is [Windows.Controls.ScrollViewer] -and $holder.Child.Content -is [Windows.Controls.RichTextBox] -and
+            $holder.Child.Content.IsReadOnly -and $holder.Child.Content.Document.Blocks.FirstBlock -is [Windows.Documents.Table]) "맨 앞 블록=$($holder.GetType().Name)"
+        $scroll = $holder.Child; $box = Get-WtMarkdownTableView $holder; $table = $box.Document.Blocks.FirstBlock
         Set-UiLayout
         $word = New-WtText '내부망' 'T.Body'; $word.FontSize = $view.Document.FontSize
         $word.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
         $minWord = [Math]::Ceiling($word.DesiredSize.Width) + 24
-        # 열 폭은 값이 아니라 실제로 놓인 칸 글 시작 x로 잰다(값만 보면 표가 깨져도 통과했다, 11-17)
-        $cellX = { @(foreach ($c in $table.RowGroups[0].Rows[1].Cells) { $c.ContentStart.GetCharacterRect('Forward').X }) }
+        # 열 폭은 값이 아니라 실제로 놓인 칸 글 시작 x(보기 좌표)로 잰다(값만 보면 표가 깨져도 통과했다, 11-17)
+        $cellX = { @(foreach ($c in $table.RowGroups[0].Rows[1].Cells) { $box.TranslatePoint([Windows.Point]::new($c.ContentStart.GetCharacterRect('Forward').X, 0), $view).X }) }
         $laidOut = { param($x) $ok = $x.Count -eq 4; for ($k = 1; $k -lt $x.Count; $k++) { $ok = $ok -and $x[$k] -gt $x[$k - 1] + 8 }; $ok -and $x[3] -lt $view.ViewportWidth - 20 }
+        # 한 칸 글이 한 줄인가: 처음 글자와 끝 글자의 줄(y)이 같다
+        $oneLine = { param($cell) [Math]::Abs($cell.ContentStart.GetCharacterRect('Forward').Y - $cell.ContentEnd.GetCharacterRect('Backward').Y) -lt 1 }
+        $starOk = { @($table.Columns | Where-Object { -not $_.Width.IsStar }).Count -eq 0 -and [Math]::Abs(($table.Columns | Measure-Object -Property { $_.Width.Value } -Sum).Sum - 10) -lt 0.01 }
         $x = & $cellX; $wide = $x[2] - $x[1]; $wideOk = & $laidOut $x
         $bounds = Test-UiTableBounds $view $table
         Assert-WtTest "표 실제 경계: 편집 단위=$unitView · 폭 544 내용 안" $bounds.Ok $bounds.Detail
@@ -112,13 +121,47 @@ try {
         Assert-WtTest "표 실제 경계: 편집 단위=$unitView · 폭 400 내용 안" $bounds.Ok $bounds.Detail
         Assert-WtTest "표 낱말 최소 폭: 편집 단위=$unitView · 544/400 폭에서 내부망 한 덩어리 · 네 칸이 폭 안에 차례로" ($wideOk -and $narrowOk -and $wide -ge $minWord -and $narrow -ge $minWord) "wide=$wide narrow=$narrow min=$minWord"
         # 고정 폭(px)이면 문서 안쪽 폭 오차만큼 넘쳐 오른쪽 테두리가 잘리고, Star 값이 크면 첫 열이 다 가져간다 → 합 10의 비율
-        Assert-WtTest "표 낱말 최소 폭: 편집 단위=$unitView · 열 폭은 합 10의 비율(Star)" (@($table.Columns | Where-Object { -not $_.Width.IsStar }).Count -eq 0 -and [Math]::Abs(($table.Columns | Measure-Object -Property { $_.Width.Value } -Sum).Sum - 10) -lt 0.01)
+        Assert-WtTest "표 낱말 최소 폭: 편집 단위=$unitView · 열 폭은 합 10의 비율(Star)" (& $starOk)
+        Assert-WtTest "표 칸: 편집 단위=$unitView · 넉넉하면 가로 스크롤 없음 · 상자 폭은 칸에 맞춤" ($scroll.ComputedHorizontalScrollBarVisibility -ne 'Visible' -and $scroll.ScrollableWidth -lt 1 -and [double]::IsNaN($box.Width)) "막대=$($scroll.ComputedHorizontalScrollBarVisibility) 넘침=$($scroll.ScrollableWidth) 폭=$($box.Width)"
         Set-UiLayout 180
-        $x = & $cellX
-        Assert-WtTest "표 낱말 최소 폭: 편집 단위=$unitView · 전체 폭 부족하면 줄바꿈 허용" (($x[2] - $x[1]) -lt $minWord)
+        $x = & $cellX; $cells = $table.RowGroups[0].Rows[1].Cells
+        Assert-WtTest "표 좁은 칸: 편집 단위=$unitView · 열은 최소 폭 그대로(내부망 한 줄) · 표만 가로 스크롤" (
+            ($x[2] - $x[1]) -ge $minWord -and (& $oneLine $cells[1]) -and $scroll.ComputedHorizontalScrollBarVisibility -eq 'Visible' -and $scroll.ScrollableWidth -gt 0 -and (& $starOk)) "열=$($x[2] - $x[1]) 최소=$minWord 한 줄=$(& $oneLine $cells[1]) 막대=$($scroll.ComputedHorizontalScrollBarVisibility) 넘침=$($scroll.ScrollableWidth)"
+        $scrollBounds = Test-WtTestInputPath -View $view -Element $scroll -Target $scroll
+        $presenter = Get-WtVisualChild $view ([Windows.Controls.ScrollContentPresenter])
+        $contentRight = $presenter.TranslatePoint([Windows.Point]::new($presenter.ActualWidth, 0), $view).X
+        $outerScroll = Get-WtVisualChild $view ([Windows.Controls.ScrollViewer])
+        Assert-WtTest "표 좁은 칸: 편집 단위=$unitView · 스크롤 칸은 글 폭 안(본문은 가로로 넘치지 않음)" ($scrollBounds.Bounds.Right -le $contentRight + 1 -and $outerScroll.ScrollableWidth -lt 1) "칸 오른쪽=$($scrollBounds.Bounds.Right) 내용 오른쪽=$contentRight 본문 넘침=$($outerScroll.ScrollableWidth)"
+        # 실제 좌표 경로: 스크롤 전에는 마지막 열 글이 칸 밖(대조군), 끝까지 옮기면 그 글에 닿는다
+        $lastRun = $cells[3].Blocks.FirstBlock.Inlines.FirstInline
+        $before = Test-WtTestInputPath -View $view -Element $lastRun -Target $lastRun
+        $scroll.ScrollToRightEnd(); Set-UiLayout 180
+        $after = Test-WtTestInputPath -View $view -Element $lastRun -Target $lastRun
+        Assert-WtTest "표 좁은 칸 숨김 좌표 경로: 편집 단위=$unitView · 가로로 옮긴 뒤 마지막 열 글 도달(옮기기 전 대조군=False)" (-not $before.Ok -and $after.Ok -and $scroll.HorizontalOffset -gt 0) "전=$($before.Path) / 뒤=$($after.Path)"
+        $hit = Get-WtMarkdownPositionFromPoint $view $after.Point
+        Assert-WtTest "표 좁은 칸: 편집 단위=$unitView · 보기 좌표 → 표 안 글 자리(옮긴 만큼 따라감)" ($hit -and [object]::ReferenceEquals($hit.Parent, $lastRun) -and [object]::ReferenceEquals((Get-WtMarkdownTableBlock $hit), $holder)) "자리=$($hit.Parent)"
+        # 휠: 표 위에서 굴려도 본문이 세로로 스크롤한다(안쪽 상자가 먹지 않게 바깥으로 넘김). 실제 입력 순서대로 미리 보기 → 보통 이벤트
+        $outerScroll.ScrollToTop(); Set-UiLayout 180
+        $sendWheel = { param($target, [switch]$NoPreview)
+            $events = if ($NoPreview) { @([Windows.UIElement]::MouseWheelEvent) } else { @([Windows.UIElement]::PreviewMouseWheelEvent, [Windows.UIElement]::MouseWheelEvent) }
+            foreach ($ev in $events) { $a = [Windows.Input.MouseWheelEventArgs]::new([Windows.Input.Mouse]::PrimaryDevice, 0, -120); $a.RoutedEvent = $ev; $target.RaiseEvent($a); if ($a.Handled) { break } }
+            Set-UiLayout 180 }
+        & $sendWheel $lastRun -NoPreview
+        $swallowed = $outerScroll.VerticalOffset
+        & $sendWheel $lastRun
+        Assert-WtTest "표 좁은 칸 휠: 편집 단위=$unitView · 표 위 세로 휠은 본문 스크롤(대조군: 바깥으로 넘기지 않으면 안쪽 상자가 먹음)" ($swallowed -eq 0 -and $outerScroll.VerticalOffset -gt 0) "넘기기 전=$swallowed 뒤=$($outerScroll.VerticalOffset)"
+        # Shift+휠은 실제 키 상태를 읽어 시험 호스트에서 누를 수 없다: 같은 처리 함수를 Shift로 부른다(콜백 검사)
+        $scroll.ScrollToLeftEnd(); Set-UiLayout 180
+        $shiftWheel = [Windows.Input.MouseWheelEventArgs]::new([Windows.Input.Mouse]::PrimaryDevice, 0, -120); $shiftWheel.RoutedEvent = [Windows.UIElement]::PreviewMouseWheelEvent
+        & (Get-Module Markdown) { param($s, $e) Invoke-WtMdTableWheel $s $e $true } $scroll $shiftWheel; Set-UiLayout 180
+        Assert-WtTest "표 좁은 칸 Shift+휠(콜백): 편집 단위=$unitView · 한 칸에 48씩 가로로" ($shiftWheel.Handled -and [Math]::Abs($scroll.HorizontalOffset - 48) -lt 0.5) "가로=$($scroll.HorizontalOffset)"
+        $all = $view.Selection; $all.Select($view.Document.ContentStart, $view.Document.ContentEnd)
+        $copied = Get-WtMarkdownSelectedText $view
+        Assert-WtTest "표 칸: 편집 단위=$unitView · 바깥에서 고른 글(복사)에 표 글이 칸은 탭 · 행은 줄로 들어감" ($copied.Contains("SRV-01`t내부망`t443, 5985`t웹 앞단") -and $copied.Contains('뒤 문단 1')) $copied.Substring(0, [Math]::Min(80, $copied.Length))
+        $view.Selection.Select($view.Document.ContentStart, $view.Document.ContentStart)
         Set-UiLayout
         $x = & $cellX
-        Assert-WtTest "표 낱말 최소 폭: 편집 단위=$unitView · 다시 넓히면 복원" ((& $laidOut $x) -and ($x[2] - $x[1]) -ge $minWord)
+        Assert-WtTest "표 낱말 최소 폭: 편집 단위=$unitView · 다시 넓히면 복원(가로 스크롤 끔)" ((& $laidOut $x) -and ($x[2] - $x[1]) -ge $minWord -and $scroll.ComputedHorizontalScrollBarVisibility -ne 'Visible' -and [double]::IsNaN($box.Width)) "막대=$($scroll.ComputedHorizontalScrollBarVisibility)"
         $tag = $table.Tag; $ratios = @($table.Columns | ForEach-Object { $_.Width.Value })
         try {
             $table.Tag = $null   # 고장 대조군의 폭을 정상 배치 함수가 고치지 않게 한다.
@@ -132,6 +175,14 @@ try {
             }
         } finally { $table.Tag = $tag; Set-WtDocumentTableWidths $table }
     }
+    # 표 칸 안 문서도 둘레 글자색을 따른다(인용 안 표는 인용 색)
+    $quoteView = New-WtMarkdownView; $root.Child = $quoteView
+    Set-WtMarkdownText $quoteView "> 인용 글`n>`n> | 가 | 나 |`n> |---|---|`n> | 1 | 2 |"
+    Set-UiLayout
+    $quoteHolder = $quoteView.Document.Blocks.FirstBlock.Blocks.LastBlock
+    $quoteBox = Get-WtMarkdownTableView $quoteHolder
+    Assert-WtTest '표 칸: 인용 안 표 글자색 = 인용 글자색' ($quoteBox -and $quoteBox.Document.Foreground.Color -eq $quoteView.Document.Blocks.FirstBlock.Foreground.Color -and
+        $quoteBox.Document.Foreground.Color -ne $quoteView.Document.Foreground.Color) "표=$($quoteBox.Document.Foreground) 인용=$($quoteView.Document.Blocks.FirstBlock.Foreground) 문서=$($quoteView.Document.Foreground)"
     $styles = Get-WtStyleDictionary
     function Get-UiBounds($Element) { $Element.TransformToAncestor($root).TransformBounds([Windows.Rect]::new(0, 0, $Element.ActualWidth, $Element.ActualHeight)) }
     # 이름 묻는 창(Read-WtName): 창은 띄우지 않고 만든 내용(New-WtNameDialog)을 숨김 호스트에 붙여 모양 · 결과 · 좌표 경로를 본다.

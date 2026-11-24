@@ -1400,7 +1400,32 @@ $script:stylesXaml = @'
     <Setter Property="CellSpacing" Value="0"/>
     <Setter Property="BorderBrush" Value="{DynamicResource B.Border}"/>
     <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="Margin" Value="0"/>
+  </Style>
+  <!-- 본문 표는 가로 스크롤 칸 안의 문서에 둔다(값 문서 8절 메모 「표」): 블록(아래 12) > 스크롤 > 읽기 전용 상자 > 문서 > 표.
+       칸이 넉넉하면 가로 스크롤을 끄고 표가 글 폭을 채운다. 넓으면 Set-WtDocumentTableWidths가 상자 폭을 정하고 가로 스크롤을 켠다 -->
+  <Style x:Key="Md.TableBox" TargetType="BlockUIContainer">
     <Setter Property="Margin" Value="0,0,0,12"/>
+  </Style>
+  <Style x:Key="Md.TableScroll" TargetType="ScrollViewer" BasedOn="{StaticResource {x:Type ScrollViewer}}">
+    <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="Focusable" Value="False"/>
+  </Style>
+  <Style x:Key="Md.TableView" TargetType="RichTextBox" BasedOn="{StaticResource Md.View}">
+    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="IsTabStop" Value="False"/>
+    <Setter Property="IsReadOnly" Value="True"/>
+    <Setter Property="IsDocumentEnabled" Value="True"/>
+    <Setter Property="IsUndoEnabled" Value="False"/>
+    <Setter Property="IsInactiveSelectionHighlightEnabled" Value="True"/>
+    <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+    <!-- 안쪽 스크롤 없이 문서만 그린다(가로 스크롤은 바깥 칸이 맡음, 표가 많은 메모도 가볍게). 안쪽 여백 -5가 문서의 PagePadding 5를 상쇄한다 -->
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="RichTextBox"><Decorator x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/></ControlTemplate>
+      </Setter.Value>
+    </Setter>
   </Style>
   <Style x:Key="Md.Td" TargetType="TableCell">
     <Setter Property="Padding" Value="12,6"/>
@@ -3457,11 +3482,19 @@ function Update-WtTableHead($List) {
     $state.Head.Padding = [System.Windows.Thickness]::new($p.Left, $p.Top, $p.Right + $width, $p.Bottom)
 }
 
-# 본문 표의 열 비율을 유지하되, 들어갈 수 있으면 각 열의 가장 긴 낱말 폭부터 확보한다.
+# 본문 표의 열 폭(값 문서 8절 메모 「표」). 표는 가로 스크롤 칸 안의 문서에 있다(Markdown.psm1 New-WtMdTableBox):
+#   칸 = 블록(BlockUIContainer) > 스크롤(ScrollViewer) > 읽기 전용 상자(RichTextBox) > 문서 > 표
+# 열은 그 열의 가장 긴 낱말 폭(칸 좌우 여백 포함, 최대 $script:tableColumnMax)보다 좁히지 않는다.
+# 다 들어가면 가로 스크롤을 끄고 열 비율을 지키며 글 폭을 채운다. 안 들어가면 상자 폭을 최소 폭 합으로 두고 표만 가로로 스크롤한다.
+$script:tableColumnMax = 360
 function Set-WtDocumentTableWidths($Table) {
     if (-not $Table.Tag -or -not $Table.Tag.Weights) { return }
-    $parent = $Table.Parent
-    $inset = $Table.Margin.Left + $Table.Margin.Right + $Table.BorderThickness.Left + $Table.BorderThickness.Right
+    $box = if ($Table.Parent -is [System.Windows.Documents.FlowDocument]) { $Table.Parent.Parent }
+    $scroll = if ($box -is [System.Windows.Controls.RichTextBox]) { $box.Parent }
+    $holder = if ($scroll -is [System.Windows.Controls.ScrollViewer]) { $scroll.Parent }
+    if ($holder -isnot [System.Windows.Documents.BlockUIContainer]) { return }   # 칸 밖의 표(다른 곳에서 직접 만든 문서)는 다루지 않는다
+    $parent = $holder.Parent
+    $inset = $holder.Margin.Left + $holder.Margin.Right + $holder.Padding.Left + $holder.Padding.Right
     while ($parent -and $parent -isnot [System.Windows.Controls.RichTextBox]) {
         if ($parent -is [System.Windows.Documents.Block]) {
             $inset += $parent.Padding.Left + $parent.Padding.Right + $parent.Margin.Left + $parent.Margin.Right
@@ -3473,31 +3506,21 @@ function Set-WtDocumentTableWidths($Table) {
         $parent = $parent.Parent
     }
     if (-not $parent -or $parent.ViewportWidth -le 0) { return }
+    # 스크롤 칸 폭(= 글 폭에서 둘레 여백을 뺀 폭). 상자의 안쪽 여백 -5가 문서의 PagePadding 5를 상쇄해 표 폭 = 상자 폭이다
+    $outer = $parent.ViewportWidth - $inset
     # 1: 반올림 여유. 계산한 폭은 비율(Star)로 넣어 WPF가 실제 폭에 맞추므로 표가 넘쳐 잘리지 않는다
-    $available = $parent.ViewportWidth - $inset - 1
+    $edge = $Table.Margin.Left + $Table.Margin.Right + $Table.BorderThickness.Left + $Table.BorderThickness.Right
+    $available = $outer - $edge - 1
     if ($available -le 0) { return }
     $n = $Table.Columns.Count
-    $minimum = [double[]]::new($n)
-    $measure = [System.Windows.Controls.TextBlock]::new()
-    $infinite = [System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)
-    foreach ($group in $Table.RowGroups) {
-        foreach ($row in $group.Rows) {
-            for ($i = 0; $i -lt $n; $i++) {
-                $cell = $row.Cells[$i]
-                $measure.FontFamily = $cell.FontFamily; $measure.FontSize = $cell.FontSize; $measure.FontWeight = $cell.FontWeight
-                $text = [System.Windows.Documents.TextRange]::new($cell.ContentStart, $cell.ContentEnd).Text
-                foreach ($word in [regex]::Matches($text, '\S+')) {
-                    $measure.Text = $word.Value; $measure.Measure($infinite)
-                    $minimum[$i] = [Math]::Max($minimum[$i], [Math]::Ceiling($measure.DesiredSize.Width) + $cell.Padding.Left + $cell.Padding.Right + $cell.BorderThickness.Left + $cell.BorderThickness.Right)
-                }
-            }
-        }
-    }
+    $minimum = Get-WtDocumentTableMinimum $Table
     $widths = [double[]]::new($n)
     $weights = $Table.Tag.Weights
-    $totalWeight = ($weights | Measure-Object -Sum).Sum
-    if (($minimum | Measure-Object -Sum).Sum -gt $available) {
-        for ($i = 0; $i -lt $n; $i++) { $widths[$i] = $available * $weights[$i] / $totalWeight }
+    $need = ($minimum | Measure-Object -Sum).Sum
+    $wide = $need -gt $available
+    if ($wide) {
+        # 열은 최소 폭 그대로, 상자는 그 합만큼 넓혀 표만 가로로 스크롤한다
+        for ($i = 0; $i -lt $n; $i++) { $widths[$i] = $minimum[$i] }
     } else {
         $pending = [System.Collections.Generic.List[int]]::new()
         for ($i = 0; $i -lt $n; $i++) { $pending.Add($i) }
@@ -3520,6 +3543,40 @@ function Set-WtDocumentTableWidths($Table) {
             $Table.Columns[$i].Width = [System.Windows.GridLength]::new($star, 'Star')
         }
     }
+    # 들어가면 상자는 칸 폭을 그대로 쓰고(가로 스크롤 끔), 넘치면 최소 폭 합 + 테두리 + 반올림 여유만큼 넓힌다
+    $bar = if ($wide) { 'Auto' } else { 'Disabled' }
+    if ($scroll.HorizontalScrollBarVisibility -ne $bar) { $scroll.HorizontalScrollBarVisibility = $bar }
+    if ($wide) {
+        $width = [Math]::Ceiling($need + $edge + 1)
+        if ($box.Width -ne $width) { $box.Width = $width }
+    } elseif (-not [double]::IsNaN($box.Width)) { $box.ClearValue([System.Windows.FrameworkElement]::WidthProperty) }
+}
+
+# 표 열마다 가장 긴 낱말 폭 + 칸 좌우 여백(최대 $script:tableColumnMax). 글은 그린 뒤 바뀌지 않으므로 글꼴이 같으면 잰 값을 다시 쓴다
+function Get-WtDocumentTableMinimum($Table) {
+    $key = '{0}|{1}' -f $Table.FontSize, $Table.FontFamily.Source
+    if ($Table.Tag.MinimumKey -ceq $key -and $Table.Tag.Minimum) { return , $Table.Tag.Minimum }
+    $n = $Table.Columns.Count
+    $minimum = [double[]]::new($n)
+    $measure = [System.Windows.Controls.TextBlock]::new()
+    $infinite = [System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity)
+    foreach ($group in $Table.RowGroups) {
+        foreach ($row in $group.Rows) {
+            for ($i = 0; $i -lt $n; $i++) {
+                $cell = $row.Cells[$i]
+                $measure.FontFamily = $cell.FontFamily; $measure.FontSize = $cell.FontSize; $measure.FontWeight = $cell.FontWeight
+                $text = [System.Windows.Documents.TextRange]::new($cell.ContentStart, $cell.ContentEnd).Text
+                $side = $cell.Padding.Left + $cell.Padding.Right + $cell.BorderThickness.Left + $cell.BorderThickness.Right
+                $minimum[$i] = [Math]::Max($minimum[$i], $side)   # 빈 열도 칸 여백만큼은 남긴다
+                foreach ($word in [regex]::Matches($text, '\S+')) {
+                    $measure.Text = $word.Value; $measure.Measure($infinite)
+                    $minimum[$i] = [Math]::Max($minimum[$i], [Math]::Min($script:tableColumnMax, [Math]::Ceiling($measure.DesiredSize.Width) + $side))
+                }
+            }
+        }
+    }
+    $Table.Tag.Minimum = $minimum; $Table.Tag.MinimumKey = $key
+    , $minimum
 }
 function Set-WtDocumentTablesLayout($View) {
     function Update-DocumentBlocks($Blocks) {
@@ -3527,6 +3584,12 @@ function Set-WtDocumentTablesLayout($View) {
             if ($block -is [System.Windows.Documents.Table]) {
                 Set-WtDocumentTableWidths $block
                 foreach ($group in $block.RowGroups) { foreach ($row in $group.Rows) { foreach ($cell in $row.Cells) { Update-DocumentBlocks $cell.Blocks } } }
+            } elseif ($block -is [System.Windows.Documents.BlockUIContainer]) {
+                # 가로 스크롤 칸 안의 표
+                $scroll = $block.Child
+                if ($scroll -is [System.Windows.Controls.ScrollViewer] -and $scroll.Content -is [System.Windows.Controls.RichTextBox] -and $scroll.Content.Document) {
+                    Update-DocumentBlocks $scroll.Content.Document.Blocks
+                }
             } elseif ($block -is [System.Windows.Documents.Section]) { Update-DocumentBlocks $block.Blocks }
             elseif ($block -is [System.Windows.Documents.List]) { foreach ($item in $block.ListItems) { Update-DocumentBlocks $item.Blocks } }
         }

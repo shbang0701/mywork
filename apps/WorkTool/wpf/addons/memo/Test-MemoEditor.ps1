@@ -368,22 +368,45 @@ function New-EdMouseMove([double]$X, [double]$Y) {
 }
 function Send-EdMouseMove($Ed, [double]$X, [double]$Y) { & $script:em { param($s, $e) Invoke-WtMemoLiveMouseMove $s $e } $Ed.Live (New-EdMouseMove $X $Y) }
 
-# 그린 글에서 $Needle의 $Index번째 글자 왼쪽 끝 + 1px (보기 좌표)
-function Get-EdPoint($View, [string]$Needle, [int]$Index = 0) {
-    $View.UpdateLayout()
-    $tp = $View.Document.ContentStart
+# 그린 글에서 $Needle이 든 Run을 문서 차례로 찾는다. 표는 가로 스크롤 칸 안 문서라서 그 블록 자리에서 안으로 들어간다.
+# @{ Box(그 문서를 가진 상자); Pointer(Run 시작); Index(Run 안 자리) }
+function Find-EdText($Box, [string]$Needle) {
+    $tp = $Box.Document.ContentStart
     while ($tp) {
-        if ($tp.GetPointerContext('Forward') -eq 'Text') {
-            $run = $tp.GetTextInRun('Forward')
-            $k = $run.IndexOf($Needle, [StringComparison]::Ordinal)
-            if ($k -ge 0) {
-                $r = $tp.GetPositionAtOffset($k + $Index).GetCharacterRect('Forward')
-                return [System.Windows.Point]::new($r.X + 1, $r.Y + $r.Height / 2)
-            }
+        $ctx = $tp.GetPointerContext('Forward')
+        if ($ctx -eq 'Text') {
+            $k = $tp.GetTextInRun('Forward').IndexOf($Needle, [StringComparison]::Ordinal)
+            if ($k -ge 0) { return @{ Box = $Box; Pointer = $tp; Index = $k } }
+        } elseif ($ctx -eq 'ElementStart') {
+            $inner = Get-WtMarkdownTableView $tp.GetAdjacentElement('Forward')
+            if ($inner) { $found = Find-EdText $inner $Needle; if ($found) { return $found } }
         }
         $tp = $tp.GetNextContextPosition('Forward')
     }
-    throw "그린 글에서 '$Needle'을 찾지 못했습니다"
+    $null
+}
+# 그린 글에서 $Needle의 $Index번째 글자 왼쪽 끝 + 1px (보기 좌표. 표 칸 안 글은 가로로 옮긴 만큼 따라간 좌표)
+function Get-EdPoint($View, [string]$Needle, [int]$Index = 0) {
+    $View.UpdateLayout()
+    $found = Find-EdText $View $Needle
+    if (-not $found) { throw "그린 글에서 '$Needle'을 찾지 못했습니다" }
+    $r = $found.Pointer.GetPositionAtOffset($found.Index + $Index).GetCharacterRect('Forward')
+    $p = [System.Windows.Point]::new($r.X + 1, $r.Y + $r.Height / 2)
+    if (-not [object]::ReferenceEquals($found.Box, $View)) { $p = $found.Box.TranslatePoint($p, $View) }
+    $p
+}
+# 보기 문서의 요소를 차례로 모은다(표 칸 안 문서까지)
+function Get-EdElements($Box) {
+    $tp = $Box.Document.ContentStart
+    while ($tp) {
+        if ($tp.GetPointerContext('Forward') -eq 'ElementStart') {
+            $element = $tp.GetAdjacentElement('Forward')
+            $element
+            $inner = Get-WtMarkdownTableView $element
+            if ($inner) { Get-EdElements $inner }
+        }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
 }
 function Find-EdHit($Ed, [string]$Needle, [int]$Index = 0) {
     $pt = Get-EdPoint $Ed.Live $Needle $Index
@@ -930,14 +953,9 @@ try {
             Set-EdText $ed $body; $null = Set-WtMemoEditorMode $ed $mode
             $view = if ($mode -eq 'live') { $ed.Live } else { $ed.View }
             $links = [Collections.Generic.List[object]]::new(); $plain = $null
-            $pointer = $view.Document.ContentStart
-            while ($pointer) {
-                if ($pointer.GetPointerContext('Forward') -eq 'ElementStart') {
-                    $element = $pointer.GetAdjacentElement('Forward')
-                    if ($element -is [Windows.Documents.Hyperlink]) { $links.Add($element) }
-                    if ($element -is [Windows.Documents.Run] -and $element.Text -ceq '일반 본문') { $plain = $element }
-                }
-                $pointer = $pointer.GetNextContextPosition('Forward')
+            foreach ($element in @(Get-EdElements $view)) {   # 표 칸 안 문서의 링크까지
+                if ($element -is [Windows.Documents.Hyperlink]) { $links.Add($element) }
+                if ($element -is [Windows.Documents.Run] -and $element.Text -ceq '일반 본문') { $plain = $element }
             }
             Assert-Ed "숨김 입력 경로 준비: $mode · 링크 6개" ($links.Count -eq 6)
             foreach ($link in $links) {
@@ -1096,6 +1114,86 @@ try {
             Assert-Ed "편집기 클릭 위치($($cs[0])): 원문 줄 · 칸" ($got -eq $cs[3]) "기대 $($cs[3]) 결과 $got"
         }
     } -Bug 'hit-offset'
+    # 좁은 칸 표(11-24 베타 11): 열은 최소 폭까지만 줄고 표만 가로로 스크롤한다. 옮긴 뒤에도 누른 자리 · 링크 · 아래 체크 · 휠 · 읽기 찾기가
+    # 실제 배치 좌표를 따라가는지 본다(숨김 호스트의 좌표 경로. OS 입력 · 실제 화면은 아님)
+    Invoke-EdCase 'NarrowTable-ScrollPaths' {
+        $ed = New-EdEditor
+        $ed.TestLinks = [Collections.Generic.List[string]]::new()
+        $ed.OnLink = { param($editor, $link, $how) $editor.TestLinks.Add([string]$link.Target); $true }
+        $ed.Root.Width = 320
+        $lines = @('# 좁은 칸', '', '| 호스트 | 구간 | 확인 포트 | 담당 역할 | 비고 |', '| --- | --- | --- | --- | --- |',
+            '| SRV-01 | 내부망 | 443, 5985 | 웹 앞단 | [점검표](https://example.invalid/check) |', '| SRV-02 | 백업망 | 5432 | 데이터베이스 | 끝칸글 |', '',
+            '- [ ] 표 아래 할 일') + @(1..40 | ForEach-Object { ''; "채움 문단 $_" })
+        $layout = { $win.UpdateLayout(); Sync-EdUi; $ed.Live.UpdateLayout(); $ed.View.UpdateLayout() }
+        $tableOf = { param($view) @(Get-EdElements $view | Where-Object { Get-WtMarkdownTableView $_ })[0] }
+        $clickThrough = { param($hit, $view) & $script:em { param($el, $stop) Test-WtMemoClickThrough $el $stop } $hit $view }
+        try {
+            Set-EdText $ed (Join-EdLines $lines)
+            & $layout
+            $holder = & $tableOf $ed.Live; $box = Get-WtMarkdownTableView $holder; $scroll = $holder.Child
+            Assert-Ed 'NarrowTable: 편집 보기 표는 가로 스크롤 칸 · 넘침 · 안쪽 상자는 포커스를 받지 않음' ($box -and $scroll.ScrollableWidth -gt 0 -and -not $box.Focusable) "넘침=$($scroll.ScrollableWidth)"
+            # 옮기기 전에는 끝 칸 글이 칸 밖이라 그 자리를 눌러도 닿지 않는다(대조군)
+            $endRun = (Find-EdText $box '끝칸글').Pointer.Parent
+            $before = Test-WtTestInputPath -View $ed.Live -Element $endRun -Target $endRun
+            $scroll.ScrollToRightEnd(); & $layout
+            $after = Test-WtTestInputPath -View $ed.Live -Element $endRun -Target $endRun -ClickThrough $clickThrough
+            $want = "5:$($lines[5].IndexOf('끝칸글') + 1)"
+            $got = Find-EdHit $ed '끝칸글' 1
+            Assert-Ed 'NarrowTable: 가로로 옮긴 뒤 끝 칸 글 좌표 → 원문 줄 · 칸 (옮기기 전 대조군=닿지 않음)' (
+                $got -eq $want -and -not $before.Reached -and $after.Reached -and $after.ClickThrough -eq $false) "기대 $want 결과 $got 전=$($before.Path) 뒤=$($after.Path)"
+            # 누름 처리 그대로: 그 좌표의 실제 맞은 요소로 누르면 그 자리에 섬(원문)이 열린다
+            $pt = Get-EdPoint $ed.Live '끝칸글' 1
+            $mouse = [pscustomobject]@{ OriginalSource = $ed.Live.InputHitTest($pt); Point = $pt; Handled = $false }
+            $mouse | Add-Member ScriptMethod GetPosition { param($el) $this.Point }
+            & $em { param($s, $e) Invoke-WtMemoLiveMouseDown $s $e } $ed.Live $mouse
+            & $em { param($s, $e) Invoke-WtMemoLiveMouseUp $s $e } $ed.Live $mouse
+            Sync-EdUi
+            Assert-Ed 'NarrowTable: 옮긴 뒤 끝 칸을 누르면 그 자리에 섬' ($mouse.Handled -and $ed.Island -and (Get-EdCaret $ed) -eq $want) (Get-EdCaret $ed)
+            Close-Ed $ed; & $layout
+            [void](Test-EdContract $ed '좁은 칸 표 누름')
+            # 표 안 링크: 옮긴 뒤 좌표 경로가 링크에 닿고(편집기는 누름을 넘김), 누르면 링크 처리
+            $holder = & $tableOf $ed.Live; $box = Get-WtMarkdownTableView $holder; $scroll = $holder.Child
+            $scroll.ScrollToRightEnd(); & $layout
+            $link = @(Get-EdElements $box | Where-Object { $_ -is [Windows.Documents.Hyperlink] })[0]
+            $route = Test-WtTestInputPath -View $ed.Live -Element $link.Inlines.FirstInline -Target $link -ClickThrough $clickThrough
+            $link.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Documents.Hyperlink]::ClickEvent))
+            Assert-Ed 'NarrowTable 숨김 좌표 경로: 옮긴 뒤 표 안 링크 · 누르면 링크 처리' ($route.Ok -and $scroll.HorizontalOffset -gt 0 -and $ed.TestLinks -contains 'https://example.invalid/check') $route.Path
+            # 표를 옮긴 뒤에도 아래 할 일 체크는 그 자리 그대로
+            Invoke-EdTaskClickOf $ed '- [ ] 표 아래 할 일'
+            Assert-Ed 'NarrowTable: 표를 옮긴 뒤 아래 할 일 체크' ((Get-EdLines $ed)[7] -ceq '- [x] 표 아래 할 일') (Get-EdLines $ed)[7]
+            # 표 위 세로 휠은 본문이 스크롤한다(실제 순서: 미리 보기 → 보통 이벤트)
+            & $layout
+            $holder = & $tableOf $ed.Live; $box = Get-WtMarkdownTableView $holder
+            $sv = & $em { param($v) Get-WtMemoScroller $v } $ed.Live
+            $sv.ScrollToTop(); & $layout
+            $run = (Find-EdText $box 'SRV-01').Pointer.Parent
+            foreach ($ev in [Windows.UIElement]::PreviewMouseWheelEvent, [Windows.UIElement]::MouseWheelEvent) {
+                $a = [Windows.Input.MouseWheelEventArgs]::new([Windows.Input.Mouse]::PrimaryDevice, 0, -120); $a.RoutedEvent = $ev; $run.RaiseEvent($a); if ($a.Handled) { break }
+            }
+            & $layout
+            Assert-Ed 'NarrowTable: 표 위 세로 휠 → 본문 스크롤' ($sv.VerticalOffset -gt 0) "세로=$($sv.VerticalOffset)"
+            # 읽기 보기 찾기: 표 칸 안에서 고르고 찾은 곳이 보이게 표를 가로로 옮긴다. 표 밖을 찾으면 표 칸 선택은 지운다
+            $null = Set-WtMemoEditorMode $ed 'read'; & $layout
+            $rholder = & $tableOf $ed.View; $rbox = Get-WtMarkdownTableView $rholder; $rscroll = $rholder.Child
+            Open-WtMemoFind $ed
+            $ed.Find.Query.Text = '끝칸글'; Sync-EdUi
+            & $em { param($x) Invoke-WtMemoFind $x -Here } $ed
+            & $layout
+            $r = $rbox.Selection.Start.GetCharacterRect('Forward'); $x = $rbox.TranslatePoint([Windows.Point]::new($r.X, 0), $rscroll).X
+            Assert-Ed 'NarrowTable 읽기 찾기: 표 칸 안에서 고르고 찾은 곳이 보이게 가로로 옮김' (
+                $rbox.Selection.Text -ceq '끝칸글' -and $ed.View.Selection.IsEmpty -and $rscroll.HorizontalOffset -gt 0 -and $x -ge 0 -and $x -lt $rscroll.ViewportWidth -and $ed.Find.Count.Text -ceq '1/1') "선택=[$($rbox.Selection.Text)] 가로=$($rscroll.HorizontalOffset) x=$x 개수=$($ed.Find.Count.Text)"
+            $ed.Find.Query.Text = '채움 문단 3'; Sync-EdUi
+            & $em { param($x) Invoke-WtMemoFind $x -Here } $ed
+            Assert-Ed 'NarrowTable 읽기 찾기: 표 밖을 찾으면 표 칸 선택을 지운다' ($rbox.Selection.IsEmpty -and $ed.View.Selection.Text -ceq '채움 문단 3') "표=[$($rbox.Selection.Text)] 본문=[$($ed.View.Selection.Text)]"
+            $ed.Find.Regex.IsChecked = $true; $ed.Find.Query.Text = 'SRV-0\d'; Sync-EdUi
+            & $em { param($x) Update-WtMemoFindCount $x } $ed
+            Assert-Ed 'NarrowTable 읽기 찾기: 정규식도 표 칸 안 글을 센다' ($ed.Find.Total -eq 2) "개수=$($ed.Find.Total)"
+        } finally {
+            $ed.Find.Regex.IsChecked = $false
+            & $em { param($x) Close-WtMemoFind $x } $ed
+            Set-WtSetting 'memo.find.regex' $false
+        }
+    }
 
     # ---- 상태 · 포커스 ----
     Invoke-EdCase '상태' {
@@ -1745,7 +1843,8 @@ try {
         $model = (ConvertTo-WtMarkdownModel (Get-EdText $ed)).Blocks
         Set-WtMemoEditorMode $ed 'read'
         $readTable = $null
-        foreach ($b in $ed.View.Document.Blocks) { if ($b -is [System.Windows.Documents.Table] -or ($b -is [System.Windows.Documents.Section] -and $b.Blocks.FirstBlock -is [System.Windows.Documents.Table])) { $readTable = $b } }
+        # 표는 가로 스크롤 칸(블록) 안 문서에 있다
+        foreach ($b in $ed.View.Document.Blocks) { if ((Get-WtMarkdownTableView $b) -or ($b -is [System.Windows.Documents.Section] -and (Get-WtMarkdownTableView $b.Blocks.FirstBlock))) { $readTable = $b } }
         Assert-Ed 'QuoteExit-TableOutsideCallout: 콜아웃 → Enter 두 번 → 표는 콜아웃 밖 (편집 단위 · 모델 · 읽기 보기 맨 위 블록)' (
             $kinds -ceq '0-2 callout, 3-6 table' -and $model.Count -eq 2 -and $model[0].T -ceq 'callout' -and $model[1].T -ceq 'table' -and
             @($model[0].Blocks | Where-Object { $_.T -ceq 'table' }).Count -eq 0 -and $null -ne $readTable) "단위=$kinds 모델=$(@($model | ForEach-Object T) -join ',') 글=$((Get-EdText $ed).Replace("`n", '¶'))"

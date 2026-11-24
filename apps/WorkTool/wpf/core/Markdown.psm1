@@ -650,14 +650,17 @@ function New-WtMarkdownView {
         Text = ''; BaseDir = $BaseDir; OnLink = $OnLink; OnTask = $OnTask; Strict = [bool]$StrictLineBreaks
         Anchors = @{}; HeadingBlocks = @{}; Remeasure = $false; Error = $null; ListDepth = 0
         Images = [System.Collections.Generic.List[object]]::new()   # 이번에 그리면서 읽기 시작한 그림 (끝내기 전에 잠깐 기다린다)
+        TableFocus = $true     # 표 칸 안쪽 상자가 포커스를 받는가 (New-WtMdTableBox). 그린 뒤 바꾸면 다음에 그리는 표부터
+        SelectionBox = $null   # Select-WtMarkdownRange가 마지막으로 고른 상자 (보기 또는 표 칸)
     }
     for ($i = $script:views.Count - 1; $i -ge 0; $i--) { if (-not $script:views[$i].IsAlive) { $script:views.RemoveAt($i) } }
     $script:views.Add([System.WeakReference]::new($v))
     $v.Add_SizeChanged({ param($s, $e) if ($e.WidthChanged) { Set-WtDocumentTablesLayout $s } })
     $v.AddHandler([System.Windows.Controls.ScrollViewer]::ScrollChangedEvent, [System.Windows.Controls.ScrollChangedEventHandler]{
         param($s, $e)
-        if ($e.ViewportWidthChange -ne 0) { Set-WtDocumentTablesLayout $s }
+        if ($e.ViewportWidthChange -ne 0 -and [object]::ReferenceEquals($e.OriginalSource, (Get-WtVisualChild $s ([System.Windows.Controls.ScrollViewer])))) { Set-WtDocumentTablesLayout $s }
     })
+    [System.Windows.Input.CommandManager]::AddPreviewExecutedHandler($v, [System.Windows.Input.ExecutedRoutedEventHandler]{ param($s, $e) Invoke-WtMdCopy $s $e })
     $v
 }
 
@@ -671,6 +674,7 @@ function Set-WtMarkdownText {
     $st.Remeasure = $false
     $st.Error = $null
     $st.ListDepth = 0
+    $st.SelectionBox = $null
     $doc = [System.Windows.Documents.FlowDocument]::new()
     Set-WtMdStyle $doc 'Md.Doc'
     try {
@@ -1368,8 +1372,171 @@ function New-WtMdTable($B, $St) {
     }
     $t.RowGroups.Add($g)
     $t.Tag = @{ Weights = @($t.Columns | ForEach-Object { $_.Width.Value }) }
-    $t.Add_Loaded({ param($s, $e) Set-WtDocumentTableWidths $s })
-    $t
+    New-WtMdTableBox $t $St
+}
+
+<#
+표는 가로 스크롤 칸 안의 문서에 둔다(값 문서 8절 메모 「표」, apps/design.md 4.3).
+  블록(BlockUIContainer, 아래 여백) > 스크롤(ScrollViewer) > 읽기 전용 상자(RichTextBox) > 문서 > 표
+열 폭 · 가로 스크롤 켜기는 Set-WtDocumentTableWidths가 정한다(칸이 넉넉하면 지금처럼 글 폭을 채움).
+링크 · 그림은 안쪽 문서에서 그대로 눌린다. 세로 휠은 바깥 보기로 넘기고, Shift+휠은 표를 가로로 옮긴다.
+글자색은 둘레(인용 등)를 따르게 바깥 블록에 묶는다. 보기 상태의 TableFocus가 $false면(메모 편집 보기처럼 누름을 보기가 받는 곳)
+안쪽 상자는 포커스를 받지 않는다.
+#>
+function New-WtMdTableBox($Table, $St) {
+    $doc = [System.Windows.Documents.FlowDocument]::new()
+    Set-WtMdStyle $doc 'Md.Doc'
+    $doc.Blocks.Add($Table)
+    $box = [System.Windows.Controls.RichTextBox]::new()
+    Set-WtMdStyle $box 'Md.TableView'
+    if ($St -is [hashtable] -and $St.TableFocus -eq $false) { $box.Focusable = $false }
+    $box.Document = $doc
+    $scroll = [System.Windows.Controls.ScrollViewer]::new()
+    Set-WtMdStyle $scroll 'Md.TableScroll'
+    $scroll.Content = $box
+    $scroll.Add_PreviewMouseWheel({
+            param($s, $e)
+            Invoke-WtMdTableWheel $s $e ((([System.Windows.Input.Keyboard]::Modifiers) -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0)
+        })
+    $scroll.Add_Loaded({
+            param($s, $e)
+            $t = $s.Content.Document.Blocks.FirstBlock
+            if ($t -is [System.Windows.Documents.Table]) { Set-WtDocumentTableWidths $t }
+        })
+    $holder = [System.Windows.Documents.BlockUIContainer]::new($scroll)
+    Set-WtMdStyle $holder 'Md.TableBox'
+    $bind = [System.Windows.Data.Binding]::new('Foreground')
+    $bind.Source = $holder
+    [void]$doc.SetBinding([System.Windows.Documents.FlowDocument]::ForegroundProperty, $bind)
+    $holder
+}
+
+# 표 칸 위의 휠. Shift+휠은 표를 가로로 옮긴다(넘칠 때만). 그 밖은 안쪽 상자가 휠을 먹지 않게 바깥 보기로 다시 올려 본문이 세로로 스크롤한다
+function Invoke-WtMdTableWheel($Scroll, $E, [bool]$Shift) {
+    if ($Shift -and $Scroll.ScrollableWidth -gt 0) {
+        $Scroll.ScrollToHorizontalOffset($Scroll.HorizontalOffset - $E.Delta / 120 * 48)
+        $E.Handled = $true
+        return
+    }
+    $up = [System.Windows.Media.VisualTreeHelper]::GetParent($Scroll)
+    while ($up -and $up -isnot [System.Windows.UIElement]) { $up = [System.Windows.Media.VisualTreeHelper]::GetParent($up) }
+    if (-not $up) { return }
+    $E.Handled = $true
+    $a = [System.Windows.Input.MouseWheelEventArgs]::new($E.MouseDevice, $E.Timestamp, $E.Delta)
+    $a.RoutedEvent = [System.Windows.UIElement]::MouseWheelEvent
+    $a.Source = $Scroll
+    $up.RaiseEvent($a)
+}
+
+# 표 블록(가로 스크롤 칸)이면 안쪽 읽기 전용 상자, 아니면 $null
+function Get-WtMarkdownTableView($Block) {
+    if ($Block -isnot [System.Windows.Documents.BlockUIContainer]) { return $null }
+    $scroll = $Block.Child
+    if ($scroll -is [System.Windows.Controls.ScrollViewer] -and $scroll.Content -is [System.Windows.Controls.RichTextBox]) { return $scroll.Content }
+    $null
+}
+
+# 표 안 문서의 글 자리면 그 표를 담은 바깥 문서의 블록(BlockUIContainer), 아니면 $null
+function Get-WtMarkdownTableBlock($Pointer) {
+    if (-not $Pointer) { return $null }
+    $doc = $Pointer.DocumentStart.Parent
+    $box = if ($doc -is [System.Windows.Documents.FlowDocument]) { $doc.Parent }
+    $scroll = if ($box -is [System.Windows.Controls.RichTextBox]) { $box.Parent }
+    $holder = if ($scroll -is [System.Windows.Controls.ScrollViewer]) { $scroll.Parent }
+    if ($holder -is [System.Windows.Documents.BlockUIContainer] -and [object]::ReferenceEquals((Get-WtMarkdownTableView $holder), $box)) { return $holder }
+    $null
+}
+
+# 보기 좌표($View 기준)의 글 자리(TextPointer). 표 칸 위면 그 안 문서의 자리를 찾는다(가로로 옮긴 만큼 따라감)
+function Get-WtMarkdownPositionFromPoint($View, [System.Windows.Point]$Point) {
+    $node = $View.InputHitTest($Point)
+    while ($node -and -not [object]::ReferenceEquals($node, $View)) {
+        if ($node -is [System.Windows.Controls.RichTextBox]) {
+            $tp = $node.GetPositionFromPoint($View.TranslatePoint($Point, $node), $true)
+            if ($tp) { return $tp }
+            break
+        }
+        $node = if ($node -is [System.Windows.Media.Visual]) { [System.Windows.Media.VisualTreeHelper]::GetParent($node) } else { [System.Windows.LogicalTreeHelper]::GetParent($node) }
+    }
+    $View.GetPositionFromPoint($Point, $true)
+}
+
+<#
+보기 안 글 범위를 고른다(찾기). 표 안이면 그 표 상자에서 고르고 바깥 선택은 지운다. 앞서 고른 다른 표 상자의 선택도 지운다.
+표는 고른 곳이 보이게 가로로 옮기고, 바깥 보기는 그 줄이 보이게 세로로 옮긴다. 두 문서에 걸친 범위는 시작 문서 안까지만 고른다
+#>
+function Select-WtMarkdownRange($View, $Start, $End) {
+    if (-not [object]::ReferenceEquals($Start.DocumentStart.Parent, $End.DocumentStart.Parent)) {
+        $block = Get-WtMarkdownTableBlock $End
+        $End = if ($block -and [object]::ReferenceEquals($block.ElementStart.DocumentStart.Parent, $Start.DocumentStart.Parent)) { $block.ElementStart } else { $Start.DocumentEnd }
+    }
+    $holder = Get-WtMarkdownTableBlock $Start
+    $box = if ($holder) { Get-WtMarkdownTableView $holder } else { $View }
+    $st = $View.Tag
+    $last = if ($st -is [hashtable]) { $st.SelectionBox }
+    if ($last -and -not [object]::ReferenceEquals($last, $box) -and $last.Document) { $last.Selection.Select($last.Document.ContentStart, $last.Document.ContentStart) }
+    if ($holder) { $View.Selection.Select($View.Document.ContentStart, $View.Document.ContentStart) }
+    $box.Selection.Select($Start, $End)
+    if ($st -is [hashtable]) { $st.SelectionBox = $box }
+    if (-not $holder) {
+        $p = $Start.Parent
+        if ($p -is [System.Windows.FrameworkContentElement]) { $p.BringIntoView() }
+        return
+    }
+    $scroll = $holder.Child
+    $box.UpdateLayout()
+    $a = $Start.GetCharacterRect('Forward'); $z = $End.GetCharacterRect('Backward')
+    if ($a.IsEmpty) { return }
+    $left = $a.X; $right = if ($z.IsEmpty) { $a.X } else { [Math]::Max($a.X, $z.X) }
+    $from = $scroll.HorizontalOffset; $port = $scroll.ViewportWidth
+    if ($right - $left -gt $port - 16 -or $left -lt $from) { $scroll.ScrollToHorizontalOffset($left - 8) }
+    elseif ($right -gt $from + $port) { $scroll.ScrollToHorizontalOffset($right - $port + 8) }
+    $top = $box.TranslatePoint([System.Windows.Point]::new(0, $a.Y), $scroll).Y
+    $scroll.BringIntoView([System.Windows.Rect]::new(0, $top, 1, [Math]::Max(1, $a.Height)))
+}
+
+# 보기에서 고른 글. 바깥 선택이 표를 지나면 표 글(칸은 탭, 행은 줄바꿈)도 넣는다. 바깥 선택이 없으면 포커스가 있는 표 상자의 선택
+function Get-WtMarkdownSelectedText($View) {
+    if (-not $View.Selection.IsEmpty) { return Get-WtMdRangeText $View.Selection.Start $View.Selection.End }
+    $focused = [System.Windows.Input.Keyboard]::FocusedElement
+    if ($focused -is [System.Windows.Controls.RichTextBox] -and -not [object]::ReferenceEquals($focused, $View) -and $View.IsAncestorOf($focused)) { return $focused.Selection.Text }
+    ''
+}
+
+# 바깥 문서의 [Start, End) 글. 표 칸(블록 안 스크롤 요소)은 그 안 문서 글(칸은 탭, 행은 줄바꿈)로 바꿔 넣는다($Tables에 넣은 표 수).
+# 선택은 표 블록 안(요소 바로 앞)에서 시작할 수 있어서 블록 시작이 아니라 요소 자리에서 알아본다
+function Get-WtMdRangeText($Start, $End, [ref]$Tables) {
+    $sb = [System.Text.StringBuilder]::new()
+    $count = 0
+    $from = $Start; $tp = $Start
+    while ($tp -and $tp.CompareTo($End) -lt 0) {
+        if ($tp.GetPointerContext('Forward') -eq 'EmbeddedElement') {
+            $child = $tp.GetAdjacentElement('Forward')
+            $inner = if ($child -is [System.Windows.FrameworkElement]) { Get-WtMarkdownTableView $child.Parent }
+            if ($inner -and $inner.Document) {
+                [void]$sb.Append([System.Windows.Documents.TextRange]::new($from, $tp).Text)
+                if ($sb.Length -and $sb.ToString($sb.Length - 1, 1) -ne "`n") { [void]$sb.Append("`r`n") }
+                [void]$sb.Append([System.Windows.Documents.TextRange]::new($inner.Document.ContentStart, $inner.Document.ContentEnd).Text.TrimEnd("`r", "`n"))
+                $count++
+                $tp = $tp.GetNextContextPosition('Forward'); $from = $tp
+                continue
+            }
+        }
+        $tp = $tp.GetNextContextPosition('Forward')
+    }
+    if ($from -and $from.CompareTo($End) -lt 0) { [void]$sb.Append([System.Windows.Documents.TextRange]::new($from, $End).Text) }
+    if ($Tables) { $Tables.Value = $count }
+    $sb.ToString()
+}
+
+# 바깥 보기에서 복사: 고른 범위가 표 칸을 지나면 표 글까지 글로 넣는다(표 칸은 따로 든 문서라 기본 복사에서 빠진다)
+function Invoke-WtMdCopy($View, $E) {
+    if ($E.Command -ne [System.Windows.Input.ApplicationCommands]::Copy -or -not [object]::ReferenceEquals($E.OriginalSource, $View)) { return }
+    if ($View.Selection.IsEmpty) { return }
+    $tables = 0
+    $text = Get-WtMdRangeText $View.Selection.Start $View.Selection.End ([ref]$tables)
+    if (-not $tables) { return }
+    try { [System.Windows.Clipboard]::SetText($text); $E.Handled = $true } catch { }
 }
 
 # 맨 앞 속성(--- 사이): 이름 · 값 두 열 표
@@ -1411,4 +1578,5 @@ Register-WtSettingHandler {
 
 Export-ModuleMember -Function Register-WtMarkdownCodeRenderer, Register-WtMarkdownCallout, ConvertTo-WtMarkdownModel,
     Get-WtMarkdownSnippet, Get-WtMarkdownHeadings, New-WtMarkdownView, Set-WtMarkdownText, Invoke-WtMarkdownLink,
-    Get-WtMarkdownUnits, New-WtMarkdownUnitSection
+    Get-WtMarkdownUnits, New-WtMarkdownUnitSection,
+    Get-WtMarkdownTableView, Get-WtMarkdownTableBlock, Get-WtMarkdownPositionFromPoint, Select-WtMarkdownRange, Get-WtMarkdownSelectedText
