@@ -176,6 +176,46 @@ try {
                 $look.OkGroup.IsEnabled -and $null -eq $look.OkGroup.ToolTip
             if (-not ($rowLook -and $rowTip -and $groupLook)) { Write-Host "줄=$rowLook/$($look.RowBox.Background.Color)/$($look.RowBox.BorderBrush.Color) 툴팁=$rowTip/$($look.Row.ToolTip) 묶음=$groupLook/$($look.Group.ToolTip)" }
             Assert-Active '닫을 수 없는 줄 · 묶음의 체크 상자는 비활성 모양(옅은 바탕 · 옅은 선)과 이유 툴팁 (11-24 실사용)' ($rowLook -and $rowTip -and $groupLook)
+            # 그런 줄은 글자까지 흐리게(이름 · 종류 · 창 · 상태 모두 B.Text.Disabled), 그런 줄만 있는 묶음은 머리의 이름 · 개수도 흐리게.
+            # 목록에서는 빼지 않고, 고를 수 있는 줄(b) · 묶음(Chrome)의 글자는 그대로다. 글자는 실제로 놓인 칸의 TextBlock에서 읽는다
+            function Get-TaskRowTexts($Row) {
+                $found = [Collections.Generic.List[object]]::new(); $queue = [Collections.Generic.Queue[object]]::new(); $queue.Enqueue($Row)
+                while ($queue.Count) {
+                    $node = $queue.Dequeue()
+                    if ($node -is [Windows.Controls.TextBlock]) { $found.Add($node) }
+                    for ($i = 0; $i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($node); $i++) { $queue.Enqueue([Windows.Media.VisualTreeHelper]::GetChild($node, $i)) }
+                }
+                @($found)
+            }
+            $taskRows = & $module { @{ Off = Find-WtTaskRow $script:ui.Grid 'c'; On = Find-WtTaskRow $script:ui.Grid 'b'; Grid = $script:ui.Grid; Count = $script:ui.Grid.Items.Count } }
+            $disabled = $view.FindResource('B.Text.Disabled').Color; $primary = $view.FindResource('B.Text.Primary').Color; $tertiary = $view.FindResource('B.Text.Tertiary').Color
+            $offTexts = Get-TaskRowTexts $taskRows.Off; $onTexts = Get-TaskRowTexts $taskRows.On
+            $rowDim = $taskRows.Count -eq 3 -and (@($offTexts | ForEach-Object Text) -join '|') -ceq '읽기 제한|창|창 1|탭 확인 불가' -and
+                @($offTexts | Where-Object { $_.Foreground.Color -ne $disabled }).Count -eq 0 -and
+                $onTexts.Count -eq 4 -and @($onTexts | Where-Object { $_.Foreground.Color -ne $primary }).Count -eq 0
+            $groupTexts = @($look.Group.Parent.Children)[1, 2]; $okGroupTexts = @($look.OkGroup.Parent.Children)[1, 2]
+            $groupDim = $groupTexts[0].Text -ceq 'Microsoft Edge' -and $groupTexts[0].Foreground.Color -eq $disabled -and $groupTexts[1].Foreground.Color -eq $disabled -and
+                $okGroupTexts[0].Text -ceq 'Google Chrome' -and $okGroupTexts[0].Foreground.Color -eq $primary -and $okGroupTexts[1].Foreground.Color -eq $tertiary
+            if (-not ($rowDim -and $groupDim)) { Write-Host "줄 글자=$(@($offTexts | ForEach-Object { "$($_.Text):$($_.Foreground.Color)" }) -join ', ') / 고를 수 있는 줄=$(@($onTexts | ForEach-Object { "$($_.Text):$($_.Foreground.Color)" }) -join ', ') / 묶음=$(@($groupTexts + $okGroupTexts | ForEach-Object { "$($_.Text):$($_.Foreground.Color)" }) -join ', ')" }
+            Assert-Active '닫을 수 없는 줄은 글자 전체, 그런 줄만 있는 묶음은 머리 글자까지 B.Text.Disabled · 목록에는 남김 (11-24 실사용)' ($rowDim -and $groupDim)
+            # 겹치는 모양에서도 읽힌다: 표의 줄 고르기(누름 · 화살표)는 줄을 칠하지 않고, 칸 키보드 포커스 테두리(안쪽 1 + 2 + 1 = 4)는 글자(칸 안쪽 12)에 닿지 않는다.
+            # 올림 바탕 위 흐린 글자는 일곱 색 모두 흰 면 · 올림 면에서 2:1 이상이다(비활성 글자는 4.5:1 예외). 체크 상자가 비활성이라 선택 바탕은 이 줄에 오지 않는다
+            $offName = $offTexts[0]; $offCell = $offName
+            while ($offCell -and $offCell -isnot [Windows.Controls.DataGridCell]) { $offCell = [Windows.Media.VisualTreeHelper]::GetParent($offCell) }
+            $surface = $view.FindResource('B.Bg.Surface').Color
+            $taskRows.Grid.SelectedItem = $taskRows.Off.Item; $taskRows.Grid.UpdateLayout()
+            $picked = $taskRows.Off.IsSelected -and $taskRows.Off.Background.Color -eq $surface -and $offName.Foreground.Color -eq $disabled -and
+                -not (& $module { ($script:items | Where-Object Id -eq 'c').Selected })
+            $cellFocused = $offCell.Focus()
+            $insideLeft = $offName.TranslatePoint([Windows.Point]::new(0, 0), $offCell).X
+            $focusOk = $cellFocused -and $offCell.IsKeyboardFocused -and $offCell.FocusVisualStyle -eq (Get-WtStyleDictionary)['Focus.Inside'] -and $insideLeft -ge 4 -and $offName.Foreground.Color -eq $disabled
+            $taskRows.Grid.SelectedItem = $null; [Windows.Input.Keyboard]::ClearFocus()
+            $weak = @(foreach ($name in (Get-WtPalette).Keys) {
+                    $c = Get-WtThemeColors $name
+                    foreach ($bg in 'Bg.Surface', 'Fill.Hover.Surface') { if ((Get-WtContrast $c['Text.Disabled'] $c[$bg]) -lt 2) { "$name/$bg" } }
+                })
+            if (-not ($picked -and $focusOk -and -not $weak.Count)) { Write-Host "줄 고르기=$picked/$($taskRows.Off.Background.Color) 포커스=$focusOk/$cellFocused/$insideLeft 약한 대비=$($weak -join ',')" }
+            Assert-Active '흐린 줄: 표 줄 고르기 · 칸 키보드 포커스와 겹쳐도 글자가 흐린 채 보이고, 올림 면 대비 2:1 이상(일곱 색)' ($picked -and $focusOk -and -not $weak.Count)
         } finally {
             & $shellModule { param($s) $script:current = $s.Current; $script:ui = $s.Ui } $savedShell
             & $module { Set-Item Function:script:Get-WtTaskModifiers -Value $script:originalMods }
