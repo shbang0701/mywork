@@ -2370,6 +2370,37 @@ try {
         $hits = @((Find-EdHit $ed '둘째' 0), (Find-EdHit $ed '번호 안 글' 0), (Find-EdHit $ed '인용 안 글' 0)) -join ','
         Assert-Ed 'NestedFirstList-LiveShowsText: 글자 첫머리를 누르면 겹친 기호 뒤 (- - · 1. - · - >)' ($hits -ceq '1:4,4:5,6:4') $hits
     }
+    # 11-24 실사용: Enter가 붙인 - 뒤에 습관대로 - 를 또 치면 - - 로 겹쳤다(편집 · 원문 둘 다). 실제 키 경로(Enter · 글자 입력)로 친다
+    Invoke-EdCase 'ListMarker-TypedAgain' {
+        $ed = New-EdEditor
+        $detail = @(); $ok = $true
+        foreach ($mode in 'live', 'source') {
+            $null = Set-WtMemoEditorMode $ed $mode
+            Set-EdText $ed '- 첫째 줄'
+            if ($mode -eq 'live') { Open-EdAt $ed 0 6 } else { $ed.Source.Select($ed.Source.Text.Length, 0) }
+            Send-EdKey $ed Return
+            foreach ($ch in '-', ' ', '둘', '째') { Send-EdText $ed $ch }
+            Send-EdKey $ed Return
+            foreach ($ch in '1', '.', ' ') { Send-EdText $ed $ch }   # 다른 종류 표지는 그대로 (하위 목록)
+            $typed = Get-EdText $ed
+            # Tab으로 하위 목록 만들기는 그대로
+            Set-EdText $ed '- 첫째 줄'
+            if ($mode -eq 'live') { Open-EdAt $ed 0 6 } else { $ed.Source.Select($ed.Source.Text.Length, 0) }
+            Send-EdKey $ed Return
+            Send-EdKey $ed Tab
+            foreach ($ch in '안', '쪽') { Send-EdText $ed $ch }
+            $tabbed = Get-EdLines $ed
+            $one = $typed -ceq "- 첫째 줄`n- 둘째`n- 1. " -and $tabbed.Count -eq 2 -and $tabbed[1] -match '^\s+- 안쪽$'
+            $ok = $ok -and $one
+            $detail += "$mode [$($typed.Replace("`n", '¶'))] Tab [$($tabbed -join '¶')]"
+            if ($mode -eq 'live') {
+                Close-Ed $ed
+                [void](Test-EdContract $ed '표지 겹침 막기')
+            }
+        }
+        $null = Set-WtMemoEditorMode $ed 'live'
+        Assert-Ed 'ListMarker-TypedAgain: 편집 · 원문 보기에서 Enter가 붙인 - 뒤에 - 를 또 쳐도 - - 로 겹치지 않고, 다른 표지 · Tab 하위 목록은 그대로' $ok ($detail -join ' / ')
+    }
 
     # ---- 무작위 편집 (고정 시드) ----
     # 코드 블록 없는 글로 돌린다 (울타리 짝이 깨지면 알려진 버그 fence-kind-change에 걸려 그 뒤를 못 봐서)

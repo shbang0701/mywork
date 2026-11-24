@@ -366,6 +366,21 @@ function Get-WtMemoTypeEdit($s, [string]$Char) {
             $e.Suggest = 'wiki'
             return $e
         }
+        ' ' {
+            # 표지만 있는 빈 항목(Enter가 붙인 - · 2. · - [ ])에서 같은 종류 표지를 또 치면(- 뒤 - · 2. 뒤 3. · 할 일 뒤 - 나 [ ])
+            # 공백을 넣는 대신 친 표지를 지운다. 습관대로 줄마다 표지를 쳐도 - - 로 겹치지 않게. 하위 목록은 Tab으로 만든다
+            if ($n -gt 0) { return $null }
+            $line = Get-WtMemoTextLine $t $pos
+            $info = Get-WtMemoTextLineInfo $line.Text
+            if (-not $info.List) { return $null }
+            $cs = $line.Text.Length - $info.Body.Length
+            $col = $pos - $line.Start
+            if ($col -le $cs -or $line.Text.Substring($col).Trim()) { return $null }
+            $typed = $line.Text.Substring($cs, $col - $cs)
+            $kind = if ($info.Mk -match '^\d') { '^\d{1,9}' + [regex]::Escape($info.Mk.Substring($info.Mk.Length - 1)) + '$' } else { '^[-*+]$' }
+            if ($typed -notmatch $kind -and -not ($info.Cb -and $typed -match '^\[[ xX]\]$')) { return $null }
+            return New-WtMemoTextResult ($line.Start + $cs) $typed.Length '' ($line.Start + $cs)
+        }
         ']' {
             if ($n -gt 0 -or $pos -ge $t.Length -or $t[$pos] -ne ']') { return $null }
             $line = Get-WtMemoTextLine $t $pos
