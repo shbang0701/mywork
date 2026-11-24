@@ -227,7 +227,7 @@ function Add-WtMemoContextMenu($Target, $Ed) {
     $format.Tag = @{ Value = @{ Ed = $Ed; Action = 'Format' } }
     [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($format, $true)
     foreach ($spec in @(@('굵게', 'Bold', 'Ctrl+B', 0xE8DD), @('기울임', 'Italic', 'Ctrl+I', 0xE8DB), @('취소선', 'Strike', 'Alt+Shift+5', 0xEDE0),
-            @('인라인 코드', 'Code', '', 0xE943), @('링크', 'Link', 'Ctrl+K', 0xE71B), @('할 일', 'Task', 'Ctrl+L', 0xE73A))) {
+            @('인라인 코드', 'Code', 'Ctrl+Shift+`', 0xE943), @('링크', 'Link', 'Ctrl+K', 0xE71B), @('할 일', 'Task', 'Ctrl+L', 0xE73A))) {
         [void]$format.Items.Add((New-WtMemoContextItem $Ed @spec))
     }
     [void]$menu.Items.Add($format)

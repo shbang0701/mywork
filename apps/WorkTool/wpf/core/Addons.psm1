@@ -41,7 +41,8 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
                셸은 끝낼 때(트레이 종료 · 닫기 = 끝내기 · Alt+F4) 맨 먼저, 저장 통로 마무리(SavePending) · 쓰지 못한 내용 확인보다 앞에
                탭 순서대로 부른다. Confirm 앞에 창을 띄우고 그 탭 화면을 보인다. 하나라도 $false면 끝내지 않고 뒤 단계도 묻지 않는다
   Help         도움말 「이 버전」에 넣을 설명 문단들 (선택)
-  Shortcuts    도움말 「단축키」에 넣을 @('키', '설명') 목록. 키 처리는 탭 화면이 직접 한다 (선택)
+  Shortcuts    도움말 「단축키」에 넣을 @('키', '설명') 또는 @('키', '설명', '주제') 목록. 키 처리는 탭 화면이 직접 한다 (선택)
+               도움말은 탭마다 제목 아래에 모으고, 주제가 있으면 그 탭 안에서 주제(소제목)별로 나눈다(처음 나온 순서)
                하나만 줄 때는 앞에 쉼표를 붙인다: -Shortcuts (, @('F5', '새로 고침'))
   HelpCard     { } → 도움말에 따로 놓을 카드 요소를 돌려준다 (선택)
   WarmUp       켠 뒤 한가할 때 화면을 미리 만들어 둘지 (선택). 처음 누를 때도 빨리 뜨게 하려는 것이다
@@ -105,7 +106,7 @@ function Register-WtAddon {
     # 쉼표 없이 한 쌍만 주면 배열이 펴져서 들어온다 → 한 쌍으로 되돌린다
     if ($Shortcuts.Count -and $Shortcuts[0] -is [string]) { $Shortcuts = @(, $Shortcuts) }
     foreach ($s in $Shortcuts) {
-        if (@($s).Count -ne 2) { throw "애드온 '$Id'의 단축키는 @('키', '설명') 모양이어야 합니다." }
+        if (@($s).Count -notin 2, 3) { throw "애드온 '$Id'의 단축키는 @('키', '설명') 또는 @('키', '설명', '주제') 모양이어야 합니다." }
     }
     $relatedEntry = $null
     if ($Related) {

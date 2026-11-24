@@ -826,19 +826,26 @@ function New-WtKeyRow([string]$Keys, [string]$What, [switch]$Header) {
     $row
 }
 
-# 탭이 등록한 단축키를 메뉴 순서대로 모은다. 키와 설명이 같으면 한 줄로 묶는다 (예: 문서 · 활성 작업: 새로 고침)
-function Get-WtShortcutRows {
-    $rows = [System.Collections.Generic.List[object]]::new()
+# 단축키 목록 안의 제목 줄. 탭 이름(-Topic 없음)은 진하게 위 16, 탭 안 주제는 작은 회색 글자 위 12
+function New-WtKeySection([string]$Text, [switch]$Topic) {
+    $t = New-WtText $Text $(if ($Topic) { 'T.Sub' } else { 'T.Strong' })
+    $t.Margin = if ($Topic) { [System.Windows.Thickness]::new(0, 12, 0, 2) } else { [System.Windows.Thickness]::new(0, 16, 0, 4) }
+    $t
+}
+
+# 탭이 등록한 단축키를 탭마다(메뉴 순서, 끈 탭 빼고) 묶는다. 셋째 값(주제)이 있으면 그 탭 안에서 주제가 처음 나온 순서대로 모은다.
+# 예전에는 한 목록에 「탭: 설명」으로 이어 붙여 메모 것만 스무 줄이 넘었다(11-24 승호: 많으면 주제를 나눠야)
+function Get-WtShortcutGroups {
     foreach ($a in @(Get-WtAddon)) {
-        foreach ($s in @($a.Shortcuts)) {
-            $same = $rows | Where-Object { $_.Key -ceq $s[0] -and $_.What -ceq $s[1] } | Select-Object -First 1
-            if ($same) { $same.Titles.Add($a.Title); continue }
-            $titles = [System.Collections.Generic.List[string]]::new()
-            $titles.Add($a.Title)
-            $rows.Add([pscustomobject]@{ Key = [string]$s[0]; What = [string]$s[1]; Titles = $titles })
-        }
+        $rows = @(foreach ($s in @($a.Shortcuts)) {
+                if (@($s).Count -lt 2) { continue }
+                [pscustomobject]@{ Key = [string]$s[0]; What = [string]$s[1]; Topic = $(if (@($s).Count -gt 2) { [string]$s[2] } else { '' }) }
+            })
+        if (-not $rows.Count) { continue }
+        $topics = [System.Collections.Generic.List[string]]::new()
+        foreach ($r in $rows) { if (-not $topics.Contains($r.Topic)) { $topics.Add($r.Topic) } }
+        [pscustomobject]@{ Title = [string]$a.Title; Rows = @(foreach ($t in $topics) { $rows | Where-Object { $_.Topic -ceq $t } }) }
     }
-    foreach ($r in $rows) { [pscustomobject]@{ Key = $r.Key; Text = '{0}: {1}' -f ($r.Titles -join ' · '), $r.What } }
 }
 
 function New-WtHelpPage {
@@ -846,6 +853,7 @@ function New-WtHelpPage {
     $col = New-WtStack Vertical
     [System.Windows.Controls.Grid]::SetIsSharedSizeScope($col, $true)
     [void](Add-WtChild $col (New-WtKeyRow '키' '하는 일' -Header))
+    [void](Add-WtChild $col (New-WtKeySection '공통'))
     foreach ($r in @(
             @('Ctrl + 1 ~ 9', '메뉴 순서대로 화면 이동'),
             @('Ctrl + Shift + B', '사이드바 접기 / 펼치기'),
@@ -854,7 +862,15 @@ function New-WtHelpPage {
             @('F1', '도움말'))) {
         [void](Add-WtChild $col (New-WtKeyRow $r[0] $r[1]))
     }
-    foreach ($r in @(Get-WtShortcutRows)) { [void](Add-WtChild $col (New-WtKeyRow $r.Key $r.Text)) }
+    foreach ($g in @(Get-WtShortcutGroups)) {
+        [void](Add-WtChild $col (New-WtKeySection $g.Title))
+        $topic = ''
+        foreach ($r in $g.Rows) {
+            if ($r.Topic -and $r.Topic -cne $topic) { [void](Add-WtChild $col (New-WtKeySection $r.Topic -Topic)) }
+            $topic = $r.Topic
+            [void](Add-WtChild $col (New-WtKeyRow $r.Key $r.What))
+        }
+    }
     $keys.Child = $col
 
     $tabs = New-WtStack Vertical 16

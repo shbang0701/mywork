@@ -1048,14 +1048,21 @@ if (`$Mode -eq 'own') { Exit-WtOwnProcess -ScriptPath `$PSCommandPath -ExitCode 
     Register-WtAddon -Id 'test-one' -Title '하나' -Order 90 -NewView { } -Shortcuts @('F9', '혼자')
     Assert-Wt '단축키 한 쌍은 쉼표 없이 줘도 한 쌍' (@((Get-WtAddon -Id 'test-one').Shortcuts).Count -eq 1 -and (Get-WtAddon -Id 'test-one').Shortcuts[0][1] -eq '혼자')
     $threw = $false
-    try { Register-WtAddon -Id 'test-bad' -Title '잘못' -NewView { } -Shortcuts @(@('F5', '새로 고침', '남는 값')) } catch { $threw = $true }
+    try { Register-WtAddon -Id 'test-bad' -Title '잘못' -NewView { } -Shortcuts @(@('F5', '새로 고침', '주제', '남는 값')) } catch { $threw = $true }
     Assert-Wt '모양이 틀린 단축키는 등록할 때 알린다' ($threw -and -not (Get-WtAddon -Id 'test-bad'))
-    $keyRows = (@(& (Get-Module Pages) { Get-WtShortcutRows }) | ForEach-Object { "$($_.Key)=$($_.Text)" }) -join '|'
-    Assert-Wt '도움말 단축키: 메뉴 순서로 모으고, 키 · 설명이 같으면 탭 이름을 묶는다' ($keyRows -eq 'F5=엑스 · 와이: 새로 고침|Enter=엑스: 열기|F9=하나: 혼자') $keyRows
+    # 도움말 단축키는 탭마다 묶는다(11-24: 한 목록에 「탭: 설명」으로 이어 붙여 메모 것만 스무 줄이 넘었음). 셋째 값은 탭 안 주제
+    $formatGroups = { (@(& (Get-Module Pages) { Get-WtShortcutGroups }) | Where-Object { $_.Title -in '엑스', '와이', '하나', '주제탭' } |
+            ForEach-Object { "$($_.Title)[" + (($_.Rows | ForEach-Object { "$($_.Key)=$($_.What)$(if ($_.Topic) { "/$($_.Topic)" })" }) -join ',') + ']' }) -join '|' }
+    $keyRows = & $formatGroups
+    Assert-Wt '도움말 단축키: 메뉴 순서로 탭마다 묶고, 같은 키 · 설명도 탭마다 따로' ($keyRows -eq '엑스[F5=새로 고침,Enter=열기]|와이[F5=새로 고침]|하나[F9=혼자]') $keyRows
     Set-WtSetting 'addons.disabled' @('test-y')
-    $keyRows = (@(& (Get-Module Pages) { Get-WtShortcutRows }) | ForEach-Object { "$($_.Key)=$($_.Text)" }) -join '|'
-    Assert-Wt '도움말 단축키: 끈 탭은 뺀다' ($keyRows -eq 'F5=엑스: 새로 고침|Enter=엑스: 열기|F9=하나: 혼자') $keyRows
+    $keyRows = & $formatGroups
+    Assert-Wt '도움말 단축키: 끈 탭은 뺀다' ($keyRows -eq '엑스[F5=새로 고침,Enter=열기]|하나[F9=혼자]') $keyRows
     Set-WtSetting 'addons.disabled' @()
+    Register-WtAddon -Id 'test-topic' -Title '주제탭' -Order 95 -NewView { } -Shortcuts @(@('A', '가', '주1'), @('B', '나', '주2'), @('C', '다', '주1'), @('D', '라'))
+    $keyRows = & $formatGroups
+    Assert-Wt '도움말 단축키: 주제가 있으면 그 탭 안에서 처음 나온 주제 순서로 모은다' ($keyRows -like '*|주제탭`[A=가/주1,C=다/주1,B=나/주2,D=라`]') $keyRows
+    Register-WtAddon -Id 'test-topic' -Title '검사 끝' -NewView { }
 
     # ---- 예전 데이터 가져오기 흐름 (가짜 탭) ----
     # 예전 WorkTool(WinForms)의 data 폴더는 정해진 CSV 이름으로 알아본다
@@ -2099,10 +2106,11 @@ pie
         Assert-Wt '메뉴 툴팁: Right 배치·항목 세로 가운데' $statusChecks.TipRight
 
         # 도움말: 탭이 등록한 설명 · 카드를 모은다. 카드 하나가 실패해도 도움말은 연다
-        Register-WtAddon -Id 'test-help' -Title '도움' -Order 50 -NewView { } -Help '가짜 탭 설명' -HelpCard { New-WtText '가짜 카드' 'T.Body' }
+        Register-WtAddon -Id 'test-help' -Title '도움' -Order 50 -NewView { } -Help '가짜 탭 설명' -HelpCard { New-WtText '가짜 카드' 'T.Body' } -Shortcuts (, @('F7', '가짜 주제 키', '가짜 주제'))
         Register-WtAddon -Id 'test-broken' -Title '고장' -Order 60 -NewView { } -HelpCard { throw '일부러 낸 오류' }
         $texts = @(Get-WtTestTexts (New-WtHelpPage))
-        Assert-Wt 'WPF 도움말: 탭 설명 · 단축키 · 카드를 싣는다' ($texts -contains '가짜 탭 설명' -and $texts -contains '가짜 카드' -and $texts -contains '엑스 · 와이: 새로 고침')
+        Assert-Wt 'WPF 도움말: 탭 설명 · 단축키(공통 · 탭 제목 · 주제) · 카드를 싣는다' ($texts -contains '가짜 탭 설명' -and $texts -contains '가짜 카드' -and
+            $texts -contains '공통' -and $texts -contains '가짜 주제' -and $texts -contains '가짜 주제 키' -and $texts -notcontains '엑스 · 와이: 새로 고침') ($texts -join ' / ')
         Assert-Wt 'WPF 도움말: 실패한 탭 카드는 알리고 나머지는 연다' (@($texts | Where-Object { $_ -like '고장 도움말을 만들지 못했습니다*' }).Count -eq 1)
 
         $shell = Get-Module Shell
