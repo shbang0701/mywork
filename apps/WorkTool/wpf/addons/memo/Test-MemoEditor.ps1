@@ -1194,6 +1194,39 @@ try {
             Set-WtSetting 'memo.find.regex' $false
         }
     }
+    # 편집 보기 표 가로 위치 기억(11-24 승호): 섬을 열고 닫거나(고친 표는 새로 그려짐) 보기를 다시 그려도 표마다 그대로,
+    # 창을 넓혀 칸에 다 들어가면 0, 다른 메모를 열면 처음부터
+    Invoke-EdCase 'NarrowTable-RememberScroll' {
+        $ed = New-EdEditor
+        $ed.Root.Width = 320
+        $rows = @('| 호스트 | 구간 | 확인 포트 | 담당 역할 | 비고 |', '| --- | --- | --- | --- | --- |', '| SRV-01 | 내부망 | 443, 5985 | 웹 앞단 | 첫칸글 |', '| SRV-02 | 백업망 | 5432 | 데이터베이스 | 끝칸글 |')
+        $text = Join-EdLines (@('# 두 표', '') + $rows + @('', '가운데 문단', '') + $rows)   # 표 줄 2..5 · 9..12
+        $layout = { $win.UpdateLayout(); Sync-EdUi; $ed.Live.UpdateLayout(); Sync-EdUi; $win.UpdateLayout() }
+        $scrolls = { @(Get-EdElements $ed.Live | Where-Object { Get-WtMarkdownTableView $_ } | ForEach-Object { $_.Child }) }
+        $offsets = { (& $scrolls | ForEach-Object { [Math]::Round($_.HorizontalOffset) }) -join ',' }
+        Set-EdText $ed $text; & $layout
+        $s = & $scrolls
+        $s[0].ScrollToHorizontalOffset(60); $s[1].ScrollToRightEnd(); & $layout
+        $want = & $offsets
+        Open-EdAt $ed 4 2; Send-EdText $ed 'X'; Close-Ed $ed; & $layout
+        $afterEdit = & $offsets
+        Open-EdAt $ed 11 2; Close-Ed $ed; & $layout
+        $afterOpen = & $offsets
+        $null = Set-WtMemoEditorMode $ed 'read'; $null = Set-WtMemoEditorMode $ed 'live'; & $layout
+        $afterMode = & $offsets
+        Assert-Ed 'NarrowTable-RememberScroll: 섬에서 고친 표 · 섬만 열고 닫은 표 · 보기를 다시 그린 뒤에도 표마다 가로 위치 그대로' (
+            $want -match '^60,[1-9]' -and $afterEdit -ceq $want -and $afterOpen -ceq $want -and $afterMode -ceq $want) "처음=$want 고친 뒤=$afterEdit 열고 닫은 뒤=$afterOpen 보기 뒤=$afterMode"
+        [void](Test-EdContract $ed '표 가로 위치 기억')
+        $ed.Root.Width = 900; & $layout
+        $wide = & $offsets
+        $ed.Root.Width = 320; & $layout
+        Open-EdAt $ed 4 2; Close-Ed $ed; & $layout
+        Assert-Ed 'NarrowTable-RememberScroll: 창을 넓혀 칸에 다 들어가면 0, 다시 좁혀 섬을 열고 닫아도 0' ($wide -ceq '0,0' -and (& $offsets) -ceq '0,0') "넓힘=$wide 다시 좁힘=$(& $offsets)"
+        $s = & $scrolls
+        $s[0].ScrollToRightEnd(); & $layout
+        Set-EdText $ed '다른 메모'; Set-EdText $ed $text; & $layout
+        Assert-Ed 'NarrowTable-RememberScroll: 다른 메모를 열었다 오면 처음부터' ((& $offsets) -ceq '0,0') (& $offsets)
+    }
 
     # ---- 상태 · 포커스 ----
     Invoke-EdCase '상태' {
