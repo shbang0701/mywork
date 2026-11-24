@@ -265,7 +265,9 @@ function Add-WtMdListItemUnits($Units, $List, $Li, $Ctx, [int]$Depth, [int]$List
     for ($i = 0; $i -lt $children.Count; $i++) { if ($children[$i].GetType().Name -eq 'ListBlock') { $firstNested = $i; break } }
     $split = $firstNested -ge 1
     if ($split) { for ($i = $firstNested; $i -lt $children.Count; $i++) { if ($children[$i].GetType().Name -ne 'ListBlock') { $split = $false } } }
-    $own = if ($split) { @($children[0..($firstNested - 1)]) } else { $children }
+    # if 식으로 받으면 자식이 하나일 때 배열이 풀린다. 그 자식이 목록 · 인용이면 그 안의 항목을 자식으로 읽어 글이 빠진다(- - 글)
+    $own = $children
+    if ($split) { $own = @($children[0..($firstNested - 1)]) }
     $range = Get-WtMdBlockLines $Li $Ctx
     $end = if ($split) { (Get-WtMdBlockLines $children[$firstNested] $Ctx)[0] } else { $range[1] }
     # 항목 안 빈 줄은 단위에 넣지 않는다 (뒤쪽 빈 줄 떼기)

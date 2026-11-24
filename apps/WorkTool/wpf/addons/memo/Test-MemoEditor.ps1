@@ -2318,6 +2318,89 @@ try {
         Assert-Ed 'BodyHint-EmptyMemo: 빈 본문은 첫 글자 자리에 예시 글자 · 누름은 본문으로 · 쓰면 숨김 · 읽기 보기 없음 (헤맨 곳)' $ok ($detail -join ' / ')
         Set-WtMemoEditorMode $ed 'live'
     }
+    # 11-24 실사용: 목록 항목의 첫 내용이 또 목록인 줄(- - 글)이 편집 보기에서 빈 점만 그려지고 글자가 사라졌다.
+    # 읽기 보기와 같은 모양(• ○ 글)으로 그리는지, 글자가 실제 배치에서 안쪽 기호 뒤에 놓이는지, 누르면 글자 앞으로 가는지 본다
+    Invoke-EdCase 'NestedFirstList-LiveShowsText' {
+        $ed = New-EdEditor
+        Set-EdText $ed (Join-EdLines @('- 첫째 줄', '- - 둘째 줄', '- - 셋째 줄', '', '1. - 번호 안 글', '', '- > 인용 안 글', '', '문단', '', '- [ ] - 할 일 안 글'))
+        if ($ed.Island) { Close-Ed $ed }
+        [void](Test-EdContract $ed '- - 글 불러오기')
+        # 문단마다 「위쪽 목록 기호 · 인용 > 글」. 항목마다 따로 그린 편집 보기와 한 번에 그린 읽기 보기를 같은 글로 견준다
+        $quoteStyle = (Get-WtStyleDictionary)['Md.Quote']
+        # 문단의 글은 Run만 모은다 (TextRange.Text는 자리에 따라 목록 기호 글자를 넣기도 해서 견줄 수 없다)
+        function Get-EdParaPaths($Blocks, [string]$Chain) {
+            foreach ($b in @($Blocks)) {
+                if ($b -is [System.Windows.Documents.Paragraph]) {
+                    $sb = [System.Text.StringBuilder]::new(); $tp = $b.ContentStart
+                    while ($tp -and $tp.CompareTo($b.ContentEnd) -lt 0) {
+                        if ($tp.GetPointerContext('Forward') -eq 'Text') { [void]$sb.Append($tp.GetTextInRun('Forward')) }
+                        $tp = $tp.GetNextContextPosition('Forward')
+                    }
+                    "$Chain$($sb.ToString().Trim())"
+                } elseif ($b -is [System.Windows.Documents.List]) {
+                    foreach ($li in $b.ListItems) { Get-EdParaPaths $li.Blocks "$Chain$($b.MarkerStyle)>" }
+                } elseif ($b -is [System.Windows.Documents.Section]) {
+                    Get-EdParaPaths $b.Blocks $(if ([object]::ReferenceEquals($b.Style, $quoteStyle)) { "${Chain}인용>" } else { $Chain })
+                }
+            }
+        }
+        $live = @(Get-EdParaPaths $ed.Live.Document.Blocks '') -join ' | '
+        $null = Set-WtMemoEditorMode $ed 'read'
+        $ed.View.UpdateLayout()
+        $read = @(Get-EdParaPaths $ed.View.Document.Blocks '') -join ' | '
+        $null = Set-WtMemoEditorMode $ed 'live'
+        [void](Complete-EdRender $ed)
+        if ($ed.Island) { Close-Ed $ed }
+        Assert-Ed 'NestedFirstList-LiveShowsText: 편집 보기도 읽기 보기처럼 • ○ 글 (번호 · 인용 · 할 일 겹침 포함)' ($live -ceq $read -and
+            $live.StartsWith('Disc>첫째 줄 | Disc>Circle>둘째 줄 | Disc>Circle>셋째 줄 | Decimal>Circle>번호 안 글 | Disc>인용>인용 안 글 | 문단 | None>', [StringComparison]::Ordinal) -and
+            $live.EndsWith('- 할 일 안 글', [StringComparison]::Ordinal)) "편집 [$live] 읽기 [$read]"
+        # 실제 배치: 글자가 그려졌고(폭 있음) 안쪽 기호만큼 첫째 줄보다 오른쪽, 보기 안
+        $ed.Live.UpdateLayout()
+        $rectOf = {
+            param($needle)
+            $p = Get-EdPoint $ed.Live $needle 0
+            $tp = $ed.Live.GetPositionFromPoint($p, $true)
+            @{ P = $p; R = $tp.GetCharacterRect('Forward') }
+        }
+        $first = & $rectOf '첫째'; $second = & $rectOf '둘째'; $third = & $rectOf '셋째'
+        $laid = $second.P.X -gt $first.P.X + 8 -and [Math]::Abs($second.P.X - $third.P.X) -lt 0.5 -and $second.P.Y -gt $first.P.Y -and
+            $third.P.Y -gt $second.P.Y -and $second.R.Height -gt 0 -and $second.P.X -lt $ed.Live.ActualWidth
+        Assert-Ed 'NestedFirstList-LiveShowsText: 둘째 · 셋째 줄 글자가 실제 배치에서 안쪽 기호 뒤, 줄마다 아래로' $laid "첫째 $($first.P) 둘째 $($second.P) 셋째 $($third.P)"
+        # 글자 첫머리를 누르면 겹친 기호 뒤(글자 앞)에 커서
+        $hits = @((Find-EdHit $ed '둘째' 0), (Find-EdHit $ed '번호 안 글' 0), (Find-EdHit $ed '인용 안 글' 0)) -join ','
+        Assert-Ed 'NestedFirstList-LiveShowsText: 글자 첫머리를 누르면 겹친 기호 뒤 (- - · 1. - · - >)' ($hits -ceq '1:4,4:5,6:4') $hits
+    }
+    # 11-24 실사용: Enter가 붙인 - 뒤에 습관대로 - 를 또 치면 - - 로 겹쳤다(편집 · 원문 둘 다). 실제 키 경로(Enter · 글자 입력)로 친다
+    Invoke-EdCase 'ListMarker-TypedAgain' {
+        $ed = New-EdEditor
+        $detail = @(); $ok = $true
+        foreach ($mode in 'live', 'source') {
+            $null = Set-WtMemoEditorMode $ed $mode
+            Set-EdText $ed '- 첫째 줄'
+            if ($mode -eq 'live') { Open-EdAt $ed 0 6 } else { $ed.Source.Select($ed.Source.Text.Length, 0) }
+            Send-EdKey $ed Return
+            foreach ($ch in '-', ' ', '둘', '째') { Send-EdText $ed $ch }
+            Send-EdKey $ed Return
+            foreach ($ch in '1', '.', ' ') { Send-EdText $ed $ch }   # 다른 종류 표지는 그대로 (하위 목록)
+            $typed = Get-EdText $ed
+            # Tab으로 하위 목록 만들기는 그대로
+            Set-EdText $ed '- 첫째 줄'
+            if ($mode -eq 'live') { Open-EdAt $ed 0 6 } else { $ed.Source.Select($ed.Source.Text.Length, 0) }
+            Send-EdKey $ed Return
+            Send-EdKey $ed Tab
+            foreach ($ch in '안', '쪽') { Send-EdText $ed $ch }
+            $tabbed = Get-EdLines $ed
+            $one = $typed -ceq "- 첫째 줄`n- 둘째`n- 1. " -and $tabbed.Count -eq 2 -and $tabbed[1] -match '^\s+- 안쪽$'
+            $ok = $ok -and $one
+            $detail += "$mode [$($typed.Replace("`n", '¶'))] Tab [$($tabbed -join '¶')]"
+            if ($mode -eq 'live') {
+                Close-Ed $ed
+                [void](Test-EdContract $ed '표지 겹침 막기')
+            }
+        }
+        $null = Set-WtMemoEditorMode $ed 'live'
+        Assert-Ed 'ListMarker-TypedAgain: 편집 · 원문 보기에서 Enter가 붙인 - 뒤에 - 를 또 쳐도 - - 로 겹치지 않고, 다른 표지 · Tab 하위 목록은 그대로' $ok ($detail -join ' / ')
+    }
 
     # ---- 무작위 편집 (고정 시드) ----
     # 코드 블록 없는 글로 돌린다 (울타리 짝이 깨지면 알려진 버그 fence-kind-change에 걸려 그 뒤를 못 봐서)

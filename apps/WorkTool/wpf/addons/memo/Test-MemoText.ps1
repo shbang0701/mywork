@@ -190,6 +190,22 @@ Test-MtCase '] 입력: 두 번째 ]도 넘긴다' '[[abc]|]' $close '[[abc]]|'
 Test-MtCase '] 입력: [[가 없으면 그대로' 'a|]' $close '<null>'
 Test-MtCase '] 입력: 이미 닫힌 [[ ]] 뒤면 그대로' '[[a]] b|]' $close '<null>'
 Test-MtCase '다른 글자는 그대로' 'a|' { param($s) Get-WtMemoTypeEdit $s 'x' } '<null>'
+# 11-24 실사용: Enter가 붙인 - 뒤에 습관대로 - 를 또 치면 - - 로 겹쳤다. 표지만 있는 빈 항목에서 같은 종류 표지 + 공백은 친 표지를 지운다
+$space = { param($s) Get-WtMemoTypeEdit $s ' ' }
+Test-MtCase '공백 입력: 빈 항목에서 - 를 또 치면 겹치지 않는다' '- 첫째 줄¶- -|' $space '- 첫째 줄¶- |'
+Test-MtCase '공백 입력: 글머리 종류(* +)도 같은 종류' '- a¶- *|' $space '- a¶- |'
+Test-MtCase '공백 입력: 번호 항목에서 번호를 또 치면 겹치지 않는다' '1. a¶2. 2.|' $space '1. a¶2. |'
+Test-MtCase '공백 입력: 번호는 다른 수라도 같은 종류(괄호 표지)' '1) a¶2) 3)|' $space '1) a¶2) |'
+Test-MtCase '공백 입력: 할 일 항목에서 - 를 또 치면' '- [ ] a¶- [ ] -|' $space '- [ ] a¶- [ ] |'
+Test-MtCase '공백 입력: 할 일 항목에서 [ ] 를 또 치면' '- [ ] a¶- [ ] [ ]|' $space '- [ ] a¶- [ ] |'
+Test-MtCase '공백 입력: 들여쓴 빈 항목 · 인용 안도 같다' '> - a¶>     - -|' $space '> - a¶>     - |'
+Test-MtCase '공백 입력: 다른 종류(글머리 뒤 번호)는 그대로 하위 목록' '- a¶- 1.|' $space '<null>'
+Test-MtCase '공백 입력: 글이 있으면 그대로' '- a -|' $space '<null>'
+Test-MtCase '공백 입력: 표지 바로 뒤(빈 항목)는 그대로' '- |' $space '<null>'
+Test-MtCase '공백 입력: 뒤에 글이 있으면 그대로' '- -|가' $space '<null>'
+Test-MtCase '공백 입력: 목록이 아닌 줄은 그대로' '-|' $space '<null>'
+Test-MtCase '공백 입력: 글머리 항목에서 [ ] 는 할 일로 (그대로)' '- [ ]|' $space '<null>'
+Test-MtCase '공백 입력: 선택이 있으면 그대로' '- «-»' $space '<null>'
 
 # ---- Enter -----------------------------------------------------------------------------------
 

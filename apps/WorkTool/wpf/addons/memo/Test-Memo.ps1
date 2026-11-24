@@ -938,6 +938,22 @@ try {
         } finally { $button.ClearValue([Windows.UIElement]::IsEnabledProperty) }
         Assert-WtTest 'WPF 메모 탭: 나눈 두 칸의 선택 표시 · 비활성 색 · 실제 좌표 입력 경로' ($selected -and $disabled -and $route.Ok) $route.Path
     }
+    # 11-24 실사용: 나눈 뒤 Ctrl+\가 다른 칸으로 포커스를 옮기지 않았다(나눌 때 지금 칸만 오른쪽으로 가고 포커스는 왼쪽에 남아서).
+    # 키는 포커스가 있는 요소에서 올린다(실제 키 경로). 칸 번호는 키보드 포커스가 들어 있는 칸
+    $focusPane = { & $memoModule { $n = -1; for ($i = 0; $i -lt $script:panes.Count; $i++) { if ($script:panes[$i].Root.IsKeyboardFocusWithin) { $n = $i } }; $n } }
+    # 섬 포커스는 배치가 끝난 뒤(Loaded)에 마저 준다. 실제로는 키 사이에 디스패처가 돈다
+    $sendSplit = { [void](Send-TestKey Oem5 Control ([System.Windows.Input.Keyboard]::FocusedElement)); & $findPump }
+    & $findPump
+    $afterSplit = & $focusPane
+    & $sendSplit; $one = "$(& $focusPane)/$((Get-TestTabs).Active)"
+    & $sendSplit; $two = "$(& $focusPane)/$((Get-TestTabs).Active)"
+    # 링크 · 메뉴로 다른 칸에 연 것처럼 지금 칸만 오른쪽이고 포커스는 왼쪽일 때도 포커스의 반대쪽(오른쪽)으로
+    & $memoModule { $null = Set-WtMemoEditorFocus $script:panes[0].Editor }; & $findPump
+    & $memoModule { $script:active = 1 }
+    $mixed = "$(& $focusPane)/$((Get-TestTabs).Active)"
+    & $sendSplit; $three = "$(& $focusPane)/$((Get-TestTabs).Active)"
+    Assert-WtTest 'MemoSplit-CtrlBackslashMovesFocus: 나누면 오른쪽 칸에 포커스, 나눈 뒤 Ctrl+\는 포커스가 있는 칸의 다른 칸으로 (지금 칸과 포커스 칸이 달라도)' (
+        $afterSplit -eq 1 -and $one -ceq '0/0' -and $two -ceq '1/1' -and $mixed -ceq '0/1' -and $three -ceq '1/1') "나눔=$afterSplit 첫=$one 둘=$two 어긋남=$mixed 셋=$three (포커스 칸/지금 칸)"
     Set-TestBody 1 'synced text'
     $st0 = & $memoModule { $script:panes[0].Status }; $st1 = & $memoModule { $script:panes[1].Status }
     Assert-WtTest 'WPF 메모 칸: 저장 상태는 칸마다 (고친 칸만 저장 안 됨)' ((@(Get-WtTestTexts $st1) -contains '저장 안 됨') -and -not (@(Get-WtTestTexts $st0) -contains '저장 안 됨'))

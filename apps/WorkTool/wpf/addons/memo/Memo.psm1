@@ -985,17 +985,23 @@ function Select-WtMemoNextTab([int]$Step) {
     [void](Select-WtMemoTab $p $p.Tabs[(($i + $Step) % $n + $n) % $n])
 }
 
-# Ctrl+\: 나누지 않았으면 지금 메모를 오른쪽 칸에 열고, 나눴으면 다른 칸으로 포커스
+# Ctrl+\: 나누지 않았으면 지금 메모를 오른쪽 칸에 열고 그 칸으로 포커스, 나눴으면 다른 칸으로 포커스.
+# 「다른 칸」은 키보드 포커스가 있는 칸의 반대쪽이다. 나눈 직후 · 링크나 메뉴로 다른 칸에 연 뒤에는 지금 칸(active)만 옮겨 가고
+# 포커스는 앞 칸에 남아 있어서, active 기준으로 고르면 포커스가 있던 칸으로 되돌아가 옮겨지지 않았다(11-24 실사용)
 function Split-WtMemoRight {
     $p = Get-WtMemoActivePane
     if (-not $p) { return }
     if ($script:panes.Count -gt 1) {
+        foreach ($q in $script:panes) { if ($q.Root.IsKeyboardFocusWithin) { $p = $q; break } }
         $other = Get-WtMemoOtherPane $p
         Set-WtMemoActivePane $other
         if ($other.Current) { $null = Set-WtMemoEditorFocus $other.Editor }
         return
     }
-    if ($p.Current) { [void](Open-WtMemo $p.Current.Id 'side' $p) }
+    if (-not $p.Current) { return }
+    [void](Open-WtMemo $p.Current.Id 'side' $p)
+    $side = Get-WtMemoActivePane
+    if ($script:panes.Count -gt 1 -and $side.Current -and -not [object]::ReferenceEquals($side, $p)) { $null = Set-WtMemoEditorFocus $side.Editor }
 }
 
 # 뒤로(-1) · 앞으로(1). 탭마다 기록이 따로 있다
