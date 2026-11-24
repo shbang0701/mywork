@@ -91,6 +91,59 @@ try {
     } finally { & $docsModule { Set-Item Function:script:Open-WtDocEntry -Value $script:originalShortcutOpen } }
     Set-WtSetting 'docs.pins' @(); Set-WtSetting 'docs.roots' @()
 
+    # ---- 키 (11-24 실사용): 탭을 옮긴 직후(포커스가 왼쪽 메뉴 · 창 자체)에도 Ctrl+F는 찾기 칸으로, 찾기 칸 ↓는 걸러진 목록 첫 항목으로 ----
+    # 창 없는 숨김 호스트에 가짜 메뉴 단추와 문서 화면을 두고 셸의 창 키 처리를 붙여, 포커스 자리에서 키를 올린다. 보조 키는 흉내 낸다
+    $keyView = New-WtTestView 'docs'
+    $keyRows = @(foreach ($n in '01-월간-점검.xlsx', '08-표준-운영절차-안내서.pdf', '09-변경-절차.docx') {
+            [pscustomobject]@{ Name = $n; Path = "X:\keys\$n"; IsDir = $false; Kind = '문서'; SizeText = '1 KB'; ModifiedText = '2026-11-24'; IconText = [string][char]0xE8A5; Missing = $false } })
+    & $docsModule { param($items) $script:current = 'X:\keys'; $script:entries = $items; Update-WtDocList } $keyRows
+    $shellModule = Get-Module Shell
+    $keyNav = [Windows.Controls.RadioButton]::new(); $keyNav.Content = '가짜 메뉴'
+    $keyHost = [Windows.Controls.DockPanel]::new(); [Windows.Controls.DockPanel]::SetDock($keyNav, 'Left')
+    [void]$keyHost.Children.Add($keyNav); [void]$keyHost.Children.Add($keyView)
+    & $shellModule { param($root) $root.Add_PreviewKeyDown({ param($s, $e) Invoke-WtShellKey $e }) } $keyHost
+    $keyParams = [Windows.Interop.HwndSourceParameters]::new('Docs key test'); $keyParams.WindowStyle = 0; $keyParams.Width = 1000; $keyParams.Height = 600
+    $keySource = [Windows.Interop.HwndSource]::new($keyParams); $keySource.RootVisual = $keyHost
+    $keyHost.Measure([Windows.Size]::new(1000, 600)); $keyHost.Arrange([Windows.Rect]::new(0, 0, 1000, 600)); $keyHost.UpdateLayout()
+    $savedShell = & $shellModule { @{ Current = $script:current; Ui = $script:ui } }
+    & $docsModule { $script:testMods = [Windows.Input.ModifierKeys]::None; $script:originalMods = ${function:Get-WtDocModifiers}; function script:Get-WtDocModifiers { $script:testMods } }
+    function Send-DocKey($Target, [string]$Key, [string]$Mods = 'None') {
+        & $docsModule { param($m) $script:testMods = $m } ([Enum]::Parse([Windows.Input.ModifierKeys], $Mods))
+        $a = [Windows.Input.KeyEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $keySource, 0, [Windows.Input.Key]$Key)
+        $a.RoutedEvent = [Windows.Input.Keyboard]::PreviewKeyDownEvent
+        try { $Target.RaiseEvent($a) } finally { & $docsModule { $script:testMods = [Windows.Input.ModifierKeys]::None } }
+        $a.Handled
+    }
+    try {
+        & $shellModule { param($v) $script:current = 'docs'; $script:ui = @{ PageHost = [pscustomobject]@{ Content = $v } } } $keyView
+        $filterBox = & $docsModule { $script:ui.Filter }
+        $keyList = & $docsModule { $script:ui.List }
+        $navFocused = $keyNav.Focus()
+        $fromNav = Send-DocKey $keyNav F Control
+        $navOk = $navFocused -and $fromNav -and $filterBox.IsKeyboardFocused
+        [Windows.Input.Keyboard]::ClearFocus()   # 단축키로 옮겨 앞 화면의 포커스 칸이 사라진 직후(포커스가 창 자체)
+        $fromWindow = Send-DocKey $keyHost F Control
+        Assert-WtTest '문서 키: 왼쪽 메뉴 · 창에 포커스가 있어도 Ctrl+F는 찾기 칸으로 (11-24 실사용)' ($navOk -and $fromWindow -and $filterBox.IsKeyboardFocused) "메뉴포커스=$navFocused 메뉴=$fromNav/$navOk 창=$fromWindow 찾기칸=$($filterBox.IsKeyboardFocused)"
+        # 방금 친 글이 걸러지기 전에 ↓를 눌러도 먼저 거른 뒤 첫 항목으로 간다
+        $filterBox.Text = '절차'
+        $down = Send-DocKey $filterBox Down
+        $firstRow = $keyList.ItemContainerGenerator.ContainerFromIndex(0)
+        $downOk = $down -and $keyList.Items.Count -eq 2 -and $keyList.SelectedIndex -eq 0 -and $firstRow -and $firstRow.IsKeyboardFocused -and
+            $keyList.SelectedItem.Name -ceq '08-표준-운영절차-안내서.pdf'
+        # 맞는 항목이 없으면 칸에 남는다. Shift+↓는 칸의 글 고르기라 넘기지 않는다
+        [void]$filterBox.Focus(); $filterBox.Text = '없는 이름'
+        $emptyDown = Send-DocKey $filterBox Down
+        $filterBox.Text = '절차'
+        $shiftDown = Send-DocKey $filterBox Down Shift
+        $stayOk = -not $emptyDown -and -not $shiftDown -and $filterBox.IsKeyboardFocused
+        Assert-WtTest '문서 찾기 칸: ↓는 걸러진 목록 첫 항목을 골라 그 줄로, 맞는 항목이 없거나 Shift+↓면 칸에 남음 (11-24 실사용)' ($downOk -and $stayOk) (
+            "↓=$down 수=$($keyList.Items.Count) 고름=$($keyList.SelectedIndex) 첫줄포커스=$($firstRow.IsKeyboardFocused) 빈↓=$emptyDown Shift↓=$shiftDown")
+    } finally {
+        & $shellModule { param($s) $script:current = $s.Current; $script:ui = $s.Ui } $savedShell
+        & $docsModule { $script:filterTimer.Stop(); Set-Item Function:script:Get-WtDocModifiers -Value $script:originalMods }
+        $keySource.RootVisual = $null; $keySource.Dispose()
+    }
+
     # ---- 목록 가상화: 데이터 5천 개여도 보이는 행만 만든다 ----
     $view = New-WtTestView 'docs'
     $docList = & $docsModule { $script:ui.List }

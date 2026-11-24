@@ -399,6 +399,24 @@ function Cancel-WtDocFolder {
 
 function Get-WtDocSelected { $script:ui.List.SelectedItem }
 
+# 보조 키(Ctrl · Shift · Alt) 상태. 검사는 이 함수를 바꿔 실제 키보드 없이 흉내 낸다
+function Get-WtDocModifiers { [System.Windows.Input.Keyboard]::Modifiers }
+
+# 찾기 칸에서 ↓: 걸러진 목록의 첫 항목을 고르고 그 줄로 포커스를 옮긴다. 목록이 비었으면 $false(칸에 남음)
+function Move-WtDocFilterToList {
+    # 방금 친 글이 아직 걸러지기 전이면 먼저 거른다
+    if ($script:filterTimer -and $script:filterTimer.IsEnabled) { $script:filterTimer.Stop(); Update-WtDocList }
+    $list = $script:ui.List
+    if (-not $list.Items.Count) { return $false }
+    $list.SelectedIndex = 0
+    $list.ScrollIntoView($list.Items[0])
+    $list.UpdateLayout()
+    $row = $list.ItemContainerGenerator.ContainerFromIndex(0)
+    if (-not $row) { return $false }
+    [void]$row.Focus()
+    $true
+}
+
 function Set-WtDocStatus([string]$Text) {
     $script:ui.Status.Text = $Text
     $script:ui.Status.ToolTip = if ($Text) { $Text } else { $null }   # 좁은 창에서 말줄임되면 전체를 본다
@@ -636,6 +654,12 @@ function New-WtDocsView {
     $filter.ToolTip = '이 폴더에서 이름으로 찾습니다. 띄어 쓰면 낱말이 모두 들어간 이름만 (Ctrl+F)'
     $script:filterTimer = New-WtPollTimer { $script:filterTimer.Stop(); Update-WtDocList }
     $filter.Add_TextChanged({ $script:filterTimer.Stop(); $script:filterTimer.Start() })
+    # ↓: 걸러진 목록으로 내려간다(11-24 실사용). 한글 조합 중이면 입력기가 받은 원래 키를 본다. Shift+↓ 등은 칸의 글 고르기로 남긴다
+    $filter.Add_PreviewKeyDown({
+            param($s, $e)
+            $key = if ($e.Key -eq 'ImeProcessed') { $e.ImeProcessedKey } else { $e.Key }
+            if ($key -eq 'Down' -and (Get-WtDocModifiers) -eq [System.Windows.Input.ModifierKeys]::None -and (Move-WtDocFilterToList)) { $e.Handled = $true }
+        })
     foreach ($b in @($openFolder, $refresh)) { [System.Windows.Controls.DockPanel]::SetDock($b, 'Right'); [void]$top.Children.Add($b) }
     $pathText = New-WtText '' 'T.Strong'
     $pathText.TextWrapping = 'NoWrap'
@@ -760,10 +784,10 @@ function New-WtDocsView {
     [void]$grid.Children.Add($right)
     [void]$page.Panel.Children.Add($grid)
 
-    # 문서 화면 안 단축키
+    # 문서 화면 단축키. 포커스가 왼쪽 메뉴 · 창 자체에 있어도 셸이 이 처리기에 다시 올려 준다
     $page.Root.Add_PreviewKeyDown({
             param($s, $e)
-            $mods = [System.Windows.Input.Keyboard]::Modifiers
+            $mods = Get-WtDocModifiers
             $key = if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }
             if ($key -eq 'F5') { Show-WtDocFolder $script:current; $e.Handled = $true; return }
             if ($key -eq 'Up' -and ($mods -band [System.Windows.Input.ModifierKeys]::Alt) -and $script:ui.Up.IsEnabled) {
@@ -796,7 +820,7 @@ Register-WtAddon -Id 'docs' -Title '문서' -Icon 0xE8B7 -Group '작업' -Order 
     -ShortcutExists { param($Key) Test-WtDocShortcut $Key } `
     -OnExit { Stop-WtDocs } `
     -Help '폴더의 파일을 원래 프로그램으로 엽니다.' `
-    -Shortcuts @(@('Enter', '고른 파일 열기 · 폴더 들어가기'), @('Alt + ↑', '위 폴더'), @('F5', '새로 고침'), @('Ctrl + F', '이름으로 필터링'))
+    -Shortcuts @(@('Enter', '고른 파일 열기 · 폴더 들어가기'), @('Alt + ↑', '위 폴더'), @('F5', '새로 고침'), @('Ctrl + F', '이름으로 필터링'), @('↓', '찾기 칸에서 목록으로'))
 
 Export-ModuleMember -Function Get-WtDocKind, Format-WtDocSize, Get-WtDocEntries, Get-WtDocSubfolders, Get-WtDocPinEntries,
     Test-WtDocPinned, Switch-WtDocPin, Get-WtDocRoots, Get-WtDocChain, Find-WtDocEntry, Format-WtDocPathLabel

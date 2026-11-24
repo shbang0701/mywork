@@ -127,6 +127,61 @@ try {
         Assert-Active '자동 적용 시 모드 표시 갱신' ((& $module { $script:ui.Mode.Text }) -eq '자동 · 2분' -and (& $module { $script:ui.Auto.IsChecked }))
         & $module { $script:ui.Manual.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.MenuItem]::ClickEvent)) }
         Assert-Active '수동 메뉴 클릭은 자동 갱신 중지' ((Get-WtTaskRefresh).mode -eq 'manual')
+        # ---- 키 · 닫을 수 없는 줄 (11-24 실사용) ----
+        # 창 없는 숨김 호스트에 가짜 메뉴 단추와 이 화면을 두고 셸의 창 키 처리를 붙여, 포커스 자리에서 키를 올린다. 보조 키는 흉내 낸다
+        $shellModule = Get-Module Shell
+        $keyNav = [Windows.Controls.RadioButton]::new(); $keyNav.Content = '가짜 메뉴'
+        $keyHost = [Windows.Controls.DockPanel]::new(); [Windows.Controls.DockPanel]::SetDock($keyNav, 'Left')
+        [void]$keyHost.Children.Add($keyNav); [void]$keyHost.Children.Add($view)
+        & $shellModule { param($root) $root.Add_PreviewKeyDown({ param($s, $e) Invoke-WtShellKey $e }) } $keyHost
+        $keyParams = [Windows.Interop.HwndSourceParameters]::new('Active tasks key test'); $keyParams.WindowStyle = 0; $keyParams.Width = 1100; $keyParams.Height = 700
+        $keySource = [Windows.Interop.HwndSource]::new($keyParams)
+        $savedShell = & $shellModule { @{ Current = $script:current; Ui = $script:ui } }
+        & $module { $script:testMods = [Windows.Input.ModifierKeys]::None; $script:originalMods = ${function:Get-WtTaskModifiers}; function script:Get-WtTaskModifiers { $script:testMods } }
+        function Send-TaskKey($Target, [string]$Key, [string]$Mods = 'None') {
+            & $module { param($m) $script:testMods = $m } ([Enum]::Parse([Windows.Input.ModifierKeys], $Mods))
+            $a = [Windows.Input.KeyEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $keySource, 0, [Windows.Input.Key]$Key)
+            $a.RoutedEvent = [Windows.Input.Keyboard]::PreviewKeyDownEvent
+            try { $Target.RaiseEvent($a) } finally { & $module { $script:testMods = [Windows.Input.ModifierKeys]::None } }
+            $a.Handled
+        }
+        try {
+            $keySource.RootVisual = $keyHost
+            $keyHost.Measure([Windows.Size]::new(1100, 700)); $keyHost.Arrange([Windows.Rect]::new(0, 0, 1100, 700)); $keyHost.UpdateLayout()
+            $keyHost.Dispatcher.Invoke([action]{}, [Windows.Threading.DispatcherPriority]::ContextIdle)   # 묶음 머리 Loaded → 묶음 체크 상자 등록
+            & $shellModule { param($v) $script:current = 'active-tasks'; $script:ui = @{ PageHost = [pscustomobject]@{ Content = $v } } } $view
+            $searchBox = & $module { $script:ui.Search }
+            $navFocused = $keyNav.Focus()
+            $fromNav = Send-TaskKey $keyNav F Control
+            $navOk = $navFocused -and $fromNav -and $searchBox.IsKeyboardFocused
+            [Windows.Input.Keyboard]::ClearFocus()   # 단축키로 옮겨 앞 화면의 포커스 칸이 사라진 직후(포커스가 창 자체)
+            $fromWindow = Send-TaskKey $keyHost F Control
+            $keysOk = $navOk -and $fromWindow -and $searchBox.IsKeyboardFocused
+            if (-not $keysOk) { Write-Host "메뉴포커스=$navFocused 메뉴=$fromNav/$navOk 창=$fromWindow 찾기칸=$($searchBox.IsKeyboardFocused)" }
+            Assert-Active '왼쪽 메뉴 · 창에 포커스가 있어도 Ctrl+F는 찾기 칸으로 (11-24 실사용)' $keysOk
+            # 닫을 수 없는 줄(c) · 그런 줄만 있는 묶음은 비활성 모양 + 이유 툴팁. 고를 수 있는 줄(b) · 묶음과 다르게 보인다
+            $look = & $module {
+                $rowCheck = Get-WtVisualChild (Find-WtTaskRow $script:ui.Grid 'c') ([Windows.Controls.CheckBox])
+                $okCheck = Get-WtVisualChild (Find-WtTaskRow $script:ui.Grid 'b') ([Windows.Controls.CheckBox])
+                $group = $script:ui.GroupChecks['Microsoft Edge']
+                @{ Row = $rowCheck; RowBox = $rowCheck.Template.FindName('Box', $rowCheck); OkBox = $okCheck.Template.FindName('Box', $okCheck)
+                    Group = $group; GroupBox = $(if ($group) { $group.Template.FindName('Box', $group) }); OkGroup = $script:ui.GroupChecks['Google Chrome'] }
+            }
+            $canvas = $view.FindResource('B.Bg.Canvas').Color; $muted = $view.FindResource('B.Border.Muted').Color
+            $rowLook = -not $look.Row.IsEnabled -and $look.RowBox.Background.Color -eq $canvas -and $look.RowBox.BorderBrush.Color -eq $muted -and
+                $look.OkBox.Background.Color -ne $canvas -and $look.OkBox.BorderBrush.Color -ne $muted
+            $rowTip = [Windows.Controls.ToolTipService]::GetShowOnDisabled($look.Row) -and [string]$look.Row.ToolTip -ceq '닫기 지원 안 됨'
+            $groupLook = $look.Group -and -not $look.Group.IsEnabled -and $look.GroupBox.Background.Color -eq $canvas -and $look.GroupBox.BorderBrush.Color -eq $muted -and
+                [Windows.Controls.ToolTipService]::GetShowOnDisabled($look.Group) -and [string]$look.Group.ToolTip -ceq '이 프로그램에는 여기서 닫을 수 있는 항목이 없습니다.' -and
+                $look.OkGroup.IsEnabled -and $null -eq $look.OkGroup.ToolTip
+            if (-not ($rowLook -and $rowTip -and $groupLook)) { Write-Host "줄=$rowLook/$($look.RowBox.Background.Color)/$($look.RowBox.BorderBrush.Color) 툴팁=$rowTip/$($look.Row.ToolTip) 묶음=$groupLook/$($look.Group.ToolTip)" }
+            Assert-Active '닫을 수 없는 줄 · 묶음의 체크 상자는 비활성 모양(옅은 바탕 · 옅은 선)과 이유 툴팁 (11-24 실사용)' ($rowLook -and $rowTip -and $groupLook)
+        } finally {
+            & $shellModule { param($s) $script:current = $s.Current; $script:ui = $s.Ui } $savedShell
+            & $module { Set-Item Function:script:Get-WtTaskModifiers -Value $script:originalMods }
+            $keySource.RootVisual = $null; [void]$keyHost.Children.Remove($view)   # 아래 창 검사가 같은 화면을 쓴다
+            $keySource.Dispose()
+        }
         # 실제 대화상자와 타이머 연결을 검사하되, 수집 함수는 가짜 호출 기록으로 교체한다.
         $shellModule = Get-Module Shell
         $testHost = [Windows.Window]::new(); $testHost.Title = 'WorkTool 표 검사'; $testHost.Width = 1100; $testHost.Height = 700

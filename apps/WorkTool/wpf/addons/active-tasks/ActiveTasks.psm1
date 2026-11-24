@@ -395,6 +395,8 @@ function Update-WtTaskStatus {
         $groupRows = @($script:visible | Where-Object AppLabel -eq $key)
         $check.IsChecked = Get-WtTaskCheckState $groupRows
         $check.IsEnabled = @($groupRows | Where-Object CanClose).Count -gt 0
+        # 닫을 수 있는 줄이 없는 묶음은 비활성 + 이유(줄의 체크 상자는 CloseHint)
+        $check.ToolTip = if ($check.IsEnabled) { $null } else { '이 프로그램에는 여기서 닫을 수 있는 항목이 없습니다.' }
     }
 }
 
@@ -437,6 +439,9 @@ function Restore-WtTaskFocus {
     }
     if ($check) { [void]$check.Focus() }
 }
+
+# 보조 키(Ctrl · Shift · Alt) 상태. 검사는 이 함수를 바꿔 실제 키보드 없이 흉내 낸다
+function Get-WtTaskModifiers { [System.Windows.Input.Keyboard]::Modifiers }
 
 function Find-WtTaskRow($Root, [string]$Id) {
     if ($Root -is [System.Windows.Controls.DataGridRow]) { if ([string]$Root.Item.Id -eq $Id) { return $Root }; return $null }
@@ -614,10 +619,11 @@ function New-WtActiveTasksView {
         $e.Column.SortDirection = $script:sortDirection
         Update-WtTaskList -KeepSelection
     })
+    # 화면 단축키. 포커스가 왼쪽 메뉴 · 창 자체에 있어도 셸이 이 처리기에 다시 올려 준다
     $page.Root.Add_PreviewKeyDown({
         param($s, $e)
         if ($e.Key -eq 'F5') { Start-WtTaskJob 'scan'; $e.Handled = $true }
-        if ($e.Key -eq 'F' -and ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control)) { [void]$script:ui.Search.Focus(); $e.Handled = $true }
+        if ($e.Key -eq 'F' -and ((Get-WtTaskModifiers) -band [System.Windows.Input.ModifierKeys]::Control)) { [void]$script:ui.Search.Focus(); $e.Handled = $true }
     })
     $script:timer = [System.Windows.Threading.DispatcherTimer]::new()
     $script:timer.Interval = [timespan]::FromMilliseconds(250); $script:timer.Add_Tick({ Invoke-WtTaskTick })
