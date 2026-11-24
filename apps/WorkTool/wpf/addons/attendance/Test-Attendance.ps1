@@ -770,6 +770,124 @@ try {
                 $exitClean -ceq 'True|' -and $exitCancel -ceq 'False|탭|True|끝낼 때 고침|2026-11|1' -and $exitDrop -ceq 'True|탭|행 옮길 때 저장') "$exitClean / $exitCancel / $exitDrop"
         } finally { $leaveHost.RootVisual = $null; $leaveHost.Dispose(); & $module { $script:form = $null } }
     }
+
+    # ---- 11-24 실사용 보고(근태, 그림 02 · 03 · live 246 · 247) ----
+    # 5: 퇴근 없는 근무는 지난 날만 센다. 오늘 · 앞날은 아직 근무 중이라 세지 않는다(출근 직후 「퇴근 기록 없음 1일」)
+    $test = New-WtTestData 'attendance-1124'; $tests.Add($test)
+    Copy-WtTestHolidays
+    $openWork = { param([string]$Id, [string]$Day) ConvertFrom-WtAttendanceItem ("{`"id`":`"$Id`",`"kind`":`"work`",`"start`":{`"date`":`"$Day`",`"time`":`"09:00`"},`"end`":null}" | ConvertFrom-Json -DateKind String) }
+    $openDays = @((& $openWork 'o1' '2026-11-20'), (& $openWork 'o2' '2026-11-24'), (& $openWork 'o3' '2026-11-25'))
+    $noLeaveSum = Get-WtAttendanceSummary (& $d '2026-11-01') $openDays ([Collections.Generic.HashSet[string]]::new()) -Today (& $d '2026-11-24')
+    $noLeaveLater = Get-WtAttendanceSummary (& $d '2026-11-01') $openDays ([Collections.Generic.HashSet[string]]::new()) -Today (& $d '2026-12-01')
+    Assert-WtTest '근태 요약(그림 03 ②): 퇴근 기록 없음은 지난 날만 센다(11/24 기준 11/20 하루, 오늘 · 앞날 뺌 · 다음 달이면 셋 다), 출근 수는 그대로' (
+        $noLeaveSum.NoLeaveDays -eq 1 -and $noLeaveSum.WorkOpen -eq 3 -and $noLeaveLater.NoLeaveDays -eq 3) "$($noLeaveSum.NoLeaveDays) / $($noLeaveSum.WorkOpen) / $($noLeaveLater.NoLeaveDays)"
+    # 화면: 숨김 호스트(WindowStyle=0인 HwndSource, 창을 띄우지 않음)에 1280 × 800 창의 내용 크기로 배치한다. 키는 입력 관리자에 넣는 실제 키 경로이고
+    # 키보드 상태(Ctrl)만 core\Ui의 검사용 값으로 바꾼다. 메뉴 점 갱신은 근태 모듈 안 Update-WtNavBadges를 가로채 그때 등록한 배지 값을 남긴다
+    if (Test-WtTestWpf) {
+        $module = Get-Module Attendance
+        $now = [datetime]::Today
+        Set-WtWorkHours @{ 'work.days' = @(1, 2, 3, 4, 5, 6, 7); 'work.start' = '09:00'; 'work.end' = '18:00'; 'work.lunchStart' = '12:00'; 'work.lunchEnd' = '13:00'; 'work.halfDay' = '' }
+        $otherDay = if ($now.Day -gt 1) { $now.AddDays(-1) } else { $now.AddDays(1) }   # 같은 달 다른 날(표 둘째 줄)
+        [void](Save-WtAttendanceItem (Open-WtAttendanceStore) @{ kind = 'work'; start = @{ date = ConvertTo-WtDateText $otherDay; time = '08:00' }; end = @{ date = ConvertTo-WtDateText $otherDay; time = '17:00' }; note = '다른 날' })
+        & $module { param($m) $script:month = $m; $script:form = $null; $script:viewKey = $null } ([datetime]::new($now.Year, $now.Month, 1))
+        $view = New-WtTestView 'attendance'
+        $hostParams = [Windows.Interop.HwndSourceParameters]::new('Attendance 1124 test'); $hostParams.WindowStyle = 0; $hostParams.Width = 1224; $hostParams.Height = 736
+        $hostAtt = [Windows.Interop.HwndSource]::new($hostParams)
+        $placeNow = { for ($pass = 0; $pass -lt 2; $pass++) { $view.Measure([Windows.Size]::new(1224,736)); $view.Arrange([Windows.Rect]::new(0,0,1224,736)); $view.UpdateLayout(); [Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ApplicationIdle) } }
+        $pressNow = { param($Element) $Element.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent)) }
+        $sendKeyNow = { param([string]$Key) $a = [Windows.Input.KeyEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $hostAtt, 0, [Windows.Input.Key]$Key); $a.RoutedEvent = [Windows.Input.Keyboard]::PreviewKeyDownEvent; [void][Windows.Input.InputManager]::Current.ProcessInput($a) }
+        $typeNow = {
+            param([string]$Text)
+            $target = [Windows.Input.Keyboard]::FocusedElement
+            foreach ($ev in [Windows.Input.TextCompositionManager]::PreviewTextInputEvent, [Windows.Input.TextCompositionManager]::TextInputEvent) {
+                $composition = [Windows.Input.TextComposition]::new([Windows.Input.InputManager]::Current, $target, $Text)
+                $textArgs = [Windows.Input.TextCompositionEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $composition); $textArgs.RoutedEvent = $ev
+                $target.RaiseEvent($textArgs); if ($textArgs.Handled) { break }
+            }
+        }
+        # 표 칸: 그 줄 · 그 열 칸의 글(TextBlock)과 칸. 마우스 누름은 표가 줄을 고르는 것과 같은 선택 변경 → 칸 글 자리에서 뗌(PreviewMouseUp)
+        $cellOf = {
+            param($Item, [string]$Header)
+            $table = & $module { $script:table }
+            $table.ScrollIntoView($Item); & $placeNow
+            $rowBox = $table.ItemContainerGenerator.ContainerFromItem($Item)
+            $cell = @(Find-WtTestVisual $rowBox ([Windows.Controls.DataGridCell]) | Where-Object { [string]$_.Column.Header -ceq $Header })[0]
+            @{ Cell = $cell; Text = (Get-WtVisualChild $cell ([Windows.Controls.TextBlock])) }
+        }
+        $clickCell = {
+            param($Item, [string]$Header)
+            $at = & $cellOf $Item $Header
+            $route = Test-WtTestInputPath -View $view -Element $at.Text -Target $at.Cell
+            & $module { param($i) $script:table.SelectedItem = $i } $Item
+            $up = [Windows.Input.MouseButtonEventArgs]::new([Windows.Input.Mouse]::PrimaryDevice, 0, [Windows.Input.MouseButton]::Left); $up.RoutedEvent = [Windows.Input.Mouse]::PreviewMouseUpEvent
+            $at.Text.RaiseEvent($up); & $placeNow
+            $route
+        }
+        $rowFor = { param([datetime]$Day) @(& $module { @($script:table.ItemsSource) } | Where-Object { $_.Entry.StartDate -eq $Day.Date })[0] }
+        $uiModule = Get-Module Ui
+        & $uiModule { $script:realMods = (Get-Item function:Get-WtKeyModifiers).ScriptBlock; $script:testMods = [Windows.Input.ModifierKeys]::None; function script:Get-WtKeyModifiers { $script:testMods } }
+        & $module {
+            $script:badgeProbe = [System.Collections.Generic.List[string]]::new()
+            function script:Update-WtNavBadges { $script:badgeProbe.Add([string](& (Get-WtAddon -Id attendance).Badge)) }
+        }
+        try {
+            $hostAtt.RootVisual = $view
+            & $module { Update-WtAttendanceView }; & $placeNow
+            # 5 · 6(그림 03): [출근]을 누르면 사이드바에 「퇴근 기록 없음」이 없고, 메뉴 점(오늘 안 찍음)을 바로 다시 그려 꺼진다
+            $dotBefore = [string](& (Get-WtAddon -Id attendance).Badge)
+            & $pressNow (& $module { $script:view['work-start'] }); & $placeNow
+            $probe = @(& $module { $script:badgeProbe })
+            $clockState = "$($probe.Count -ge 1)|$(if ($probe.Count) { $probe[-1] })|$((Get-WtTestTexts $view) -contains '퇴근 기록 없음')"
+            $restToday = Test-WtAttRestDay $now @()   # 시험 휴무일(고정 자료)에 돌리면 찍기 전에도 점이 없다
+            Assert-WtTest '근태 출근(그림 03 ② ③): 출근 직후 「퇴근 기록 없음」이 없고, 메뉴 점을 바로 다시 그려(찍기 전 점 → 찍은 뒤 없음) 1분 타이머 · 마우스 올림을 기다리지 않는다' (
+                $dotBefore -ceq $(if ($restToday) { '' } else { 'dot' }) -and $clockState -ceq 'True||False') "찍기 전 [$dotBefore] / $clockState"
+            # 7(live 246 · 247): 표의 시작 칸(좌표 경로)을 마우스로 누르면 폼의 시작 칸으로 포커스 + 글 전체 선택이라 바로 친 0900이 들어가고,
+            # 2 · 3: 0900은 09:00으로 바꿔 한 줄 칸 Enter로 저장한다
+            $todayRow = & $rowFor $now
+            $startRoute = & $clickCell $todayRow '시작'
+            $startBox = & $module { $script:form.Fields.start }
+            $cellFocus = "$($startBox.IsKeyboardFocused)|$($startBox.SelectionLength -eq $startBox.Text.Length -and $startBox.Text.Length -gt 0)"
+            & $typeNow '0900'; $typedStart = $startBox.Text
+            & $sendKeyNow Return; Wait-WtTestWrites
+            $savedStart = @((Get-WtAttendanceData).Entries | Where-Object { $_.Kind -ceq 'work' -and $_.StartDate -eq $now })[0]
+            $enterState = "$(& $module { $null -eq $script:form })|$($savedStart.Item.start.time)|$($probe.Count -lt @(& $module { $script:badgeProbe }).Count)"
+            # 키보드로 표 줄을 옮기면(칸 포커스에서 ↓, 실제 키 경로) 폼은 열리지만 포커스는 표에 남는다
+            $todayRow = & $rowFor $now; $otherRow = & $rowFor $otherDay
+            $first = @(& $module { @($script:table.ItemsSource) })[0]
+            $firstCell = (& $cellOf $first '날짜').Cell
+            [void]$firstCell.Focus(); & $sendKeyNow Down; & $placeNow
+            $keyState = & $module { "$($null -ne $script:form)|$($script:table.IsKeyboardFocusWithin)|$(if ($script:form) { $script:form.Fields.date.IsKeyboardFocused })" }
+            # 그 종류에 없는 칸(근무의 장소)을 누르면 표에 남는다
+            $placeRoute = & $clickCell $otherRow '장소'
+            $placeState = & $module { "$($script:form.Entry.Note)|$($script:table.IsKeyboardFocusWithin)" }
+            Assert-WtTest '근태 표 칸 누름(live 246 · 247): 시작 칸(좌표 경로)을 누르면 폼 시작 칸에 포커스 + 전체 선택, 바로 친 0900 → Enter로 09:00 저장 · 메뉴 점 다시 그림, 키보드로 줄을 옮기면 표에 남고 없는 칸(근무 장소)도 표에 남음' (
+                $startRoute.Ok -and $cellFocus -ceq 'True|True' -and $typedStart -ceq '0900' -and $enterState -ceq 'True|09:00|True' -and
+                $keyState -ceq 'True|True|False' -and $placeRoute.Ok -and $placeState -ceq '다른 날|True') "$($startRoute.Path) / $cellFocus / $typedStart / $enterState / $keyState / $placeState"
+            # 2 · 4(그림 02): 못 읽는 시각은 사람 말 오류, 틀린 칸이 여럿이면 폼 순서의 첫 칸(시작)으로 포커스 + 전체 선택([저장] 단추로 눌러도).
+            # 3: Ctrl+S는 고르기 칸에 포커스가 있어도, 메모(여러 줄) 칸의 Enter는 줄 바꿈이고 저장하지 않는다
+            $todayRow = & $rowFor $now
+            & $module { param($r) Show-WtAttForm $r.Entry } $todayRow; & $placeNow
+            $form = & $module { $script:form }
+            $form.Fields.start.Text = '9시'; $form.Fields.end.Text = '25:00'
+            [void]$form.Save.Focus(); & $pressNow $form.Save
+            $badState = "$($form.Errors.start.Text)|$($form.Errors.end.Text)|$($form.Fields.start.IsKeyboardFocused)|$($form.Fields.start.SelectedText)"
+            $form.Fields.note.Text = '메모'; $form.Fields.note.CaretIndex = 2; [void]$form.Fields.note.Focus(); & $sendKeyNow Return
+            $noteState = "$(& $module { $null -ne $script:form })|$($form.Fields.note.Text -match "`n")"
+            $form.Fields.start.Text = '9'; $form.Fields.end.Text = '1830'
+            & $uiModule { $script:testMods = [Windows.Input.ModifierKeys]::Control }
+            [void]$form.Fields.kind.Focus(); & $sendKeyNow S
+            & $uiModule { $script:testMods = [Windows.Input.ModifierKeys]::None }
+            Wait-WtTestWrites
+            $savedBoth = @((Get-WtAttendanceData).Entries | Where-Object { $_.Kind -ceq 'work' -and $_.StartDate -eq $now })[0]
+            $ctrlState = "$(& $module { $null -eq $script:form })|$($savedBoth.Item.start.time)|$($savedBoth.Item.end.time)"
+            Assert-WtTest '근태 폼(그림 02): 9시 · 25:00은 「시각은 09:00처럼 입력하세요.」 · 첫 틀린 칸(시작)에 포커스 + 전체 선택, 메모 칸 Enter는 줄 바꿈, Ctrl+S(종류 칸)로 9 · 1830을 09:00 · 18:30 저장' (
+                $badState -ceq '시각은 09:00처럼 입력하세요.|시각은 09:00처럼 입력하세요.|True|9시' -and $noteState -ceq 'True|True' -and $ctrlState -ceq 'True|09:00|18:30') "$badState / $noteState / $ctrlState"
+        } finally {
+            $hostAtt.RootVisual = $null; $hostAtt.Dispose()
+            & $uiModule { Set-Item function:script:Get-WtKeyModifiers $script:realMods }
+            & $module { Remove-Item function:script:Update-WtNavBadges -ErrorAction Ignore; $script:form = $null }
+        }
+    }
 } finally {
     foreach ($t in $tests) { Remove-WtTestData $t }
 }
