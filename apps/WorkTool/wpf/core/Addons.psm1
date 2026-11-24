@@ -25,7 +25,8 @@ $script:addons = [System.Collections.Generic.List[hashtable]]::new()
   ShortcutExists { param($Key) } → 바로 가기 대상이 남아 있으면 $true (선택)
   ShortcutTitle  { param($Key) } → 바로 가기 대상의 지금 이름. 비거나 실패하면 연 때 남긴 이름을 쓴다 (선택)
   PageKey      { param($Key, $Modifiers) } → 이 화면이 떠 있는데 키보드 포커스가 화면 밖(왼쪽 메뉴 · 제목 줄 · 창 자체)에 있을 때
-               셸이 처리하지 않은 키를 넘긴다. 처리했으면 $true (선택). 화면 안 키는 화면이 직접 받는다
+               셸이 처리하지 않은 키를 넘긴다. 처리했으면 $true (선택). 화면 안 키는 화면이 직접 받는다.
+               주지 않으면 셸이 같은 키를 화면 맨 위 요소(NewView가 돌려준 것)의 PreviewKeyDown으로 다시 올린다
   HomeCard     { } → 홈에 놓을 카드 요소(여러 개 가능)를 돌려준다 (선택)
   HomeSlot     main(기본) · side · head(제목 아래 줄). HomeOrder가 작을수록 먼저 놓는다
   HomeCards    @(@{ Slot = 'head'|'main'|'side'; Order = 숫자; Card = { } }, ...). 한 탭의 여러 자리 카드 (선택)

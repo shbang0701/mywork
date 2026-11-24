@@ -40,6 +40,7 @@ $script:warmStarted = $false  # ContentRendered가 다시 와도 세션당 한 �
 $script:forceOpaque = $false  # WORKTOOL_FORCE_OPAQUE=1: 설정을 저장하지 않는 불투명 창
 $script:writingDropped = $false   # 끝낼 때 사용자가 「저장을 기다리지 않고 끝내기」를 골랐는지
 $script:exitAsking = $false       # 끝내기 전에 묻는 중(그사이 트레이 종료 등이 또 와도 겹쳐 묻지 않게)
+$script:forwardingKey = $false    # 화면 밖 포커스의 키를 화면에 다시 올리는 중(Invoke-WtPageKey)
 
 $script:shellXaml = Get-WtShellXaml
 
@@ -152,14 +153,48 @@ function Close-WtUtilityWindows {
 }
 
 # 지금 화면이 떠 있는데 키보드 포커스가 화면 밖(왼쪽 메뉴 · 제목 줄 단추 · 창 자체)에 있으면, 셸이 처리하지 않은 키를
-# 그 탭의 PageKey 등록에 넘긴다. 화면 안에 포커스가 있으면 화면이 직접 받으므로 넘기지 않는다. 처리했으면 $true
+# 그 탭에 넘긴다. 화면 안에 포커스가 있으면 화면이 직접 받으므로 넘기지 않는다. 처리했으면 $true
+# - PageKey를 등록한 탭은 그 등록이 받는다.
+# - 등록하지 않은 탭은 화면 맨 위 요소(NewView가 돌려준 것)에 같은 키를 PreviewKeyDown으로 다시 올린다. 화면 안에 포커스가 있을 때
+#   받던 처리기가 그대로 받는다(탭을 옮긴 직후 Ctrl+F · F5가 목록을 한 번 눌러야 먹던 것, 11-24 실사용)
 function Invoke-WtPageKey([System.Windows.Input.Key]$Key, [System.Windows.Input.ModifierKeys]$Modifiers) {
     if (-not $script:current -or -not $script:ui) { return $false }
     $view = $script:ui.PageHost.Content
     if (-not $view -or $view.IsKeyboardFocusWithin) { return $false }
     $addon = Get-WtAddon -Id $script:current
-    if (-not $addon -or -not $addon.PageKey) { return $false }
-    @(& $addon.PageKey $Key $Modifiers)[-1] -eq $true
+    if (-not $addon) { return $false }
+    if ($addon.PageKey) { return @(& $addon.PageKey $Key $Modifiers)[-1] -eq $true }
+    if ($view -isnot [System.Windows.UIElement]) { return $false }
+    $source = [System.Windows.PresentationSource]::FromVisual($view)
+    if (-not $source) { return $false }
+    $forward = [System.Windows.Input.KeyEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $source, [Environment]::TickCount, $Key)
+    $forward.RoutedEvent = [System.Windows.Input.Keyboard]::PreviewKeyDownEvent
+    # 다시 올린 키도 창을 지나 내려가므로, 그동안 창의 키 처리(Invoke-WtShellKey)는 건너뛴다
+    $script:forwardingKey = $true
+    try { $view.RaiseEvent($forward) } finally { $script:forwardingKey = $false }
+    $forward.Handled
+}
+
+# 앱 창의 단축키(창의 PreviewKeyDown). 셸 단축키를 먼저 보고, 처리하지 않은 키는 지금 화면에 넘긴다(Invoke-WtPageKey)
+function Invoke-WtShellKey($KeyArgs) {
+    if ($script:forwardingKey) { return }
+    if (Invoke-WtWorkSetupKey $KeyArgs) { return }
+    $ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
+    $key = if ($KeyArgs.Key -eq 'System') { $KeyArgs.SystemKey } else { $KeyArgs.Key }
+    $shift = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0
+    if ($ctrl -and $shift -and $key -eq 'B') { Switch-WtPanelCycle; $KeyArgs.Handled = $true; return }
+    if ($key -eq 'F11') { Switch-WtFullScreen; $KeyArgs.Handled = $true; return }
+    if ($key -eq 'Escape' -and $script:fullscreen) { Switch-WtFullScreen; $KeyArgs.Handled = $true; return }
+    if ($key -eq 'F1') { Select-WtPage '_help'; $KeyArgs.Handled = $true; return }
+    if ($ctrl -and $key -eq 'OemComma') { Select-WtPage '_settings'; $KeyArgs.Handled = $true; return }
+    if ($ctrl -and [int]$key -ge [int][System.Windows.Input.Key]::D1 -and [int]$key -le [int][System.Windows.Input.Key]::D9) {
+        $ids = @(Get-WtAddon | ForEach-Object { $_.Id })
+        $idx = [int]$key - [int][System.Windows.Input.Key]::D1
+        if ($idx -lt $ids.Count) { Select-WtPage $ids[$idx] }
+        $KeyArgs.Handled = $true
+        return
+    }
+    if (Invoke-WtPageKey $key ([System.Windows.Input.Keyboard]::Modifiers)) { $KeyArgs.Handled = $true }
 }
 
 # 공개된 Select-WtPage의 출력은 그대로 두고, 항목 열기는 전환 성공 여부까지 확인한다.
@@ -1004,25 +1039,7 @@ function Start-WtApp {
 
     $w.Add_PreviewKeyDown({
             param($s, $e)
-            try {
-                if (Invoke-WtWorkSetupKey $e) { return }
-                $ctrl = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Control) -ne 0
-                $key = if ($e.Key -eq 'System') { $e.SystemKey } else { $e.Key }
-                $shift = ([System.Windows.Input.Keyboard]::Modifiers -band [System.Windows.Input.ModifierKeys]::Shift) -ne 0
-                if ($ctrl -and $shift -and $key -eq 'B') { Switch-WtPanelCycle; $e.Handled = $true; return }
-                if ($key -eq 'F11') { Switch-WtFullScreen; $e.Handled = $true; return }
-                if ($key -eq 'Escape' -and $script:fullscreen) { Switch-WtFullScreen; $e.Handled = $true; return }
-                if ($key -eq 'F1') { Select-WtPage '_help'; $e.Handled = $true; return }
-                if ($ctrl -and $key -eq 'OemComma') { Select-WtPage '_settings'; $e.Handled = $true; return }
-                if ($ctrl -and [int]$key -ge [int][System.Windows.Input.Key]::D1 -and [int]$key -le [int][System.Windows.Input.Key]::D9) {
-                    $ids = @(Get-WtAddon | ForEach-Object { $_.Id })
-                    $idx = [int]$key - [int][System.Windows.Input.Key]::D1
-                    if ($idx -lt $ids.Count) { Select-WtPage $ids[$idx] }
-                    $e.Handled = $true
-                    return
-                }
-                if (Invoke-WtPageKey $key ([System.Windows.Input.Keyboard]::Modifiers)) { $e.Handled = $true }
-            } catch { Show-WtError $_ '단축키' }
+            try { Invoke-WtShellKey $e } catch { Show-WtError $_ '단축키' }
         })
 
     if ($global:WorkToolUnhandledHandler) {

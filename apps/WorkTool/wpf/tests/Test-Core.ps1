@@ -1750,6 +1750,80 @@ pie
         Assert-Wt '기능 수명: 셸 초기화를 반복해도 설정 처리기는 한 번만 실행한다' $lifecycleChecks.OneHandler
         Assert-Wt '기능 수명: 종료한 셸에는 설정 변경을 반영하지 않는다' $lifecycleChecks.NoClosedUpdates
 
+        # 화면 밖 포커스의 탭 단축키(11-24 실사용: 탭을 옮긴 직후 Ctrl+F가 목록을 한 번 눌러야 먹음). 가짜 탭으로 본다.
+        # 창 없는 숨김 호스트에 가짜 왼쪽 메뉴 단추 · 화면 자리를 두고 셸의 창 키 처리(Invoke-WtShellKey)를 붙여, 키를 포커스 자리에서 올린다
+        $pageKeyChecks = & (Get-Module Shell) {
+            $savedKey = @{ Ui = $script:ui; Current = $script:current; Views = $script:views; Buttons = $script:navButtons }
+            $savedKeyAddons = & (Get-Module Addons) { ,$script:addons.ToArray() }
+            $keySource = $null
+            try {
+                & (Get-Module Addons) { $script:addons.Clear() }
+                $script:keyRootCalls = 0; $script:keyOwnCalls = 0; $script:keyOwnRootCalls = 0
+                # 화면 맨 위 요소의 PreviewKeyDown으로만 단축키를 받는 탭 (-PageKey 없음)
+                Register-WtAddon -Id 'key-plain' -Title '가짜 찾기' -NewView {
+                    $root = [System.Windows.Controls.DockPanel]::new()
+                    $root.Tag = [System.Windows.Controls.TextBox]::new()
+                    [void]$root.Children.Add($root.Tag)
+                    $root.Add_PreviewKeyDown({ param($s, $e) $script:keyRootCalls++; if ($e.Key -eq 'F') { [void]$s.Tag.Focus(); $e.Handled = $true } })
+                    $root
+                }
+                # -PageKey를 준 탭은 그 등록이 받고, 화면 맨 위 처리기에는 다시 올리지 않는다
+                Register-WtAddon -Id 'key-own' -Title '가짜 직접' -NewView {
+                    $root = [System.Windows.Controls.DockPanel]::new()
+                    $root.Add_PreviewKeyDown({ $script:keyOwnRootCalls++ })
+                    $root
+                } -PageKey { param($Key, $Modifiers) $script:keyOwnCalls++; $Key -eq 'F' }
+                $keyNav = [System.Windows.Controls.RadioButton]::new(); $keyNav.Content = '가짜 메뉴'
+                $keyPageHost = [System.Windows.Controls.ContentControl]::new(); $keyPageHost.Focusable = $false
+                $keyHost = [System.Windows.Controls.DockPanel]::new()
+                [System.Windows.Controls.DockPanel]::SetDock($keyNav, 'Left')
+                [void]$keyHost.Children.Add($keyNav); [void]$keyHost.Children.Add($keyPageHost)
+                $keyHost.Add_PreviewKeyDown({ param($s, $e) Invoke-WtShellKey $e })
+                $keyParams = [System.Windows.Interop.HwndSourceParameters]::new('Shell key test')
+                $keyParams.WindowStyle = 0; $keyParams.Width = 640; $keyParams.Height = 400
+                $keySource = [System.Windows.Interop.HwndSource]::new($keyParams); $keySource.RootVisual = $keyHost
+                $script:ui = @{ PageHost = $keyPageHost }; $script:navButtons = @{}; $script:views = @{}; $script:current = $null
+                $sendKey = {
+                    param($Target, [System.Windows.Input.Key]$Key)
+                    $a = [System.Windows.Input.KeyEventArgs]::new([System.Windows.Input.Keyboard]::PrimaryDevice, $keySource, 0, $Key)
+                    $a.RoutedEvent = [System.Windows.Input.Keyboard]::PreviewKeyDownEvent
+                    $Target.RaiseEvent($a)
+                    $a.Handled
+                }
+                Select-WtPage 'key-plain'
+                $keyHost.Measure([System.Windows.Size]::new(640, 400)); $keyHost.Arrange([System.Windows.Rect]::new(0, 0, 640, 400)); $keyHost.UpdateLayout()
+                $plainFind = $keyPageHost.Content.Tag
+                # 왼쪽 메뉴를 눌러 옮긴 직후: 포커스는 메뉴 단추
+                $navFocused = $keyNav.Focus() -and $keyNav.IsKeyboardFocused
+                $fromNav = & $sendKey $keyNav F
+                $navOk = $navFocused -and $fromNav -and $plainFind.IsKeyboardFocused -and $script:keyRootCalls -eq 1
+                # 단축키로 옮겨 앞 화면의 포커스 칸이 사라진 직후: 포커스는 창 자체(없음)
+                [System.Windows.Input.Keyboard]::ClearFocus()
+                $fromWindow = & $sendKey $keyHost F
+                $windowOk = $fromWindow -and $plainFind.IsKeyboardFocused -and $script:keyRootCalls -eq 2
+                # 화면 안에 포커스가 있으면 화면이 직접 받는다(셸이 다시 올리지 않아 한 번만)
+                $inside = & $sendKey $plainFind F
+                $insideOk = $inside -and $script:keyRootCalls -eq 3
+                # 화면이 처리하지 않은 키는 메뉴 단추에 그대로 남는다(방향키로 메뉴 옮기기 등)
+                [void]$keyNav.Focus()
+                $passed = & $sendKey $keyNav Down
+                $passOk = -not $passed -and $keyNav.IsKeyboardFocused -and $script:keyRootCalls -eq 4
+                Select-WtPage 'key-own'
+                $keyHost.UpdateLayout()
+                [void]$keyNav.Focus()
+                $own = & $sendKey $keyNav F
+                $ownOk = $own -and $script:keyOwnCalls -eq 1 -and $script:keyOwnRootCalls -eq 0
+                @{ Nav = $navOk; Window = $windowOk; Inside = $insideOk; Pass = $passOk; Own = $ownOk
+                    Detail = "메뉴포커스=$navFocused 메뉴=$fromNav 창=$fromWindow 안=$inside 남김=$passed 직접=$own 맨위=$script:keyRootCalls 등록=$script:keyOwnCalls/$script:keyOwnRootCalls" }
+            } finally {
+                if ($keySource) { $keySource.RootVisual = $null; $keySource.Dispose() }
+                & (Get-Module Addons) { param($restore) $script:addons.Clear(); foreach ($addon in $restore) { $script:addons.Add($addon) } } $savedKeyAddons
+                $script:ui = $savedKey.Ui; $script:current = $savedKey.Current; $script:views = $savedKey.Views; $script:navButtons = $savedKey.Buttons
+            }
+        }
+        Assert-Wt '탭 단축키: 메뉴 단추 · 창에 포커스가 있어도 화면 맨 위 처리기가 받는다(가짜 탭, 11-24 실사용 Ctrl+F)' ($pageKeyChecks.Nav -and $pageKeyChecks.Window) $pageKeyChecks.Detail
+        Assert-Wt '탭 단축키: 화면 안 포커스는 한 번만 · 처리 안 한 키는 메뉴에 남김 · -PageKey 탭은 등록만' ($pageKeyChecks.Inside -and $pageKeyChecks.Pass -and $pageKeyChecks.Own) $pageKeyChecks.Detail
+
         # 창 짜임은 가짜 등록·가짜 보조 칸으로만 본다. 실제 탭은 아래 탭 모아 보기/각 탭 검사에서 맡는다.
         $shellChecks = & (Get-Module Shell) {
             $saved = @{ Window = $script:window; Ui = $script:ui; Current = $script:current; Views = $script:views

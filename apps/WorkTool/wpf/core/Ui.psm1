@@ -1575,9 +1575,11 @@ $script:stylesXaml = @'
         <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.Hover}"/></Trigger>
         <Trigger Property="IsPressed" Value="True"><Setter TargetName="HitArea" Property="Background" Value="{DynamicResource B.AccentSoft}"/></Trigger>
         <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Text}"/><Setter TargetName="Box" Property="BorderThickness" Value="2"/></Trigger>
-        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="1"/></Trigger>
+        <!-- 닫을 수 없는 줄 · 묶음: 값 문서 2절 비활성(Check와 같은 상자), 이유는 툴팁 (11-24 실사용) -->
+        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Box" Property="Background" Value="{DynamicResource B.Bg.Canvas}"/><Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource B.Border.Muted}"/><Setter TargetName="Mark" Property="Stroke" Value="{DynamicResource B.Text.Disabled}"/><Setter TargetName="Dash" Property="Background" Value="{DynamicResource B.Text.Disabled}"/></Trigger>
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
+    <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
   </Style>
   <Style x:Key="Task.GroupCheck" TargetType="CheckBox" BasedOn="{StaticResource Task.Check}"><Setter Property="Padding" Value="4,8,12,8"/></Style>
   <Style x:Key="Task.GroupToggle" TargetType="ToggleButton">
