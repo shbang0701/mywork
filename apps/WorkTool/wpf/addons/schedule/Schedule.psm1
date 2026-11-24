@@ -28,6 +28,8 @@ Register-WtSettingDefault 'schedule.alarmLate' 30      # 늦게 켰을 때 시�
 $script:alarmChoices = [ordered]@{ '없음' = -1; '정시' = 0; '5분 전' = 5; '10분 전' = 10; '15분 전' = 15; '30분 전' = 30; '1시간 전' = 60 }
 $script:snoozeChoices = @(5, 10, 15, 30)
 $script:lateChoices = [ordered]@{ '울리지 않음' = 0; '10분' = 10; '30분' = 30; '1시간' = 60 }
+# 편집 폼의 시각 칸(일정 시작 · 끝, 루틴 시각 · 시간마다 시작 · 끝, 알람 기준 시각). 0900 · 9:00 · 9도 09:00으로 받는다
+$script:timeKeys = @('start', 'end', 'time', 'alarmDayAt')
 # 알람 확인 틱(설계 16장): 앞 틱 시각 · 알람 상태 핸들 · 이번 실행에서 알린 "키|울릴 시각"(상태 파일을 못 써도 두 번 띄우지 않게)
 $script:alarmPrevious = $null
 $script:alarmState = $null
@@ -159,17 +161,29 @@ function New-WtScheduleView {
     $add = New-WtButton '' -Kind Icon -Icon 0xE710 -ToolTip '새로 만들기'; Set-WtStyle $add 'Schedule.Add'
     [Windows.Automation.AutomationProperties]::SetName($add, '새로 만들기')
     [Windows.Controls.DockPanel]::SetDock($add, 'Right'); $script:side.Header.Children.Insert(1, $add); $script:side.Add = $add
-    $menu = New-WtHomePinContextMenu
-    foreach ($spec in @('새 일정', 'event'), @('새 루틴', 'routine')) { [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($kind) Show-WtScheduleForm -Kind $kind } $spec[1])) }
-    $add.ContextMenu = $menu
+    $add.ContextMenu = New-WtScheduleAddMenu
     # +는 사이드바 제목 줄 오른쪽 끝(창 오른쪽 끝)이라 메뉴를 오른쪽에 맞춰 창 안쪽으로 연다
     $add.Add_Click({ param($s, $e) Open-WtButtonMenu $s -Right })
+    # 창이 좁아(1200 미만) 레일로 접혀도 새로 만들기에 닿게 레일 제목 줄 아래에도 +를 둔다. 같은 메뉴, 고르면 폼이 사이드바를 펼친다
+    # (11-24 실사용: 최소 창 1024 × 640에서 [+]가 접힌 칸 안에 숨어 새 일정을 만들 길이 안 보였다)
+    $railAdd = New-WtButton '' -Kind Icon -Icon 0xE710 -ToolTip '새로 만들기'
+    [Windows.Automation.AutomationProperties]::SetName($railAdd, '새로 만들기'); [Windows.Automation.AutomationProperties]::SetAutomationId($railAdd, 'Schedule-RailAdd')
+    $railAdd.ContextMenu = New-WtScheduleAddMenu
+    $railAdd.Add_Click({ param($s, $e) Open-WtButtonMenu $s -Right })
+    [void]$side.FindName('RailItems').Children.Add($railAdd); $script:side.RailAdd = $railAdd
     [void]$script:view.Side.Children.Add($side)
     $mode = [string](Get-WtSetting 'schedule.view')
     $script:viewMode = if ($mode -cin $script:viewModes) { $mode } else { 'calendar' }
     Initialize-WtScheduleHeader
     Initialize-WtScheduleLists
     $root
+}
+
+# 사이드바 + 메뉴(새 일정 · 새 루틴). 펼친 사이드바와 접힌 레일의 + 가 각자 하나씩 쓴다(메뉴 하나를 두 단추가 같이 쓰지 않는다)
+function New-WtScheduleAddMenu {
+    $menu = New-WtHomePinContextMenu
+    foreach ($spec in @('새 일정', 'event'), @('새 루틴', 'routine')) { [void]$menu.Items.Add((New-WtMenuItem $spec[0] { param($kind) Show-WtScheduleForm -Kind $kind } $spec[1])) }
+    $menu
 }
 
 # ---- 3단계 머리줄 · 표 · 할 일 · 루틴 보기 (설계 14장, 디자인 README 「일정」) ---------------------------------
@@ -1347,6 +1361,9 @@ function Show-WtScheduleForm([ValidateSet('event', 'routine')][string]$Kind, $Oc
     Update-WtScheduleLinks
     # [취소]는 고친 내용을 버리는 단추라 묻지 않는다
     $save.Add_Click({ Save-WtScheduleForm }); $cancel.Add_Click({ Show-WtScheduleDay }); $delete.Add_Click({ Remove-WtScheduleForm })
+    # 11-24 실사용: 한 줄 칸 Enter · 폼 어디서든 Ctrl+S도 [저장]. 시각 칸은 0900 · 9:00 · 9도 받아 떠날 때 09:00으로 보인다(core\Ui)
+    Register-WtFormSaveKeys $body { Save-WtScheduleForm }
+    foreach ($key in $script:timeKeys) { if ($script:form.Fields[$key]) { Register-WtTimeInput $script:form.Fields[$key] } }
     Update-WtScheduleFormFields; $script:detail.Content = $body
     $script:form.Initial = Get-WtScheduleFormState   # 떠날 때 이 값과 다르면 묻는다
     if ($script:side.Rail.Visibility -eq 'Visible') { $script:side.Open.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent)) }
@@ -1420,16 +1437,19 @@ function Update-WtScheduleFormFields {
     }
 }
 # 칸 오류: 칸 아래 한 줄 + 글 칸이면 빨간 선 · 오류 아이콘 · 툴팁(근태 · 메모와 같은 공통 표시, core\Ui.psm1 Set-WtInputError).
-# -Notice: 칸 탓이 아닌 알림(저장 실패 등)은 제목 칸 아래 글만 쓰고 칸을 빨갛게 하지 않는다
+# 틀린 칸으로 포커스를 옮기고 글 칸은 글 전체를 고른다(11-24 실사용: 저장 단추에 남아 다시 눌러야 했다. 폼은 틀린 칸 하나에서 멈추므로 그 칸이 첫 칸).
+# -Notice: 칸 탓이 아닌 알림(저장 실패 등)은 제목 칸 아래 글만 쓰고 칸을 빨갛게 하지 않으며 포커스는 그대로 둔다
 function Set-WtScheduleFormError([string]$Key, [string]$Message, [switch]$Notice) {
     $script:form.Errors[$Key].Text = $Message; $script:form.Errors[$Key].Visibility = 'Visible'
     [Windows.Automation.AutomationProperties]::SetHelpText($script:form.Fields[$Key], $Message)
-    if (-not $Notice) { Set-WtInputError $script:form.Fields[$Key] $Message }
+    if (-not $Notice) { Set-WtInputError $script:form.Fields[$Key] $Message; [void](Set-WtInputFocus $script:form.Fields[$Key]) }
 }
 function Save-WtScheduleForm([string]$Scope) {
     $f = $script:form; if (-not $f) { return }
     foreach ($errorText in $f.Errors.Values) { $errorText.Text = ''; $errorText.Visibility = 'Collapsed' }
     foreach ($field in $f.Fields.Values) { Set-WtInputError $field '' }
+    # Enter · Ctrl+S는 칸을 떠나지 않고 저장하므로 시각 칸 모양(0900 → 09:00)을 여기서도 맞춘다
+    foreach ($key in $script:timeKeys) { if ($f.Fields[$key]) { Update-WtTimeInput $f.Fields[$key] } }
     $fields = $f.Fields
     if (-not $fields.title.Text.Trim()) { Set-WtScheduleFormError title '제목을 입력하세요.'; return }
     try {
@@ -1444,10 +1464,11 @@ function Save-WtScheduleForm([string]$Scope) {
             $start = $null; $end = $null
             if (-not $fields.allDay.IsChecked) {
                 $start = ConvertFrom-WtTimeText $fields.start.Text
-                if ($null -eq $start) { Set-WtScheduleFormError start '시작 시각을 확인하세요.'; return }
+                if ($null -eq $start) { Set-WtScheduleFormError start (Get-WtTimeInputHint); return }
                 if ($fields.end.Text) {
                     $end = ConvertFrom-WtTimeText $fields.end.Text
-                    if ($null -eq $end -or ($spanDays -eq 0 -and $end -lt $start)) { Set-WtScheduleFormError end '끝 시각을 확인하세요.'; return }
+                    if ($null -eq $end) { Set-WtScheduleFormError end (Get-WtTimeInputHint); return }
+                    if ($spanDays -eq 0 -and $end -lt $start) { Set-WtScheduleFormError end '끝 시각을 확인하세요.'; return }
                 } elseif ($spanDays -gt 0) { Set-WtScheduleFormError end '여러 날 일정은 끝 시각을 넣으세요.'; return }
             }
             $repeat = $null
@@ -1470,7 +1491,7 @@ function Save-WtScheduleForm([string]$Scope) {
                 $chosen = Get-WtScheduleFormAlarmOptions
                 if ($fields.allDay.IsChecked -and $chosen.AllDayAt -and $null -eq (ConvertFrom-WtTimeText $chosen.AllDayAt)) {
                     if (-not $f.AlarmMore.Open) { Switch-WtScheduleAlarmMore }
-                    Set-WtScheduleFormError alarmDayAt '기준 시각은 HH:mm 형식으로 입력하세요.'; return
+                    Set-WtScheduleFormError alarmDayAt (Get-WtTimeInputHint); return
                 }
                 $optionPatch = Get-WtScheduleAlarmOptionPatch $f.AlarmOptions $chosen ([bool]$fields.allDay.IsChecked) -All:($Scope -eq '이 회차만')
                 foreach ($a in $alarms) { foreach ($k in $optionPatch.Keys) { $a[$k] = $optionPatch[$k] } }
@@ -1500,7 +1521,7 @@ function Save-WtScheduleForm([string]$Scope) {
             if ($freq -ne 'hourly') {
                 # 시각은 선택 칸. 비우면 null로 넘겨 저장 함수가 칸을 뺀다(설계 14.2)
                 $timeText = $fields.time.Text.Trim()
-                if ($timeText -and $null -eq (ConvertFrom-WtTimeText $timeText)) { Set-WtScheduleFormError time '시각을 확인하세요. 예: 09:00'; return }
+                if ($timeText -and $null -eq (ConvertFrom-WtTimeText $timeText)) { Set-WtScheduleFormError time (Get-WtTimeInputHint); return }
                 $rule.time = if ($timeText) { $timeText } else { $null }
             }
             if ($freq -eq 'weekly') {
@@ -1511,8 +1532,9 @@ function Save-WtScheduleForm([string]$Scope) {
                 $every = 0
                 if (-not [int]::TryParse($fields.every.Text, [ref]$every) -or $every -lt 1 -or $every -gt 12) { Set-WtScheduleFormError every '간격 시간을 확인하세요.'; return }
                 $start = ConvertFrom-WtTimeText $fields.start.Text; $end = ConvertFrom-WtTimeText $fields.end.Text
-                if ($null -eq $start) { Set-WtScheduleFormError start '시작 시각을 확인하세요.'; return }
-                if ($null -eq $end -or $end -le $start) { Set-WtScheduleFormError end '끝 시각을 확인하세요.'; return }
+                if ($null -eq $start) { Set-WtScheduleFormError start (Get-WtTimeInputHint); return }
+                if ($null -eq $end) { Set-WtScheduleFormError end (Get-WtTimeInputHint); return }
+                if ($end -le $start) { Set-WtScheduleFormError end '끝 시각을 확인하세요.'; return }
                 $rule.every = $every; $rule.from = $fields.start.Text; $rule.to = $fields.end.Text
             }
             $patch = @{ title = $fields.title.Text; routine = $rule }; if (-not $f.Id) { $patch.start = @{ date = ConvertTo-WtDateText $script:selected } }
@@ -1765,14 +1787,15 @@ function New-WtScheduleAlarmSettingRows {
     )
 }
 function Save-WtScheduleAllDaySetting($Box) {
+    Update-WtTimeInput $Box   # 0900 · 9:00 · 9도 09:00으로(일정 · 근태 폼과 같은 칸 규칙)
     $text = $Box.Text.Trim()
     if ($null -eq (ConvertFrom-WtTimeText $text)) {
-        $Box.Tag.Error.Text = '시각은 HH:mm 형식으로 입력하세요.'; $Box.Tag.Error.Visibility = 'Visible'; return
+        $Box.Tag.Error.Text = Get-WtTimeInputHint; $Box.Tag.Error.Visibility = 'Visible'; return
     }
     $Box.Tag.Error.Visibility = 'Collapsed'
     if ([string](Get-WtSetting 'schedule.alarmAllDay') -cne $text) { Set-WtSetting 'schedule.alarmAllDay' $text }
 }
 
 # 메뉴 개수 = 할 일 수(기한 지남 + 오늘 남은 일정 · 루틴 + 마감 임박, 설계 14.5). 보기 단추의 숫자와 같다
-Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ConfirmExit @{ Pending = { Test-WtScheduleFormDirty }; Confirm = { Confirm-WtScheduleFormLeave } } -Tick { param($Now) [void](Invoke-WtScheduleAlarmTick $Now) } -TickSeconds 15 -SettingRows { New-WtScheduleAlarmSettingRows } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder }-Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
+Register-WtAddon -Id 'schedule' -Title '일정' -Icon 0xE787 -Group '일과' -Order 20 -WarmUp Full -BadgeKind count -BadgeToolTip '남은 일 {0}' -StatusItems { Get-WtScheduleStatusItems } -Badge { $data = Get-WtScheduleData; if ($data.Error) { throw $data.Error }; Get-WtScheduleDueCount } -NewView { New-WtScheduleView } -Refresh { param($view) Update-WtScheduleView } -HomeCards @(@{ Slot = 'head'; Order = 10; Card = { New-WtNextEventHomeLine } }, @{ Slot = 'main'; Order = 10; Card = { New-WtScheduleHomeCards } }, @{ Slot = 'side'; Order = 20; Card = { New-WtRoutineHomeCard } }) -CalendarHost -OnOpen { param($OpenArgs) Open-WtScheduleArgs $OpenArgs } -OnExit { if ($script:homeTimer) { $script:homeTimer.Stop() } } -ConfirmExit @{ Pending = { Test-WtScheduleFormDirty }; Confirm = { Confirm-WtScheduleFormLeave } } -Tick { param($Now) [void](Invoke-WtScheduleAlarmTick $Now) } -TickSeconds 15 -SettingRows { New-WtScheduleAlarmSettingRows } -ImportLegacy { param($folder) Import-WtScheduleLegacy $folder }-Shortcuts @(@('PageUp / PageDown', '달력 칸 · 표에서 이전 달 / 다음 달'), @('Enter / Space', '표에서 줄 열기 / 체크'), @('Enter / Ctrl+S', '편집 폼 저장 (Enter는 한 줄 칸에서)')) -Help @('보기는 할 일 · 달력 · 표 · 루틴 네 가지입니다. 할 일은 기한 지남 · 오늘 · 마감 임박만 모아 보여 줍니다.', '달력에서 일정과 반복 일정을 확인합니다. 여러 날 일정은 이어진 막대로 보입니다.', '일정 줄의 체크 상자로 끝낸 회차를 표시합니다.', '찾기: 낱말 · #태그 · title: · 2026-11-05 · 2026-10-01..2026-10-31 · is:done · is:open · is:routine, 빼기는 -, 또는은 OR, 묶음은 ( ).', '날짜를 우클릭해 회사 휴무를 지정하거나 휴가를 넣습니다(근태). 개인 휴무는 설정 → 휴무일에서 넣고, 공휴일은 앱이 해마다 채웁니다.')
 Export-ModuleMember -Function Format-WtAlarm, Get-WtRepeatLabel, Invoke-WtScheduleAlarmTick, Format-WtScheduleAlarmWhen
