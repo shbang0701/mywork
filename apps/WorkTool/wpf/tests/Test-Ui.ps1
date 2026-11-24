@@ -145,8 +145,9 @@ try {
         $window = $dialog.Window; $content = $window.Content; $window.Content = $null; $root.Child = $content; Set-UiLayout 480 400
         $heading = Get-UiBounds $content.Children[0]; $box = Get-UiBounds $dialog.Box; $save = Get-UiBounds $dialog.Save; $cancel = Get-UiBounds $dialog.Cancel
         $above = if ($case.Note) { (Get-UiBounds $dialog.Body.Children[0]).Bottom + 8 } else { $heading.Bottom + 12 }
-        Assert-WtTest "이름 묻는 창 ($($case.Name)): 제목 · 설명 한 줄 · 칸 이름 · 처음 글 · [저장] 주 버튼(Enter) · [취소](Esc) · 오류 줄 숨김" (
-            $window.Title -ceq $case.Title -and $window.Width -eq 480 -and $content.Children[0].Text -ceq $case.Title -and
+        # 창 제목줄은 Windows 메시지 상자처럼 앱 이름만, 본문 큰 제목이 질문 · 할 일이다(같은 글이 두 번 보이지 않게, 11-24 실사용)
+        Assert-WtTest "이름 묻는 창 ($($case.Name)): 창 제목줄 WorkTool · 본문 제목 · 설명 한 줄 · 칸 이름 · 처음 글 · [저장] 주 버튼(Enter) · [취소](Esc) · 오류 줄 숨김" (
+            $window.Title -ceq 'WorkTool' -and $window.Width -eq 480 -and $content.Children[0].Text -ceq $case.Title -and
             $dialog.Body.Children.Count -eq $(if ($case.Note) { 2 } else { 1 }) -and
             (-not $case.Note -or ($dialog.Body.Children[0].Text -ceq $case.Note -and $dialog.Body.Children[0].Style -eq $styles['T.Sub'])) -and
             $dialog.Box.Style -eq $styles['Input'] -and [Windows.Automation.AutomationProperties]::GetName($dialog.Box) -ceq $case.Label -and $dialog.Box.Text -ceq $case.Text -and
@@ -180,8 +181,8 @@ try {
         $window = $choice.Window; $content = $window.Content; $window.Content = $null; $root.Child = $content; Set-UiLayout 480 300
         $buttons = @($choice.Buttons.Children)
         $save = Get-UiBounds $choice.Save; $discard = Get-UiBounds $choice.Discard; $cancel = Get-UiBounds $choice.Cancel; $heading = Get-UiBounds $content.Children[0]
-        Assert-WtTest "저장 묻는 창: 제목 질문 · 한 문장 · [저장] 주 버튼(Enter) · [저장 안 함] · [취소](Esc) 순서로 오른쪽 끝에 사이 8 · 처음 답은 취소" (
-            $window.Title -ceq '변경 내용을 저장할까요?' -and $content.Children[0].Text -ceq '변경 내용을 저장할까요?' -and
+        Assert-WtTest "저장 묻는 창: 창 제목줄 WorkTool · 본문 제목 질문 · 한 문장 · [저장] 주 버튼(Enter) · [저장 안 함] · [취소](Esc) 순서로 오른쪽 끝에 사이 8 · 처음 답은 취소" (
+            $window.Title -ceq 'WorkTool' -and $content.Children[0].Text -ceq '변경 내용을 저장할까요?' -and
             (@(Get-WtTestTexts $choice.Body) -join '|') -ceq '「점검」 일정에서 고친 내용이 저장되지 않았습니다.' -and
             $buttons.Count -eq 3 -and (@($buttons | ForEach-Object { [string]$_.Content }) -join ',') -ceq '저장,저장 안 함,취소' -and
             $choice.Save.Style -eq $styles['Btn.Primary'] -and $choice.Discard.Style -eq $styles['Btn'] -and $choice.Cancel.Style -eq $styles['Btn'] -and

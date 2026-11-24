@@ -1662,6 +1662,19 @@ $script:stylesXaml = @'
     <Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=Text}"/>
     <Style.Triggers><Trigger Property="Text" Value=""><Setter Property="ToolTip" Value="{x:Null}"/></Trigger></Style.Triggers>
   </Style>
+  <!-- 여기서 닫을 수 없는 줄(CanClose 거짓)은 글자 전체를 비활성 글자로. 목록에서 빼지 않고 이유는 체크 상자 툴팁 (값 문서 8절 활성 작업) -->
+  <Style x:Key="Task.RowText" TargetType="TextBlock" BasedOn="{StaticResource Task.Text}">
+    <Style.Triggers><DataTrigger Binding="{Binding CanClose}" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></DataTrigger></Style.Triggers>
+  </Style>
+  <!-- 묶음 머리의 이름 · 개수: 묶음 체크 상자(GroupCheck)가 비활성(닫을 수 있는 줄이 없음)이면 같이 흐리게. 펼침 단추는 그대로 쓴다 -->
+  <Style x:Key="Task.GroupName" TargetType="TextBlock" BasedOn="{StaticResource T.Strong}">
+    <Setter Property="Margin" Value="12,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/>
+    <Style.Triggers><DataTrigger Binding="{Binding IsEnabled, ElementName=GroupCheck}" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></DataTrigger></Style.Triggers>
+  </Style>
+  <Style x:Key="Task.GroupCount" TargetType="TextBlock" BasedOn="{StaticResource T.Sub}">
+    <Setter Property="Foreground" Value="{DynamicResource B.Text.Tertiary}"/><Setter Property="Margin" Value="8,0,0,0"/><Setter Property="VerticalAlignment" Value="Center"/>
+    <Style.Triggers><DataTrigger Binding="{Binding IsEnabled, ElementName=GroupCheck}" Value="False"><Setter Property="Foreground" Value="{DynamicResource B.Text.Disabled}"/></DataTrigger></Style.Triggers>
+  </Style>
   <Style x:Key="Task.Title" TargetType="TextBlock" BasedOn="{StaticResource T.Title}"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="Margin" Value="8,0,16,0"/></Style>
   <Style x:Key="Task.Filter" TargetType="Button" BasedOn="{StaticResource Btn}"><Setter Property="Margin" Value="8,0,0,0"/></Style>
   <!-- 설정 행: 라벨↔값 12, 행 사이 12 (값 문서 8절 설정·도움말) -->
@@ -2653,9 +2666,9 @@ function New-WtTaskGrid {
       <ControlTemplate TargetType="GroupItem">
         <Expander Tag="task-group" IsExpanded="True" Style="{DynamicResource Task.Group}">
           <Expander.Header><StackPanel Orientation="Horizontal">
-            <CheckBox Tag="group" IsThreeState="True" Style="{DynamicResource Task.GroupCheck}" AutomationProperties.Name="{Binding Name}"/>
-            <TextBlock Text="{Binding Name}" Style="{DynamicResource T.Strong}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-            <TextBlock Text="{Binding ItemCount}" Style="{DynamicResource T.CaptionMuted}" Margin="8,0,0,0" VerticalAlignment="Center"/>
+            <CheckBox x:Name="GroupCheck" Tag="group" IsThreeState="True" Style="{DynamicResource Task.GroupCheck}" AutomationProperties.Name="{Binding Name}"/>
+            <TextBlock Text="{Binding Name}" Style="{DynamicResource Task.GroupName}"/>
+            <TextBlock Text="{Binding ItemCount}" Style="{DynamicResource Task.GroupCount}"/>
           </StackPanel></Expander.Header>
           <ItemsPresenter/>
         </Expander>
@@ -2667,7 +2680,7 @@ function New-WtTaskGrid {
     # 열은 시각 트리 밖이라 DynamicResource가 듣지 않는다. 스타일 안의 색은 자원 이름으로 남아 테마를 따른다.
     $styles = Get-WtStyleDictionary
     $grid.Columns[0].CellStyle = $styles['Task.CheckCell']
-    foreach ($column in @($grid.Columns)[1..4]) { $column.ElementStyle = $styles['Task.Text'] }
+    foreach ($column in @($grid.Columns)[1..4]) { $column.ElementStyle = $styles['Task.RowText'] }
     # 그룹 행의 ItemsPresenter가 무한 폭으로 측정돼도 이름 열이 남는 폭을 채운다.
     $grid.Add_SizeChanged({ param($s, $e) $s.Columns[1].Width = [System.Windows.Controls.DataGridLength]::new([Math]::Max(200, $s.ActualWidth - 60 - 72 - 72 - 200 - 24)) })
     $grid
@@ -2685,9 +2698,10 @@ function New-WtTaskPage {
 }
 
 # 대화상자 모양은 여기에서만 정한다. 호출자는 본문/버튼과 처리기만 붙인다.
+# -Title은 본문 큰 제목이다. 창 제목줄은 Windows 메시지 상자처럼 앱 이름만 써서 같은 글이 두 번 보이지 않게 한다(값 문서 7절 대화상자)
 function New-WtModal([string]$Title) {
     $w = [System.Windows.Window]::new()
-    $w.Title = $Title; $w.Width = 480; $w.SizeToContent = 'Height'; $w.ResizeMode = 'NoResize'
+    $w.Title = 'WorkTool'; $w.Width = 480; $w.SizeToContent = 'Height'; $w.ResizeMode = 'NoResize'
     $w.WindowStyle = 'ToolWindow'; $w.ShowInTaskbar = $false; $w.WindowStartupLocation = 'CenterOwner'
     $owner = Get-WtWindow
     if ($owner -and $owner.IsVisible) { $w.Owner = $owner; $w.Resources.MergedDictionaries.Add($owner.Resources) }
