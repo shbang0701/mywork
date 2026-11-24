@@ -537,9 +537,13 @@ function Save-WtHolidayDialog($Fields, $Entry) {
 
 # ---- 업무시간: 첫 설정과 일반 설정이 같은 입력 · 검사를 사용한다. ------------------------------
 
+# 시각 칸은 0900 · 9:00 · 9도 09:00으로 읽는다(core\Records ConvertFrom-WtTimeInput, 일정 · 근태 폼과 같음). 못 읽는 글은 그대로 넘겨 칸 아래 오류
 function Get-WtWorkFormHours($Form) {
     $hours = @{ 'work.days' = @($Form.Days | Where-Object IsChecked | ForEach-Object { [int]$_.Tag.Day }) }
-    foreach ($k in $Form.Boxes.Keys) { $hours[$k] = $Form.Boxes[$k].Text }
+    foreach ($k in $Form.Boxes.Keys) {
+        $text = $Form.Boxes[$k].Text; $time = ConvertFrom-WtTimeInput $text
+        $hours[$k] = if ($null -ne $time) { $time } else { $text }
+    }
     $hours
 }
 
@@ -706,10 +710,11 @@ function New-WtWorkHoursForm([switch]$FirstSetup) {
         $binding.Source = [pscustomobject]@{ Field = $field[0] }
         [void]$box.SetBinding([System.Windows.FrameworkElement]::DataContextProperty, $binding)
         $box.Add_TextChanged({ param($s, $e) [void](Update-WtWorkForm $s.Tag) })
+        Register-WtTimeInput $box   # 떠날 때 0900 → 09:00 (아래 저장보다 먼저)
         $box.Add_LostKeyboardFocus({ param($s, $e) if (-not $s.Tag.FirstSetup) { [void](Update-WtWorkForm $s.Tag -Save) } })
         $box.Add_KeyDown({
             param($s, $e)
-            if ($e.Key -eq 'Return' -and -not $s.Tag.FirstSetup) { [void](Update-WtWorkForm $s.Tag -Save); $e.Handled = $true }
+            if ($e.Key -eq 'Return' -and -not $s.Tag.FirstSetup) { Update-WtTimeInput $s; [void](Update-WtWorkForm $s.Tag -Save); $e.Handled = $true }
         })
         $form.Boxes[$field[0]] = $box
         if ($field[0] -ceq 'work.halfDay') {

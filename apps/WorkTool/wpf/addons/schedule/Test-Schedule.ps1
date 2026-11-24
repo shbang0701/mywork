@@ -1600,14 +1600,15 @@ try {
         $scopeError = & $module { $script:form.Errors.tags.Text }
         Assert-WtTest '폼 태그: 표 줄을 누르면 폼, 태그 칸은 쉼표로 보여 주고 저장, 「이 회차만」에서는 태그를 바꿀 수 없음' (
             $tagField -ceq '점검, 작업' -and $savedTags -ceq '보고,작업' -and $scopeError -clike '*이후 모두*') "$tagField / $savedTags / $scopeError"
-        & $module { param($Id) Show-WtScheduleForm -Kind routine -Id $Id; $script:form.Fields.time.Text = '7:30'; Save-WtScheduleForm } $r1.Id
+        # 11-24 실사용 보고: 7:30 · 0730 같은 모양도 07:30으로 받는다(전에는 HH:mm만). 못 읽는 글만 칸 아래 사람 말 오류
+        & $module { param($Id) Show-WtScheduleForm -Kind routine -Id $Id; $script:form.Fields.time.Text = '7시 30분'; Save-WtScheduleForm } $r1.Id
         $timeError = & $module { $script:form.Errors.time.Text }
-        & $module { $script:form.Fields.time.Text = '07:30'; Save-WtScheduleForm }
+        & $module { $script:form.Fields.time.Text = '7:30'; Save-WtScheduleForm }
         $savedTime = [string]@((Get-WtScheduleData).Items | Where-Object { $_.id -ceq $r1.Id })[0].routine.time
         & $module { param($Id) Show-WtScheduleForm -Kind routine -Id $Id; $script:form.Fields.freq.SelectedItem = '시간마다'; Update-WtScheduleFormFields } $r1.Id
         $timeHidden = & $module { $script:form.Rows.time.Visibility }
         & $module { Show-WtScheduleDay }
-        Assert-WtTest '루틴 폼 시각: HH:mm만 받고 저장, 시간마다로 고르면 시각 칸을 숨긴다' ($timeError -clike '시각을 확인하세요*' -and $savedTime -ceq '07:30' -and $timeHidden -ceq 'Collapsed') "$timeError / $savedTime / $timeHidden"
+        Assert-WtTest '루틴 폼 시각: 7:30도 07:30으로 저장, 못 읽는 글은 「시각은 09:00처럼 입력하세요.」, 시간마다로 고르면 시각 칸을 숨긴다' ($timeError -ceq '시각은 09:00처럼 입력하세요.' -and $savedTime -ceq '07:30' -and $timeHidden -ceq 'Collapsed') "$timeError / $savedTime / $timeHidden"
         & $module { Set-WtScheduleViewMode 'calendar' }
 
         foreach ($mode in 'due', 'routines') {
@@ -1881,6 +1882,94 @@ try {
             Assert-WtTest '끝내기(보고 2): 고친 폼이 없으면 묻지 않고 끝냄, [취소]는 끝내지 않고 폼 그대로 · 뒤 단계 확인 창 없음, [저장]이 틀리면 끝내지 않고 칸 오류, [저장 안 함]은 버리고 끝냄, [저장]은 저장하고 끝냄' (
                 $exitClean -ceq 'True|' -and $exitCancel -ceq "False|탭|True|끝낼 때 고침|$todayText|1" -and $exitBad -ceq 'False|탭|제목을 입력하세요.|True' -and
                 $exitDrop -ceq 'True|탭|루틴 지워도 남음' -and $exitSave -cmatch '^True\|탭(,셸쓰기:exit)*$' -and $exitSaved -ceq '끝낼 때 저장') "$exitClean / $exitCancel / $exitBad / $exitDrop / $exitSave / $exitSaved"
+
+            # ---- 11-24 실사용 보고(일정 폼 · 최소 창). 키는 입력 관리자에 넣는 실제 키 경로(WPF 키보드 이동 · 칸 처리 · 폼 처리기)이고,
+            # 키보드 상태(Tab이 눌려 있는지 · Ctrl)만 core\Ui의 검사용 값으로 바꾼다. 글은 글 입력 이벤트로 친다
+            $uiModule = Get-Module Ui
+            & $uiModule { $script:realTab = (Get-Item function:Test-WtTabNavigation).ScriptBlock; $script:realMods = (Get-Item function:Get-WtKeyModifiers).ScriptBlock
+                $script:testTab = $false; $script:testMods = [Windows.Input.ModifierKeys]::None
+                function script:Test-WtTabNavigation { $script:testTab }; function script:Get-WtKeyModifiers { $script:testMods } }
+            $sendKeyUx = { param([string]$Key) $a = [Windows.Input.KeyEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $uxSource, 0, [Windows.Input.Key]$Key); $a.RoutedEvent = [Windows.Input.Keyboard]::PreviewKeyDownEvent; [void][Windows.Input.InputManager]::Current.ProcessInput($a) }
+            $typeUx = {
+                param([string]$Text)
+                $target = [Windows.Input.Keyboard]::FocusedElement
+                foreach ($ev in [Windows.Input.TextCompositionManager]::PreviewTextInputEvent, [Windows.Input.TextCompositionManager]::TextInputEvent) {
+                    $composition = [Windows.Input.TextComposition]::new([Windows.Input.InputManager]::Current, $target, $Text)
+                    $textArgs = [Windows.Input.TextCompositionEventArgs]::new([Windows.Input.Keyboard]::PrimaryDevice, $composition); $textArgs.RoutedEvent = $ev
+                    $target.RaiseEvent($textArgs); if ($textArgs.Handled) { break }
+                }
+            }
+            $shellModule = Get-Module Shell
+            $savedShellWindow = & $shellModule { $script:window }
+            try {
+                # 1(그림 01): 새 일정에서 하루 종일 체크 상자 → Tab으로 시작 시각 칸에 들어가면 글 전체 선택, 바로 친 22:00 · Tab · 23:00이 덮어쓴다(전에는 22:0009:00)
+                & $answer ''; & $module { Show-WtScheduleDay; Show-WtScheduleForm -Kind event }; & $layoutUx
+                $f = & $module { $script:form.Fields }
+                $f.title.Text = 'SRV-02 응답 지연 점검'
+                & $uiModule { $script:testTab = $true }
+                [void]$f.allDay.Focus(); & $sendKeyUx Tab
+                $tabState = "$($f.start.IsKeyboardFocused)|$($f.start.SelectedText)"
+                & $typeUx '22:00'; & $sendKeyUx Tab; & $typeUx '23:00'
+                & $uiModule { $script:testTab = $false }
+                $typed = "$($f.start.Text)|$($f.end.Text)"
+                Assert-WtTest '일정 폼 Tab(그림 01): 하루 종일에서 Tab으로 시작 시각에 들어가면 글 전체 선택, 바로 친 22:00 · Tab · 23:00이 덮어씀' (
+                    $tabState -ceq "True|$((Get-WtWorkHours)['work.start'])" -and $typed -ceq '22:00|23:00') "$tabState / $typed"
+                # 2 · 3: 시각 900 · 10도 받고(09:00 · 10:00으로 저장), 한 줄 칸(제목)에서 Enter로 저장
+                $f.start.Text = '900'; $f.end.Text = '10'
+                [void]$f.title.Focus(); & $sendKeyUx Return
+                Wait-WtTestWrites
+                $enterDoc = @((Read-WtTestDoc).items | Where-Object title -ceq 'SRV-02 응답 지연 점검')
+                $enterSaved = "$(& $module { $null -eq $script:form })|$($enterDoc.Count)|$($enterDoc[0].start.time)|$($enterDoc[0].end.time)"
+                # 3: Ctrl+S는 체크 상자에 포커스가 있어도 저장. 루틴 시각 930도 09:30으로
+                & $module { Show-WtScheduleForm -Kind event }; & $layoutUx
+                $f = & $module { $script:form.Fields }; $f.title.Text = 'Ctrl+S 저장'
+                & $uiModule { $script:testMods = [Windows.Input.ModifierKeys]::Control }
+                [void]$f.allDay.Focus(); & $sendKeyUx S
+                & $module { Show-WtScheduleForm -Kind routine }; & $layoutUx
+                $f = & $module { $script:form.Fields }; $f.title.Text = '루틴 시각 930'; $f.time.Text = '930'
+                [void]$f.time.Focus(); & $sendKeyUx S
+                & $uiModule { $script:testMods = [Windows.Input.ModifierKeys]::None }
+                Wait-WtTestWrites
+                $keyDoc = Read-WtTestDoc
+                $ctrlSaved = "$(& $module { $null -eq $script:form })|$(@($keyDoc.items | Where-Object title -ceq 'Ctrl+S 저장').Count)|$(@($keyDoc.items | Where-Object title -ceq '루틴 시각 930')[0].routine.time)"
+                # 2 · 4: 못 읽는 시각(25)에 Enter → 저장 안 함 · 칸 아래 사람 말 · 그 칸에 포커스 + 글 전체 선택.
+                # [저장] 단추(포커스가 단추)로 끝이 시작보다 이르면 끝 칸으로 옮긴다(9 → 09:00으로 바꾼 뒤 비교)
+                & $module { Show-WtScheduleForm -Kind event }; & $layoutUx
+                $f = & $module { $script:form.Fields }; $f.title.Text = '틀린 시각'; $f.start.Text = '25'
+                [void]$f.title.Focus(); & $sendKeyUx Return
+                $badState = & $module { "$($null -ne $script:form)|$($script:form.Errors.start.Text)|$($script:form.Fields.start.IsKeyboardFocused)|$($script:form.Fields.start.SelectedText)" }
+                $f.start.Text = '9'; $f.end.Text = '8'
+                $saveButton = & $module { $script:form.Save }; [void]$saveButton.Focus(); & $pressUx $saveButton
+                $orderState = & $module { "$($script:form.Errors.end.Text)|$($script:form.Fields.end.IsKeyboardFocused)|$($script:form.Fields.end.SelectedText)|$($script:form.Fields.start.Text)" }
+                & $module { Show-WtScheduleDay }
+                Assert-WtTest '일정 폼(2 · 3 · 4): 900 · 10 · 930을 09:00 · 10:00 · 09:30으로 저장, 한 줄 칸 Enter · Ctrl+S(체크 상자 · 시각 칸)로 저장, 못 읽는 시각은 「시각은 09:00처럼 입력하세요.」 · 그 칸 포커스 + 전체 선택, [저장] 단추로 틀려도 틀린 칸으로' (
+                    $enterSaved -ceq 'True|1|09:00|10:00' -and $ctrlSaved -ceq 'True|1|09:30' -and $badState -ceq 'True|시각은 09:00처럼 입력하세요.|True|25' -and
+                    $orderState -ceq '끝 시각을 확인하세요.|True|08:00|09:00') "$enterSaved / $ctrlSaved / $badState / $orderState"
+
+                # 9(그림 12): 창 폭 1024(최소 창)면 사이드바가 레일로 접혀도 레일의 + (좌표 경로)로 새로 만들기 → 새 일정 폼이 사이드바를 겹쳐 펼치고 제목 칸에 포커스
+                & $shellModule { $script:window = [pscustomobject]@{ ActualWidth = 1024.0; Width = 1024.0 } }
+                $side = & $module { $script:side }
+                & $shellModule { param($r) $p = $null; if ($script:sidePanels.TryGetValue($r, [ref]$p)) { Update-WtSidePanel $p } } $side.Root
+                & $layoutUx
+                $railAdd = $side.RailAdd
+                $railRoute = Test-WtTestInputPath -View $uxHost -Element $railAdd -Target $railAdd
+                $addRect = & $boundsUx $railAdd; $openRect = & $boundsUx $side.Open; $railRect = & $boundsUx $side.Rail
+                $railState = "$($side.Rail.Visibility)|$($side.Expanded.Visibility)|$($addRect.Top -ge $openRect.Bottom - 0.5 -and $addRect.Left -ge $railRect.Left - 0.5 -and $addRect.Right -le $railRect.Right + 0.5)|$([string]$railAdd.ToolTip)"
+                & $module { $script:menuOpened = $null; function script:Open-WtButtonMenu { param($Button, [switch]$Right) $script:menuOpened = @{ Button = $Button; Right = [bool]$Right }; Set-WtButtonMenuPlacement $Button -Right:$Right } }
+                try { & $pressUx $railAdd } finally { & $module { Remove-Item function:script:Open-WtButtonMenu -ErrorAction Ignore } }
+                $railOpened = & $module { $script:menuOpened }
+                $railMenu = "$([object]::ReferenceEquals($railOpened.Button, $railAdd))|$($railOpened.Right)|$(@($railAdd.ContextMenu.Items | ForEach-Object Header) -join ',')"
+                & $pressItem $railAdd.ContextMenu '새 일정'; & $layoutUx
+                $railForm = "$(& $module { "$($script:form.Kind)|$($script:form.Fields.title.IsKeyboardFocused)" })|$($side.Expanded.Visibility)"
+                Assert-WtTest '최소 창(그림 12): 레일로 접혀도 레일 제목 줄 아래 +(좌표 경로 · 툴팁 새로 만들기)가 같은 메뉴를 오른쪽 맞춤으로 열고, 새 일정을 고르면 사이드바가 펼쳐져 제목 칸에 포커스' (
+                    $railRoute.Ok -and $railState -ceq 'Visible|Collapsed|True|새로 만들기' -and $railMenu -ceq 'True|True|새 일정,새 루틴' -and $railForm -ceq 'event|True|Visible') "$($railRoute.Path) / $railState / $railMenu / $railForm"
+            } finally {
+                & $uiModule { Set-Item function:script:Test-WtTabNavigation $script:realTab; Set-Item function:script:Get-WtKeyModifiers $script:realMods }
+                & $shellModule { param($w) $script:window = $w } $savedShellWindow
+                $sideRoot = & $module { $script:side.Root }
+                & $shellModule { param($r) $p = $null; if ($script:sidePanels.TryGetValue($r, [ref]$p)) { Update-WtSidePanel $p } } $sideRoot
+                & $module { $script:form = $null; Show-WtScheduleDay }
+            }
         } finally {
             Set-WtSetting 'ui.fontScale' 'm'
             & $module { $script:form = $null; $script:saveAnswers.Clear() }
@@ -1889,7 +1978,8 @@ try {
         & $module { Set-WtScheduleViewMode 'calendar' }
         [IO.File]::WriteAllText((Get-WtStorePath 'schedule'), '{ "schema": 3, "items": [] }', [Text.UTF8Encoding]::new($false))
         & $module { Update-WtScheduleView }
-        Assert-WtTest '일정 화면: 못 읽는 파일은 이유 표시 · 새로 만들기 비활성' ((Get-WtTestTexts $view | Where-Object { $_ -like '*더 새 버전*' }).Count -gt 0 -and -not (& $module { $script:side.Add.IsEnabled }))
+        Assert-WtTest '일정 화면: 못 읽는 파일은 이유 표시 · 새로 만들기 비활성(접힌 레일의 +도)' ((Get-WtTestTexts $view | Where-Object { $_ -like '*더 새 버전*' }).Count -gt 0 -and -not (& $module { $script:side.Add.IsEnabled }) -and
+            -not (& $module { $script:side.RailAdd.IsEnabled }) -and (& $module { [string]$script:side.RailAdd.ToolTip }) -like '*더 새 버전*')
 
         # ---- 알람 2b 화면 (설계 16장): 앱 틱 → 알림 창 · 소리, 본문 → 그날 폼, 다시 알림, 이 일정 알람 끄기, 잠시 끄기, 폼 알람 자세히, 설정 행 ----
         # 창 · 소리는 실제로 내지 않는다. 코어 알림 부품의 OS 자리(창 보이기 · 작업 영역 · 재생기 · 기본 소리 · 앱 창 열기)만 가짜로 바꾸고 15초 타이머를 끈다
@@ -2044,7 +2134,7 @@ try {
             & $module { $script:form.Fields.alarmDayAt.Text = '08:30'; Save-WtScheduleForm }
             $daySaved = (& $itemOf $k.day).alarms[0]
             Assert-WtTest '폼 기준 시각(하루 종일): 하루 종일 일정만 보임 · 틀린 시각은 칸 아래 오류(펼쳐서 보임) · 08:30 저장' (
-                $dayVisible -ceq 'Visible' -and $dayError[0] -ceq '기준 시각은 HH:mm 형식으로 입력하세요.' -and $dayError[1] -and $daySaved.allDayAt -ceq '08:30' -and $daySaved.before -eq 10) "$dayVisible / $($dayError -join ',') / $($daySaved | ConvertTo-Json -Compress)"
+                $dayVisible -ceq 'Visible' -and $dayError[0] -ceq '시각은 09:00처럼 입력하세요.' -and $dayError[1] -and $daySaved.allDayAt -ceq '08:30' -and $daySaved.before -eq 10) "$dayVisible / $($dayError -join ',') / $($daySaved | ConvertTo-Json -Compress)"
             & $addon.OnOpen @{ Id = $k.daily; Date = [datetime]'2026-11-25' }
             & $module { $script:form.Fields.alarmSound.SelectedItem = '끔'; Save-WtScheduleForm -Scope '이 회차만' }
             $dailyItem = & $itemOf $k.daily
@@ -2064,15 +2154,15 @@ try {
             $dayLine = $rows[1].Control.Children[0]; $mode = $dayLine.Children[0]; $timeBox = $dayLine.Children[1]; $dayErr = $rows[1].Control.Children[1]
             $mode.SelectedItem = '직접'; $direct = [string](Get-WtSetting 'schedule.alarmAllDay')
             $timeBox.Text = '25:00'; $timeBox.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.UIElement]::LostFocusEvent))
-            $bad = @([string]$dayErr.Visibility, [string](Get-WtSetting 'schedule.alarmAllDay'))
-            $timeBox.Text = '08:15'; $timeBox.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.UIElement]::LostFocusEvent))
-            $direct2 = [string](Get-WtSetting 'schedule.alarmAllDay')
+            $bad = @([string]$dayErr.Visibility, [string](Get-WtSetting 'schedule.alarmAllDay'), [string]$dayErr.Text)
+            $timeBox.Text = '815'; $timeBox.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.UIElement]::LostFocusEvent))
+            $direct2 = "$([string](Get-WtSetting 'schedule.alarmAllDay'))|$($timeBox.Text)"
             $mode.SelectedItem = '업무 시작 시각'
             $back = @([string](Get-WtSetting 'schedule.alarmAllDay'), $timeBox.IsEnabled, $timeBox.Text)
             Set-WtSetting 'schedule.alarmDefault' 10; Set-WtSetting 'schedule.alarmLate' 30
-            Assert-WtTest '설정 행(일정): 새 일정 기본 알람 · 하루 종일 알람 기준 · 늦게 켰을 때 — 고르면 바로 저장 · 직접 시각은 HH:mm만(틀리면 칸 아래 오류) · 업무 시작으로 되돌림' (
+            Assert-WtTest '설정 행(일정): 새 일정 기본 알람 · 하루 종일 알람 기준 · 늦게 켰을 때 — 고르면 바로 저장 · 직접 시각은 815도 08:15로(못 읽으면 칸 아래 사람 말 오류) · 업무 시작으로 되돌림' (
                 $rowLabels -ceq '새 일정 기본 알람,하루 종일 알람 기준,늦게 켰을 때' -and $defaultSet -eq 30 -and $lateOff -eq 0 -and $lateHour -eq 60 -and
-                $direct -ceq '09:00' -and $bad[0] -ceq 'Visible' -and $bad[1] -ceq '09:00' -and $direct2 -ceq '08:15' -and $back[0] -ceq '' -and -not $back[1] -and $back[2] -ceq '09:00') (
+                $direct -ceq '09:00' -and $bad[0] -ceq 'Visible' -and $bad[1] -ceq '09:00' -and $bad[2] -ceq '시각은 09:00처럼 입력하세요.' -and $direct2 -ceq '08:15|08:15' -and $back[0] -ceq '' -and -not $back[1] -and $back[2] -ceq '09:00') (
                 "$rowLabels / $defaultSet $lateOff $lateHour / $direct $($bad -join ',') $direct2 / $($back -join ',')")
         } finally {
             try { Clear-WtNotices } catch { }

@@ -255,11 +255,13 @@ function Get-WtLeaveDays($Entry, [datetime]$First, [datetime]$Last, $DayOff) {
   출장   그 달에 걸친 기록. TripCount 건수 · TripDays 일수($TripDays: all = 걸친 날 모두, workdays = 근무일만)
   휴가   LeaveDays: Get-WtLeaveDays 합계 (근무일 = 토 · 일 · 휴무일이 아닌 날)
          = LeaveFixed(사람이 정한 days, 확정) + LeaveEstimated(days가 null이라 지금 규칙 · 휴무일로 센 잠정 값)
-  초과 OvertimeSite · OvertimeRemote · OvertimeUnknown 분(작업장 → 원격 → 장소 없음 우선). Travel 이동 분은 별도. NoLeaveDays 퇴근 없는 날 수.
+  초과 OvertimeSite · OvertimeRemote · OvertimeUnknown 분(작업장 → 원격 → 장소 없음 우선). Travel 이동 분은 별도.
+       NoLeaveDays 퇴근 없는 날 수. 지난 날만 센다(오늘은 아직 근무 중일 수 있다, 11-24 실사용: 출근 직후 「퇴근 기록 없음 1일」)
   Skipped 계산에서 뺀 항목 수(읽기 전용 · 고칠 항목). other(기타)는 셈에 넣지 않는다
 $DayOff: 휴무일 날짜 모음(yyyy-MM-dd). 주지 않으면 core\Calendar.psm1의 휴무일을 쓴다
+$Today: 퇴근 없는 날을 이날 전까지만 센다. 주지 않으면 오늘
 #>
-function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, [string]$TripDays) {
+function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, [string]$TripDays, [datetime]$Today = [datetime]::Today) {
     $first = [datetime]::new($Month.Year, $Month.Month, 1)
     $last = $first.AddMonths(1).AddDays(-1)
     if ($null -eq $DayOff) { $DayOff = Get-WtHolidayDates $first $last }
@@ -316,7 +318,7 @@ function Get-WtAttendanceSummary([datetime]$Month, [object[]]$Entries, $DayOff, 
         $cuts = [Collections.Generic.SortedSet[long]]::new()
         foreach ($entry in $dayGroup.Group) {
             if ($entry.Kind -ceq 'overtime') { $r.Travel += $entry.Travel }
-            if ($entry.Kind -ceq 'work' -and -not $entry.HasEnd) { [void]$missing.Add($day) }
+            if ($entry.Kind -ceq 'work' -and -not $entry.HasEnd -and $day -lt $Today.Date) { [void]$missing.Add($day) }
             if (-not $entry.HasTime -or -not $entry.HasEnd -or $entry.End -le $entry.Start) { continue }
             $rank = if ($entry.Kind -ceq 'work' -or $entry.How -ceq 'onsite') { 0 } elseif ($entry.How -ceq 'remote') { 1 } else { 2 }
             $ranges.Add(@{ A = $entry.Start.Ticks; B = $entry.End.Ticks; Rank = $rank })
