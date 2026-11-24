@@ -1670,9 +1670,9 @@ function Get-WtMemoSourceOffset([string]$Rendered, [string]$Source) {
     if ($Rendered.Length -and [char]::IsWhiteSpace($Rendered[$Rendered.Length - 1])) {
         while ($j -lt $Source.Length -and $Source[$j] -in ' ', "`t", '|', "`n") { $j++ }
     }
-    # 줄 맨 앞이면 제목 · 목록 · 할 일 · 인용 기호 뒤(글자 앞)에 둔다
+    # 줄 맨 앞이면 제목 · 목록 · 할 일 · 인용 기호 뒤(글자 앞)에 둔다. 항목의 첫 내용이 또 목록 · 인용이면(- - 글 · 1. - 글 · - > 글) 그 기호까지
     if ($j -lt $Source.Length -and ($j -eq 0 -or $Source[$j - 1] -eq "`n")) {
-        $m = [regex]::Match($Source.Substring($j), '^\s*(?:>\s?)*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d{1,9}[.)]\s+(?:\[[ xX]\]\s+)?)?')
+        $m = [regex]::Match($Source.Substring($j), '^\s*(?:>\s?)*(?:#{1,6}\s+|(?:(?:[-*+]|\d{1,9}[.)])\s+(?:>\s?)*)+(?:\[[ xX]\]\s+)?)?')
         $j += $m.Length
     }
     $j
