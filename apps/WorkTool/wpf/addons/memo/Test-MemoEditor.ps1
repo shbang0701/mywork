@@ -2315,7 +2315,7 @@ try {
             $topIcons -ceq 'E8C6,E8C8,E77F,F0E3,E8D2,E8B3' -and $subIcons -ceq 'E8DD,E8DB,EDE0,E943,E71B,E73A' -and
             [object]::ReferenceEquals($format.Style, $edHost.FindResource('Home.PinSubmenuItem')) -and
             (@($format.Items.Header) -join ',') -ceq '굵게,기울임,취소선,인라인 코드,링크,할 일' -and
-            (@($format.Items.InputGestureText) -join ',') -ceq 'Ctrl+B,Ctrl+I,Alt+Shift+5,,Ctrl+K,Ctrl+L') "$topIcons / $subIcons"
+            (@($format.Items.InputGestureText) -join ',') -ceq 'Ctrl+B,Ctrl+I,Alt+Shift+5,Ctrl+Shift+`,Ctrl+K,Ctrl+L') "$topIcons / $subIcons"
         # 서식 항목 = 같은 상태에 MemoText 명령을 바로 적용한 결과(원문 보기 · 편집 보기의 섬 · 섬 없이 커서 블록)
         $commands = @{ '굵게' = { param($st) Get-WtMemoWrapEdit $st '**' }; '기울임' = { param($st) Get-WtMemoWrapEdit $st '*' }; '취소선' = { param($st) Get-WtMemoWrapEdit $st '~~' }
             '인라인 코드' = { param($st) Get-WtMemoWrapEdit $st '`' }; '링크' = { param($st) Get-WtMemoLinkEdit $st }; '할 일' = { param($st) Get-WtMemoTaskEdit $st } }
