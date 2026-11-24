@@ -293,6 +293,118 @@ exit 0
     Assert-WtInstance '빠른 적기 뒤: 앱 창을 다시 보면 지금 화면을 한 번만 새로 그리고, 평소 활성화에는 그리지 않는다' ($frontChecks.Quiet -and $frontChecks.Redrawn -and $frontChecks.Once) $frontChecks.Detail
     } } else { Write-Host 'SKIP 앞으로 가져오기 (Windows STA에서만)' }
 
+    # ---- 앱이 꺼져 있을 때 -QuickMemo: 앱 창은 트레이에 숨긴 채 켜고 빠른 적기 창만 띄운다 ----
+    # 실제 Start-WtApp을 돌린다. 창 보이기 · 트레이 아이콘 · 알림 창 보이기만 가짜로 바꿔 끼워 창을 띄우지 않는다.
+    # 메시지 돌리기 안에서 도는 시험 타이머가 단계마다 상태를 적고, 마지막에 트레이 메뉴 「종료」로 끝낸다
+    if (Test-WtTestWpf) { Invoke-WtInstanceSection '트레이에 숨긴 채 시작' {
+    $global:wtTrayProbe = @{ Shown = 0; Captured = 0; Notices = 0; Tray = $null; Errors = [Collections.Generic.List[string]]::new(); Log = [ordered]@{} }
+    & (Get-Module Addons) { $script:addons.Clear() }
+    Register-WtAddon -Id 'tray-first' -Title '첫 화면' -Order 10 -NewView { $b = [System.Windows.Controls.Border]::new(); $b.Tag = 'tray-first'; $b }
+    Register-WtAddon -Id 'tray-cap' -Title '가짜 적기' -Order 20 -NewView { [System.Windows.Controls.Border]::new() } `
+        -QuickCapture @{ Name = '가짜 빠른 적기'; Open = { $global:wtTrayProbe.Captured++ } }
+    Set-WtSetting 'work.start' '09:00'   # 업무시간 첫 설정 화면은 이 검사와 상관없다
+    $trayShell = & $shell {
+        $saved = @{ Show = $script:showMain; Tray = $script:newTray; Error = ${function:Show-WtError}; Writing = ${function:Show-WtWritingChoice}; Pending = ${function:Show-WtPendingChoice} }
+        $script:showMain = { param($Window) $global:wtTrayProbe.Shown++ }
+        $script:newTray = {
+            param($Icon)
+            $fake = [pscustomobject]@{ Visible = $true; Icon = $Icon; Disposed = $false; ContextMenuStrip = (New-WtTrayMenu) }
+            $fake | Add-Member ScriptMethod Dispose { $this.Disposed = $true }
+            $fake | Add-Member ScriptMethod ShowBalloonTip { }
+            $global:wtTrayProbe.Tray = $fake
+            $fake
+        }
+        function script:Show-WtError { param($ErrorRecord, $Where) $global:wtTrayProbe.Errors.Add("$Where $($ErrorRecord)") }
+        function script:Show-WtWritingChoice { param($Purpose, [switch]$NoCancel) 'proceed' }
+        function script:Show-WtPendingChoice { param($Purpose, $Title, $Text, [switch]$NoCancel) 'proceed' }
+        $saved
+    }
+    $noticeSaved = & (Get-Module Notice) { $s = @{ Show = $script:showWindow; Timer = $script:useTimer }; $script:showWindow = { param($Window) $global:wtTrayProbe.Notices++ }; $script:useTimer = $false; $s }
+    $newEvent = { [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset) }
+    # 시험 타이머: 1단계(숨은 채) 기록 → 보이기 신호 → 2단계(처음 보인 앱 창) 기록 → 트레이 「종료」. 20초 안에 못 끝내면 강제로 끝낸다
+    function New-WtTrayDriver([scriptblock]$Steps) {
+        $driver = [System.Windows.Threading.DispatcherTimer]::new()
+        $driver.Interval = [TimeSpan]::FromMilliseconds(100)
+        $driver.Tag = @{ Steps = $Steps; Step = 0; Deadline = [datetime]::UtcNow.AddSeconds(20) }
+        $driver.Add_Tick({
+                param($s, $e)
+                $t = $s.Tag
+                try { $done = & $t.Steps $t.Step; $t.Step++ } catch { $global:wtTrayProbe.Errors.Add("시험 단계 $($t.Step): $($_.Exception.Message)"); $done = $true }
+                if ($done -or [datetime]::UtcNow -gt $t.Deadline) {
+                    $s.Stop()
+                    if (-not $done) { & (Get-Module Shell) { $script:exiting = $true; [void](Stop-WtApp) } }
+                }
+            })
+        $driver
+    }
+    $global:wtTrayProbe.StateOf = { & (Get-Module Shell) { [ordered]@{ Shown = $global:wtTrayProbe.Shown; Started = $script:mainStarted; Current = $script:current; Exiting = $script:exiting
+                Running = [bool]($script:frame -and $script:frame.Continue); Width = $script:window.Width; Height = $script:window.Height; Where = [string]$script:window.WindowStartupLocation
+                Page = $(if ($script:ui.PageHost.Content) { [string]$script:ui.PageHost.Content.Tag } else { '' }) } } }
+    try {
+        # 1) 숨긴 채 시작: 빠른 적기 자기 신호만 남긴 진입 스크립트처럼
+        $signals = @{ Show = & $newEvent; Capture = & $newEvent; Ready = & $newEvent }
+        [void]$signals.Capture.Set()
+        $global:wtTrayProbe.Signals = $signals
+        $driver = New-WtTrayDriver {
+            param($Step)
+            $log = $global:wtTrayProbe.Log
+            switch ($Step) {
+                0 {
+                    $log.Hidden = & $global:wtTrayProbe.StateOf
+                    $log.Captured = $global:wtTrayProbe.Captured
+                    $log.TrayVisible = [bool]$global:wtTrayProbe.Tray.Visible
+                    # 숨어 있는 동안에도 알람 창은 뜬다(앱 창에 붙지 않음)
+                    $log.Notice = [bool](Show-WtNotice @{ Key = 'tray-test'; Title = '숨은 동안 알람' })
+                    $log.Notices = $global:wtTrayProbe.Notices
+                    Close-WtNotices
+                    # 보이기 신호(Ctrl+Alt+W 바로 가기 · 다시 실행): 앱 창을 처음 보이며 첫 화면을 만든다
+                    [void]$global:wtTrayProbe.Signals.Show.Set()
+                    [void](& (Get-Module Shell) { Invoke-WtInstanceSignals })
+                    $log.Shown = & $global:wtTrayProbe.StateOf
+                    $false
+                }
+                default {
+                    # 트레이 → 종료
+                    $item = @($global:wtTrayProbe.Tray.ContextMenuStrip.Items | Where-Object { $_.Text -ceq '종료' })[0]
+                    $item.PerformClick()
+                    $true
+                }
+            }
+        }
+        $driver.Start()
+        try { Start-WtApp -AppRoot $test.App -Instance $signals -StartInTray } finally { $driver.Stop() }
+        $log = $global:wtTrayProbe.Log
+        $closed = $signals.Show.SafeWaitHandle.IsClosed -and $signals.Capture.SafeWaitHandle.IsClosed
+        Assert-WtInstance '숨긴 채 시작: 앱 창은 보이지 않고 첫 화면도 아직 만들지 않으며, 빠른 적기 창만 바로 연다 · 트레이 아이콘은 보인다' (
+            $log.Hidden.Shown -eq 0 -and -not $log.Hidden.Started -and -not $log.Hidden.Current -and $log.Captured -eq 1 -and $log.TrayVisible -and $log.Hidden.Running -and -not $log.Hidden.Exiting) (
+            "(보임 $($log.Hidden.Shown) · 첫 화면 $($log.Hidden.Started)/$($log.Hidden.Current) · 적기 $($log.Captured) · 트레이 $($log.TrayVisible) · 오류 $($global:wtTrayProbe.Errors -join ' | '))")
+        Assert-WtInstance '숨긴 채 시작: 앱 창이 숨어 있어도 알람 창은 뜬다' ($log.Notice -and $log.Notices -eq 1)
+        Assert-WtInstance '숨긴 채 시작 → 보이기 신호: 앱 창이 처음 뜰 때 정상 크기(1280 × 800) · 화면 가운데 · 첫 탭으로 보인다' (
+            $log.Shown.Shown -eq 1 -and $log.Shown.Started -and $log.Shown.Current -ceq 'tray-first' -and $log.Shown.Page -ceq 'tray-first' -and
+            $log.Shown.Width -eq 1280 -and $log.Shown.Height -eq 800 -and $log.Shown.Where -ceq 'CenterScreen') (($log.Shown.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
+        Assert-WtInstance '숨긴 채 시작 → 트레이 「종료」: 끝내기 흐름 그대로 메시지 돌리기를 멈추고 트레이 아이콘 · 신호를 정리한다' (
+            $global:wtTrayProbe.Tray.Disposed -and -not $global:wtTrayProbe.Tray.Visible -and $closed -and -not $global:wtTrayProbe.Errors.Count) "(트레이 $($global:wtTrayProbe.Tray.Disposed) · 신호 $closed · 오류 $($global:wtTrayProbe.Errors -join ' | '))"
+
+        # 2) 보통 시작(빠른 적기 아님) · 신호 손잡이 없이 숨긴 채 시작(앞 앱을 기다리다 시간이 지남): 앱 창을 바로 보인다
+        foreach ($case in @(@{ Name = '보통'; Instance = @{ Show = (& $newEvent); Capture = (& $newEvent); Ready = (& $newEvent) }; Tray = $false }, @{ Name = '손잡이 없음'; Instance = $null; Tray = $true })) {
+            $global:wtTrayProbe.Shown = 0; $global:wtTrayProbe.Captured = 0; $global:wtTrayProbe.Log = [ordered]@{}; $global:wtTrayProbe.Errors.Clear()
+            $driver = New-WtTrayDriver {
+                param($Step)
+                $global:wtTrayProbe.Log.State = & $global:wtTrayProbe.StateOf
+                @($global:wtTrayProbe.Tray.ContextMenuStrip.Items | Where-Object { $_.Text -ceq '종료' })[0].PerformClick()
+                $true
+            }
+            $driver.Start()
+            try { Start-WtApp -AppRoot $test.App -Instance $case.Instance -StartInTray:$case.Tray } finally { $driver.Stop() }
+            $st = $global:wtTrayProbe.Log.State
+            Assert-WtInstance "$($case.Name) 시작: 앱 창을 바로 보이고 첫 탭을 만든다" ($st.Shown -eq 1 -and $st.Started -and $st.Current -ceq 'tray-first' -and $global:wtTrayProbe.Captured -eq 0) (($st.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
+        }
+    } finally {
+        & $shell { param($s) $script:showMain = $s.Show; $script:newTray = $s.Tray; Set-Item function:script:Show-WtError $s.Error; Set-Item function:script:Show-WtWritingChoice $s.Writing; Set-Item function:script:Show-WtPendingChoice $s.Pending } $trayShell
+        & (Get-Module Notice) { param($s) $script:showWindow = $s.Show; $script:useTimer = $s.Timer } $noticeSaved
+    }
+    } } else { Write-Host 'SKIP 트레이에 숨긴 채 시작 (Windows STA에서만)' }
+
     # ---- 바로 가기 대상 (도움말 → 정보) ----
     Invoke-WtInstanceSection '바로 가기 대상' {
     $targets = & $shell {

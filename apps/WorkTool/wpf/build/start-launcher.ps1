@@ -8,7 +8,7 @@
 .PARAMETER ScriptPath
     띄울 스크립트. 비우면 이 파일 옆의 WorkTool-WPF.ps1(zip 구성)을 띄운다.
 .PARAMETER QuickMemo
-    빠른 메모 창을 연다. 앱이 떠 있으면 그 앱이 열고, 없으면 앱을 켠 뒤 연다.
+    빠른 메모 창을 연다. 앱이 떠 있으면 그 앱이 열고, 없으면 앱 창은 트레이에 숨긴 채 켜고 빠른 메모 창만 띄운다.
 .EXAMPLE
     .\Start-WorkTool-Launcher.ps1
 .EXAMPLE

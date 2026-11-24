@@ -46,6 +46,9 @@ $script:instanceTimer = $null     # 그 신호를 보는 화면 스레드 타이
 $script:frontTimer = $null        # 앞으로 못 가져왔을 때 잠깐 맨 위로 둔 것을 푸는 타이머
 $script:captureStale = $false     # 빠른 적기 뒤 앱 창을 다시 보면 지금 화면을 한 번 새로 그린다
 $script:entryPath = ''            # 바로 가기 대상에 쓸 진입 파일(Start-WorkTool.ps1 · WorkTool-WPF.ps1)
+$script:mainStarted = $false      # 앱 창의 첫 화면을 만들었는지. 트레이에 숨긴 채 켜면(-StartInTray) 앱 창을 처음 보일 때 만든다
+$script:showMain = { param($Window) $Window.Show() }        # 검사가 바꿔 끼운다(창을 띄우지 않게)
+$script:newTray = { param($Icon) New-WtTrayIcon $Icon }     # 검사가 바꿔 끼운다(트레이 아이콘을 띄우지 않게)
 
 $script:shellXaml = Get-WtShellXaml
 
@@ -687,9 +690,19 @@ function Update-WtAppIcon {
 }
 
 function Show-WtMainWindow {
-    $script:window.Show()
+    & $script:showMain $script:window
+    # 실행 파일이 콘솔을 최소화해서 띄우면(start /min · 바로 가기 「실행: 최소화」) 첫 창도 최소화돼서 뜬다 → 원래 크기로 앞에 띄운다
     if ($script:window.WindowState -eq 'Minimized') { $script:window.WindowState = 'Normal' }
     [void]$script:window.Activate()
+    if (-not $script:mainStarted) { Start-WtMainPage }
+}
+
+# 앱 창의 첫 화면(첫 탭 · 첫 업무시간 입력). 보통은 켜자마자, 트레이에 숨긴 채 켰으면 앱 창을 처음 보일 때(트레이 열기 · 보이기 신호) 한 번
+function Start-WtMainPage {
+    $script:mainStarted = $true
+    $script:captureStale = $false   # 지금 새로 만드는 화면이라 빠른 적기 뒤 다시 그릴 것이 없다
+    $initialPage = Initialize-WtMainPage
+    Show-WtFirstWorkSetup $script:window $initialPage
 }
 
 # ---- 한 번만 뜨기 · 빠른 적기 --------------------------------------------------------------------
@@ -1072,8 +1085,9 @@ function Initialize-WtShellButtons {
 }
 
 # -ScriptPath: 진입 파일(바로 가기 대상 글에 쓴다). -Instance: 진입 스크립트의 한 번만 뜨기 신호 손잡이(없으면 신호를 받지 않는다)
+# -StartInTray: 앱 창을 트레이에 숨긴 채 켜고 빠른 적기 창만 띄운다(앱이 꺼져 있을 때 -QuickMemo). 신호 손잡이가 없으면 보통처럼 앱 창을 보인다
 function Start-WtApp {
-    param([Parameter(Mandatory)][string]$AppRoot, [string]$ScriptPath = '', [hashtable]$Instance)
+    param([Parameter(Mandatory)][string]$AppRoot, [string]$ScriptPath = '', [hashtable]$Instance, [switch]$StartInTray)
 
     $script:exiting = $false
     $script:entryPath = $ScriptPath
@@ -1169,27 +1183,33 @@ function Start-WtApp {
     # 설정이 바뀌면 바로 반영한다
     Initialize-WtShellSettings
 
-    # 처음 실행이면 예전 WorkTool 데이터를 가져온다 (이미 가져온 탭은 건너뜀)
+    # 처음 실행이면 예전 WorkTool 데이터를 가져온다 (이미 가져온 탭은 건너뜀). 빠른 적기 창보다 먼저 한다(가져오기 전에 새 메모를 쓰지 않게)
     try { [void](Import-WtLegacyData) } catch { Show-WtError $_ '예전 데이터 가져오기' }
+    # 트레이 아이콘은 늘 둔다. 앱 창이 숨어 있는 동안(트레이에 숨긴 채 시작 포함)은 닫기 설정과 상관없이 트레이로 다시 연다
+    $script:notify = & $script:newTray $script:icon
 
+    # 창이 닫힐 때까지 메시지를 돌린다. Dispatcher를 끄지 않으므로 같은 창에서 다시 실행해도 된다.
+    $script:frame = [System.Windows.Threading.DispatcherFrame]::new()
+    $script:mainStarted = $false
+    $inTray = $StartInTray -and $script:instance
+    if ($inTray) {
+        # 빠른 적기로 켰다(-QuickMemo): 앱 창은 숨긴 채 두고, 메뉴 · 첫 화면을 만들기 전에 빠른 적기 창부터 띄운다.
+        # 첫 화면은 앱 창을 처음 보일 때 만든다(Show-WtMainWindow). 연 것이 없으면(등록 없음 · 신호 없음) 앱 창을 보인다
+        Start-WtInstanceTimer
+        if (-not (Invoke-WtInstanceSignals)) { $inTray = $false }
+    }
     Update-WtNav
     Start-WtNavBadgeTimer
     # 탭이 등록한, 화면에 묶지 않은 작업(일정 알람 확인 등). 트레이로 숨거나 다른 탭을 볼 때도 돈다
     [void](Start-WtAddonTicks)
     Update-WtCloseTip
     Set-WtOpacity
-    $script:notify = New-WtTrayIcon $script:icon
-
-    # 창이 닫힐 때까지 메시지를 돌린다. Dispatcher를 끄지 않으므로 같은 창에서 다시 실행해도 된다.
-    $script:frame = [System.Windows.Threading.DispatcherFrame]::new()
-    $w.Show()
-    # 실행 파일이 콘솔을 최소화해서 띄우면(start /min) 첫 창도 최소화돼서 뜬다 → 원래 크기로 앞에 띄운다
-    if ($w.WindowState -eq 'Minimized') { $w.WindowState = 'Normal' }
-    [void]$w.Activate()
-    $initialPage = Initialize-WtMainPage
-    Show-WtFirstWorkSetup $w $initialPage
-    # 다 뜬 뒤부터 다시 켠 실행 보조의 신호를 받는다(뜨는 동안 온 신호 · 자기 -QuickMemo도 첫 틱에 처리한다)
-    Start-WtInstanceTimer
+    if (-not $inTray -and -not $script:mainStarted) {
+        Show-WtMainWindow
+        # 다 뜬 뒤부터 다시 켠 실행 보조의 신호를 받는다(뜨는 동안 온 신호도 바로 처리한다)
+        Start-WtInstanceTimer
+        [void](Invoke-WtInstanceSignals)
+    }
     if (-not $script:exiting) { [System.Windows.Threading.Dispatcher]::PushFrame($script:frame) }
     } finally {
         Stop-WtInstanceSignals

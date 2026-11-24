@@ -2690,6 +2690,8 @@ function Show-WtMemoCapture {
     [System.Windows.Input.FocusManager]::SetFocusedElement($parts.Window, $box)
     Update-WtMemoCaptureStatus $q
     & $script:captureShow $parts.Window
+    # 앱을 막 켠 프로세스의 첫 창이면 바로 가기 「실행: 최소화」를 따라 최소화돼서 뜰 수 있다 → 원래 크기로
+    if ($parts.Window.WindowState -eq 'Minimized') { $parts.Window.WindowState = 'Normal'; [void]$parts.Window.Activate() }
     [void]$box.Focus()
     $q
 }

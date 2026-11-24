@@ -11,7 +11,8 @@
     - 같은 데이터 폴더를 쓰는 앱은 하나만 뜬다. 이미 떠 있으면 새로 켠 쪽은 그 앱에 알리고(창을 앞으로 · 빠른 메모) 바로 끝난다.
 
 .PARAMETER QuickMemo
-    빠른 메모 창을 연다. 앱이 떠 있으면 그 앱이 열고, 없으면 앱을 켠 뒤 연다. 바탕 화면 바로 가기의 「바로 가기 키」용이다.
+    빠른 메모 창을 연다. 앱이 떠 있으면 그 앱이 열고, 없으면 앱 창은 트레이에 숨긴 채 켜고 빠른 메모 창만 띄운다.
+    바탕 화면 바로 가기의 「바로 가기 키」용이다.
 
 .EXAMPLE
     .\Start-WorkTool.ps1
@@ -157,7 +158,7 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
 # 모듈을 불러오기 전이라 빠르고, 두 앱이 같은 데이터를 같이 만지지 않는다
 $instance = Enter-WtInstance (Get-WtInstanceName $PSScriptRoot) -QuickCapture:$QuickMemo
 if (-not $instance) { return }
-# 이 프로세스가 앱이 됐다: -QuickMemo면 다 뜬 뒤 빠른 적기 창을 연다(셸이 다른 실행 보조의 신호와 같은 길로 받는다)
+# 이 프로세스가 앱이 됐다: -QuickMemo면 빠른 적기 창을 연다(셸이 다른 실행 보조의 신호와 같은 길로 받는다)
 if ($QuickMemo -and $instance.Capture) { [void]$instance.Capture.Set() }
 
 $previousRenderMode = $null
@@ -186,7 +187,8 @@ foreach ($file in (Get-ChildItem (Join-Path $PSScriptRoot 'addons') -Filter '*.p
 }
 #endregion
 
-    Start-WtApp -AppRoot $PSScriptRoot -ScriptPath $PSCommandPath -Instance $instance
+    # -QuickMemo로 켰으면 앱 창은 트레이에 숨긴 채 두고 빠른 메모 창만 띄운다(트레이 · 보이기 신호로 앱 창을 연다)
+    Start-WtApp -AppRoot $PSScriptRoot -ScriptPath $PSCommandPath -Instance $instance -StartInTray:$QuickMemo
 } catch {
     $msg = "$($_.Exception.Message)`n`n위치: $($_.InvocationInfo.PositionMessage)"
     Write-Host $msg -ForegroundColor Red

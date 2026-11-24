@@ -184,6 +184,15 @@ try {
     Assert-WtTest '빠른 메모 끝내기: 저장 확인(SavePending)이 창의 글을 저장하고, 정리(OnExit)가 창을 닫는다' (
         $pending -eq $true -and $made[0].body -ceq '끝내기 직전에 쓴 줄' -and $null -eq (Get-TestQuick) -and $global:wtQuickProbe.Closed -eq 5)
 
+    # ---- 바로 가기 「실행: 최소화」로 켜면 Windows가 앱 프로세스의 첫 창을 최소화해 띄울 수 있다 → 빠른 메모 창은 원래 크기로 ----
+    & $memoModule { $script:testShow = $script:captureShow; $script:captureShow = { param($Window) $global:wtQuickProbe.Shown++; $Window.WindowState = 'Minimized' } }
+    [void](& $cap.QuickCapture.Open)
+    $q = Get-TestQuick
+    $state = [string]$q.Window.WindowState
+    [void](& $memoModule { Close-WtMemoCapture })
+    & $memoModule { $script:captureShow = $script:testShow }
+    Assert-WtTest '빠른 메모 창: 최소화로 떠도(바로 가기 「실행: 최소화」) 원래 크기로 띄운다' ($state -ceq 'Normal') $state
+
     # ---- 도움말 → 단축키 ----
     $keys = @($addon.Shortcuts | Where-Object { @($_).Count -gt 2 -and $_[2] -ceq '빠른 메모' } | ForEach-Object { $_[0] })
     Assert-WtTest '빠른 메모 도움말: 단축키 목록의 메모 쪽에 「빠른 메모」 주제(여는 키 · Esc / Ctrl+Enter · Ctrl+S)' (($keys -join ',') -ceq 'Ctrl + Alt + M,Esc / Ctrl + Enter,Ctrl + S') ($keys -join ',')
